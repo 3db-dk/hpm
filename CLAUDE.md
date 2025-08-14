@@ -1,27 +1,27 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This document provides development guidelines for the HPM (Houdini Package Manager) repository.
 
 ## Project Overview
 
-This is the **HPM (Houdini Package Manager)** repository - a Rust-based package management system for SideFX Houdini. HPM brings modern package management capabilities to the Houdini ecosystem, similar to what npm does for Node.js or uv does for Python.
+HPM is a Rust-based package management system for SideFX Houdini, providing modern package management capabilities equivalent to npm for Node.js, uv for Python or cargo for Rust.
 
-### Goal
+### Core Functionality
 
-HPM provides comprehensive tooling for Houdini package workflows:
-- **Authoring**: Create new Houdini packages with proper structure and metadata
-- **Publishing**: Distribute packages to registries for community sharing
-- **Installing**: Download and install packages with dependency resolution
-- **Managing**: Update, remove, and maintain installed packages
+HPM delivers comprehensive package management for Houdini:
+- **Authoring**: Package creation with standardized structure and metadata
+- **Publishing**: Registry-based package distribution
+- **Installation**: Automated package installation with dependency resolution
+- **Management**: Package updates, removal, and lifecycle maintenance
 
-### Key Benefits
+### Architecture Benefits
 
-- **Modern Workflows**: Cargo/npm-style package management for Houdini
-- **Dependency Resolution**: Automatic handling of package dependencies
-- **Version Management**: Semantic versioning and compatibility checking  
-- **Performance**: Fast Rust implementation with parallel operations
-- **Compatibility**: Works with existing Houdini package system
-- **Discovery**: Centralized registry for package distribution and discovery
+- **Modern Workflows**: Industry-standard package management patterns
+- **Dependency Resolution**: Automated dependency graph management
+- **Version Management**: Semantic versioning with compatibility validation
+- **Performance**: Concurrent operations via Rust and Tokio
+- **Compatibility**: Seamless integration with existing Houdini packages
+- **Discovery**: Centralized package registry and search capabilities
 
 ## Technology Stack
 
@@ -36,92 +36,65 @@ HPM provides comprehensive tooling for Houdini package workflows:
 
 ### Build and Test
 ```bash
-# Build the project
-cargo build
-
-# Run all tests
-cargo test
-
-# Run tests with output
-cargo test -- --nocapture
-
-# Build and run
-cargo run -- --help
-
-# Build release version
-cargo build --release
+cargo build                    # Standard build
+cargo build --release        # Optimized build
+cargo test                   # Execute test suite
+cargo test -- --nocapture   # Test with output
+cargo run -- --help         # Run with help flag
 ```
 
 ### Code Quality
 ```bash
-# Format code
-cargo fmt
-
-# Run clippy linter
-cargo clippy -- -D warnings
-
-# Run clippy with all features
-cargo clippy --all-features -- -D warnings
-
-# Check without building
-cargo check
+cargo fmt                            # Format source code
+cargo clippy -- -D warnings         # Lint with warnings as errors
+cargo clippy --all-features -- -D warnings  # Lint all features
+cargo check                          # Validate without building
 ```
 
-### Development Workflow
+### Development Operations
 ```bash
-# Run in development mode with logging
-RUST_LOG=debug cargo run -- install example-package
-
-# Test package operations
-cargo run -- init my-package
-cargo run -- build
-cargo run -- publish
-
-# Run specific test module  
-cargo test resolver::tests
-
-# Run integration tests only
-cargo test --test integration
-
-# Generate documentation
-cargo doc --open
+RUST_LOG=debug cargo run -- install <package>  # Debug logging
+cargo run -- init <name>                       # Initialize package
+cargo test <module>::tests                     # Module-specific tests
+cargo test --test integration                  # Integration tests only
+cargo doc --open                               # Generate documentation
 ```
 
 ## Project Architecture
 
-HPM follows a modular Rust architecture optimized for package management:
+HPM implements a modular architecture optimized for package management operations.
 
 ### Core Modules
-- **`src/main.rs`** - CLI entry point and command orchestration
-- **`src/cli/`** - Command-line interface and argument parsing  
-- **`src/config/`** - Configuration management and persistence
-- **`src/registry/`** - Package registry client and communication
-- **`src/resolver/`** - Dependency resolution and version management
-- **`src/installer/`** - Package installation and file management
-- **`src/package/`** - Package manifest and metadata handling
-- **`src/error/`** - Error types and handling utilities
+- **`src/main.rs`** - Application entry point and command orchestration
+- **`src/cli/`** - Command-line interface implementation
+- **`src/config/`** - Configuration management system
+- **`src/registry/`** - Package registry communication layer
+- **`src/resolver/`** - Dependency resolution engine
+- **`src/installer/`** - Package installation subsystem
+- **`src/package/`** - Package manifest processing
+- **`src/error/`** - Error handling infrastructure
 
-### Key Design Patterns
-- **Async/Await**: All I/O operations use Tokio async runtime
-- **Error Propagation**: Consistent error handling with `anyhow` and `thiserror`
-- **Trait Abstractions**: Testable interfaces for registry and file system operations
-- **Configuration Layers**: Global, project, and runtime configuration management
+### Design Principles
+- **Asynchronous Operations**: Tokio runtime for all I/O operations
+- **Structured Error Handling**: Domain errors via `thiserror`, application errors via `anyhow`
+- **Interface Abstraction**: Trait-based design for testability and modularity
+- **Layered Configuration**: Hierarchical configuration management (global, project, runtime)
 
-## Houdini Package System
+## Houdini Integration
 
-HPM works with Houdini's native package system while adding modern package management features.
+HPM extends Houdini's native package system with modern dependency management capabilities.
 
-### Houdini Package Basics
+### Standard Houdini Packages
 
-Houdini packages are JSON files that define:
-- Environment variables and paths
+Houdini packages utilize JSON manifests defining:
+- Environment variables and path configurations
 - Houdini path modifications (`hpath`)
-- Conditional loading based on version/OS
-- Package dependencies and load order
+- Conditional loading based on version and platform
+- Package dependencies and loading order
 
-### HPM Enhancement
+### HPM Package Manifest
 
-HPM adds a manifest file (`hpm.toml`) alongside the standard Houdini `package.json`:
+HPM introduces `hpm.toml` alongside standard `package.json` files:
 
 ```toml
 [package]
@@ -163,44 +136,44 @@ my-package/
 ```
 
 ### Supported Asset Types
-- **HDAs**: Houdini Digital Assets (.hda, .otl files)
-- **Python**: Python libraries and modules for Houdini
-- **Scripts**: Shelf tools, event scripts, and automation
-- **Presets**: Node presets and configurations
-- **Config**: Environment and pipeline configurations
+- **Digital Assets**: Houdini Digital Assets (.hda, .otl)
+- **Python Modules**: Libraries and tools for Houdini Python environment
+- **Scripts**: Shelf tools, event handlers, and automation scripts
+- **Presets**: Node parameter presets and configurations
+- **Configuration**: Environment and pipeline configuration files
 
-## Development Conventions
+## Development Standards
 
 ### Code Style
-- Follow standard Rust conventions (`rustfmt`)
-- Use `cargo clippy` for additional linting
-- Prefer explicit error handling over panics
-- Document public APIs with doc comments
+- Adhere to standard Rust formatting (`rustfmt`)
+- Apply comprehensive linting (`cargo clippy`)
+- Implement explicit error handling (avoid panics)
+- Document all public APIs with doc comments
 
-### Testing Strategy
-- Unit tests in `src/` modules using `#[cfg(test)]`
-- Integration tests in `tests/` directory
-- Mock implementations for external dependencies
-- Property-based testing for complex algorithms
+### Testing Framework
+- Unit tests: Module-level tests using `#[cfg(test)]`
+- Integration tests: End-to-end testing in `tests/` directory
+- Mock implementations: External dependency abstraction
+- Property-based testing: Complex algorithm verification
 
 ### Error Handling
 ```rust
-// Use thiserror for domain errors
+// Domain-specific errors using thiserror
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
     #[error("Package not found: {name}")]
     PackageNotFound { name: String },
-    
+
     #[error("Network error: {0}")]
     Network(#[from] reqwest::Error),
 }
 
-// Use anyhow for application errors
+// Application-level errors using anyhow
 use anyhow::{Context, Result};
 
 pub fn install_package(name: &str) -> Result<()> {
     download_package(name)
-        .context("Failed to download package")?;
+        .context("Package download failed")?;
     Ok(())
 }
 ```
@@ -212,7 +185,7 @@ pub fn install_package(name: &str) -> Result<()> {
 [registry]
 default = "https://packages.houdini.org"
 
-[install] 
+[install]
 path = "packages/hpm"
 parallel_downloads = 8
 
@@ -230,40 +203,42 @@ material-library = { version = "1.5", optional = true }
 test-assets = "0.1.0"
 ```
 
-## Houdini Integration
+## System Integration
 
-HPM integrates with Houdini through:
-- **Package Discovery**: Installs to Houdini's package directories
-- **JSON Generation**: Creates compatible `package.json` files from `hpm.toml`
-- **Path Management**: Manages `hpath`, `HOUDINI_PATH`, and environment variables
-- **Version Compatibility**: Ensures packages work with specified Houdini versions
-- **Asset Registration**: Automatic OTL and Python module registration
+HPM integrates with Houdini through standardized mechanisms:
+- **Package Discovery**: Installation to Houdini package directories
+- **Manifest Translation**: Generation of `package.json` from `hpm.toml`
+- **Path Management**: Configuration of `hpath`, `HOUDINI_PATH`, and environment variables
+- **Version Compatibility**: Enforcement of Houdini version constraints
+- **Asset Registration**: Automated registration of digital assets and Python modules
 
-### Installation Locations
-HPM installs packages to standard Houdini locations:
-- `$HOUDINI_USER_PREF_DIR/packages/` - User packages
-- Project-specific locations via `HOUDINI_PACKAGE_DIR`
-- Custom registry and cache in `~/.hpm/`
+### Installation Paths
+Package installation follows Houdini conventions:
+- `$HOUDINI_USER_PREF_DIR/packages/` - User-specific packages
+- `$HOUDINI_PACKAGE_DIR` - Project-specific installations
+- `~/.hpm/` - HPM registry cache and metadata
 
-## Security Considerations
+## Security Framework
 
-- **Package Verification**: Cryptographic signatures for package integrity
-- **Sandboxed Installation**: Safe package extraction and installation
-- **Path Validation**: Prevention of directory traversal attacks
-- **Dependency Auditing**: Security vulnerability scanning for dependencies
+- **Package Verification**: Cryptographic signature validation for integrity assurance
+- **Sandboxed Installation**: Isolated package extraction and installation processes
+- **Path Validation**: Directory traversal attack prevention
+- **Dependency Auditing**: Automated vulnerability scanning for package dependencies
 
-## Contributing Guidelines
+## Contributing
 
-1. **Fork and Clone**: Standard GitHub workflow
-2. **Feature Branches**: Create branches for new features
-3. **Testing**: Ensure all tests pass before submitting
-4. **Documentation**: Update docs for public API changes
-5. **Code Review**: All changes require review before merge
-
-## Troubleshooting
+### Contribution Process
+1. **Repository Setup**: Fork repository and create feature branches
+2. **Development**: Implement changes following project standards
+3. **Testing**: Ensure comprehensive test coverage and validation
+4. **Documentation**: Update documentation for API modifications
+5. **Review**: Submit changes for peer review and approval
 
 ### Common Issues
-- **Build Failures**: Ensure Rust toolchain is up to date
-- **Network Errors**: Check proxy settings and registry connectivity
-- **Permission Errors**: Verify write access to installation directories
-- **Version Conflicts**: Use `cargo tree` to debug dependency issues
+
+| Issue | Resolution |
+|-------|------------|
+| Build Failures | Verify current Rust toolchain installation |
+| Network Errors | Validate proxy configuration and registry connectivity |
+| Permission Errors | Confirm write access to target installation directories |
+| Version Conflicts | Analyze dependency tree using `cargo tree` |

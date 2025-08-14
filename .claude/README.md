@@ -1,6 +1,6 @@
 # Claude Code Configuration for HPM (Houdini Package Manager)
 
-This directory contains Claude Code configuration for **software development** of HPM, a Rust-based package manager for SideFX Houdini. HPM brings modern package management capabilities to the Houdini ecosystem, similar to what npm does for Node.js or uv does for Python.
+This directory contains Claude Code configuration for software development of HPM, a Rust-based package manager for SideFX Houdini. HPM provides package management capabilities for the Houdini ecosystem.
 
 ## Directory Structure
 
@@ -58,21 +58,24 @@ Code generation templates:
 /hpm/publish
 ```
 
-## Token Optimization
+## Cost Optimization
 
-This configuration is optimized for Rust development with:
-- **Agent specialization** for context efficiency  
-- **Parallel workflows** for faster development
-- **Smart caching** for frequently accessed operations
-- **Rust-specific tooling** integration
+This configuration reduces token usage through:
+- Agent specialization for focused context
+- MCP server integration for direct tool access
+- Structured responses from external tools
+- Reduced command output interpretation overhead
 
 ## Focus
 
 This setup is specifically for:
-- ✅ **Rust software development** of the HPM project
-- ✅ **Houdini package management** functionality and workflows  
-- ✅ **CLI development** and user experience
-- ✅ **Development productivity** and code quality
-- ✅ **Houdini ecosystem integration** and compatibility
-- ❌ **Houdini content creation** (HDAs, scenes, etc.)
-- ❌ **Production VFX workflows** (unless specifically requested)
+**Scope:**
+- Rust software development for HPM project
+- Houdini package management functionality
+- CLI development and user experience
+- Development productivity and code quality
+- Houdini ecosystem integration
+
+**Out of Scope:**
+- Houdini content creation (HDAs, scenes, etc.)
+- Production VFX workflows

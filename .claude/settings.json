@@ -7,7 +7,12 @@
       "Bash(rust-analyzer *)",
       "Bash(clippy *)",
       "Bash(rustfmt *)",
-      "Bash(git *)",
+      "Bash(cargo-audit *)",
+      "Bash(git status)",
+      "Bash(git diff)",
+      "Bash(git add)",
+      "Bash(git commit)",
+      "Bash(git push)",
       "Read(**/*.rs)",
       "Read(**/*.md)",
       "Read(**/*.toml)",
@@ -28,11 +33,17 @@
       "TodoWrite(*)"
     ],
     "deny": [
+      "Bash(rm *)",
+      "Bash(sudo *)",
+      "Bash(chmod *)",
       "Read(./.env*)",
       "Read(./secrets/**)",
       "Read(**/credentials*)",
+      "Read(**/private*)",
       "Write(./.env*)",
-      "Edit(./.env*)"
+      "Edit(./.env*)",
+      "Write(./secrets/**)",
+      "Edit(./secrets/**)"
     ]
   },
   "model": "claude-3-5-sonnet-20241022",
@@ -43,32 +54,43 @@
   "agents": {
     "general-purpose": {
       "description": "General research and multi-step task execution",
-      "tools": ["*"]
+      "tools": ["*"],
+      "model": "claude-3-5-sonnet-20241022"
     },
-    "rust-expert": {
-      "description": "Rust development specialist",
-      "tools": ["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
-      "model": "sonnet"
+    "rust-formatter": {
+      "description": "Code formatting and style enforcement",
+      "tools": ["Read", "Edit", "MultiEdit", "Bash"],
+      "model": "claude-3-5-haiku-20241022"
     },
-    "package-expert": {
-      "description": "Package management systems specialist",
-      "tools": ["Read", "Write", "Edit", "Bash"],
-      "model": "sonnet"
+    "rust-developer": {
+      "description": "Feature development and dependency management", 
+      "tools": ["Read", "Write", "Edit", "MultiEdit", "Bash", "Grep", "Glob"],
+      "model": "claude-3-5-sonnet-20241022"
     },
-    "testing-specialist": {
-      "description": "Testing, QA, and code quality specialist",
-      "tools": ["Read", "Write", "Bash", "Grep"],
-      "model": "sonnet"
+    "test-specialist": {
+      "description": "Test implementation and quality assurance",
+      "tools": ["Read", "Write", "Edit", "MultiEdit", "Bash"],
+      "model": "claude-3-5-sonnet-20241022"
     },
-    "code-reviewer": {
-      "description": "Code quality and security review specialist", 
-      "tools": ["Read", "Grep", "Glob"],
-      "model": "sonnet"
+    "documentation-writer": {
+      "description": "Technical documentation and API documentation",
+      "tools": ["Read", "Write", "Edit", "MultiEdit"],
+      "model": "claude-3-5-haiku-20241022"
     },
-    "documentation-expert": {
-      "description": "Technical documentation specialist",
-      "tools": ["Read", "Write", "Edit", "Grep"],
-      "model": "sonnet"
+    "architecture-advisor": {
+      "description": "System design and architectural decisions",
+      "tools": ["Read", "Glob", "Grep", "WebSearch", "WebFetch"],
+      "model": "claude-opus-4-1-20250805"
+    },
+    "performance-specialist": {
+      "description": "Performance analysis and optimization",
+      "tools": ["Read", "Bash", "Grep", "Glob"],
+      "model": "claude-3-5-sonnet-20241022"
+    },
+    "security-auditor": {
+      "description": "Security analysis and vulnerability scanning",
+      "tools": ["Read", "Bash", "Grep", "WebSearch"],
+      "model": "claude-3-5-sonnet-20241022"
     }
   },
   "hooks": {
