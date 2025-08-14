@@ -51,7 +51,7 @@ clippy:
 
 # Check for emoji usage in source code
 check-emojis:
-    ./scripts/check-emojis.sh
+    python3 scripts/check-emojis.py
 
 # Fix clippy issues automatically where possible
 clippy-fix:

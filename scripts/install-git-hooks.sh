@@ -48,7 +48,7 @@ else
         exit 1
     fi
     
-    if ! ./scripts/check-emojis.sh; then
+    if ! python3 scripts/check-emojis.py; then
         echo "[ERROR] Emoji check failed!"
         echo "Remove emojis from source code before committing."
         exit 1

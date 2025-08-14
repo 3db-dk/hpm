@@ -166,7 +166,7 @@ cargo clippy -- -D warnings         # Lint with warnings as errors
 cargo clippy --all-features -- -D warnings  # Lint all features
 cargo check                          # Validate without building
 cargo-machete                        # Check for unused dependencies
-./scripts/check-emojis.sh            # Enforce no-emoji policy
+python3 scripts/check-emojis.py      # Enforce no-emoji policy (platform-agnostic)
 ```
 
 ### Development Operations

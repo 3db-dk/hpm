@@ -180,7 +180,7 @@ check_emojis() {
     
     # Process results if any emojis were found
     if [[ "$found_emojis" == "true" ]]; then
-        echo -e "${RED}❌ Emojis found in source code:${NC}"
+        echo -e "${RED}[ERROR] Emojis found in source code:${NC}"
         echo
         
         # Display the results (strip ANSI colors for parsing)
@@ -213,7 +213,7 @@ check_emojis() {
         return $EXIT_EMOJI_FOUND
     else
         if [[ "$VERBOSE" == "true" ]]; then
-            echo -e "${GREEN}✓ No emojis found in source code${NC}"
+            echo -e "${GREEN}[SUCCESS] No emojis found in source code${NC}"
         fi
         rm -f "$temp_file"
         return $EXIT_SUCCESS
