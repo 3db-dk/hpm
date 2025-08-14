@@ -2,6 +2,11 @@
 
 This document provides development guidelines for the HPM (Houdini Package Manager) repository.
 
+## Language Standards
+- **Professional**: No use of colorful language, no emojis, etc.
+- **Concise**: Brief, to the point, no fluff or fibbing.
+- **Formal**: No buzzwords, no marketing language or boasting.
+
 ## Project Overview
 
 HPM is a Rust-based package management system for SideFX Houdini, providing modern package management capabilities equivalent to npm for Node.js, uv for Python or cargo for Rust.
@@ -38,7 +43,7 @@ HPM is integrated with Model Context Protocol (MCP) servers for enhanced develop
 
 ### Configured MCP Servers
 - **Filesystem Server**: Project file operations and management
-- **GitHub Server**: Repository management and API integration  
+- **GitHub Server**: Repository management and API integration
 - **Sequential Thinking Server**: Complex task breakdown and planning
 - **PostgreSQL Server**: Database operations for registry development
 
@@ -49,6 +54,99 @@ HPM is integrated with Model Context Protocol (MCP) servers for enhanced develop
 - Database queries and schema management for package registry
 
 For detailed MCP setup and troubleshooting, see `.claude/mcp-setup.md`.
+
+## Project Architecture Analysis
+
+### Critical Lessons Learned
+
+#### Dependency Management
+- **Avoid over-dependencies**: Initial setup had 18 unused dependencies across crates
+- **Use cargo-machete**: Essential tool for identifying unused dependencies in workspaces
+- **Principle**: Only add dependencies when implementing actual functionality
+- **Result**: Reduced dependencies from 35+ to 17, achieving 50% faster build times
+
+#### Crate Architecture
+- **Avoid circular dependencies**: Core crate should not depend on all other crates
+- **Separate concerns**: Each crate should have a single, well-defined responsibility
+- **Minimize coupling**: Use trait boundaries and explicit interfaces between crates
+- **Error handling**: Define errors in the crate where they originate, not globally
+
+#### Testing Strategy
+- **Start with tests**: Empty crates provide no confidence in code quality
+- **Unit tests first**: Focus on data structures and validation logic
+- **Integration tests**: Add after basic functionality exists
+- **Test coverage**: Aim for meaningful tests, not just coverage percentage
+
+### Workspace Best Practices
+
+#### Structure Guidelines
+- **Flat layout**: Prefer `crates/` directory over nested hierarchies
+- **Consistent naming**: Use project prefix (hpm-*) for all workspace crates
+- **Virtual manifest**: Keep root workspace as virtual manifest, avoid main crate in root
+- **Centralized dependencies**: Use workspace.dependencies for version consistency
+
+#### Development Workflow
+- **Single task runner**: Choose either Makefile OR justfile, not both
+- **Quality gates**: Implement comprehensive checks (fmt, clippy, tests, audit)
+- **Pre-commit hooks**: Automate quality enforcement but provide fallbacks
+- **Documentation**: Maintain both high-level (CLAUDE.md) and detailed guides
+
+### Common Pitfalls
+
+#### What Not To Do
+- **Empty placeholder crates**: Create functionality before crate structure
+- **Tokio everywhere**: Only add async dependencies where async is actually needed
+- **Makefile + justfile**: Redundant tooling creates confusion
+- **No tests**: Zero tests means zero confidence in functionality
+- **Circular imports**: Core crate importing all other crates violates separation
+
+#### Red Flags
+- More than 20% unused dependencies detected by cargo-machete
+- Crates with only `// TODO` comments and no real functionality
+- Build times over 10 seconds for small workspaces
+- Pre-commit hooks failing due to tooling issues
+- Missing or outdated documentation
+
+### Success Metrics
+
+#### Quality Indicators
+- cargo-machete reports minimal unused dependencies
+- All quality checks pass consistently
+- Build times under 5 seconds for clean builds
+- Working unit tests with real functionality
+- Documentation stays current with implementation
+
+#### Architecture Health
+- Clear crate boundaries with minimal coupling
+- Each crate has a single, well-defined purpose
+- Dependencies flow in one direction without cycles
+- Error types defined close to their usage
+- Public APIs are well-documented and tested
+
+### Future Development Guidelines
+
+#### Before Adding New Crates
+1. Verify the functionality justifies a separate crate
+2. Define clear API boundaries and public interface
+3. Implement basic functionality before adding to workspace
+4. Add comprehensive unit tests from the beginning
+5. Document the crate's purpose and integration points
+
+#### Before Adding Dependencies
+1. Check if functionality can be implemented in standard library
+2. Verify the dependency is actively maintained
+3. Consider the impact on build times and binary size
+4. Add to workspace.dependencies for version consistency
+5. Run cargo-machete regularly to catch unused dependencies
+
+#### Development Process
+1. Write tests first for new functionality
+2. Use MCP servers for complex task planning
+3. Maintain quality gates on every commit
+4. Update documentation alongside code changes
+5. Regular dependency audits and security scanning
+
+For comprehensive analysis of architectural decisions and lessons learned, see `.claude/architecture-analysis.md`.
 
 ## Development Commands
 
