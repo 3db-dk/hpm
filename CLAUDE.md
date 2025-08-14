@@ -32,6 +32,24 @@ HPM delivers comprehensive package management for Houdini:
 - **Configuration**: TOML format with Serde
 - **Testing**: Built-in Rust testing + tokio-test for async
 
+## MCP Integration
+
+HPM is integrated with Model Context Protocol (MCP) servers for enhanced development capabilities:
+
+### Configured MCP Servers
+- **Filesystem Server**: Project file operations and management
+- **GitHub Server**: Repository management and API integration  
+- **Sequential Thinking Server**: Complex task breakdown and planning
+- **PostgreSQL Server**: Database operations for registry development
+
+### MCP Usage
+- Use `@filesystem` to access project files and resources
+- Use `/thinking` for structured problem-solving workflows
+- Access GitHub resources for repository operations
+- Database queries and schema management for package registry
+
+For detailed MCP setup and troubleshooting, see `.claude/mcp-setup.md`.
+
 ## Development Commands
 
 ### Build and Test

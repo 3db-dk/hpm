@@ -1,0 +1,33 @@
+repos:
+  - repo: local
+    hooks:
+      - id: rust-fmt
+        name: Rust Format
+        entry: cargo fmt --all -- --check
+        language: system
+        files: \.rs$
+        pass_filenames: false
+
+      - id: rust-clippy
+        name: Rust Clippy
+        entry: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        language: system
+        files: \.rs$
+        pass_filenames: false
+
+      - id: rust-test
+        name: Rust Test
+        entry: cargo test --workspace --all-features
+        language: system
+        files: \.rs$
+        pass_filenames: false
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files

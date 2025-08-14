@@ -1,0 +1,16 @@
+[package]
+name = "hpm-registry"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+description = "registry functionality for HPM (Houdini Package Manager)"
+
+[dependencies]
+# TODO: Add registry-specific dependencies when implementing functionality
