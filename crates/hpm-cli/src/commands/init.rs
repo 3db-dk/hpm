@@ -104,18 +104,18 @@ pub async fn init_package(options: InitOptions) -> Result<()> {
     // Print success message
     if options.bare {
         println!(
-            "✅ Successfully created minimal Houdini package '{}'",
+            "Successfully created minimal Houdini package '{}'",
             package_name
         );
     } else {
-        println!("✅ Successfully created Houdini package '{}'", package_name);
+        println!("Successfully created Houdini package '{}'", package_name);
     }
 
-    println!("\n📁 Package structure:");
+    println!("\nPackage structure:");
     print_directory_tree(target_dir, 0)?;
 
     if !options.bare {
-        println!("\n🚀 Next steps:");
+        println!("\nNext steps:");
         println!("  cd {}", package_name);
         println!("  hpm add  # Add dependencies");
     }

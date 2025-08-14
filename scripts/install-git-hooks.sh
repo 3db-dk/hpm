@@ -29,7 +29,7 @@ echo "Running pre-commit quality checks..."
 if command -v just >/dev/null 2>&1; then
     # Run just pre-commit target
     if ! just pre-commit; then
-        echo "❌ Pre-commit checks failed!"
+        echo "[ERROR] Pre-commit checks failed!"
         echo "Please fix the issues above before committing."
         exit 1
     fi
@@ -37,25 +37,31 @@ else
     # Fallback to direct cargo commands
     echo "just not found, running cargo commands directly..."
     if ! cargo fmt --all -- --check; then
-        echo "❌ Code formatting check failed!"
+        echo "[ERROR] Code formatting check failed!"
         echo "Run 'cargo fmt --all' to fix formatting issues."
         exit 1
     fi
     
     if ! cargo clippy --workspace --all-targets --all-features -- -D warnings; then
-        echo "❌ Clippy linting failed!"
+        echo "[ERROR] Clippy linting failed!"
         echo "Fix clippy warnings before committing."
         exit 1
     fi
     
+    if ! ./scripts/check-emojis.sh; then
+        echo "[ERROR] Emoji check failed!"
+        echo "Remove emojis from source code before committing."
+        exit 1
+    fi
+    
     if ! cargo test --workspace --all-features; then
-        echo "❌ Tests failed!"
+        echo "[ERROR] Tests failed!"
         echo "Fix failing tests before committing."
         exit 1
     fi
 fi
 
-echo "✅ Pre-commit checks passed!"
+echo "[SUCCESS] Pre-commit checks passed!"
 EOF
 
 # Make hook executable
@@ -71,7 +77,7 @@ cat > "$HOOKS_DIR/commit-msg" << 'EOF'
 commit_regex='^(feat|fix|docs|style|refactor|test|chore|perf|ci|build|revert)(\(.+\))?: .{1,50}'
 
 if ! grep -qE "$commit_regex" "$1"; then
-    echo "❌ Invalid commit message format!"
+    echo "[ERROR] Invalid commit message format!"
     echo "Please use conventional commit format:"
     echo "  type(scope): description"
     echo ""
@@ -84,10 +90,10 @@ EOF
 # Make hook executable
 chmod +x "$HOOKS_DIR/commit-msg"
 
-echo "✅ Git hooks installed successfully!"
+echo "[SUCCESS] Git hooks installed successfully!"
 echo ""
 echo "Hooks installed:"
-echo "  - pre-commit: Runs quality checks (fmt, clippy, tests)"
+echo "  - pre-commit: Runs quality checks (fmt, clippy, emoji check, tests)"
 echo "  - commit-msg: Validates conventional commit format"
 echo ""
 echo "To bypass hooks (not recommended): git commit --no-verify"

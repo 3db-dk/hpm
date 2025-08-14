@@ -50,7 +50,7 @@ pub async fn check_package() -> Result<()> {
     let current_dir = std::env::current_dir().context("Failed to get current directory")?;
     let mut result = ValidationResult::new();
 
-    info!("🔍 Checking HPM package configuration...");
+    info!("Checking HPM package configuration...");
 
     // Check for hpm.toml existence and parse it
     let manifest_path = current_dir.join("hpm.toml");
@@ -87,13 +87,13 @@ async fn validate_manifest_file(
         return Ok(None);
     }
 
-    result.add_info("✓ hpm.toml found".to_string());
+    result.add_info("[OK] hpm.toml found".to_string());
 
     let content = fs::read_to_string(manifest_path).context("Failed to read hpm.toml")?;
 
     match toml::from_str::<PackageManifest>(&content) {
         Ok(manifest) => {
-            result.add_info("✓ hpm.toml has valid TOML syntax".to_string());
+            result.add_info("[OK] hpm.toml has valid TOML syntax".to_string());
             Ok(Some(manifest))
         }
         Err(e) => {
@@ -106,7 +106,7 @@ async fn validate_manifest_file(
 fn validate_manifest_content(manifest: &PackageManifest, result: &mut ValidationResult) {
     match manifest.validate() {
         Ok(_) => {
-            result.add_info("✓ Package manifest validation passed".to_string());
+            result.add_info("[OK] Package manifest validation passed".to_string());
         }
         Err(e) => {
             result.add_error(format!("Manifest validation failed: {}", e));
@@ -155,7 +155,7 @@ async fn validate_project_structure(
         let dir_path = project_dir.join(dir_name);
         if dir_path.exists() && dir_path.is_dir() {
             found_dirs.push(*dir_name);
-            result.add_info(format!("✓ Found {} directory", dir_name));
+            result.add_info(format!("[OK] Found {} directory", dir_name));
         }
     }
 
@@ -172,7 +172,7 @@ async fn validate_project_structure(
     for readme in &readme_files {
         if project_dir.join(readme).exists() {
             found_readme = true;
-            result.add_info(format!("✓ Found {}", readme));
+            result.add_info(format!("[OK] Found {}", readme));
             break;
         }
     }
@@ -185,7 +185,7 @@ async fn validate_project_structure(
                     readme_path
                 ));
             } else {
-                result.add_info(format!("✓ Found specified README: {}", readme_path));
+                result.add_info(format!("[OK] Found specified README: {}", readme_path));
             }
         } else {
             result.add_warning("No README file found - consider adding documentation".to_string());
@@ -210,7 +210,7 @@ async fn validate_otls_directory(project_dir: &Path, result: &mut ValidationResu
                     if extension == "hda" || extension == "otl" {
                         has_assets = true;
                         result.add_info(format!(
-                            "✓ Found Houdini asset: {}",
+                            "[OK] Found Houdini asset: {}",
                             path.file_name().unwrap().to_string_lossy()
                         ));
                     }
@@ -235,13 +235,14 @@ fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut Valid
     // Validate generated package.json structure
     match serde_json::to_string_pretty(&houdini_package) {
         Ok(json) => {
-            result.add_info("✓ Generated Houdini package.json is valid".to_string());
+            result.add_info("[OK] Generated Houdini package.json is valid".to_string());
 
             // Validate JSON can be parsed back
             match serde_json::from_str::<serde_json::Value>(&json) {
                 Ok(_) => {
-                    result
-                        .add_info("✓ Generated package.json can be parsed by Houdini".to_string());
+                    result.add_info(
+                        "[OK] Generated package.json can be parsed by Houdini".to_string(),
+                    );
                 }
                 Err(e) => {
                     result.add_error(format!("Generated package.json is invalid: {}", e));
@@ -262,7 +263,7 @@ fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut Valid
                     min_version
                 ));
             } else {
-                result.add_info(format!("✓ Minimum Houdini version: {}", min_version));
+                result.add_info(format!("[OK] Minimum Houdini version: {}", min_version));
             }
         }
 
@@ -273,7 +274,7 @@ fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut Valid
                     max_version
                 ));
             } else {
-                result.add_info(format!("✓ Maximum Houdini version: {}", max_version));
+                result.add_info(format!("[OK] Maximum Houdini version: {}", max_version));
             }
         }
 
@@ -300,7 +301,7 @@ async fn validate_best_practices(
     for license_file in &license_files {
         if project_dir.join(license_file).exists() {
             found_license = true;
-            result.add_info(format!("✓ Found license file: {}", license_file));
+            result.add_info(format!("[OK] Found license file: {}", license_file));
             break;
         }
     }
@@ -311,7 +312,7 @@ async fn validate_best_practices(
 
     // Check for version control
     if project_dir.join(".git").exists() {
-        result.add_info("✓ Git repository initialized".to_string());
+        result.add_info("[OK] Git repository initialized".to_string());
 
         // Check for .gitignore
         if !project_dir.join(".gitignore").exists() {
@@ -323,7 +324,7 @@ async fn validate_best_practices(
 
     // Check for scripts
     if let Some(ref scripts) = manifest.scripts {
-        result.add_info(format!("✓ Package defines {} script(s)", scripts.len()));
+        result.add_info(format!("[OK] Package defines {} script(s)", scripts.len()));
 
         for (script_name, script_cmd) in scripts {
             if script_cmd.trim().is_empty() {
@@ -420,7 +421,7 @@ fn display_results(result: ValidationResult) -> Result<()> {
     if !result.warnings.is_empty() {
         println!();
         for warning in &result.warnings {
-            warn!("⚠️  {}", warning);
+            warn!("[WARN] {}", warning);
         }
     }
 
@@ -428,14 +429,14 @@ fn display_results(result: ValidationResult) -> Result<()> {
     if !result.errors.is_empty() {
         println!();
         for error in &result.errors {
-            error!("❌ {}", error);
+            error!("[ERROR] {}", error);
         }
     }
 
     println!();
 
     if result.is_valid {
-        info!("✅ Package validation completed successfully!");
+        info!("Package validation completed successfully!");
         if !result.warnings.is_empty() {
             info!(
                 "   {} warning(s) found - consider addressing them",
@@ -444,7 +445,7 @@ fn display_results(result: ValidationResult) -> Result<()> {
         }
     } else {
         error!(
-            "❌ Package validation failed with {} error(s)",
+            "[ERROR] Package validation failed with {} error(s)",
             result.errors.len()
         );
         std::process::exit(1);

@@ -166,6 +166,7 @@ cargo clippy -- -D warnings         # Lint with warnings as errors
 cargo clippy --all-features -- -D warnings  # Lint all features
 cargo check                          # Validate without building
 cargo-machete                        # Check for unused dependencies
+./scripts/check-emojis.sh            # Enforce no-emoji policy
 ```
 
 ### Development Operations
@@ -175,6 +176,7 @@ cargo run -- init <name>                       # Initialize package
 cargo test <module>::tests                     # Module-specific tests
 cargo test --test integration                  # Integration tests only
 cargo doc --open                               # Generate documentation
+./scripts/check-emojis.sh                     # Check for emoji usage
 ```
 
 ### HPM CLI Testing
