@@ -1,0 +1,91 @@
+{
+  "permissions": {
+    "allow": [
+      "Task(*)",
+      "Bash(cargo *)",
+      "Bash(rustc *)",
+      "Bash(rust-analyzer *)",
+      "Bash(clippy *)",
+      "Bash(rustfmt *)",
+      "Bash(git *)",
+      "Read(**/*.rs)",
+      "Read(**/*.md)",
+      "Read(**/*.toml)",
+      "Read(**/*.json)",
+      "Read(**/CLAUDE.md)",
+      "Write(**/*.rs)",
+      "Edit(**/*.rs)",
+      "MultiEdit(**/*.rs)",
+      "Write(**/*.toml)",
+      "Edit(**/*.toml)",
+      "Write(**/*.md)",
+      "Edit(**/*.md)",
+      "Glob(**)",
+      "Grep(**)",
+      "LS(**)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "TodoWrite(*)"
+    ],
+    "deny": [
+      "Read(./.env*)",
+      "Read(./secrets/**)",
+      "Read(**/credentials*)",
+      "Write(./.env*)",
+      "Edit(./.env*)"
+    ]
+  },
+  "model": "claude-3-5-sonnet-20241022",
+  "env": {
+    "HPM_DEV": "1",
+    "HPM_PROJECT_PATH": "C:\\Users\\tumblehead\\Documents\\workspace\\hpm"
+  },
+  "agents": {
+    "general-purpose": {
+      "description": "General research and multi-step task execution",
+      "tools": ["*"]
+    },
+    "rust-expert": {
+      "description": "Rust development specialist",
+      "tools": ["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
+      "model": "sonnet"
+    },
+    "package-expert": {
+      "description": "Package management systems specialist",
+      "tools": ["Read", "Write", "Edit", "Bash"],
+      "model": "sonnet"
+    },
+    "testing-specialist": {
+      "description": "Testing, QA, and code quality specialist",
+      "tools": ["Read", "Write", "Bash", "Grep"],
+      "model": "sonnet"
+    },
+    "code-reviewer": {
+      "description": "Code quality and security review specialist", 
+      "tools": ["Read", "Grep", "Glob"],
+      "model": "sonnet"
+    },
+    "documentation-expert": {
+      "description": "Technical documentation specialist",
+      "tools": ["Read", "Write", "Edit", "Grep"],
+      "model": "sonnet"
+    }
+  },
+  "hooks": {
+    "pre-edit": {
+      "command": "cargo clippy --manifest-path $WORKSPACE/Cargo.toml -- -D warnings",
+      "description": "Lint check before editing Rust files",
+      "patterns": ["**/*.rs"]
+    },
+    "post-edit": {
+      "command": "cargo fmt --manifest-path $WORKSPACE/Cargo.toml",
+      "description": "Auto-format Rust files after editing",
+      "patterns": ["**/*.rs"]
+    },
+    "pre-commit": {
+      "command": "cargo test --manifest-path $WORKSPACE/Cargo.toml",
+      "description": "Run tests before allowing commits",
+      "cwd": "C:\\Users\\tumblehead\\Documents\\workspace\\hpm"
+    }
+  }
+}
