@@ -176,7 +176,7 @@ cargo run -- init <name>                       # Initialize package
 cargo test <module>::tests                     # Module-specific tests
 cargo test --test integration                  # Integration tests only
 cargo doc --open                               # Generate documentation
-./scripts/check-emojis.sh                     # Check for emoji usage
+python3 scripts/check-emojis.py                # Check for emoji usage (platform-agnostic)
 ```
 
 ### HPM CLI Testing
