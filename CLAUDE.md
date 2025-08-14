@@ -224,7 +224,7 @@ HPM provides comprehensive package management through industry-standard CLI patt
 - `hpm publish` - Publish packages to registry
 - `hpm info` - Show detailed package information
 - `hpm run` - Execute package scripts
-- `hpm check` - Validate package configuration
+- `hpm check` - Validate package configuration and Houdini compatibility
 - `hpm clean` - Clean build artifacts and caches
 
 #### Package Templates

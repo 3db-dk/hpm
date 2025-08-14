@@ -77,6 +77,8 @@ enum Commands {
         /// Package name
         package: String,
     },
+    /// Validate package configuration
+    Check,
 }
 
 #[tokio::main]
@@ -132,6 +134,9 @@ async fn main() -> Result<()> {
         }
         Commands::Info { package } => {
             println!("Package info for: {}", package);
+        }
+        Commands::Check => {
+            commands::check::check_package().await?;
         }
     }
 

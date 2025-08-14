@@ -225,11 +225,62 @@ hpm run docs
 ```
 
 #### `hpm check`
-Validate package configuration and dependencies.
+Validate package configuration and dependencies with comprehensive analysis.
 
 ```bash
 hpm check
-hpm check --fix  # Auto-fix issues where possible
+```
+
+**Validation Checks:**
+
+1. **Manifest Validation**
+   - `hpm.toml` existence and valid TOML syntax
+   - Package structure (name, version, semantic versioning)
+   - Required and optional field validation
+   - Package name format (kebab-case recommended)
+
+2. **Project Structure Analysis**
+   - Standard Houdini directories (`otls`, `python`, `scripts`, `presets`, `config`)
+   - README file existence and consistency with manifest
+   - Digital asset detection in `otls` directory (.hda, .otl files)
+
+3. **Houdini Compatibility**
+   - Generated `package.json` structure validation
+   - Houdini version constraint format verification
+   - Version range logic validation (min <= max)
+
+4. **Best Practices Assessment**
+   - License file presence when license specified
+   - Version control setup (Git repository, .gitignore)
+   - Package size considerations (warnings for large packages/files)
+   - Script command validation
+
+**Output Categories:**
+- ✅ **Success**: Validation checks passed
+- ⚠️ **Warnings**: Recommendations for improvement
+- ❌ **Errors**: Critical issues requiring fixes
+
+**Exit Codes:**
+- `0` - Validation successful (may include warnings)
+- `1` - Validation failed with errors
+
+**Example Output:**
+```
+🔍 Checking HPM package configuration...
+
+✓ hpm.toml found
+✓ hpm.toml has valid TOML syntax  
+✓ Package manifest validation passed
+✓ Found otls directory
+✓ Generated Houdini package.json is valid
+✓ Minimum Houdini version: 19.5
+✓ Git repository initialized
+
+⚠️ otls directory exists but contains no .hda or .otl files
+⚠️ License specified in manifest but no LICENSE file found
+
+✅ Package validation completed successfully!
+   2 warning(s) found - consider addressing them
 ```
 
 #### `hpm clean`
