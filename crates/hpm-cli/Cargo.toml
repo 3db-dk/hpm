@@ -28,6 +28,7 @@ serde_json.workspace = true
 hpm-package = { path = "../hpm-package" }
 hpm-core = { path = "../hpm-core" }
 hpm-config = { path = "../hpm-config" }
+hpm-python = { path = "../hpm-python" }
 
 [dev-dependencies]
 tempfile.workspace = true

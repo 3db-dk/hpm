@@ -7,7 +7,8 @@ members = [
     "crates/hpm-resolver",
     "crates/hpm-installer",
     "crates/hpm-package",
-    "crates/hpm-error"
+    "crates/hpm-error",
+    "crates/hpm-python"
 ]
 resolver = "2"
 
@@ -52,6 +53,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Testing
 tokio-test = "0.4"
+
+# Additional dependencies for Python support
+semver = "1.0"
+indexmap = "2.0"
+chrono = { version = "0.4", features = ["serde"] }
+which = "6.0"
 
 [profile.release]
 lto = true

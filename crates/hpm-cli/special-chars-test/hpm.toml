@@ -1,0 +1,11 @@
+[package]
+name = "special-chars-test"
+version = "1.0.0"
+description = 'Package with "quotes" & special chars!'
+authors = ["Author Name <email+test@example.com>"]
+license = "MIT"
+readme = "README.md"
+keywords = ["houdini"]
+
+[houdini]
+min_version = "19.5"

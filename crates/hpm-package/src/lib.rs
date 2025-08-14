@@ -11,6 +11,7 @@ pub struct PackageManifest {
     pub package: PackageInfo,
     pub houdini: Option<HoudiniConfig>,
     pub dependencies: Option<HashMap<String, DependencySpec>>,
+    pub python_dependencies: Option<HashMap<String, PythonDependencySpec>>,
     pub scripts: Option<HashMap<String, String>>,
 }
 
@@ -46,6 +47,18 @@ pub enum DependencySpec {
         branch: Option<String>,
         optional: Option<bool>,
         registry: Option<String>,
+    },
+}
+
+/// Python dependency specification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PythonDependencySpec {
+    Simple(String),
+    Detailed {
+        version: Option<String>,
+        optional: Option<bool>,
+        extras: Option<Vec<String>>,
     },
 }
 
@@ -94,6 +107,7 @@ impl PackageManifest {
                 max_version: None,
             }),
             dependencies: None,
+            python_dependencies: None,
             scripts: None,
         }
     }
@@ -227,6 +241,7 @@ mod tests {
                 max_version: Some("21.0".to_string()),
             }),
             dependencies: None,
+            python_dependencies: None,
             scripts: None,
         };
 
@@ -251,6 +266,7 @@ mod tests {
             },
             houdini: None,
             dependencies: None,
+            python_dependencies: None,
             scripts: None,
         };
 
@@ -275,6 +291,7 @@ mod tests {
             },
             houdini: None,
             dependencies: None,
+            python_dependencies: None,
             scripts: None,
         };
 

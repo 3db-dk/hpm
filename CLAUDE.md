@@ -208,6 +208,8 @@ cargo run -- search "geometry tools"
 # Test cleanup system
 cargo run -- clean --dry-run                   # Preview cleanup operations
 cargo run -- clean --yes                      # Automated cleanup
+cargo run -- clean --python-only --dry-run    # Preview Python virtual environment cleanup
+cargo run -- clean --comprehensive --dry-run  # Preview comprehensive cleanup (packages + Python)
 RUST_LOG=debug cargo run -- clean --dry-run    # Debug cleanup analysis
 ```
 
@@ -238,6 +240,7 @@ HPM implements a modular workspace architecture optimized for package management
 - **`crates/hpm-resolver`** - Dependency resolution engine
 - **`crates/hpm-installer`** - Package installation subsystem
 - **`crates/hpm-package`** - Package manifest processing and Houdini integration
+- **`crates/hpm-python`** - Python dependency management with virtual environment isolation
 - **`crates/hpm-error`** - Error handling infrastructure
 
 #### Core Module Components (`crates/hpm-core/src/`)
@@ -400,6 +403,191 @@ RUST_LOG=debug hpm clean --dry-run
 
 For detailed technical documentation, see `docs/cleanup-system.md`.
 
+## Python Dependency Management
+
+HPM provides comprehensive Python dependency management for Houdini packages, addressing the challenge of conflicting Python dependencies across multiple packages through virtual environment isolation.
+
+### Core Features
+
+- **Content-Addressable Virtual Environments**: Packages with identical resolved dependencies share the same virtual environment
+- **UV-Powered Resolution**: High-performance dependency resolution using bundled UV binary
+- **Complete Isolation**: HPM's UV installation is completely isolated from system UV to prevent interference
+- **Conflict Detection**: Automatic detection and reporting of dependency conflicts across packages
+- **Houdini Integration**: Seamless PYTHONPATH injection via generated package.json files
+- **Intelligent Cleanup**: Orphaned virtual environment detection and removal
+
+### Architecture Overview
+
+The Python dependency system uses hash-based virtual environment sharing:
+
+```
+~/.hpm/
+├── packages/                     # HPM packages
+├── venvs/                        # Python virtual environments
+│   ├── a1b2c3d4e5f6/            # Virtual environment (content hash)
+│   │   ├── metadata.json        # Environment metadata
+│   │   └── lib/python/site-packages/  # Python packages
+│   └── f6e5d4c3b2a1/            # Another virtual environment
+└── uv-cache/                     # Isolated UV package cache
+```
+
+### HPM Package Manifest Python Dependencies
+
+Add Python dependencies to your `hpm.toml`:
+
+```toml
+[package]
+name = "my-houdini-tool"
+version = "1.0.0"
+
+[houdini]
+min_version = "20.0"  # Maps to Python 3.9
+
+# Python dependency specifications
+[python_dependencies]
+numpy = ">=1.20.0"
+requests = { version = ">=2.25.0", extras = ["security"] }
+matplotlib = { version = "^3.5.0", optional = true }
+```
+
+### Houdini Version to Python Version Mapping
+
+HPM automatically maps Houdini versions to appropriate Python versions:
+
+| Houdini Version | Python Version |
+|----------------|----------------|
+| 19.0 - 19.5    | Python 3.7     |
+| 20.0           | Python 3.9     |
+| 20.5           | Python 3.10    |
+| 21.x           | Python 3.11    |
+
+### Dependency Resolution Process
+
+1. **Collection**: Extract Python dependencies from all package manifests
+2. **Version Mapping**: Map Houdini version constraints to Python versions
+3. **Conflict Detection**: Identify conflicting dependency versions
+4. **Resolution**: Use UV to resolve exact package versions
+5. **Environment Creation**: Create or reuse virtual environment based on content hash
+6. **Integration**: Generate Houdini package.json with PYTHONPATH injection
+
+### Usage Examples
+
+#### Basic Python Package
+```toml
+[package]
+name = "geometry-tools"
+version = "1.0.0"
+
+[houdini]
+min_version = "20.0"
+
+[python_dependencies]
+numpy = ">=1.20.0"
+scipy = ">=1.7.0"
+```
+
+#### Advanced with Optional Dependencies
+```toml
+[package]
+name = "visualization-tools"
+version = "2.1.0"
+
+[houdini]
+min_version = "20.0"
+
+[python_dependencies]
+matplotlib = "^3.5.0"
+plotly = { version = ">=5.0.0", optional = true }
+seaborn = { version = ">=0.11.0", extras = ["stats"] }
+```
+
+### Python Cleanup Operations
+
+HPM extends its cleanup system to handle Python virtual environments:
+
+```bash
+# Preview Python virtual environment cleanup
+hpm clean --python-only --dry-run
+
+# Clean only orphaned Python environments
+hpm clean --python-only
+
+# Comprehensive cleanup (packages + Python environments)
+hpm clean --comprehensive --dry-run
+hpm clean --comprehensive
+
+# Interactive cleanup with confirmation
+hpm clean --comprehensive
+```
+
+### Virtual Environment Sharing
+
+Multiple packages with identical resolved dependencies share the same virtual environment:
+
+```bash
+# Package A and B both need numpy==1.24.0, requests==2.28.0
+# They share virtual environment hash: a1b2c3d4e5f6
+
+Package A (geometry-tools) -> venv: a1b2c3d4e5f6
+Package B (mesh-utilities)  -> venv: a1b2c3d4e5f6  # Same hash, shared environment
+Package C (advanced-tools)  -> venv: f6e5d4c3b2a1  # Different dependencies, different environment
+```
+
+### Generated Houdini Integration
+
+HPM automatically generates `package.json` files with Python environment integration:
+
+```json
+{
+  "path": "$HPM_PACKAGE_ROOT",
+  "env": [
+    {
+      "PYTHONPATH": "/Users/user/.hpm/venvs/a1b2c3d4e5f6/lib/python/site-packages:$PYTHONPATH"
+    }
+  ],
+  "hpm_managed": true,
+  "hpm_package": "geometry-tools"
+}
+```
+
+### Development Commands
+
+```bash
+# Test Python dependency features
+cargo test -p hpm-python                    # Test Python dependency management
+
+# Test Python integration with core functionality
+cargo test -p hpm-core --features python   # Test core with Python features
+
+# Debug Python dependency resolution
+RUST_LOG=debug cargo run -- add geometry-tools  # See Python resolution process
+
+# Manual Python environment operations
+cargo run --example python_venv_demo -p hpm-python  # Development examples
+```
+
+### UV Isolation Strategy
+
+HPM bundles its own UV binary and ensures complete isolation:
+
+- **Bundled Binary**: UV is embedded in the HPM binary, no system dependency
+- **Isolated Cache**: UV cache stored in `~/.hpm/uv-cache/`, not system cache
+- **Isolated Config**: UV configuration in `~/.hpm/uv-config/`, separate from system
+- **Environment Variables**: HPM sets UV-specific environment variables for isolation
+- **No System Interference**: Zero impact on existing user UV installations
+
+### Error Handling and Troubleshooting
+
+Common Python dependency scenarios:
+
+- **Conflicting Versions**: HPM detects and reports version conflicts with specific package names
+- **Missing Python Version**: Automatic fallback to Python 3.9 if Houdini version mapping fails
+- **Network Issues**: UV dependency resolution failures are properly reported with context
+- **Virtual Environment Corruption**: Automatic recreation of corrupted environments
+- **Cleanup Safety**: Never removes virtual environments needed by active projects
+
+For comprehensive technical details, see `docs/python-dependency-management.md`.
+
 ## Houdini Integration
 
 HPM extends Houdini's native package system with modern dependency management capabilities.
@@ -425,6 +613,10 @@ max_version = "20.5"
 [dependencies]
 utility-nodes = "^2.1.0"
 material-library = { version = "1.5", optional = true }
+
+[python_dependencies]
+numpy = ">=1.20.0"
+requests = { version = ">=2.25.0", extras = ["security"] }
 
 [scripts]
 build = "python scripts/build.py"

@@ -2,6 +2,7 @@ use crate::dependency::{DependencyResolver, PackageId};
 use crate::discovery::ProjectDiscovery;
 use hpm_config::{ProjectsConfig, StorageConfig};
 use hpm_package::PackageManifest;
+use hpm_python::cleanup::{CleanupResult, PythonCleanupAnalyzer};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,6 +11,63 @@ use tracing::{debug, error, info, warn};
 
 pub mod types;
 pub use types::{InstalledPackage, PackageSpec};
+
+/// Result of comprehensive cleanup including both packages and Python environments
+#[derive(Debug)]
+pub struct ComprehensiveCleanupResult {
+    pub removed_packages: Vec<String>,
+    pub python_cleanup: CleanupResult,
+}
+
+impl ComprehensiveCleanupResult {
+    /// Total number of items cleaned (packages + venvs)
+    pub fn total_items_cleaned(&self) -> usize {
+        self.removed_packages.len() + self.python_cleanup.items_cleaned()
+    }
+
+    /// Total number of items that would be cleaned (packages + venvs)
+    pub fn total_items_that_would_be_cleaned(&self) -> usize {
+        self.removed_packages.len() + self.python_cleanup.items_that_would_be_cleaned()
+    }
+
+    /// Format the total space freed
+    pub fn format_total_space_freed(&self) -> String {
+        let package_space_estimate = self.removed_packages.len() as u64 * 10 * 1024 * 1024; // 10MB per package
+        let total_space = package_space_estimate + self.python_cleanup.space_freed;
+        format_bytes(total_space)
+    }
+
+    /// Format the total space that would be freed
+    pub fn format_total_space_that_would_be_freed(&self) -> String {
+        let package_space_estimate = self.removed_packages.len() as u64 * 10 * 1024 * 1024; // 10MB per package
+        let total_space = package_space_estimate + self.python_cleanup.space_that_would_be_freed;
+        format_bytes(total_space)
+    }
+}
+
+/// Format byte size in human-readable format
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    const THRESHOLD: u64 = 1024;
+
+    if bytes == 0 {
+        return "0 B".to_string();
+    }
+
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+
+    while size >= THRESHOLD as f64 && unit_index < UNITS.len() - 1 {
+        size /= THRESHOLD as f64;
+        unit_index += 1;
+    }
+
+    if unit_index == 0 {
+        format!("{} {}", bytes, UNITS[unit_index])
+    } else {
+        format!("{:.1} {}", size, UNITS[unit_index])
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct StorageManager {
@@ -309,6 +367,151 @@ impl StorageManager {
 
         Ok(orphaned_identifiers)
     }
+
+    /// Comprehensive cleanup including both packages and Python virtual environments
+    pub async fn cleanup_comprehensive(
+        &self,
+        projects_config: &ProjectsConfig,
+    ) -> Result<ComprehensiveCleanupResult, StorageError> {
+        info!("Starting comprehensive cleanup (packages + Python environments)");
+
+        // First, perform package cleanup
+        let removed_packages = self.cleanup_unused(projects_config).await?;
+
+        // Then, perform Python virtual environment cleanup
+        let python_analyzer = PythonCleanupAnalyzer::new();
+
+        // Get list of active packages after cleanup
+        let remaining_packages = self
+            .list_installed()
+            .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
+        let active_package_names: Vec<String> = remaining_packages
+            .into_iter()
+            .map(|p| format!("{}@{}", p.name, p.version))
+            .collect();
+
+        // Find and clean up orphaned virtual environments
+        let orphaned_venvs = python_analyzer
+            .analyze_orphaned_venvs(&active_package_names)
+            .await
+            .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
+
+        let python_result = python_analyzer
+            .cleanup_orphaned_venvs(&orphaned_venvs, false)
+            .await
+            .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
+
+        let result = ComprehensiveCleanupResult {
+            removed_packages,
+            python_cleanup: python_result,
+        };
+
+        info!(
+            "Comprehensive cleanup completed: {} packages, {} venvs, {} space freed",
+            result.removed_packages.len(),
+            result.python_cleanup.items_cleaned(),
+            result.python_cleanup.format_space_freed()
+        );
+
+        Ok(result)
+    }
+
+    /// Comprehensive cleanup dry run including both packages and Python virtual environments
+    pub async fn cleanup_comprehensive_dry_run(
+        &self,
+        projects_config: &ProjectsConfig,
+    ) -> Result<ComprehensiveCleanupResult, StorageError> {
+        info!("Starting comprehensive cleanup dry run");
+
+        // First, get packages that would be removed
+        let would_remove_packages = self.cleanup_unused_dry_run(projects_config).await?;
+
+        // Get list of packages that would remain after cleanup
+        let all_installed = self
+            .list_installed()
+            .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
+
+        // Filter out packages that would be removed
+        let remaining_packages: Vec<String> = all_installed
+            .into_iter()
+            .filter_map(|p| {
+                let package_id = format!("{}@{}", p.name, p.version);
+                if would_remove_packages.contains(&package_id) {
+                    None
+                } else {
+                    Some(package_id)
+                }
+            })
+            .collect();
+
+        // Analyze Python virtual environments
+        let python_analyzer = PythonCleanupAnalyzer::new();
+        let orphaned_venvs = python_analyzer
+            .analyze_orphaned_venvs(&remaining_packages)
+            .await
+            .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
+
+        let python_result = python_analyzer
+            .cleanup_orphaned_venvs(&orphaned_venvs, true) // dry_run = true
+            .await
+            .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
+
+        let result = ComprehensiveCleanupResult {
+            removed_packages: would_remove_packages,
+            python_cleanup: python_result,
+        };
+
+        info!(
+            "Comprehensive cleanup dry run completed: {} packages, {} venvs would be removed",
+            result.removed_packages.len(),
+            result.python_cleanup.items_that_would_be_cleaned()
+        );
+
+        Ok(result)
+    }
+
+    /// Clean up only Python virtual environments
+    pub async fn cleanup_python_only(&self, dry_run: bool) -> Result<CleanupResult, StorageError> {
+        info!("Starting Python-only cleanup (dry_run: {})", dry_run);
+
+        let python_analyzer = PythonCleanupAnalyzer::new();
+
+        // Get list of all active packages
+        let active_packages = self
+            .list_installed()
+            .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
+        let active_package_names: Vec<String> = active_packages
+            .into_iter()
+            .map(|p| format!("{}@{}", p.name, p.version))
+            .collect();
+
+        // Find orphaned virtual environments
+        let orphaned_venvs = python_analyzer
+            .analyze_orphaned_venvs(&active_package_names)
+            .await
+            .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
+
+        // Clean up (or dry run)
+        let result = python_analyzer
+            .cleanup_orphaned_venvs(&orphaned_venvs, dry_run)
+            .await
+            .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
+
+        if dry_run {
+            info!(
+                "Python cleanup dry run: {} venvs would be cleaned",
+                result.items_that_would_be_cleaned()
+            );
+        } else {
+            info!(
+                "Python cleanup completed: {} venvs cleaned, {} space freed",
+                result.items_cleaned(),
+                result.format_space_freed()
+            );
+        }
+
+        Ok(result)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -342,6 +545,9 @@ pub enum StorageError {
 
     #[error("Dependency resolution failed: {0}")]
     DependencyResolution(String),
+
+    #[error("Python cleanup failed: {0}")]
+    PythonCleanup(String),
 }
 
 #[cfg(test)]
