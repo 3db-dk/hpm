@@ -2,6 +2,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod commands;
+use commands::init_package;
+
 #[derive(Parser)]
 #[command(name = "hpm", version, about = "HPM - Houdini Package Manager")]
 struct Cli {
@@ -14,15 +17,47 @@ enum Commands {
     /// Initialize a new HPM package
     Init {
         /// Package name
-        name: String,
+        name: Option<String>,
+
+        /// Package description
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Package author
+        #[arg(long)]
+        author: Option<String>,
+
+        /// Initial version
+        #[arg(long, default_value = "0.1.0")]
+        version: String,
+
+        /// License identifier
+        #[arg(long, default_value = "MIT")]
+        license: String,
+
+        /// Minimum Houdini version
+        #[arg(long = "houdini-min")]
+        houdini_min: Option<String>,
+
+        /// Maximum Houdini version
+        #[arg(long = "houdini-max")]
+        houdini_max: Option<String>,
+
+        /// Create minimal package structure (only hpm.toml)
+        #[arg(long)]
+        bare: bool,
+
+        /// Initialize version control (git, none)
+        #[arg(long, default_value = "git")]
+        vcs: String,
     },
-    /// Install a package
-    Install {
+    /// Add a package
+    Add {
         /// Package name
         package: Option<String>,
     },
-    /// Uninstall a package
-    Uninstall {
+    /// Remove a package
+    Remove {
         /// Package name
         package: String,
     },
@@ -51,15 +86,37 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init { name } => {
-            println!("Initializing package: {}", name);
+        Commands::Init {
+            name,
+            description,
+            author,
+            version,
+            license,
+            houdini_min,
+            houdini_max,
+            bare,
+            vcs,
+        } => {
+            let options = commands::init::InitOptions {
+                name,
+                description,
+                author,
+                version,
+                license,
+                houdini_min,
+                houdini_max,
+                bare,
+                vcs,
+            };
+
+            init_package(options).await?;
         }
-        Commands::Install { package } => match package {
-            Some(pkg) => println!("Installing package: {}", pkg),
-            None => println!("Installing dependencies from hpm.toml"),
+        Commands::Add { package } => match package {
+            Some(pkg) => println!("Adding package: {}", pkg),
+            None => println!("Adding dependencies from hpm.toml"),
         },
-        Commands::Uninstall { package } => {
-            println!("Uninstalling package: {}", package);
+        Commands::Remove { package } => {
+            println!("Removing package: {}", package);
         }
         Commands::Update => {
             println!("Updating packages");

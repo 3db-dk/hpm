@@ -23,11 +23,13 @@ check:
 
 # Run all tests
 test:
-    cargo test --workspace --all-features
+    cargo test --workspace --all-features --package hpm-cli -- --test-threads=1
+    cargo test --workspace --all-features --exclude hpm-cli
 
 # Run tests with output
 test-verbose:
-    cargo test --workspace --all-features -- --nocapture
+    cargo test --workspace --all-features --package hpm-cli -- --test-threads=1 --nocapture
+    cargo test --workspace --all-features --exclude hpm-cli -- --nocapture
 
 # Run integration tests only
 test-integration:

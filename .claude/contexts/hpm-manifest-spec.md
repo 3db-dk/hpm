@@ -52,16 +52,14 @@ keywords = ["houdini", "modeling", "vfx"]    # Search keywords
 categories = ["digital-assets", "modeling"]   # Package categories
 ```
 
-### `[houdini]` Section (Required)
+### `[houdini]` Section (Optional)
 
 Houdini-specific configuration:
 
 ```toml
 [houdini]
 min_version = "19.5"               # Minimum Houdini version
-max_version = "21.0"               # Maximum Houdini version  
-contexts = ["sop", "lop", "cop"]   # Supported Houdini contexts
-build_requires = ["cmake", "gcc"]  # Build-time requirements
+max_version = "21.0"               # Maximum Houdini version (optional)
 ```
 
 ### `[dependencies]` Section
@@ -77,46 +75,11 @@ custom-package = { path = "../local-package" }
 git-package = { git = "https://github.com/user/repo.git", tag = "v1.0" }
 ```
 
-### `[dev-dependencies]` Section
 
-Development and testing dependencies:
 
-```toml
-[dev-dependencies]
-test-framework = "0.1.0"
-benchmark-tools = "2.0"
-```
 
-### `[[assets]]` Section
 
-Define digital assets and their properties:
 
-```toml
-[[assets]]
-name = "my_custom_sop"             # Asset identifier
-path = "otls/my_custom_sop.hda"    # Path to asset file
-type = "hda"                       # Asset type: hda, otl, python, script
-contexts = ["sop"]                 # Houdini contexts where asset applies
-description = "Custom SOP node"    # Asset description
-version = "1.0"                    # Asset version (optional)
-
-[[assets]]
-name = "utility_functions"
-path = "python/utility_functions.py"
-type = "python"
-contexts = ["*"]                   # All contexts
-```
-
-### `[build]` Section
-
-Build configuration and scripts:
-
-```toml
-[build]
-build-script = "build.py"         # Custom build script
-exclude = ["tests/", "*.tmp"]     # Files to exclude from package
-include = ["otls/", "python/"]    # Files to explicitly include
-```
 
 ### `[scripts]` Section
 
@@ -129,21 +92,7 @@ lint = "ruff check python/"
 build-docs = "sphinx-build docs/ docs/_build"
 ```
 
-### `[tool.hpm]` Section
 
-HPM-specific configuration:
-
-```toml
-[tool.hpm]
-registry = "https://registry.houdini-packages.org"  # Custom registry
-cache-dir = "~/.hpm/cache"        # Custom cache directory
-install-location = "user"         # user, site, or custom path
-
-[tool.hpm.package-json]
-# Custom package.json generation settings
-template = "custom_template.json"
-extra-env = { "CUSTOM_VAR" = "$HPM_PACKAGE_ROOT/bin" }
-```
 
 ## Version Constraints
 
@@ -156,54 +105,7 @@ HPM uses Semantic Versioning with Cargo-style version constraints:
 - `"1.0.0 - 2.0.0"` - Range (inclusive)
 - `"*"` - Any version
 
-## Asset Types
 
-HPM supports the following asset types:
-
-### `hda` - Houdini Digital Assets
-```toml
-[[assets]]
-name = "my_node"
-path = "otls/my_node.hda"
-type = "hda"
-contexts = ["sop", "lop"]
-```
-
-### `python` - Python Modules
-```toml
-[[assets]]
-name = "my_module"
-path = "python/my_module.py"
-type = "python"
-contexts = ["*"]
-```
-
-### `script` - Shelf Tools and Scripts
-```toml
-[[assets]]
-name = "my_tool"
-path = "scripts/my_tool.py"
-type = "script"
-contexts = ["*"]
-```
-
-### `preset` - Node Presets
-```toml
-[[assets]]
-name = "my_preset"
-path = "presets/my_node.preset"
-type = "preset"
-contexts = ["sop"]
-```
-
-### `config` - Configuration Files
-```toml
-[[assets]]
-name = "environment"
-path = "config/env.json"
-type = "config"
-contexts = ["*"]
-```
 
 ## Generated package.json
 
@@ -214,29 +116,25 @@ HPM automatically generates a Houdini-compatible `package.json` from the `hpm.to
 [package]
 name = "my-tool"
 version = "1.0.0"
+description = "My Houdini tool"
+authors = ["Author <author@example.com>"]
+license = "MIT"
+readme = "README.md"
+keywords = ["houdini"]
 
 [houdini]
 min_version = "20.0"
-
-[[assets]]
-name = "my_sop"
-path = "otls/my_sop.hda"
-type = "hda"
-contexts = ["sop"]
 ```
 
 **Generated package.json:**
 ```json
 {
-    "hpath": "$HPM_PACKAGE_ROOT/otls",
+    "hpath": ["$HPM_PACKAGE_ROOT/otls"],
     "env": [
-        {"HPM_PACKAGE_ROOT": "$PACKAGE_PATH"},
-        {"HPM_PACKAGE_NAME": "my-tool"},
-        {"HPM_PACKAGE_VERSION": "1.0.0"}
+        {"PYTHONPATH": {"method": "prepend", "value": "$HPM_PACKAGE_ROOT/python"}},
+        {"HOUDINI_SCRIPT_PATH": {"method": "prepend", "value": "$HPM_PACKAGE_ROOT/scripts"}}
     ],
-    "enable": "houdini_version >= '20.0'",
-    "package_name": "my-tool",
-    "package_version": "1.0.0"
+    "enable": "houdini_version >= '20.0'"
 }
 ```
 

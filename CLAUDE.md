@@ -165,6 +165,7 @@ cargo fmt                            # Format source code
 cargo clippy -- -D warnings         # Lint with warnings as errors
 cargo clippy --all-features -- -D warnings  # Lint all features
 cargo check                          # Validate without building
+cargo-machete                        # Check for unused dependencies
 ```
 
 ### Development Operations
@@ -176,41 +177,69 @@ cargo test --test integration                  # Integration tests only
 cargo doc --open                               # Generate documentation
 ```
 
+### HPM CLI Testing
+```bash
+# Test CLI functionality
+cargo run -- init test-package --description "Test package"
+cargo run -- init --bare minimal-package
+cargo run -- install utility-nodes
+cargo run -- list
+cargo run -- search "geometry tools"
+```
+
 ## Project Architecture
 
-HPM implements a modular architecture optimized for package management operations.
+HPM implements a modular workspace architecture optimized for package management operations.
 
-### Core Modules
-- **`src/main.rs`** - Application entry point and command orchestration
-- **`src/cli/`** - Command-line interface implementation
-- **`src/config/`** - Configuration management system
-- **`src/registry/`** - Package registry communication layer
-- **`src/resolver/`** - Dependency resolution engine
-- **`src/installer/`** - Package installation subsystem
-- **`src/package/`** - Package manifest processing
-- **`src/error/`** - Error handling infrastructure
+### Workspace Structure
+- **`crates/hpm-cli`** - Command-line interface and application entry point
+- **`crates/hpm-core`** - Core functionality and orchestration
+- **`crates/hpm-config`** - Configuration management system
+- **`crates/hpm-registry`** - Package registry communication layer
+- **`crates/hpm-resolver`** - Dependency resolution engine
+- **`crates/hpm-installer`** - Package installation subsystem
+- **`crates/hpm-package`** - Package manifest processing and validation
+- **`crates/hpm-error`** - Error handling infrastructure
 
 ### Design Principles
 - **Asynchronous Operations**: Tokio runtime for all I/O operations
 - **Structured Error Handling**: Domain errors via `thiserror`, application errors via `anyhow`
 - **Interface Abstraction**: Trait-based design for testability and modularity
 - **Layered Configuration**: Hierarchical configuration management (global, project, runtime)
+- **Modular Crates**: Clear separation of concerns with minimal coupling
+
+## CLI Design and Package Management
+
+### Command Structure
+
+HPM provides comprehensive package management through industry-standard CLI patterns:
+
+#### Core Commands
+- `hpm init` - Initialize new Houdini packages with templates
+- `hpm add` - Add packages and resolve dependencies
+- `hpm remove` - Remove installed packages
+- `hpm update` - Update packages to latest versions
+- `hpm list` - Display installed packages and dependency tree
+- `hpm search` - Search registry for packages
+- `hpm publish` - Publish packages to registry
+- `hpm info` - Show detailed package information
+- `hpm run` - Execute package scripts
+- `hpm check` - Validate package configuration
+- `hpm clean` - Clean build artifacts and caches
+
+#### Package Templates
+- **Standard** (default): Complete Houdini package with all standard directories
+- **Bare**: Minimal structure with only hpm.toml for custom layouts
+
+See `docs/cli-design.md` for comprehensive CLI specification.
 
 ## Houdini Integration
 
 HPM extends Houdini's native package system with modern dependency management capabilities.
 
-### Standard Houdini Packages
+### HPM Package Manifest (hpm.toml)
 
-Houdini packages utilize JSON manifests defining:
-- Environment variables and path configurations
-- Houdini path modifications (`hpath`)
-- Conditional loading based on version and platform
-- Package dependencies and loading order
-
-### HPM Package Manifest
-
-HPM introduces `hpm.toml` alongside standard `package.json` files:
+The primary package descriptor supporting comprehensive metadata and dependency management:
 
 ```toml
 [package]
@@ -219,37 +248,40 @@ version = "1.0.0"
 description = "Custom Houdini digital assets and tools"
 authors = ["Author <email@example.com>"]
 license = "MIT"
-keywords = ["houdini", "modeling", "vfx"]
+readme = "README.md"
+keywords = ["houdini"]
 
 [houdini]
-min_version = "20.0"
-max_version = "21.0"
-contexts = ["sop", "lop", "cop"]
+min_version = "19.5"
+max_version = "20.5"
 
 [dependencies]
 utility-nodes = "^2.1.0"
 material-library = { version = "1.5", optional = true }
 
-[[assets]]
-name = "my_custom_node"
-path = "otls/my_custom_node.hda"
-type = "hda"
-contexts = ["sop"]
+[scripts]
+build = "python scripts/build.py"
+test = "python -m pytest tests/"
 ```
 
-### Package Structure
+### Standard Package Structure
 ```
 my-package/
 ├── hpm.toml           # HPM package manifest
-├── package.json       # Standard Houdini package file
+├── package.json       # Generated Houdini package file
+├── README.md          # Package documentation
 ├── otls/             # Digital assets (.hda, .otl files)
 │   └── my_node.hda
 ├── python/           # Python modules
 │   └── my_tool.py
 ├── scripts/          # Shelf tools and scripts
 ├── presets/          # Node presets
-└── config/           # Configuration files
+├── config/           # Configuration files
+└── tests/            # Test files
 ```
+
+### Package.json Generation
+HPM automatically generates standard Houdini `package.json` files from `hpm.toml` configuration, ensuring seamless integration with existing Houdini workflows.
 
 ### Supported Asset Types
 - **Digital Assets**: Houdini Digital Assets (.hda, .otl)
@@ -267,10 +299,62 @@ my-package/
 - Document all public APIs with doc comments
 
 ### Testing Framework
-- Unit tests: Module-level tests using `#[cfg(test)]`
-- Integration tests: End-to-end testing in `tests/` directory
-- Mock implementations: External dependency abstraction
-- Property-based testing: Complex algorithm verification
+
+#### Core Testing Principles
+- **Unit tests**: Module-level tests using `#[cfg(test)]`
+- **Integration tests**: End-to-end testing in `tests/` directory
+- **Mock implementations**: External dependency abstraction
+- **Property-based testing**: Complex algorithm verification
+
+#### File System Testing Standards
+For functionality that creates files and directories (like `hpm init`):
+
+**Test Fixtures and Cleanup**:
+- Always use `tempfile::TempDir` for temporary file system operations
+- Never rely on global file system state that could affect other tests
+- Restore working directory after tests that change it
+
+```rust
+#[tokio::test]
+async fn test_init_package_standard() {
+    let temp_dir = TempDir::new().unwrap();
+    let original_dir = env::current_dir().unwrap();
+    
+    env::set_current_dir(temp_dir.path()).unwrap();
+    // ... test logic ...
+    env::set_current_dir(original_dir).unwrap();
+    
+    // TempDir automatically cleans up when dropped
+}
+```
+
+**Content Validation Requirements**:
+- Verify both file/directory existence AND content correctness
+- Test all expected files and directories, not just a subset
+- Validate generated content matches expected structure and values
+- Test edge cases with special characters, missing optional fields
+
+```rust
+// Validate file existence
+assert!(package_path.join("hpm.toml").exists());
+assert!(package_path.join("python").is_dir());
+
+// Validate file content
+let hpm_toml_content = fs::read_to_string(package_path.join("hpm.toml")).unwrap();
+assert!(hpm_toml_content.contains("name = \"test-package\""));
+assert!(hpm_toml_content.contains("version = \"1.0.0\""));
+```
+
+**Error Case Testing**:
+- Test failure scenarios (directory already exists, invalid input)
+- Verify error messages are helpful and accurate
+- Ensure partial failures are handled gracefully
+
+#### Test Organization
+- Group related tests in modules using `#[cfg(test)]`
+- Use descriptive test names that clearly indicate what is being tested
+- Include helper functions for common validation patterns
+- Run tests with `--test-threads=1` when tests modify working directory
 
 ### Error Handling
 ```rust

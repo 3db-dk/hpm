@@ -39,7 +39,7 @@ HPM is a Rust-based package management system designed specifically for SideFX H
 ```bash
 hpm init        # Initialize new Houdini package
 hpm build       # Build package and generate package.json
-hpm install     # Install packages and dependencies
+hpm add         # Add packages and dependencies
 hpm remove      # Remove installed packages
 hpm update      # Update packages to latest versions
 hpm search      # Search package registries
@@ -114,7 +114,7 @@ $SYSTEM/packages.json           # System package integration
 [package]
 name = "example-lib"
 version = "1.0.0"
-description = "Example library package"
+description = "Example Houdini package"
 authors = ["Author Name <author@example.com>"]
 license = "MIT"
 keywords = ["library", "utilities", "tools"]
