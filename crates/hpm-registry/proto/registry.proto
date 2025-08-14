@@ -1,0 +1,147 @@
+syntax = "proto3";
+
+package hpm.registry.v1;
+
+service PackageRegistry {
+  // Package operations
+  rpc PublishPackage(stream PublishRequest) returns (PublishResponse);
+  rpc DownloadPackage(DownloadRequest) returns (stream DownloadResponse);
+  rpc SearchPackages(SearchRequest) returns (SearchResponse);
+  rpc GetPackageInfo(PackageInfoRequest) returns (PackageInfo);
+  rpc ListVersions(ListVersionsRequest) returns (ListVersionsResponse);
+  
+  // Authentication
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+  
+  // Health checks
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// Package information and metadata
+message PackageInfo {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+  repeated string authors = 4;
+  string license = 5;
+  map<string, string> dependencies = 6;
+  HoudiniRequirements houdini = 7;
+  int64 size_bytes = 8;
+  string checksum = 9;
+  int64 published_at = 10; // Unix timestamp
+  repeated string keywords = 11;
+  string readme = 12;
+  string repository = 13;
+  string homepage = 14;
+}
+
+message HoudiniRequirements {
+  string min_version = 1;
+  string max_version = 2;
+  repeated string platforms = 3;
+}
+
+// Publish package messages
+message PublishRequest {
+  oneof data {
+    PackageMetadata metadata = 1;
+    bytes chunk = 2;
+  }
+}
+
+message PackageMetadata {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+  repeated string authors = 4;
+  string license = 5;
+  map<string, string> dependencies = 6;
+  HoudiniRequirements houdini = 7;
+  repeated string keywords = 8;
+  string readme = 9;
+  string repository = 10;
+  string homepage = 11;
+  int64 size_bytes = 12;
+  string checksum = 13;
+}
+
+message PublishResponse {
+  bool success = 1;
+  string package_id = 2;
+  string message = 3;
+}
+
+// Download package messages
+message DownloadRequest {
+  string name = 1;
+  string version = 2;
+}
+
+message DownloadResponse {
+  oneof data {
+    PackageInfo metadata = 1;
+    bytes chunk = 2;
+  }
+}
+
+// Search packages messages
+message SearchRequest {
+  string query = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+  SearchFilter filter = 4;
+}
+
+message SearchFilter {
+  repeated string keywords = 1;
+  string license = 2;
+  HoudiniRequirements houdini = 3;
+  int64 min_published_at = 4;
+  int64 max_published_at = 5;
+}
+
+message SearchResponse {
+  repeated PackageInfo packages = 1;
+  int32 total_count = 2;
+}
+
+// Package info messages
+message PackageInfoRequest {
+  string name = 1;
+  string version = 2; // Optional, defaults to latest
+}
+
+// List versions messages
+message ListVersionsRequest {
+  string name = 1;
+}
+
+message ListVersionsResponse {
+  repeated string versions = 1;
+}
+
+// Authentication messages
+message ValidateTokenRequest {
+  string token = 1;
+}
+
+message ValidateTokenResponse {
+  bool valid = 1;
+  string user_id = 2;
+  repeated string scopes = 3;
+  int64 expires_at = 4; // Optional, Unix timestamp
+}
+
+// Health check messages
+message HealthRequest {}
+
+message HealthResponse {
+  enum Status {
+    SERVING = 0;
+    NOT_SERVING = 1;
+    UNKNOWN = 2;
+  }
+  Status status = 1;
+  string message = 2;
+  int64 timestamp = 3;
+}

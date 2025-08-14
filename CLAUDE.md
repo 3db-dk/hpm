@@ -30,12 +30,21 @@ HPM delivers comprehensive package management for Houdini:
 
 ## Technology Stack
 
+### Core Framework
 - **Language**: Rust (stable channel)
 - **Build System**: Cargo
 - **Runtime**: Tokio async runtime
 - **CLI Framework**: Clap (derive API)
 - **Configuration**: TOML format with Serde
 - **Testing**: Built-in Rust testing + tokio-test for async
+
+### Registry System
+- **Transport**: QUIC with s2n-quic for high-performance networking
+- **RPC Protocol**: gRPC with Protocol Buffers for efficient serialization
+- **Authentication**: Token-based auth with scoped permissions
+- **Storage**: Trait-based storage abstraction (Memory, PostgreSQL, S3)
+- **Compression**: zstd for package data compression
+- **Security**: SHA-256 checksums, mandatory TLS encryption
 
 ## MCP Integration
 
@@ -173,6 +182,7 @@ python3 scripts/check-emojis.py      # Enforce no-emoji policy (platform-agnosti
 cargo test -p hpm-config      # Test configuration management
 cargo test -p hpm-core        # Test core functionality and storage
 cargo test -p hpm-package     # Test package manifest handling
+cargo test -p hpm-registry    # Test registry client/server functionality
 cargo test --workspace       # Test entire workspace
 ```
 
@@ -201,6 +211,21 @@ cargo run -- clean --yes                      # Automated cleanup
 RUST_LOG=debug cargo run -- clean --dry-run    # Debug cleanup analysis
 ```
 
+### Registry Development
+```bash
+# Start registry server (development)
+cargo run --bin registry-server -p hpm-registry
+
+# Test registry client
+cargo run --example basic_client -p hpm-registry
+
+# Run registry integration tests
+cargo test --test integration_tests -p hpm-registry
+
+# Build registry with all features
+cargo build --release --all-features -p hpm-registry
+```
+
 ## Project Architecture
 
 HPM implements a modular workspace architecture optimized for package management operations.
@@ -209,7 +234,7 @@ HPM implements a modular workspace architecture optimized for package management
 - **`crates/hpm-cli`** - Command-line interface and application entry point
 - **`crates/hpm-core`** - Core functionality with storage, project discovery, and cleanup systems
 - **`crates/hpm-config`** - Configuration management with project discovery settings
-- **`crates/hpm-registry`** - Package registry communication layer
+- **`crates/hpm-registry`** - High-performance package registry with QUIC transport and gRPC API
 - **`crates/hpm-resolver`** - Dependency resolution engine
 - **`crates/hpm-installer`** - Package installation subsystem
 - **`crates/hpm-package`** - Package manifest processing and Houdini integration
@@ -222,6 +247,13 @@ HPM implements a modular workspace architecture optimized for package management
 - **`project.rs`** - Project manifest management and Houdini integration
 - **`manager.rs`** - High-level package management operations
 - **`integration_test.rs`** - End-to-end testing for cleanup workflows
+
+#### Registry Module Components (`crates/hpm-registry/src/`)
+- **`client/`** - Registry client with QUIC connections and authentication
+- **`server/`** - gRPC server implementation with pluggable storage backends
+- **`types/`** - Shared types for authentication, packages, and error handling
+- **`utils/`** - Compression, validation, and checksum utilities
+- **`proto/`** - Generated Protocol Buffer definitions for gRPC API
 
 ### Package Storage Architecture
 
