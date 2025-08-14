@@ -284,12 +284,94 @@ hpm check
 ```
 
 #### `hpm clean`
-Clean build artifacts and caches.
+Clean orphaned packages using project-aware analysis.
 
+**Overview:**
+The `hpm clean` command provides intelligent package cleanup that safely removes orphaned packages while preserving dependencies needed by active projects. It uses dependency graph analysis to ensure no required packages are accidentally removed.
+
+**Syntax:**
 ```bash
-hpm clean
-hpm clean --cache  # Clear package cache
+hpm clean [OPTIONS]
 ```
+
+**Options:**
+- `-n, --dry-run` - Perform a dry run without actually removing packages
+- `-f, --force` - Remove packages without asking for confirmation
+- `--package <PACKAGE>` - Target specific package patterns (future enhancement)
+
+**Examples:**
+```bash
+# Interactive cleanup with confirmation prompts
+hpm clean
+
+# Preview what would be removed without making changes
+hpm clean --dry-run
+
+# Automated cleanup without confirmation prompts
+hpm clean --force
+```
+
+**How It Works:**
+
+1. **Project Discovery** - Scans configured directories to find HPM-managed projects
+2. **Dependency Analysis** - Builds complete dependency graph including transitive dependencies
+3. **Orphan Detection** - Identifies packages not needed by any active project
+4. **Safe Removal** - Only removes truly orphaned packages while preserving needed dependencies
+
+**Safety Features:**
+- Never removes packages required by active projects
+- Preserves transitive dependencies automatically
+- Warns if no HPM-managed projects are found (prevents removing all packages)
+- Provides detailed logging of cleanup operations
+
+**Configuration:**
+Project discovery is configured via `~/.hpm/config.toml`:
+```toml
+[projects]
+# Explicit project paths to monitor
+explicit_paths = ["/path/to/project1", "/path/to/project2"]
+
+# Root directories to search for HPM projects
+search_roots = ["/Users/username/houdini-projects", "/shared/projects"]
+
+# Maximum directory depth for project search
+max_search_depth = 3
+
+# Patterns to ignore during project search
+ignore_patterns = [".git", "node_modules", "*.tmp"]
+```
+
+**Output Examples:**
+
+*Dry Run Mode:*
+```
+🔍 Analyzing packages for cleanup (dry run)...
+📁 Found 2 HPM-managed projects for cleanup analysis
+📦 Found 5 installed packages to analyze
+✓ Marked 3 packages as needed (including transitive dependencies)
+🗑️ Would remove 2 orphaned packages:
+  - unused-library@1.0.0
+  - old-tools@2.1.0
+```
+
+*Interactive Mode:*
+```
+🔍 Analyzing packages for cleanup...
+📦 Found 2 orphaned packages to remove:
+  - unused-library@1.0.0
+  - old-tools@2.1.0
+
+These packages are not used by any active HPM projects.
+Remove these packages? [y/N]: y
+
+✓ Removed unused-library@1.0.0
+✓ Removed old-tools@2.1.0
+🎉 Cleanup completed: removed 2 orphaned packages
+```
+
+**Exit Codes:**
+- `0` - Cleanup completed successfully
+- `1` - Cleanup failed due to errors
 
 ## Package Templates
 

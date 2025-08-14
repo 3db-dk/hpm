@@ -162,11 +162,18 @@ cargo run -- --help         # Run with help flag
 ### Code Quality
 ```bash
 cargo fmt                            # Format source code
-cargo clippy -- -D warnings         # Lint with warnings as errors
 cargo clippy --all-features -- -D warnings  # Lint all features
 cargo check                          # Validate without building
 cargo-machete                        # Check for unused dependencies
 python3 scripts/check-emojis.py      # Enforce no-emoji policy (platform-agnostic)
+```
+
+### Package-Specific Testing
+```bash
+cargo test -p hpm-config      # Test configuration management
+cargo test -p hpm-core        # Test core functionality and storage
+cargo test -p hpm-package     # Test package manifest handling
+cargo test --workspace       # Test entire workspace
 ```
 
 ### Development Operations
@@ -187,6 +194,11 @@ cargo run -- init --bare minimal-package
 cargo run -- install utility-nodes
 cargo run -- list
 cargo run -- search "geometry tools"
+
+# Test cleanup system
+cargo run -- clean --dry-run                   # Preview cleanup operations
+cargo run -- clean --yes                      # Automated cleanup
+RUST_LOG=debug cargo run -- clean --dry-run    # Debug cleanup analysis
 ```
 
 ## Project Architecture
@@ -195,13 +207,52 @@ HPM implements a modular workspace architecture optimized for package management
 
 ### Workspace Structure
 - **`crates/hpm-cli`** - Command-line interface and application entry point
-- **`crates/hpm-core`** - Core functionality and orchestration
-- **`crates/hpm-config`** - Configuration management system
+- **`crates/hpm-core`** - Core functionality with storage, project discovery, and cleanup systems
+- **`crates/hpm-config`** - Configuration management with project discovery settings
 - **`crates/hpm-registry`** - Package registry communication layer
 - **`crates/hpm-resolver`** - Dependency resolution engine
 - **`crates/hpm-installer`** - Package installation subsystem
-- **`crates/hpm-package`** - Package manifest processing and validation
+- **`crates/hpm-package`** - Package manifest processing and Houdini integration
 - **`crates/hpm-error`** - Error handling infrastructure
+
+#### Core Module Components (`crates/hpm-core/src/`)
+- **`storage.rs`** - Global package storage with project-aware cleanup
+- **`discovery.rs`** - Project discovery and filesystem scanning
+- **`dependency.rs`** - Dependency graph construction and analysis
+- **`project.rs`** - Project manifest management and Houdini integration
+- **`manager.rs`** - High-level package management operations
+- **`integration_test.rs`** - End-to-end testing for cleanup workflows
+
+### Package Storage Architecture
+
+HPM implements a two-tier storage system optimized for Houdini's package loading:
+
+#### Global Storage (`~/.hpm/`)
+```
+~/.hpm/
+├── packages/                     # Versioned package storage
+│   ├── utility-nodes@2.1.0/     # Individual package installations
+│   └── material-library@1.5.0/
+├── cache/                        # Download cache and metadata
+└── registry/                     # Registry index cache
+```
+
+#### Project Integration (`.hpm/packages/`)
+```
+project/
+├── .hpm/
+│   └── packages/                 # Houdini package manifests
+│       ├── utility-nodes.json   # Links to global storage
+│       └── material-library.json
+├── hpm.toml                      # Project manifest
+└── hpm.lock                      # Dependency lock file
+```
+
+**Key Benefits**:
+- **Disk Efficiency**: Single global storage prevents duplicate installations
+- **Version Management**: Multiple versions coexist in global storage
+- **Houdini Integration**: Generated package.json files work with HOUDINI_PACKAGE_PATH
+- **Project Isolation**: Each project can use different package versions
 
 ### Design Principles
 - **Asynchronous Operations**: Tokio runtime for all I/O operations
@@ -227,13 +278,95 @@ HPM provides comprehensive package management through industry-standard CLI patt
 - `hpm info` - Show detailed package information
 - `hpm run` - Execute package scripts
 - `hpm check` - Validate package configuration and Houdini compatibility
-- `hpm clean` - Clean build artifacts and caches
+- `hpm clean` - Project-aware package cleanup with orphan detection
 
 #### Package Templates
 - **Standard** (default): Complete Houdini package with all standard directories
 - **Bare**: Minimal structure with only hpm.toml for custom layouts
 
 See `docs/cli-design.md` for comprehensive CLI specification.
+
+## Project-Aware Cleanup System
+
+HPM features an intelligent cleanup system that safely removes orphaned packages while preserving dependencies needed by active projects.
+
+### Architecture Overview
+
+The cleanup system consists of four integrated components:
+
+1. **Project Discovery** (`crates/hpm-core/src/discovery.rs`)
+   - Configurable filesystem scanning for HPM-managed projects
+   - Depth-limited recursive traversal with ignore patterns
+   - Manifest validation and project metadata extraction
+
+2. **Dependency Graph Engine** (`crates/hpm-core/src/dependency.rs`)
+   - Transitive dependency tracking and analysis
+   - Cycle detection with detailed warnings
+   - Root package identification and reachability analysis
+
+3. **Storage Manager** (`crates/hpm-core/src/storage.rs`)
+   - Project-aware cleanup logic with safety guarantees
+   - Orphan detection through set difference operations
+   - Safe removal with comprehensive error handling
+
+4. **CLI Integration** (`crates/hpm-cli/src/commands/clean.rs`)
+   - User-friendly interface with dry-run and force modes
+   - Interactive confirmation and progress reporting
+
+### Key Features
+
+#### Safety Guarantees
+- **Never removes packages required by active projects**
+- **Preserves transitive dependencies automatically**
+- **Warns when no projects found (prevents removing all packages)**
+- **Comprehensive logging for troubleshooting**
+
+#### Configuration-Driven Discovery
+```toml
+[projects]
+# Explicit project paths to monitor
+explicit_paths = ["/path/to/project1", "/path/to/project2"]
+
+# Root directories to search for HPM projects  
+search_roots = ["/Users/username/houdini-projects", "/shared/projects"]
+
+# Maximum directory depth for project search
+max_search_depth = 3
+
+# Patterns to ignore during project search
+ignore_patterns = [".git", "node_modules", "*.tmp"]
+```
+
+#### Usage Patterns
+```bash
+# Preview cleanup operations (recommended first step)
+hpm clean --dry-run
+
+# Interactive cleanup with confirmation prompts
+hpm clean
+
+# Automated cleanup for scripts and CI/CD
+hpm clean --yes
+
+# Debug cleanup analysis
+RUST_LOG=debug hpm clean --dry-run
+```
+
+### Implementation Highlights
+
+#### Advanced Dependency Analysis
+- **Transitive Resolution**: Follows complete dependency chains
+- **Cycle Detection**: Identifies and warns about circular dependencies
+- **Missing Package Handling**: Creates placeholder nodes for uninstalled dependencies
+- **Performance Optimization**: Uses efficient graph algorithms (HashSet-based reachability)
+
+#### Comprehensive Testing
+- **Unit Tests**: 25+ tests covering core functionality
+- **Integration Tests**: End-to-end scenarios with real filesystem operations
+- **Transitive Dependency Preservation**: Validates complex dependency chain handling
+- **Error Scenario Testing**: Ensures graceful handling of edge cases
+
+For detailed technical documentation, see `docs/cleanup-system.md`.
 
 ## Houdini Integration
 

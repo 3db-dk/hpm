@@ -393,11 +393,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "home"
+version = "0.5.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "589533453244b0995c858700322199b2becb13b627df2851f64a2775d024abcf"
+dependencies = [
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "hpm-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "hpm-config",
+ "hpm-core",
  "hpm-package",
  "serde_json",
  "tempfile",
@@ -412,6 +423,7 @@ dependencies = [
 name = "hpm-config"
 version = "0.1.0"
 dependencies = [
+ "home",
  "serde",
  "serde_json",
 ]
@@ -420,6 +432,13 @@ dependencies = [
 name = "hpm-core"
 version = "0.1.0"
 dependencies = [
+ "hpm-config",
+ "hpm-package",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.14",
+ "tokio",
+ "toml",
  "tracing",
 ]
 
@@ -428,7 +447,7 @@ name = "hpm-error"
 version = "0.1.0"
 dependencies = [
  "reqwest",
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1310,7 +1329,16 @@ version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b0949c3a6c842cbde3f1686d6eea5a010516deb7085f79db747562d4102f41e"
+dependencies = [
+ "thiserror-impl 2.0.14",
 ]
 
 [[package]]
@@ -1318,6 +1346,17 @@ name = "thiserror-impl"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc5b44b4ab9c2fdd0e0512e6bece8388e214c0749f5862b114cc5b7a25daf227"
 dependencies = [
  "proc-macro2",
  "quote",

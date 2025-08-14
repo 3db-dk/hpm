@@ -79,6 +79,8 @@ enum Commands {
     },
     /// Validate package configuration
     Check,
+    /// Clean orphaned packages
+    Clean(commands::clean::CleanArgs),
 }
 
 #[tokio::main]
@@ -137,6 +139,9 @@ async fn main() -> Result<()> {
         }
         Commands::Check => {
             commands::check::check_package().await?;
+        }
+        Commands::Clean(args) => {
+            commands::clean::execute_clean(&args).await?;
         }
     }
 

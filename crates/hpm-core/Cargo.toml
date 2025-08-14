@@ -14,3 +14,12 @@ description = "Core functionality for HPM (Houdini Package Manager)"
 
 [dependencies]
 tracing.workspace = true
+hpm-config = { path = "../hpm-config" }
+hpm-package = { path = "../hpm-package" }
+thiserror = "2.0"
+toml = "0.8"
+tokio = { version = "1.43", features = ["macros", "rt"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3.13"
