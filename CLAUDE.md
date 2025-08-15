@@ -55,6 +55,13 @@ HPM delivers comprehensive package management for Houdini:
 - **Compression**: zstd for package data compression
 - **Security**: SHA-256 checksums, mandatory TLS encryption
 
+### CLI Interface
+- **Error Handling**: UV-inspired structured error reporting with contextual help
+- **Console Output**: Professional styling with colors, verbosity levels, and accessibility
+- **Machine-Readable Output**: JSON formats for automation and CI/CD integration
+- **User Experience**: Semantic colors, helpful error messages, and consistent interface
+- **Styling**: anstream, console, owo-colors for cross-platform terminal support
+
 ## MCP Integration
 
 HPM leverages Claude Code's built-in capabilities and selective MCP servers for enhanced development functionality:
@@ -553,6 +560,189 @@ claude mcp add -s user awesome-claude-code https://gitmcp.io/hesreallyhim/awesom
 - **Fast Startup**: No connection delays from unnecessary servers
 - **Clear Documentation**: Each server's purpose documented and justified
 - **Scope Alignment**: Servers in appropriate scope (user vs local)
+
+## CLI Error Handling and Console Output
+
+HPM implements a professional CLI interface inspired by UV's approach to error handling and user experience.
+
+### Error Handling System
+
+#### Structured Error Types
+- **Config**: Configuration file issues, invalid settings
+- **Package**: Package manifest problems, dependency conflicts  
+- **Network**: Registry connection issues, download failures
+- **I/O**: File system operations, permission problems
+- **Internal**: Unexpected errors, bugs in HPM itself
+- **External**: Failures in external commands (git, etc.)
+
+#### Exit Code Standards
+- **0**: Success - command completed successfully
+- **1**: User error - configuration, input, package issues
+- **2**: Internal error - bugs, unexpected conditions
+- **N**: External command exit code
+
+### Console Output Features
+
+#### Styled Output
+- **Success Messages**: Green checkmark (✓) with description
+- **Error Messages**: Red X (✗) with error details
+- **Warning Messages**: Yellow warning (⚠) for potential issues
+- **Info Messages**: Blue info (ℹ) for helpful information
+- **Accessibility**: Symbols alongside colors for color-blind users
+
+#### Verbosity Levels
+```bash
+# Silent mode - only critical errors
+hpm --quiet init package-name
+
+# Normal mode - standard output (default)
+hpm init package-name
+
+# Verbose mode - detailed information
+hpm --verbose init package-name
+```
+
+#### Color Management
+```bash
+# Automatic color detection (default)
+hpm init package-name
+
+# Force colors always
+hpm --color always init package-name
+
+# Disable colors completely  
+hpm --color never init package-name
+```
+
+### Machine-Readable Output
+
+#### JSON Output Formats
+```bash
+# Pretty-printed JSON for human-readable automation
+hpm --output json install package-name
+
+# Single-line JSON for streaming and log processing
+hpm --output json-lines clean --dry-run
+
+# Compact JSON for bandwidth efficiency
+hpm --output json-compact list --package project.toml
+```
+
+#### Error Response Schema
+```json
+{
+  "success": false,
+  "error": "Package error",
+  "error_type": "package",
+  "elapsed_ms": 125
+}
+```
+
+#### Success Response Schema
+```json
+{
+  "success": true,
+  "command": "install",
+  "message": "3 packages installed",
+  "elapsed_ms": 1250
+}
+```
+
+### Usage Examples
+
+#### Development and Debugging
+```bash
+# Debug mode with verbose output and timing
+hpm --verbose --output json init debug-package
+
+# Error investigation with full context
+hpm --color always --verbose install failing-package
+```
+
+#### Automation and CI/CD
+```bash
+# Check command success in scripts
+hpm --output json --quiet install | jq '.success'
+
+# Parse installation results
+hpm --output json-compact install | jq -r '.message'
+
+# Stream processing of cleanup operations
+hpm --output json-lines clean --dry-run | while read line; do
+  echo "$line" | jq '.packages_removed[]'
+done
+```
+
+#### Integration with External Tools
+```bash
+# Combine with other tools
+hpm --output json list | jq '.dependencies[].name' | sort
+
+# Error handling in scripts
+if ! hpm --quiet --color never install package-name; then
+  echo "Installation failed with exit code $?"
+  exit 1
+fi
+```
+
+### Error Message Examples
+
+#### Configuration Error
+```bash
+$ hpm init existing-directory
+error: Package error: Directory 'existing-directory' already exists
+  help: Choose a different name or remove the existing directory
+```
+
+#### JSON Error Output  
+```bash
+$ hpm --output json init existing-directory
+{
+  "success": false,
+  "error": "Package error",
+  "error_type": "package",
+  "elapsed_ms": 12
+}
+```
+
+#### Helpful Context
+```bash
+$ hpm add nonexistent-package
+error: Package error: Package 'nonexistent-package' not found
+  help: Use 'hpm search' to find available packages
+```
+
+### Implementation Architecture
+
+#### Module Structure
+- **`console.rs`**: Terminal styling, colors, verbosity control
+- **`error.rs`**: Structured error types, exit codes, error reporting
+- **`output.rs`**: Machine-readable output formats (JSON, etc.)
+
+#### Dependencies
+- **`anstream`**: Cross-platform terminal output with color support
+- **`console`**: Terminal interaction utilities
+- **`owo-colors`**: Terminal colors and styling
+- **`miette`**: Advanced error diagnostics (foundation for future enhancements)
+- **`thiserror`**: Structured error type definitions
+- **`serde`/`serde_json`**: JSON serialization for machine output
+
+### Future Enhancements
+
+#### Interactive Features
+- User confirmation prompts for dangerous operations
+- Interactive package selection and configuration
+- Progress bars for long-running operations
+
+#### Enhanced Diagnostics
+- Source-code-like error highlighting using miette
+- Suggestions for fixing common configuration issues
+- Integration with external documentation and help systems
+
+#### Advanced Output Formats
+- YAML output for configuration management
+- CSV output for data analysis
+- XML output for legacy system integration
 
 ## User-Level Development Workflows
 

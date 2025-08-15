@@ -71,6 +71,13 @@ ring = "0.17"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# Console output and styling
+anstream = "0.6"
+console = { version = "0.16", features = ["std"] }
+owo-colors = "4.1"
+indicatif = "0.18"
+miette = { version = "7.2", features = ["fancy-no-backtrace"] }
+
 # Testing
 tokio-test = "0.4"
 

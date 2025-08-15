@@ -1,0 +1,477 @@
+//! Console utilities for HPM CLI
+//!
+//! This module provides consistent terminal output styling, colors, and user interaction
+//! patterns across all HPM commands. It follows UV's approach to professional CLI design
+//! with support for:
+//!
+//! - **Styled Output**: Color-coded messages with semantic meaning (success, error, warning, info)
+//! - **Verbosity Control**: Multiple output levels from silent to verbose
+//! - **Color Management**: Automatic detection with manual override options
+//! - **User Interaction**: Prompts for confirmation and input (foundation for future features)
+//!
+//! # Examples
+//!
+//! ```rust
+//! use hpm_cli::console::{Console, Verbosity, ColorChoice};
+//!
+//! // Create a console with specific settings
+//! let mut console = Console::with_settings(Verbosity::Normal, ColorChoice::Auto);
+//!
+//! // Print styled messages
+//! console.success("Package installed successfully");
+//! console.warn("This feature is experimental");
+//! console.info("Processing dependencies...");
+//! ```
+//!
+//! # Design Principles
+//!
+//! - **Semantic Colors**: Green for success, red for errors, yellow for warnings, blue for info
+//! - **Accessibility**: Uses symbols (checkmark, x-mark, warning, info) alongside colors for color-blind users
+//! - **Terminal Agnostic**: Works across Windows, macOS, and Linux terminals
+//! - **Performance**: Minimal overhead for quiet/silent modes
+
+use anstream::{stderr, stdout, AutoStream};
+use console::Term;
+use owo_colors::{OwoColorize, Style};
+use std::fmt::Display;
+use std::io::{self, Write};
+
+/// Console printer that controls terminal output with styling and verbosity
+#[derive(Debug)]
+pub struct Console {
+    verbosity: Verbosity,
+    color: ColorChoice,
+    stderr: AutoStream<std::io::Stderr>,
+    stdout: AutoStream<std::io::Stdout>,
+}
+
+/// Verbosity levels for console output
+///
+/// Controls how much information is displayed to the user. Higher levels
+/// include all output from lower levels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Verbosity {
+    /// Suppress all output except critical errors
+    ///
+    /// Use this for automated scripts where minimal output is desired.
+    /// Only shows errors that prevent the program from continuing.
+    #[allow(dead_code)]
+    Silent,
+
+    /// Minimal output (warnings, errors, and essential information)
+    ///
+    /// Shows important information that users should be aware of,
+    /// including successful operations and warnings about potential issues.
+    Quiet,
+
+    /// Standard output level (default)
+    ///
+    /// Provides a good balance of information for interactive use.
+    /// Shows success, info, warning, and error messages.
+    Normal,
+
+    /// Verbose output (includes debug information)
+    ///
+    /// Shows detailed information useful for troubleshooting.
+    /// Includes all message types and detailed operation information.
+    Verbose,
+}
+
+/// Color output preference
+///
+/// Controls when colored output is used. This allows users to override
+/// automatic terminal detection when needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorChoice {
+    /// Automatically detect terminal color support (default)
+    ///
+    /// Uses heuristics to determine if the terminal supports colors
+    /// and if the user wants colored output (respects NO_COLOR, etc.)
+    Auto,
+
+    /// Always use colored output
+    ///
+    /// Forces color output regardless of terminal detection.
+    /// Useful when piping through tools that preserve colors.
+    Always,
+
+    /// Never use colored output
+    ///
+    /// Disables all colors and styling. Useful for logging,
+    /// scripting, or accessibility needs.
+    Never,
+}
+
+/// Message levels for styled output
+///
+/// Internal enum for categorizing different types of messages.
+/// Each level has associated colors and symbols.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Level {
+    /// Success messages (green, checkmark)
+    Success,
+    /// Informational messages (blue, info symbol)
+    Info,
+    /// Warning messages (yellow, warning symbol)
+    Warning,
+    /// Error messages (red, x-mark)
+    #[allow(dead_code)]
+    Error,
+    /// Debug messages (cyan, magnifier)
+    #[allow(dead_code)]
+    Debug,
+}
+
+impl Console {
+    /// Create a new console with default settings
+    ///
+    /// Uses normal verbosity and automatic color detection.
+    /// This is suitable for most interactive use cases.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use hpm_cli::console::Console;
+    ///
+    /// let mut console = Console::new();
+    /// console.success("Operation completed successfully");
+    /// ```
+    pub fn new() -> Self {
+        Self {
+            verbosity: Verbosity::Normal,
+            color: ColorChoice::Auto,
+            stderr: stderr(),
+            stdout: stdout(),
+        }
+    }
+
+    /// Create console with specific verbosity and color settings
+    ///
+    /// Allows full control over console behavior, useful for testing
+    /// or when specific output behavior is required.
+    ///
+    /// # Arguments
+    ///
+    /// * `verbosity` - Controls how much output is shown
+    /// * `color` - Controls when colors are used
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use hpm_cli::console::{Console, Verbosity, ColorChoice};
+    ///
+    /// // Create a quiet console with no colors for scripting
+    /// let mut console = Console::with_settings(Verbosity::Quiet, ColorChoice::Never);
+    ///
+    /// // Create a verbose console with forced colors for debugging
+    /// let mut console = Console::with_settings(Verbosity::Verbose, ColorChoice::Always);
+    /// ```
+    pub fn with_settings(verbosity: Verbosity, color: ColorChoice) -> Self {
+        Self {
+            verbosity,
+            color,
+            stderr: stderr(),
+            stdout: stdout(),
+        }
+    }
+
+    /// Print a success message
+    ///
+    /// Displays a green checkmark with the message, indicating successful completion.
+    /// Only shown at Quiet verbosity level and above.
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The success message to display
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// console.success("Package installed successfully");
+    /// // Output: [checkmark] Package installed successfully (in green)
+    /// ```
+    pub fn success(&mut self, message: impl Display) {
+        if self.should_show(Level::Success) {
+            self.print_styled(Level::Success, message);
+        }
+    }
+
+    /// Print an informational message
+    ///
+    /// Displays a blue info symbol with the message, providing helpful information.
+    /// Only shown at Normal verbosity level and above.
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The informational message to display
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// console.info("Processing dependencies...");
+    /// // Output: ℹ Processing dependencies... (in blue)
+    /// ```
+    pub fn info(&mut self, message: impl Display) {
+        if self.should_show(Level::Info) {
+            self.print_styled(Level::Info, message);
+        }
+    }
+
+    /// Print a warning message
+    ///
+    /// Displays a yellow warning symbol with the message, indicating potential issues.
+    /// Only shown at Quiet verbosity level and above.
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The warning message to display
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// console.warn("This feature is experimental");
+    /// // Output: [warning] This feature is experimental (in yellow)
+    /// ```
+    pub fn warn(&mut self, message: impl Display) {
+        if self.should_show(Level::Warning) {
+            self.print_styled(Level::Warning, message);
+        }
+    }
+
+    /// Check if we should show output for a given level
+    ///
+    /// Internal method that implements the verbosity logic for each message level.
+    /// This ensures consistent behavior across all message types.
+    fn should_show(&self, level: Level) -> bool {
+        match (self.verbosity, level) {
+            // Silent: Only errors that prevent program continuation
+            (Verbosity::Silent, Level::Error) => true,
+            (Verbosity::Silent, _) => false,
+
+            // Quiet: Essential information (success, warnings, errors)
+            (Verbosity::Quiet, Level::Error | Level::Warning | Level::Success) => true,
+            (Verbosity::Quiet, _) => false,
+
+            // Normal: All except debug information
+            (Verbosity::Normal, Level::Debug) => false,
+            (Verbosity::Normal, _) => true,
+
+            // Verbose: Everything
+            (Verbosity::Verbose, _) => true,
+        }
+    }
+
+    /// Print a styled message with appropriate prefix and colors
+    ///
+    /// Internal method that handles the actual output formatting and routing.
+    /// Routes errors and warnings to stderr, other messages to stdout.
+    fn print_styled(&mut self, level: Level, message: impl Display) {
+        let should_color = match self.color {
+            ColorChoice::Always => true,
+            ColorChoice::Never => false,
+            ColorChoice::Auto => console::colors_enabled_stderr(),
+        };
+
+        let formatted_message = if should_color {
+            self.style_message(level, message)
+        } else {
+            format!("{}: {}", level.prefix(), message)
+        };
+
+        // Route errors and warnings to stderr, everything else to stdout
+        match level {
+            Level::Error | Level::Warning => {
+                writeln!(self.stderr, "{}", formatted_message).ok();
+                self.stderr.flush().ok();
+            }
+            _ => {
+                writeln!(self.stdout, "{}", formatted_message).ok();
+                self.stdout.flush().ok();
+            }
+        }
+    }
+
+    /// Apply styling to a message based on its level
+    ///
+    /// Internal method that creates the colored and styled output.
+    /// Each level has a specific color scheme and symbol for visual clarity.
+    fn style_message(&self, level: Level, message: impl Display) -> String {
+        match level {
+            Level::Success => format!(
+                "{} {}",
+                // Unicode check mark (U+2713) - standard CLI success symbol
+                "\u{2713}".style(Style::new().green().bold()),
+                message.to_string().style(Style::new().green())
+            ),
+            Level::Info => format!(
+                "{} {}",
+                // Unicode info symbol (U+2139) - standard CLI info symbol
+                "\u{2139}".style(Style::new().blue().bold()),
+                message
+            ),
+            Level::Warning => format!(
+                "{} {}",
+                // Unicode warning sign (U+26A0) - standard CLI warning symbol
+                "\u{26A0}".style(Style::new().yellow().bold()),
+                message.to_string().style(Style::new().yellow())
+            ),
+            Level::Error => format!(
+                "{} {}",
+                // Unicode ballot X (U+2717) - standard CLI error symbol
+                "\u{2717}".style(Style::new().red().bold()),
+                message.to_string().style(Style::new().red())
+            ),
+            Level::Debug => format!(
+                "{} {}",
+                // Unicode magnifying glass (U+1F50D) - debug/search symbol
+                "\u{1F50D}".style(Style::new().cyan().bold()),
+                message.to_string().style(Style::new().bright_black())
+            ),
+        }
+    }
+}
+
+impl Default for Console {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Level {
+    /// Get the text prefix for a message level
+    ///
+    /// Returns the plain text prefix used when colors are disabled.
+    /// This ensures consistent output in both colored and non-colored modes.
+    fn prefix(&self) -> &'static str {
+        match self {
+            Level::Success => "SUCCESS",
+            Level::Info => "INFO",
+            Level::Warning => "WARNING",
+            Level::Error => "ERROR",
+            Level::Debug => "DEBUG",
+        }
+    }
+}
+
+// Future utility functions for interactive features
+// These are kept for future use but not currently exposed in the public API
+
+#[allow(dead_code)]
+/// Prompt the user for confirmation (future feature)
+///
+/// This function will be used for interactive confirmations in future versions.
+/// Currently unused but kept for upcoming features like `hpm clean --interactive`.
+fn confirm(message: &str, default: bool) -> io::Result<bool> {
+    let term = Term::stderr();
+    let prompt = format!(
+        "{} {} {} {} {}",
+        "?".style(Style::new().yellow().bold()),
+        message.style(Style::new().bold()),
+        "[y/n]".style(Style::new().bright_black()),
+        "›".style(Style::new().bright_black()),
+        if default { "yes" } else { "no" }.style(Style::new().cyan())
+    );
+
+    loop {
+        term.write_line(&prompt)?;
+        match term.read_char()? {
+            'y' | 'Y' => {
+                term.write_line("yes")?;
+                return Ok(true);
+            }
+            'n' | 'N' => {
+                term.write_line("no")?;
+                return Ok(false);
+            }
+            '\r' | '\n' => {
+                term.write_line(if default { "yes" } else { "no" })?;
+                return Ok(default);
+            }
+            _ => {
+                term.write_line("Please answer yes or no.")?;
+                continue;
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+/// Prompt the user for text input (future feature)
+///
+/// This function will be used for interactive text input in future versions.
+/// Currently unused but kept for upcoming features.
+fn input(message: &str) -> io::Result<String> {
+    let term = Term::stderr();
+    let prompt = format!(
+        "{} {} {} ",
+        "?".style(Style::new().blue().bold()),
+        message.style(Style::new().bold()),
+        "›".style(Style::new().bright_black())
+    );
+
+    term.write_str(&prompt)?;
+    term.read_line()
+}
+
+#[allow(dead_code)]
+/// Print a formatted tree structure for directory listings (future feature)
+///
+/// This function will be used for displaying package dependency trees.
+/// Currently unused but kept for upcoming features.
+fn print_tree(items: &[(String, bool)]) {
+    for (i, (item, is_last)) in items.iter().enumerate() {
+        let prefix = if i == 0 {
+            "".to_string()
+        } else if *is_last {
+            "└── ".to_string()
+        } else {
+            "├── ".to_string()
+        };
+        println!("{}{}", prefix, item);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_verbosity_ordering() {
+        assert!(Verbosity::Silent < Verbosity::Quiet);
+        assert!(Verbosity::Quiet < Verbosity::Normal);
+        assert!(Verbosity::Normal < Verbosity::Verbose);
+    }
+
+    #[test]
+    fn test_should_show_messages() {
+        let console = Console::with_settings(Verbosity::Normal, ColorChoice::Never);
+
+        assert!(console.should_show(Level::Success));
+        assert!(console.should_show(Level::Info));
+        assert!(console.should_show(Level::Warning));
+        assert!(console.should_show(Level::Error));
+        assert!(!console.should_show(Level::Debug));
+    }
+
+    #[test]
+    fn test_should_show_quiet() {
+        let console = Console::with_settings(Verbosity::Quiet, ColorChoice::Never);
+
+        assert!(console.should_show(Level::Success));
+        assert!(!console.should_show(Level::Info));
+        assert!(console.should_show(Level::Warning));
+        assert!(console.should_show(Level::Error));
+        assert!(!console.should_show(Level::Debug));
+    }
+
+    #[test]
+    fn test_should_show_silent() {
+        let console = Console::with_settings(Verbosity::Silent, ColorChoice::Never);
+
+        assert!(!console.should_show(Level::Success));
+        assert!(!console.should_show(Level::Info));
+        assert!(!console.should_show(Level::Warning));
+        assert!(console.should_show(Level::Error));
+        assert!(!console.should_show(Level::Debug));
+    }
+}

@@ -135,7 +135,13 @@ fn test_unimplemented_commands() {
 
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("not yet implemented"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stdout.contains("not yet implemented") || stderr.contains("not yet implemented"),
+            "Expected 'not yet implemented' in output. stdout: '{}', stderr: '{}'",
+            stdout,
+            stderr
+        );
     }
 }
 
