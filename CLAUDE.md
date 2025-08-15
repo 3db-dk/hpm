@@ -359,7 +359,13 @@ cargo run -- init test-package --description "Test package"
 cargo run -- init --bare minimal-package
 cargo run -- install                                   # Install dependencies from hpm.toml in current directory
 cargo run -- install --manifest /path/to/hpm.toml     # Install dependencies from specific manifest
-cargo run -- add utility-nodes                        # Add a specific package
+# Test dependency management
+cargo run -- add utility-nodes                        # Add latest version
+cargo run -- add material-library --version "^1.5.0" # Add specific version  
+cargo run -- add geometry-tools --optional            # Add optional dependency
+cargo run -- add mesh-utils --package /path/to/project/  # Add to specific project
+cargo run -- remove utility-nodes                     # Remove dependency
+cargo run -- remove old-package --package /path/to/project/  # Remove from specific project
 cargo run -- list
 cargo run -- search "geometry tools"
 
@@ -1036,9 +1042,9 @@ HPM provides comprehensive package management through industry-standard CLI patt
 
 #### Core Commands
 - `hpm init` - Initialize new Houdini packages with templates
-- `hpm add` - Add packages and resolve dependencies
+- `hpm add` - Add package dependencies to hpm.toml manifest with automatic installation
 - `hpm install` - Install dependencies from hpm.toml manifest
-- `hpm remove` - Remove installed packages
+- `hpm remove` - Remove package dependencies from hpm.toml manifest (preserves downloaded packages)
 - `hpm update` - Update packages to latest versions
 - `hpm list` - Display installed packages and dependency tree
 - `hpm search` - Search registry for packages
@@ -1053,6 +1059,88 @@ HPM provides comprehensive package management through industry-standard CLI patt
 - **Bare**: Minimal structure with only hpm.toml for custom layouts
 
 See `docs/cli-design.md` for comprehensive CLI specification.
+
+### Add and Remove Commands
+
+HPM provides modern dependency management through `add` and `remove` commands that manipulate hpm.toml manifests while integrating with the broader package ecosystem.
+
+#### Add Command (`hpm add`)
+
+The `hpm add` command adds package dependencies to hpm.toml manifests with automatic installation and dependency resolution.
+
+##### Usage
+```bash
+# Add latest version of a package
+hpm add awesome-houdini-tools
+
+# Add specific version with semantic versioning
+hpm add utility-nodes --version "^2.1.0"
+
+# Add optional dependency
+hpm add material-library --optional
+
+# Target specific manifest file or directory
+hpm add geometry-tools --package /path/to/project/
+hpm add mesh-utilities --package /path/to/project/hpm.toml
+```
+
+##### Functionality
+- **Version Specifications**: Supports semantic versioning patterns (`^1.0.0`, `~2.1.0`, `>=1.5.0`, `latest`)
+- **Optional Dependencies**: Mark dependencies as optional with `--optional` flag
+- **Flexible Targeting**: Use `--package` to specify manifest location (file or directory)
+- **Automatic Installation**: Runs dependency resolution and installation after adding to manifest
+- **Lock File Updates**: Automatically updates `hpm.lock` with resolved dependencies
+- **Transitive Dependencies**: Resolves and installs sub-dependencies automatically
+
+##### Dependency Types Generated
+```toml
+# Simple version specification
+[dependencies]
+utility-nodes = "^2.1.0"
+
+# Optional dependency with detailed specification
+[dependencies.material-library]
+version = "1.5.0"
+optional = true
+```
+
+#### Remove Command (`hpm remove`)
+
+The `hpm remove` command safely removes package dependencies from hmp.toml manifests while preserving downloaded packages for reuse.
+
+##### Usage
+```bash
+# Remove dependency from current project
+hpm remove utility-nodes
+
+# Remove dependency from specific project
+hpm remove material-library --package /path/to/project/
+hpm remove geometry-tools --package /path/to/project/hpm.toml
+```
+
+##### Functionality
+- **Non-destructive Removal**: Removes dependencies from manifest but preserves downloaded packages
+- **Lock File Updates**: Automatically updates `hpm.lock` to reflect new dependency state
+- **Validation**: Confirms dependency exists before removal with clear error messages
+- **Flexible Targeting**: Use `--package` to specify manifest location (file or directory)
+- **Cleanup Guidance**: Provides information about using `hpm clean` to remove orphaned packages
+
+##### Design Philosophy
+The remove command follows a conservative approach:
+- Downloaded packages remain in global storage (`~/.hpm/packages/`)
+- Other projects can continue using the same packages
+- Use `hpm clean` to remove packages no longer needed by any project
+- Lock files are updated to maintain consistency
+
+##### Integration with Clean Command
+```bash
+# Remove dependency from manifest
+hpm remove old-package
+
+# Later, clean up orphaned packages across all projects  
+hpm clean --dry-run                    # Preview cleanup
+hpm clean                              # Remove orphaned packages
+```
 
 ### Install Command
 

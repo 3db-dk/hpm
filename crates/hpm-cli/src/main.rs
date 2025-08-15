@@ -51,15 +51,31 @@ enum Commands {
         #[arg(long, default_value = "git")]
         vcs: String,
     },
-    /// Add a package
+    /// Add a package dependency
     Add {
-        /// Package name
-        package: Option<String>,
-    },
-    /// Remove a package
-    Remove {
-        /// Package name
+        /// Package name to add
         package: String,
+
+        /// Version specification (e.g., "^1.0.0", "latest")
+        #[arg(short, long)]
+        version: Option<String>,
+
+        /// Path to directory containing hpm.toml or direct path to hpm.toml file
+        #[arg(short = 'p', long = "package")]
+        manifest: Option<std::path::PathBuf>,
+
+        /// Mark dependency as optional
+        #[arg(long)]
+        optional: bool,
+    },
+    /// Remove a package dependency
+    Remove {
+        /// Package name to remove
+        package: String,
+
+        /// Path to directory containing hpm.toml or direct path to hpm.toml file
+        #[arg(short = 'p', long = "package")]
+        manifest: Option<std::path::PathBuf>,
     },
     /// Update packages
     Update,
@@ -121,12 +137,16 @@ async fn main() -> Result<()> {
 
             init_package(options).await?;
         }
-        Commands::Add { package } => match package {
-            Some(pkg) => println!("Adding package: {}", pkg),
-            None => println!("Adding dependencies from hpm.toml"),
-        },
-        Commands::Remove { package } => {
-            println!("Removing package: {}", package);
+        Commands::Add {
+            package,
+            version,
+            manifest,
+            optional,
+        } => {
+            commands::add::add_package(package, version, manifest, optional).await?;
+        }
+        Commands::Remove { package, manifest } => {
+            commands::remove::remove_package(package, manifest).await?;
         }
         Commands::Update => {
             println!("Updating packages");
