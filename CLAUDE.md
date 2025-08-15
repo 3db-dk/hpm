@@ -201,7 +201,9 @@ python3 scripts/check-emojis.py                # Check for emoji usage (platform
 # Test CLI functionality
 cargo run -- init test-package --description "Test package"
 cargo run -- init --bare minimal-package
-cargo run -- install utility-nodes
+cargo run -- install                                   # Install dependencies from hpm.toml in current directory
+cargo run -- install --manifest /path/to/hpm.toml     # Install dependencies from specific manifest
+cargo run -- add utility-nodes                        # Add a specific package
 cargo run -- list
 cargo run -- search "geometry tools"
 
@@ -305,6 +307,7 @@ HPM provides comprehensive package management through industry-standard CLI patt
 #### Core Commands
 - `hpm init` - Initialize new Houdini packages with templates
 - `hpm add` - Add packages and resolve dependencies
+- `hpm install` - Install dependencies from hpm.toml manifest
 - `hpm remove` - Remove installed packages
 - `hpm update` - Update packages to latest versions
 - `hpm list` - Display installed packages and dependency tree
@@ -320,6 +323,54 @@ HPM provides comprehensive package management through industry-standard CLI patt
 - **Bare**: Minimal structure with only hpm.toml for custom layouts
 
 See `docs/cli-design.md` for comprehensive CLI specification.
+
+### Install Command
+
+The `hpm install` command provides comprehensive dependency installation from hpm.toml manifests, supporting both HPM packages and Python dependencies with virtual environment isolation.
+
+#### Usage
+```bash
+# Install dependencies from hpm.toml in current directory
+hpm install
+
+# Install dependencies from specific manifest file
+hpm install --manifest /path/to/hpm.toml
+hpm install -m ../project/hpm.toml
+
+# Install from directory containing hpm.toml
+hpm install --manifest /path/to/project/
+```
+
+#### Functionality
+- **Manifest Discovery**: Automatically locates hpm.toml in current directory or accepts explicit paths
+- **Dependency Resolution**: Processes both HPM package dependencies and Python dependencies
+- **Virtual Environment Management**: Creates content-addressable Python virtual environments for dependency isolation
+- **Project Structure Setup**: Creates `.hpm/` directory with proper package organization
+- **Lock File Generation**: Generates `hpm.lock` with resolved dependency information
+- **Houdini Integration**: Configures PYTHONPATH and package manifests for seamless Houdini integration
+
+#### Directory Structure Created
+```
+project/
+├── hpm.toml                    # Project manifest
+├── hpm.lock                    # Generated lock file with resolved dependencies
+└── .hpm/                       # HPM project directory
+    └── packages/               # Package installation references
+```
+
+#### Integration with Python Dependencies
+When Python dependencies are specified in hpm.toml, the install command:
+1. Maps Houdini version constraints to compatible Python versions
+2. Resolves exact package versions using bundled UV
+3. Creates or reuses content-addressable virtual environments in `~/.hpm/venvs/`
+4. Generates Houdini package.json files with proper PYTHONPATH injection
+5. Shares virtual environments between projects with identical resolved dependencies
+
+#### Error Handling
+- Clear error messages for missing or invalid hpm.toml files
+- Manifest validation with helpful feedback
+- Graceful handling of network issues during dependency resolution
+- Comprehensive logging with RUST_LOG=debug for troubleshooting
 
 ## Project-Aware Cleanup System
 

@@ -77,6 +77,12 @@ enum Commands {
         /// Package name
         package: String,
     },
+    /// Install dependencies from hpm.toml
+    Install {
+        /// Path to hpm.toml file (defaults to current directory)
+        #[arg(short, long)]
+        manifest: Option<std::path::PathBuf>,
+    },
     /// Validate package configuration
     Check,
     /// Clean orphaned packages
@@ -136,6 +142,9 @@ async fn main() -> Result<()> {
         }
         Commands::Info { package } => {
             println!("Package info for: {}", package);
+        }
+        Commands::Install { manifest } => {
+            commands::install::install_dependencies(manifest).await?;
         }
         Commands::Check => {
             commands::check::check_package().await?;

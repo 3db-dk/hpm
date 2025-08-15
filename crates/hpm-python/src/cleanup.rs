@@ -190,9 +190,11 @@ mod tests {
 
     #[test]
     fn test_cleanup_result() {
-        let mut result = CleanupResult::default();
-        result.space_freed = 1536;
-        result.space_that_would_be_freed = 2048;
+        let result = CleanupResult {
+            space_freed: 1536,
+            space_that_would_be_freed: 2048,
+            ..Default::default()
+        };
 
         assert_eq!(result.format_space_freed(), "1.5 KB");
         assert_eq!(result.format_space_that_would_be_freed(), "2.0 KB");
@@ -202,6 +204,5 @@ mod tests {
     async fn test_python_cleanup_analyzer_creation() {
         let _analyzer = PythonCleanupAnalyzer::new();
         // Just test that it can be created without errors
-        assert!(true);
     }
 }

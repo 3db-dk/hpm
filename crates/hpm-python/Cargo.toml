@@ -21,16 +21,13 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 sha2 = { workspace = true }
 dirs = { workspace = true }
-walkdir = { workspace = true }
 tempfile = { workspace = true }
 tracing = { workspace = true }
 
 # HPM internal dependencies
-hpm-error = { path = "../hpm-error" }
 hpm-package = { path = "../hpm-package" }
 
 # Python-specific dependencies
-semver = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 chrono = { workspace = true }
 which = { workspace = true }
