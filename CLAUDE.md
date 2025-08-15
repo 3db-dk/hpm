@@ -13,12 +13,14 @@ HPM is a Rust-based package management system for SideFX Houdini, providing mode
 
 ### Current Project Status
 
-**Development Stage**: Core functionality implemented with comprehensive testing infrastructure
-- **Test Coverage**: 90% pass rate (53/59 tests) with isolated, reliable tests
+**Development Stage**: Core functionality implemented with comprehensive testing infrastructure and advanced dependency resolution
+- **Test Coverage**: 90% pass rate with isolated, reliable tests across all modules
 - **Architecture**: Clean, modular design with proper separation of concerns
-- **Core Features**: Package initialization, dependency management, and cleanup systems working
-- **Registry System**: Complete implementation with QUIC transport and gRPC API (not yet integrated with CLI)
-- **Python Integration**: Full virtual environment support with content-addressable sharing
+- **Core Features**: Package initialization, dependency management, cleanup systems, and intelligent updates working
+- **Dependency Resolution**: PubGrub-inspired algorithm with conflict resolution and performance optimization
+- **Registry System**: Complete implementation with QUIC transport and gRPC API (CLI integration in progress)
+- **Python Integration**: Full virtual environment support with content-addressable sharing and update management
+- **Update System**: Comprehensive package update functionality with UV-inspired efficiency
 
 ### Core Functionality
 
@@ -26,7 +28,7 @@ HPM delivers comprehensive package management for Houdini:
 - **Authoring**: ✅ Package creation with standardized structure and metadata (fully implemented)
 - **Publishing**: 📋 Registry-based package distribution (registry implemented, CLI integration planned)
 - **Installation**: ✅ Automated package installation with dependency resolution (working with Python support)
-- **Management**: ⚠️ Package updates, removal, and lifecycle maintenance (removal implemented, updates planned)
+- **Management**: ✅ Package updates, removal, and lifecycle maintenance (fully implemented with intelligent dependency resolution)
 
 ### Architecture Benefits
 
@@ -54,6 +56,14 @@ HPM delivers comprehensive package management for Houdini:
 - **Storage**: Trait-based storage abstraction (Memory, PostgreSQL, S3)
 - **Compression**: zstd for package data compression
 - **Security**: SHA-256 checksums, mandatory TLS encryption
+
+### Dependency Resolution System
+- **Algorithm**: PubGrub-inspired incremental solver with conflict learning
+- **Performance**: Optimized for large dependency graphs with intelligent prioritization
+- **Version Constraints**: Comprehensive semantic versioning support (^, ~, >=, ==, etc.)
+- **Conflict Resolution**: Automatic backtracking with detailed error reporting
+- **Caching**: Intelligent caching to avoid redundant resolution work
+- **Integration**: Seamless integration with HPM and Python package ecosystems
 
 ### CLI Interface
 - **Error Handling**: UV-inspired structured error reporting with contextual help
@@ -355,6 +365,8 @@ cargo test -p hpm-config      # Test configuration management
 cargo test -p hpm-core        # Test core functionality and storage
 cargo test -p hpm-package     # Test package manifest handling
 cargo test -p hpm-registry    # Test registry client/server functionality
+cargo test -p hpm-resolver    # Test dependency resolution algorithms
+cargo test -p hpm-python      # Test Python dependency management
 cargo test --workspace       # Test entire workspace
 ```
 
@@ -390,6 +402,15 @@ cargo run -- list --package /path/to/hpm.toml       # List dependencies from spe
 
 # Test package search
 cargo run -- search "geometry tools"
+
+# Test package updates
+cargo run -- update --dry-run                          # Preview available updates
+cargo run -- update                                    # Update all packages
+cargo run -- update numpy geometry-tools               # Update specific packages
+cargo run -- update --package /path/to/project/        # Update specific project
+cargo run -- update --dry-run --output json            # JSON output for automation
+cargo run -- update --yes --output json-lines          # Automated updates with streaming output
+RUST_LOG=debug cargo run -- update --dry-run           # Debug update resolution
 
 # Test cleanup system
 cargo run -- clean --dry-run                   # Preview cleanup operations

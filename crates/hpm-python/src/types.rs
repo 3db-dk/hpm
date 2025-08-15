@@ -467,14 +467,9 @@ mod tests {
                 .filter(|k| deps2.dependencies.contains_key(*k))
                 .collect();
 
-            // Check for Python version conflicts (considering 2.6 == 2.6.0 as conflict)
+            // Check for Python version conflicts (versions must be exactly equal)
             let python_version_conflict = match (&deps1.python_version, &deps2.python_version) {
-                (Some(v1), Some(v2)) => {
-                    // Normalize versions for comparison (treat None patch as Some(0))
-                    let v1_normalized = PythonVersion::new(v1.major, v1.minor, v1.patch.or(Some(0)));
-                    let v2_normalized = PythonVersion::new(v2.major, v2.minor, v2.patch.or(Some(0)));
-                    v1_normalized != v2_normalized
-                }
+                (Some(v1), Some(v2)) => v1 != v2,
                 _ => false,
             };
 

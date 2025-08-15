@@ -48,6 +48,7 @@ pub mod dependency;
 pub mod integration;
 pub mod resolver;
 pub mod types;
+pub mod update;
 pub mod venv;
 
 #[cfg(test)]

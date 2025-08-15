@@ -14,8 +14,10 @@
 //! - `check` - Validate package configuration and Houdini compatibility
 //! - `clean` - Project-aware package cleanup with orphan detection
 //!
+//! ### Recently Implemented  
+//! - `update` - Update packages to latest versions with efficient dependency resolution
+//!
 //! ### Planned for Future Implementation
-//! - `update` - Update packages to latest versions
 //! - `search` - Search registry for packages
 //! - `publish` - Publish packages to registry
 //! - `run` - Execute package scripts
@@ -162,8 +164,24 @@ enum Commands {
         #[arg(short = 'p', long = "package")]
         manifest: Option<std::path::PathBuf>,
     },
-    /// Update packages
-    Update,
+    /// Update packages to latest versions
+    Update {
+        /// Only update specific packages
+        #[arg(value_name = "PACKAGE")]
+        packages: Vec<String>,
+
+        /// Path to directory containing hpm.toml or direct path to hpm.toml file
+        #[arg(short = 'p', long = "package")]
+        manifest: Option<std::path::PathBuf>,
+
+        /// Preview changes without applying them
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip confirmation prompts
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Display package information and dependencies
     List {
         /// Path to directory containing hpm.toml or direct path to hpm.toml file
@@ -344,9 +362,32 @@ async fn run_command(
                 console.success(format!("Removed dependency '{}'", package));
             }
         }
-        Commands::Update => {
-            console.warn("Update command not yet implemented");
-            console.info("This feature is planned for a future release");
+        Commands::Update {
+            packages,
+            manifest,
+            dry_run,
+            yes,
+        } => {
+            let options = commands::update::UpdateOptions {
+                package: manifest.clone(),
+                packages: packages.clone(),
+                dry_run: *dry_run,
+                yes: *yes,
+                output: output_format,
+            };
+
+            commands::update::update_packages(options)
+                .await
+                .map_err(|e| {
+                    CliError::package(
+                        e,
+                        Some("Use 'hpm update --help' for usage information".to_string()),
+                    )
+                })?;
+
+            if output_format == OutputFormat::Human {
+                console.success("Package update completed");
+            }
         }
         Commands::List { manifest } => {
             commands::list::list_dependencies(manifest.clone())

@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 57e2035849e573e74835d9a2d3a79dd1ac3131071a7fcd6704dd028c4899ba46 # shrinks to deps1 = PythonDependencies { dependencies: {}, python_version: Some(PythonVersion { major: 2, minor: 6, patch: None }) }, deps2 = PythonDependencies { dependencies: {}, python_version: Some(PythonVersion { major: 2, minor: 6, patch: Some(0) }) }
+cc e92243d31fb4bad81c4c6b76392e24f97cc4b7faa6c108c858df8100619df0e7 # shrinks to deps1 = PythonDependencies { dependencies: {}, python_version: Some(PythonVersion { major: 2, minor: 7, patch: None }) }, deps2 = PythonDependencies { dependencies: {}, python_version: Some(PythonVersion { major: 2, minor: 7, patch: Some(0) }) }

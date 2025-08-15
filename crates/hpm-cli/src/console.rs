@@ -238,6 +238,17 @@ impl Console {
         }
     }
 
+    /// Display an error message
+    ///
+    /// Error messages are always displayed (even in silent mode) and use red styling.
+    /// They are routed to stderr for proper error handling in scripts.
+    #[allow(dead_code)]
+    pub fn error(&mut self, message: impl Display) {
+        if self.should_show(Level::Error) {
+            self.print_styled(Level::Error, message);
+        }
+    }
+
     /// Check if we should show output for a given level
     ///
     /// Internal method that implements the verbosity logic for each message level.
@@ -351,6 +362,34 @@ impl Level {
             Level::Debug => "DEBUG",
         }
     }
+}
+
+// Global convenience functions for quick message output
+
+/// Display a success message using default console settings
+pub fn success(message: impl Display) {
+    let mut console = Console::new();
+    console.success(message);
+}
+
+/// Display an informational message using default console settings
+pub fn info(message: impl Display) {
+    let mut console = Console::new();
+    console.info(message);
+}
+
+/// Display a warning message using default console settings
+#[allow(dead_code)]
+pub fn warn(message: impl Display) {
+    let mut console = Console::new();
+    console.warn(message);
+}
+
+/// Display an error message using default console settings
+#[allow(dead_code)]
+pub fn error(message: impl Display) {
+    let mut console = Console::new();
+    console.error(message);
 }
 
 // Future utility functions for interactive features

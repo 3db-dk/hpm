@@ -124,7 +124,7 @@ fn test_init_bare_workflow() {
 /// Test that unimplemented commands give helpful messages
 #[test]
 fn test_unimplemented_commands() {
-    let commands = ["update", "search test", "publish"];
+    let commands = ["search test", "publish"];
 
     for cmd in &commands {
         let args: Vec<&str> = cmd.split_whitespace().collect();

@@ -23,12 +23,12 @@ members = [
     "crates/hpm-core",
     "crates/hpm-config", 
     "crates/hpm-registry",
+    "crates/hpm-resolver",
     "crates/hpm-package",
     "crates/hpm-error",
     "crates/hpm-python"
 ]
 # Removed empty placeholder crates until implementation:
-# "crates/hpm-resolver",
 # "crates/hpm-installer",
 resolver = "2"
 
