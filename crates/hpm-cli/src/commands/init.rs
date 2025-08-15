@@ -146,27 +146,38 @@ pub async fn init_package(options: InitOptions) -> Result<()> {
 
 fn convert_to_kebab_case(name: &str) -> String {
     let mut result = String::new();
+    let mut prev_was_uppercase = false;
     let mut prev_was_separator = false;
 
     for c in name.chars() {
         if c.is_uppercase() {
-            if !result.is_empty() && !prev_was_separator {
+            // Only add hyphen if previous char wasn't uppercase and we have content
+            if !result.is_empty() && !prev_was_uppercase && !prev_was_separator {
                 result.push('-');
             }
             result.push(c.to_lowercase().next().unwrap());
+            prev_was_uppercase = true;
             prev_was_separator = false;
         } else if c == '_' {
             if !result.is_empty() && !prev_was_separator {
                 result.push('-');
                 prev_was_separator = true;
             }
+            prev_was_uppercase = false;
         } else {
             result.push(c);
+            prev_was_uppercase = false;
             prev_was_separator = false;
         }
     }
 
-    result.to_lowercase()
+    // Remove duplicate hyphens and trim leading/trailing hyphens
+    result
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+        .to_lowercase()
 }
 
 async fn get_git_author() -> Option<String> {
@@ -497,5 +508,42 @@ mod tests {
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn test_empty_name_handling() {
+        let temp_dir = TempDir::new().unwrap();
+        // Create a subdirectory with a valid package name for testing
+        let test_dir = temp_dir.path().join("my-test-package");
+        fs::create_dir(&test_dir).unwrap();
+
+        let options = InitOptions {
+            name: None, // No name provided - should derive from directory name
+            description: Some("Test package".to_string()),
+            author: Some("Test Author <test@example.com>".to_string()),
+            version: "1.0.0".to_string(),
+            license: "MIT".to_string(),
+            houdini_min: None,
+            houdini_max: None,
+            bare: false,
+            vcs: "none".to_string(),
+            base_dir: Some(test_dir),
+        };
+
+        let result = init_package(options).await;
+
+        // Should derive name from directory name and succeed
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_special_character_handling() {
+        // Test various edge cases for kebab case conversion
+        assert_eq!(convert_to_kebab_case("TEST"), "test");
+        assert_eq!(convert_to_kebab_case("Test123"), "test123");
+        assert_eq!(
+            convert_to_kebab_case("Test_With_Numbers123"),
+            "test-with-numbers123"
+        );
     }
 }

@@ -263,37 +263,290 @@ impl PackageManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
-    #[test]
-    fn basic_manifest_validation() {
-        let manifest = PackageManifest {
-            package: PackageInfo {
-                name: "test-package".to_string(),
-                version: "1.0.0".to_string(),
-                description: Some("A test package".to_string()),
-                authors: Some(vec!["Author <author@example.com>".to_string()]),
-                license: Some("MIT".to_string()),
-                readme: None,
-                homepage: None,
-                repository: None,
-                documentation: None,
-                keywords: Some(vec!["houdini".to_string(), "test".to_string()]),
-                categories: None,
-            },
-            houdini: Some(HoudiniConfig {
-                min_version: Some("20.0".to_string()),
-                max_version: Some("21.0".to_string()),
-            }),
-            dependencies: None,
-            python_dependencies: None,
-            scripts: None,
-        };
+    // Custom strategies for generating test data
 
-        assert!(manifest.validate().is_ok());
+    /// Strategy to generate valid package names
+    fn package_name_strategy() -> impl Strategy<Value = String> {
+        prop::string::string_regex("[a-z][a-z0-9-]{1,50}")
+            .unwrap()
+            .prop_filter("Package name must not end with hyphen", |name| {
+                !name.ends_with('-') && name.len() >= 2 && name.len() <= 50
+            })
     }
 
+    /// Strategy to generate semantic version strings
+    fn version_strategy() -> impl Strategy<Value = String> {
+        (0u32..100, 0u32..100, 0u32..100)
+            .prop_map(|(major, minor, patch)| format!("{}.{}.{}", major, minor, patch))
+    }
+
+    /// Strategy to generate version requirement strings
+    fn version_req_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("*".to_string()),
+            version_strategy(),
+            version_strategy().prop_map(|v| format!("^{}", v)),
+            version_strategy().prop_map(|v| format!("~{}", v)),
+            version_strategy().prop_map(|v| format!(">={}", v)),
+        ]
+    }
+
+    /// Strategy to generate license identifiers
+    fn license_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("MIT".to_string()),
+            Just("Apache-2.0".to_string()),
+            Just("GPL-3.0".to_string()),
+            Just("BSD-3-Clause".to_string()),
+            Just("ISC".to_string()),
+        ]
+    }
+
+    /// Strategy to generate author strings
+    fn author_strategy() -> impl Strategy<Value = String> {
+        ("[A-Z][a-z]{3,15}", "[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}")
+            .prop_map(|(name, email)| format!("{} <{}>", name, email))
+    }
+
+    /// Strategy to generate URLs
+    fn url_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("https://github.com/user/repo".to_string()),
+            Just("https://example.com/project".to_string()),
+            Just("https://docs.example.com".to_string()),
+        ]
+    }
+
+    /// Strategy to generate Houdini version strings
+    fn houdini_version_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("19.5".to_string()),
+            Just("20.0".to_string()),
+            Just("20.5".to_string()),
+            Just("21.0".to_string()),
+        ]
+    }
+
+    /// Strategy to generate dependency specifications
+    fn dependency_spec_strategy() -> impl Strategy<Value = DependencySpec> {
+        prop_oneof![
+            version_req_strategy().prop_map(DependencySpec::Simple),
+            (
+                prop::option::of(version_req_strategy()),
+                prop::option::of(url_strategy()),
+                prop::option::of("[a-z0-9-]{3,20}"),
+                prop::option::of("[a-z0-9-]{3,20}"),
+                prop::option::of(any::<bool>()),
+                prop::option::of(url_strategy()),
+            )
+                .prop_map(|(version, git, tag, branch, optional, registry)| {
+                    DependencySpec::Detailed {
+                        version,
+                        git,
+                        tag,
+                        branch,
+                        optional,
+                        registry,
+                    }
+                })
+        ]
+    }
+
+    /// Strategy to generate Python dependency specifications
+    fn python_dependency_spec_strategy() -> impl Strategy<Value = PythonDependencySpec> {
+        prop_oneof![
+            version_req_strategy().prop_map(PythonDependencySpec::Simple),
+            (
+                prop::option::of(version_req_strategy()),
+                prop::option::of(any::<bool>()),
+                prop::option::of(prop::collection::vec("[a-z]{3,10}", 0..3)),
+            )
+                .prop_map(|(version, optional, extras)| {
+                    PythonDependencySpec::Detailed {
+                        version,
+                        optional,
+                        extras,
+                    }
+                })
+        ]
+    }
+
+    /// Strategy to generate package manifests
+    fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
+        (
+            package_name_strategy(),
+            version_strategy(),
+            prop::option::of("[A-Za-z0-9 ]{10,100}"),
+            prop::option::of(prop::collection::vec(author_strategy(), 1..4)),
+            prop::option::of(license_strategy()),
+            prop::option::of(houdini_version_strategy()),
+            prop::option::of(houdini_version_strategy()),
+        )
+            .prop_map(
+                |(name, version, description, authors, license, min_houdini, max_houdini)| {
+                    PackageManifest {
+                        package: PackageInfo {
+                            name,
+                            version,
+                            description,
+                            authors,
+                            license,
+                            readme: Some("README.md".to_string()),
+                            homepage: None,
+                            repository: None,
+                            documentation: None,
+                            keywords: Some(vec!["houdini".to_string()]),
+                            categories: None,
+                        },
+                        houdini: Some(HoudiniConfig {
+                            min_version: min_houdini,
+                            max_version: max_houdini,
+                        }),
+                        dependencies: None,
+                        python_dependencies: None,
+                        scripts: None,
+                    }
+                },
+            )
+    }
+
+    // Property-based tests
+
+    proptest! {
+        /// Test that valid package manifests always pass validation
+        #[test]
+        fn prop_valid_manifests_pass_validation(manifest in package_manifest_strategy()) {
+            prop_assert!(manifest.validate().is_ok());
+        }
+
+        /// Test that manifest serialization/deserialization is consistent
+        #[test]
+        fn prop_manifest_serialization_roundtrip(manifest in package_manifest_strategy()) {
+            let toml_str = toml::to_string(&manifest).unwrap();
+            let deserialized: PackageManifest = toml::from_str(&toml_str).unwrap();
+
+            prop_assert_eq!(manifest.package.name, deserialized.package.name);
+            prop_assert_eq!(manifest.package.version, deserialized.package.version);
+            prop_assert_eq!(manifest.package.description, deserialized.package.description);
+        }
+
+        /// Test that dependency specifications serialize/deserialize correctly
+        #[test]
+        fn prop_dependency_spec_roundtrip(spec in dependency_spec_strategy()) {
+            let json_str = serde_json::to_string(&spec).unwrap();
+            let deserialized: DependencySpec = serde_json::from_str(&json_str).unwrap();
+
+            // Compare serialized forms since the enum variants might differ in structure
+            let original_json = serde_json::to_string(&spec).unwrap();
+            let roundtrip_json = serde_json::to_string(&deserialized).unwrap();
+            prop_assert_eq!(original_json, roundtrip_json);
+        }
+
+        /// Test that Python dependency specifications serialize/deserialize correctly
+        #[test]
+        fn prop_python_dependency_spec_roundtrip(spec in python_dependency_spec_strategy()) {
+            let json_str = serde_json::to_string(&spec).unwrap();
+            let deserialized: PythonDependencySpec = serde_json::from_str(&json_str).unwrap();
+
+            let original_json = serde_json::to_string(&spec).unwrap();
+            let roundtrip_json = serde_json::to_string(&deserialized).unwrap();
+            prop_assert_eq!(original_json, roundtrip_json);
+        }
+
+        /// Test that Houdini package generation is consistent and valid
+        #[test]
+        fn prop_houdini_package_generation(manifest in package_manifest_strategy()) {
+            let houdini_pkg = manifest.generate_houdini_package();
+
+            // Generated package should always have hpath and env
+            prop_assert!(houdini_pkg.hpath.is_some());
+            prop_assert!(houdini_pkg.env.is_some());
+
+            // If Houdini config exists with versions, enable should be set
+            if let Some(houdini_config) = &manifest.houdini {
+                if houdini_config.min_version.is_some() || houdini_config.max_version.is_some() {
+                    prop_assert!(houdini_pkg.enable.is_some());
+                }
+            }
+
+            // hpath should contain otls directory
+            let hpath = houdini_pkg.hpath.unwrap();
+            prop_assert!(hpath.iter().any(|path| path.contains("otls")));
+
+            // env should contain PYTHONPATH and HOUDINI_SCRIPT_PATH
+            let env = houdini_pkg.env.unwrap();
+            let has_python_path = env.iter().any(|env_map| env_map.contains_key("PYTHONPATH"));
+            let has_script_path = env.iter().any(|env_map| env_map.contains_key("HOUDINI_SCRIPT_PATH"));
+            prop_assert!(has_python_path);
+            prop_assert!(has_script_path);
+        }
+
+        /// Test that package name validation works correctly
+        #[test]
+        fn prop_package_name_validation(
+            valid_name in package_name_strategy(),
+            invalid_chars in r"[A-Z_]{1,5}"
+        ) {
+            // Valid names should pass validation
+            let valid_manifest = PackageManifest::new(
+                valid_name,
+                "1.0.0".to_string(),
+                None,
+                None,
+                None,
+            );
+            prop_assert!(valid_manifest.validate().is_ok());
+
+            // Names with invalid characters should fail validation
+            let invalid_manifest = PackageManifest::new(
+                format!("test{}", invalid_chars),
+                "1.0.0".to_string(),
+                None,
+                None,
+                None,
+            );
+            prop_assert!(invalid_manifest.validate().is_err());
+        }
+
+        /// Test that semver validation works correctly
+        #[test]
+        fn prop_semver_validation(
+            valid_version in version_strategy(),
+            invalid_version in r"[a-zA-Z]{3,10}|[0-9]+\\.[0-9]+|[0-9]+"
+        ) {
+            // Valid semver should pass validation
+            let valid_manifest = PackageManifest::new(
+                "test-package".to_string(),
+                valid_version,
+                None,
+                None,
+                None,
+            );
+            prop_assert!(valid_manifest.validate().is_ok());
+
+            // Invalid versions should fail (unless they accidentally match semver)
+            let invalid_manifest = PackageManifest::new(
+                "test-package".to_string(),
+                invalid_version.clone(),
+                None,
+                None,
+                None,
+            );
+
+            // Only assert failure if it's clearly not semver
+            if !invalid_version.chars().all(|c| c.is_ascii_digit() || c == '.') ||
+               invalid_version.split('.').count() != 3 {
+                prop_assert!(invalid_manifest.validate().is_err());
+            }
+        }
+    }
+
+    // Traditional unit tests for edge cases and specific scenarios
+
     #[test]
-    fn manifest_validation_fails_empty_name() {
+    fn empty_name_fails_validation() {
         let manifest = PackageManifest {
             package: PackageInfo {
                 name: "".to_string(),
@@ -313,16 +566,15 @@ mod tests {
             python_dependencies: None,
             scripts: None,
         };
-
         assert!(manifest.validate().is_err());
     }
 
     #[test]
-    fn manifest_validation_fails_invalid_version() {
+    fn empty_version_fails_validation() {
         let manifest = PackageManifest {
             package: PackageInfo {
                 name: "test".to_string(),
-                version: "invalid".to_string(),
+                version: "".to_string(),
                 description: None,
                 authors: None,
                 license: None,
@@ -338,81 +590,28 @@ mod tests {
             python_dependencies: None,
             scripts: None,
         };
-
         assert!(manifest.validate().is_err());
     }
 
     #[test]
-    fn dependency_spec_serialization() {
-        let simple = DependencySpec::Simple("^1.0.0".to_string());
-        let detailed = DependencySpec::Detailed {
-            version: Some("1.5".to_string()),
-            git: None,
-            tag: None,
-            branch: None,
-            optional: Some(true),
-            registry: None,
-        };
-
-        let simple_json = serde_json::to_string(&simple).unwrap();
-        let detailed_json = serde_json::to_string(&detailed).unwrap();
-
-        assert_eq!(simple_json, r#""^1.0.0""#);
-        assert!(detailed_json.contains("version"));
-        assert!(detailed_json.contains("optional"));
+    fn dependency_spec_simple_serialization() {
+        let spec = DependencySpec::Simple("^1.0.0".to_string());
+        let json = serde_json::to_string(&spec).unwrap();
+        assert_eq!(json, r#""^1.0.0""#);
     }
 
     #[test]
-    fn package_manifest_creation() {
-        let manifest = PackageManifest::new(
-            "test-package".to_string(),
-            "1.0.0".to_string(),
-            Some("A test package".to_string()),
-            Some(vec!["Author <author@example.com>".to_string()]),
-            Some("MIT".to_string()),
-        );
+    fn houdini_package_no_version_constraints() {
+        let mut manifest =
+            PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
 
-        assert_eq!(manifest.package.name, "test-package");
-        assert_eq!(manifest.package.version, "1.0.0");
-        assert!(manifest.houdini.is_some());
-        assert!(manifest.validate().is_ok());
-    }
-
-    #[test]
-    fn houdini_package_generation() {
-        let manifest = PackageManifest::new(
-            "test-package".to_string(),
-            "1.0.0".to_string(),
-            None,
-            None,
-            None,
-        );
+        // Remove version constraints
+        manifest.houdini = Some(HoudiniConfig {
+            min_version: None,
+            max_version: None,
+        });
 
         let houdini_pkg = manifest.generate_houdini_package();
-
-        assert!(houdini_pkg.hpath.is_some());
-        assert!(houdini_pkg.env.is_some());
-        assert!(houdini_pkg.enable.is_some());
-    }
-
-    #[test]
-    fn package_name_validation() {
-        let valid_manifest = PackageManifest::new(
-            "my-package".to_string(),
-            "1.0.0".to_string(),
-            None,
-            None,
-            None,
-        );
-        assert!(valid_manifest.validate().is_ok());
-
-        let invalid_manifest = PackageManifest::new(
-            "My_Package".to_string(),
-            "1.0.0".to_string(),
-            None,
-            None,
-            None,
-        );
-        assert!(invalid_manifest.validate().is_err());
+        assert!(houdini_pkg.enable.is_none());
     }
 }

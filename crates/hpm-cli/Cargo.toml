@@ -40,6 +40,7 @@ hpm-python = { path = "../hpm-python" }
 [dev-dependencies]
 tempfile.workspace = true
 serde_json.workspace = true
+proptest.workspace = true
 
 [package.metadata.cargo-machete]
 ignored = ["indicatif"]

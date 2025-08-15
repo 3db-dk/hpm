@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 57e2035849e573e74835d9a2d3a79dd1ac3131071a7fcd6704dd028c4899ba46 # shrinks to deps1 = PythonDependencies { dependencies: {}, python_version: Some(PythonVersion { major: 2, minor: 6, patch: None }) }, deps2 = PythonDependencies { dependencies: {}, python_version: Some(PythonVersion { major: 2, minor: 6, patch: Some(0) }) }
