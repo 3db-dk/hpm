@@ -192,7 +192,7 @@ fn display_hpm_dependencies(manifest: &PackageManifest) {
 /// Display Python package dependencies
 ///
 /// Shows all Python package dependencies with their version specifications.
-/// Includes support for extras (e.g., requests[security]) and optional dependencies.
+/// Includes support for extras (e.g., requests\[security\]) and optional dependencies.
 ///
 /// # Arguments
 ///
@@ -326,7 +326,7 @@ fn is_optional_python_dependency(spec: &PythonDependencySpec) -> bool {
 /// Format Python dependency extras for display
 ///
 /// Formats the extras list for a Python dependency into a display string.
-/// Extras are additional optional components of a package (e.g., requests[security]).
+/// Extras are additional optional components of a package (e.g., requests\[security\]).
 ///
 /// # Arguments
 ///

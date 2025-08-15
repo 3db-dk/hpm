@@ -1,3 +1,47 @@
+//! # HPM Package
+//!
+//! Package manifest processing and Houdini integration for HPM.
+//!
+//! This crate provides:
+//!
+//! - **Package Manifest**: `hpm.toml` parsing, validation, and manipulation
+//! - **Houdini Integration**: Generation of `package.json` files from HPM manifests
+//! - **Package Templates**: Standardized package structure generation
+//! - **Dependency Specifications**: Support for both HPM and Python dependencies
+//!
+//! ## Key Types
+//!
+//! - [`PackageManifest`] - Represents an `hmp.toml` file with full validation
+//! - [`PackageTemplate`] - Creates standardized package directory structures
+//! - [`DependencySpec`] - HPM dependency specifications with version constraints
+//! - [`PythonDependencySpec`] - Python dependency specifications with extras support
+//! - [`HoudiniPackage`] - Generated `package.json` structure for Houdini integration
+//!
+//! ## Examples
+//!
+//! ```rust
+//! use hpm_package::{PackageManifest, PackageTemplate};
+//!
+//! // Create a new package manifest
+//! let manifest = PackageManifest::new(
+//!     "my-houdini-package".to_string(),
+//!     "1.0.0".to_string(),
+//!     Some("My custom Houdini tools".to_string()),
+//!     Some(vec!["Author <email@example.com>".to_string()]),
+//!     Some("MIT".to_string()),
+//! );
+//!
+//! // Validate the manifest
+//! assert!(manifest.validate().is_ok());
+//!
+//! // Generate Houdini package.json
+//! let houdini_package = manifest.generate_houdini_package();
+//!
+//! // Create package structure
+//! let template = PackageTemplate::new("my-package", &manifest, false);
+//! // template.create_structure("/path/to/directory")?;
+//! ```
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

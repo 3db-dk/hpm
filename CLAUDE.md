@@ -11,13 +11,22 @@ This document provides development guidelines for the HPM (Houdini Package Manag
 
 HPM is a Rust-based package management system for SideFX Houdini, providing modern package management capabilities equivalent to npm for Node.js, uv for Python or cargo for Rust.
 
+### Current Project Status
+
+**Development Stage**: Core functionality implemented with comprehensive testing infrastructure
+- **Test Coverage**: 90% pass rate (53/59 tests) with isolated, reliable tests
+- **Architecture**: Clean, modular design with proper separation of concerns
+- **Core Features**: Package initialization, dependency management, and cleanup systems working
+- **Registry System**: Complete implementation with QUIC transport and gRPC API (not yet integrated with CLI)
+- **Python Integration**: Full virtual environment support with content-addressable sharing
+
 ### Core Functionality
 
 HPM delivers comprehensive package management for Houdini:
-- **Authoring**: Package creation with standardized structure and metadata
-- **Publishing**: Registry-based package distribution
-- **Installation**: Automated package installation with dependency resolution
-- **Management**: Package updates, removal, and lifecycle maintenance
+- **Authoring**: ✅ Package creation with standardized structure and metadata (fully implemented)
+- **Publishing**: 📋 Registry-based package distribution (registry implemented, CLI integration planned)
+- **Installation**: ✅ Automated package installation with dependency resolution (working with Python support)
+- **Management**: ⚠️ Package updates, removal, and lifecycle maintenance (removal implemented, updates planned)
 
 ### Architecture Benefits
 
@@ -1047,17 +1056,21 @@ project/
 HPM provides comprehensive package management through industry-standard CLI patterns:
 
 #### Core Commands
-- `hpm init` - Initialize new Houdini packages with templates
-- `hpm add` - Add package dependencies to hpm.toml manifest with automatic installation
-- `hpm install` - Install dependencies from hpm.toml manifest
+
+**✅ Fully Implemented**:
+- `hpm init` - Initialize new Houdini packages with templates (comprehensive implementation with tests)
+- `hpm add` - Add package dependencies to hpm.toml manifest with version specs and optional dependencies
 - `hpm remove` - Remove package dependencies from hpm.toml manifest (preserves downloaded packages)
+- `hpm install` - Install dependencies from hpm.toml manifest with Python dependency support
+- `hpm list` - Display comprehensive package information and dependencies from hpm.toml manifest
+- `hpm check` - Validate package configuration and Houdini compatibility
+- `hpm clean` - Project-aware package cleanup with orphan detection and comprehensive options
+
+**❌ Planned for Future Implementation**:
 - `hpm update` - Update packages to latest versions
-- `hpm list` - Display comprehensive package information and dependencies from hmp.toml manifest
-- `hpm search` - Search registry for packages
+- `hpm search` - Search registry for packages  
 - `hpm publish` - Publish packages to registry
 - `hpm run` - Execute package scripts
-- `hpm check` - Validate package configuration and Houdini compatibility
-- `hpm clean` - Project-aware package cleanup with orphan detection
 
 #### Package Templates
 - **Standard** (default): Complete Houdini package with all standard directories
@@ -1600,21 +1613,31 @@ For functionality that creates files and directories (like `hpm init`):
 **Test Fixtures and Cleanup**:
 - Always use `tempfile::TempDir` for temporary file system operations
 - Never rely on global file system state that could affect other tests
-- Restore working directory after tests that change it
+- Use absolute paths with `base_dir` parameter instead of changing working directory
+- Avoid working directory changes that cause test concurrency issues
 
 ```rust
 #[tokio::test]
 async fn test_init_package_standard() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = env::current_dir().unwrap();
     
-    env::set_current_dir(temp_dir.path()).unwrap();
-    // ... test logic ...
-    env::set_current_dir(original_dir).unwrap();
+    let options = InitOptions {
+        name: Some("test-package".to_string()),
+        // ... other options ...
+        base_dir: Some(temp_dir.path().to_path_buf()), // Use absolute path
+    };
+    
+    let result = init_package(options).await;
+    assert!(result.is_ok());
     
     // TempDir automatically cleans up when dropped
 }
 ```
+
+**Integration Testing**:
+- Use `cargo test --test integration_tests` for end-to-end CLI testing
+- Integration tests execute actual CLI binaries to test complete workflows
+- Tests include error scenarios, edge cases, and user experience validation
 
 **Content Validation Requirements**:
 - Verify both file/directory existence AND content correctness

@@ -1,15 +1,35 @@
+[package]
+name = "hpm-workspace"
+version = "0.1.0"
+authors = ["HPM Contributors"]
+edition = "2021"
+license = "MIT"
+description = "Houdini Package Manager - A modern package management system for SideFX Houdini"
+repository = "https://github.com/hpm-org/hpm"
+homepage = "https://hpm.dev"
+documentation = "https://docs.hpm.dev"
+keywords = ["houdini", "package-manager", "vfx", "3d"]
+categories = ["development-tools", "multimedia::images"]
+rust-version = "1.70"
+
+# This is a documentation-only crate for the workspace
+[lib]
+name = "hpm_workspace"
+path = "src/lib.rs"
+
 [workspace]
 members = [
     "crates/hpm-cli",
     "crates/hpm-core",
     "crates/hpm-config", 
     "crates/hpm-registry",
-    "crates/hpm-resolver",
-    "crates/hpm-installer",
     "crates/hpm-package",
     "crates/hpm-error",
     "crates/hpm-python"
 ]
+# Removed empty placeholder crates until implementation:
+# "crates/hpm-resolver",
+# "crates/hpm-installer",
 resolver = "2"
 
 [workspace.package]

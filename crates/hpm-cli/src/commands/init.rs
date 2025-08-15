@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use hpm_package::{PackageManifest, PackageTemplate};
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{info, warn};
 
@@ -16,15 +16,22 @@ pub struct InitOptions {
     pub houdini_max: Option<String>,
     pub bare: bool,
     pub vcs: String,
+    /// Base directory where the package should be created. If None, uses current working directory.
+    pub base_dir: Option<PathBuf>,
 }
 
 pub async fn init_package(options: InitOptions) -> Result<()> {
+    // Determine base directory - use provided or current working directory
+    let base_dir = match options.base_dir {
+        Some(dir) => dir,
+        None => env::current_dir().context("Failed to get current directory")?,
+    };
+
     // Determine package name
     let package_name = match options.name {
         Some(name) => name,
         None => {
-            let current_dir = env::current_dir().context("Failed to get current directory")?;
-            let dir_name = current_dir
+            let dir_name = base_dir
                 .file_name()
                 .context("Failed to get directory name")?
                 .to_string_lossy()
@@ -35,7 +42,7 @@ pub async fn init_package(options: InitOptions) -> Result<()> {
         }
     };
 
-    let target_dir = Path::new(&package_name);
+    let target_dir = base_dir.join(&package_name);
 
     // Check if directory already exists
     if target_dir.exists() {
@@ -85,19 +92,19 @@ pub async fn init_package(options: InitOptions) -> Result<()> {
     let template = PackageTemplate::new(&package_name, &manifest, options.bare);
 
     // Create directory
-    fs::create_dir(target_dir)
+    fs::create_dir(&target_dir)
         .with_context(|| format!("Failed to create directory '{}'", package_name))?;
 
     // Create package structure
     template
-        .create_structure(target_dir)
+        .create_structure(&target_dir)
         .context("Failed to create package structure")?;
 
     info!("Package structure created successfully");
 
     // Initialize version control
     if options.vcs == "git" {
-        init_git_repository(target_dir).await?;
+        init_git_repository(&target_dir).await?;
         info!("Initialized git repository");
     }
 
@@ -112,7 +119,7 @@ pub async fn init_package(options: InitOptions) -> Result<()> {
     }
 
     println!("\nPackage structure:");
-    print_directory_tree(target_dir, 0)?;
+    print_directory_tree(&target_dir, 0)?;
 
     if !options.bare {
         println!("\nNext steps:");
@@ -257,10 +264,6 @@ mod tests {
     #[tokio::test]
     async fn test_init_package_bare() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        // Change to temp directory for this test
-        env::set_current_dir(temp_dir.path()).unwrap();
 
         let options = InitOptions {
             name: Some("test-bare-package".to_string()),
@@ -272,15 +275,13 @@ mod tests {
             houdini_max: None,
             bare: true,
             vcs: "none".to_string(),
+            base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
         let result = init_package(options).await;
         if let Err(e) = &result {
             eprintln!("Init package failed: {}", e);
         }
-
-        // Restore directory first
-        env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
         let package_path = temp_dir.path().join("test-bare-package");
@@ -309,10 +310,6 @@ mod tests {
     #[tokio::test]
     async fn test_init_package_standard() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        // Change to temp directory for this test
-        env::set_current_dir(temp_dir.path()).unwrap();
 
         let options = InitOptions {
             name: Some("test-standard-package".to_string()),
@@ -324,15 +321,13 @@ mod tests {
             houdini_max: Some("21.0".to_string()),
             bare: false,
             vcs: "none".to_string(),
+            base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
         let result = init_package(options).await;
         if let Err(e) = &result {
             eprintln!("Init package failed: {}", e);
         }
-
-        // Restore directory first
-        env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
         let package_path = temp_dir.path().join("test-standard-package");
@@ -398,9 +393,6 @@ mod tests {
     #[tokio::test]
     async fn test_init_package_with_minimal_options() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        env::set_current_dir(temp_dir.path()).unwrap();
 
         let options = InitOptions {
             name: Some("minimal-pkg".to_string()),
@@ -412,10 +404,10 @@ mod tests {
             houdini_max: None,
             bare: false,
             vcs: "none".to_string(),
+            base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
         let result = init_package(options).await;
-        env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
         let package_path = temp_dir.path().join("minimal-pkg");
@@ -438,9 +430,6 @@ mod tests {
     #[tokio::test]
     async fn test_init_package_with_special_characters() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        env::set_current_dir(temp_dir.path()).unwrap();
 
         let options = InitOptions {
             name: Some("special-chars-test".to_string()),
@@ -452,10 +441,10 @@ mod tests {
             houdini_max: None,
             bare: false,
             vcs: "none".to_string(),
+            base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
         let result = init_package(options).await;
-        env::set_current_dir(original_dir).unwrap();
 
         assert!(result.is_ok());
         let package_path = temp_dir.path().join("special-chars-test");
@@ -470,9 +459,6 @@ mod tests {
     #[tokio::test]
     async fn test_init_package_directory_already_exists() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        env::set_current_dir(temp_dir.path()).unwrap();
 
         // Create directory first
         let package_dir = temp_dir.path().join("existing-pkg");
@@ -488,10 +474,10 @@ mod tests {
             houdini_max: None,
             bare: false,
             vcs: "none".to_string(),
+            base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
         let result = init_package(options).await;
-        env::set_current_dir(original_dir).unwrap();
 
         // Should fail because directory already exists
         assert!(result.is_err());

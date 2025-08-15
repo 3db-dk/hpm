@@ -1,3 +1,28 @@
+//! # HPM CLI - Houdini Package Manager Command Line Interface
+//!
+//! The HPM CLI provides a comprehensive command-line interface for managing Houdini packages,
+//! dependencies, and project workflows.
+//!
+//! ## Available Commands
+//!
+//! ### Fully Implemented
+//! - `init` - Initialize new Houdini packages with templates
+//! - `add` - Add package dependencies with version specifications
+//! - `remove` - Remove package dependencies from manifests
+//! - `install` - Install dependencies from hpm.toml with Python support
+//! - `list` - Display package information and dependencies
+//! - `check` - Validate package configuration and Houdini compatibility
+//! - `clean` - Project-aware package cleanup with orphan detection
+//!
+//! ### Planned for Future Implementation
+//! - `update` - Update packages to latest versions
+//! - `search` - Search registry for packages
+//! - `publish` - Publish packages to registry
+//! - `run` - Execute package scripts
+//!
+//! The CLI is built using [clap](https://docs.rs/clap/) for argument parsing and provides
+//! comprehensive help information for all commands and options.
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -92,6 +117,14 @@ enum Commands {
     },
     /// Publish a package
     Publish,
+    /// Execute package scripts
+    Run {
+        /// Script name to execute
+        script: String,
+        /// Additional arguments to pass to the script
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
     /// Install dependencies from hpm.toml
     Install {
         /// Path to hpm.toml file (defaults to current directory)
@@ -132,6 +165,7 @@ async fn main() -> Result<()> {
                 houdini_max,
                 bare,
                 vcs,
+                base_dir: None, // Use current working directory for CLI usage
             };
 
             init_package(options).await?;
@@ -148,16 +182,26 @@ async fn main() -> Result<()> {
             commands::remove::remove_package(package, manifest).await?;
         }
         Commands::Update => {
-            println!("Updating packages");
+            println!("Update command not yet implemented");
+            println!("   This feature is planned for a future release");
         }
         Commands::List { manifest } => {
             commands::list::list_dependencies(manifest).await?;
         }
-        Commands::Search { query } => {
-            println!("Searching for: {}", query);
+        Commands::Search { query: _ } => {
+            println!("Search command not yet implemented");
+            println!("   This feature is planned for a future release");
         }
         Commands::Publish => {
-            println!("Publishing package");
+            println!("Publish command not yet implemented");
+            println!("   This feature is planned for a future release");
+        }
+        Commands::Run { script, args: _ } => {
+            println!("Run command not yet implemented");
+            println!(
+                "   Script '{}' execution is planned for a future release",
+                script
+            );
         }
         Commands::Install { manifest } => {
             commands::install::install_dependencies(manifest).await?;
