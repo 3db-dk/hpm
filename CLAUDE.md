@@ -366,7 +366,13 @@ cargo run -- add geometry-tools --optional            # Add optional dependency
 cargo run -- add mesh-utils --package /path/to/project/  # Add to specific project
 cargo run -- remove utility-nodes                     # Remove dependency
 cargo run -- remove old-package --package /path/to/project/  # Remove from specific project
-cargo run -- list
+
+# Test dependency listing
+cargo run -- list                                    # List dependencies from current directory's hpm.toml
+cargo run -- list --package /path/to/project/        # List dependencies from specific project directory
+cargo run -- list --package /path/to/hpm.toml       # List dependencies from specific manifest file
+
+# Test package search
 cargo run -- search "geometry tools"
 
 # Test cleanup system
@@ -1046,7 +1052,7 @@ HPM provides comprehensive package management through industry-standard CLI patt
 - `hpm install` - Install dependencies from hpm.toml manifest
 - `hpm remove` - Remove package dependencies from hpm.toml manifest (preserves downloaded packages)
 - `hpm update` - Update packages to latest versions
-- `hpm list` - Display installed packages and dependency tree
+- `hpm list` - Display HPM and Python dependencies from hmp.toml manifest
 - `hpm search` - Search registry for packages
 - `hpm publish` - Publish packages to registry
 - `hpm info` - Show detailed package information
@@ -1189,6 +1195,60 @@ When Python dependencies are specified in hpm.toml, the install command:
 - Manifest validation with helpful feedback
 - Graceful handling of network issues during dependency resolution
 - Comprehensive logging with RUST_LOG=debug for troubleshooting
+
+### List Command
+
+The `hpm list` command provides comprehensive visibility into package dependencies from HPM projects.
+
+#### Functionality
+- Lists HPM package dependencies from hmp.toml manifest files
+- Lists Python package dependencies from hmp.toml manifest files
+- Supports flexible manifest targeting via `--package` flag
+- Clear categorization between HPM and Python dependencies
+- Version specifications displayed with dependency names
+- Shows optional dependencies and Python extras
+
+#### Usage
+```bash
+# List dependencies from current directory's hpm.toml
+hpm list
+
+# List dependencies from specific project directory
+hpm list --package /path/to/project/
+
+# List dependencies from specific manifest file
+hpm list --package /path/to/project/hpm.toml
+```
+
+#### Output Format
+The command displays dependencies in organized sections:
+- Package information (name, version, description, Houdini compatibility)
+- HPM Dependencies section with version specs, git sources, optional markers
+- Python Dependencies section with version specs, extras, optional markers
+- Clear indication when no dependencies are found
+
+#### Example Output
+```
+Package: geometry-tools v1.2.0
+Description: Advanced geometry manipulation tools for Houdini
+Houdini compatibility: min: 20.0, max: 21.0
+
+HPM Dependencies:
+  utility-nodes ^2.1.0
+  material-library 1.5 (optional)
+  mesh-utils git: https://github.com/example/mesh-utils (tag: v1.0)
+
+Python Dependencies:
+  numpy >=1.20.0
+  matplotlib ^3.5.0 (optional)
+  requests >=2.25.0 [security,socks]
+```
+
+#### Integration
+- Uses the same manifest path resolution as other HPM commands
+- Integrates with existing PackageManifest parsing
+- Provides comprehensive error handling and user feedback
+- Consistent with HPM's professional, concise output style
 
 ## Project-Aware Cleanup System
 

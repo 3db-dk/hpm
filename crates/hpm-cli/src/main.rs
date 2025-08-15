@@ -80,7 +80,11 @@ enum Commands {
     /// Update packages
     Update,
     /// List installed packages
-    List,
+    List {
+        /// Path to directory containing hpm.toml or direct path to hpm.toml file
+        #[arg(short = 'p', long = "package")]
+        manifest: Option<std::path::PathBuf>,
+    },
     /// Search for packages
     Search {
         /// Search query
@@ -151,8 +155,8 @@ async fn main() -> Result<()> {
         Commands::Update => {
             println!("Updating packages");
         }
-        Commands::List => {
-            println!("Listing installed packages");
+        Commands::List { manifest } => {
+            commands::list::list_dependencies(manifest).await?;
         }
         Commands::Search { query } => {
             println!("Searching for: {}", query);
