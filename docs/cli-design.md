@@ -134,11 +134,32 @@ docs = "python scripts/generate_docs.py"
 - Custom scripts for common tasks
 - Executable via `hpm run <script-name>` (future feature)
 
+## Implementation Status
+
+The following commands are currently implemented and functional:
+
+### ✅ Fully Implemented Commands
+- `hpm init` - Initialize new HPM packages with templates
+- `hpm install` - Install dependencies from hpm.toml manifest
+- `hpm check` - Validate package configuration and Houdini compatibility
+- `hpm clean` - Project-aware cleanup with Python virtual environment support
+
+### 🚧 Placeholder Commands (Not Yet Implemented)
+- `hpm add` - Add packages and dependencies
+- `hpm remove` - Remove installed packages
+- `hpm update` - Update packages to latest versions
+- `hpm list` - List installed packages
+- `hpm search` - Search for packages in registry
+- `hpm publish` - Publish packages to registry
+- `hpm info` - Show detailed package information
+
 ## Additional CLI Commands
 
 ### Package Management
 
-#### `hpm add [PACKAGE]`
+#### `hpm add [PACKAGE]` 🚧
+**Status: Placeholder implementation**
+
 Add packages and dependencies.
 
 ```bash
@@ -160,7 +181,9 @@ hpm add --no-deps  # Skip dependencies
 hpm add --force  # Force reinstall
 ```
 
-#### `hpm remove <PACKAGE>`
+#### `hpm remove <PACKAGE>` 🚧
+**Status: Placeholder implementation**
+
 Remove installed packages.
 
 ```bash
@@ -168,7 +191,9 @@ hpm remove utility-nodes
 hpm remove --all  # Remove all packages
 ```
 
-#### `hpm update [PACKAGE]`
+#### `hpm update [PACKAGE]` 🚧
+**Status: Placeholder implementation**
+
 Update packages to latest versions.
 
 ```bash
@@ -176,7 +201,9 @@ hpm update  # Update all packages
 hpm update utility-nodes  # Update specific package
 ```
 
-#### `hpm list`
+#### `hpm list` 🚧
+**Status: Placeholder implementation**
+
 List installed packages.
 
 ```bash
@@ -187,7 +214,9 @@ hpm list --outdated  # Show outdated packages
 
 ### Registry Operations
 
-#### `hpm search <QUERY>`
+#### `hpm search <QUERY>` 🚧
+**Status: Placeholder implementation**
+
 Search for packages in registry.
 
 ```bash
@@ -196,7 +225,9 @@ hpm search --category modeling
 hpm search --author "John Doe"
 ```
 
-#### `hpm info <PACKAGE>`
+#### `hpm info <PACKAGE>` 🚧
+**Status: Placeholder implementation**
+
 Show detailed package information.
 
 ```bash
@@ -204,7 +235,9 @@ hpm info utility-nodes
 hpm info utility-nodes --versions  # Show all versions
 ```
 
-#### `hpm publish`
+#### `hpm publish` 🚧
+**Status: Placeholder implementation**
+
 Publish package to registry.
 
 ```bash
@@ -215,7 +248,9 @@ hpm publish --allow-dirty  # Publish with uncommitted changes
 
 ### Development Tools
 
-#### `hpm run <SCRIPT>`
+#### `hpm run <SCRIPT>` 🚧
+**Status: Not yet implemented**
+
 Execute package scripts.
 
 ```bash
@@ -284,10 +319,10 @@ hpm check
 ```
 
 #### `hpm clean`
-Clean orphaned packages using project-aware analysis.
+Clean orphaned packages and Python virtual environments using project-aware analysis.
 
 **Overview:**
-The `hpm clean` command provides intelligent package cleanup that safely removes orphaned packages while preserving dependencies needed by active projects. It uses dependency graph analysis to ensure no required packages are accidentally removed.
+The `hpm clean` command provides intelligent cleanup that safely removes orphaned packages and Python virtual environments while preserving dependencies needed by active projects. It uses dependency graph analysis to ensure no required packages are accidentally removed.
 
 **Syntax:**
 ```bash
@@ -296,8 +331,10 @@ hpm clean [OPTIONS]
 
 **Options:**
 - `-n, --dry-run` - Perform a dry run without actually removing packages
-- `-f, --force` - Remove packages without asking for confirmation
-- `--package <PACKAGE>` - Target specific package patterns (future enhancement)
+- `-y, --yes` - Remove packages without asking for confirmation
+- `--package <PACKAGE>` - Target specific package patterns
+- `--python-only` - Clean only Python virtual environments
+- `--comprehensive` - Clean both packages and Python virtual environments
 
 **Examples:**
 ```bash
@@ -308,7 +345,16 @@ hpm clean
 hpm clean --dry-run
 
 # Automated cleanup without confirmation prompts
-hpm clean --force
+hpm clean --yes
+
+# Clean only Python virtual environments
+hpm clean --python-only
+
+# Preview comprehensive cleanup (packages + Python)
+hpm clean --comprehensive --dry-run
+
+# Automated comprehensive cleanup
+hpm clean --comprehensive --yes
 ```
 
 **How It Works:**
@@ -367,6 +413,30 @@ Remove these packages? [y/N]: y
 ✓ Removed unused-library@1.0.0
 ✓ Removed old-tools@2.1.0
 🎉 Cleanup completed: removed 2 orphaned packages
+```
+
+*Python Virtual Environment Cleanup:*
+```
+# Python-only cleanup
+hpm clean --python-only --dry-run
+🔍 Analyzing Python virtual environments for cleanup (dry run)...
+Found 3 orphaned virtual environments that would be removed:
+  - ~/.hpm/venvs/a1b2c3d4e5f6
+  - ~/.hpm/venvs/f6e5d4c3b2a1  
+  - ~/.hpm/venvs/9x8y7z6w5v4u
+Would free approximately: 250 MB
+
+# Comprehensive cleanup  
+hpm clean --comprehensive --yes
+🔍 Performing comprehensive cleanup (packages + Python environments)...
+Successfully removed 2 orphaned packages:
+  - unused-library@1.0.0
+  - old-tools@2.1.0
+Successfully removed 3 orphaned virtual environments:
+  - ~/.hpm/venvs/a1b2c3d4e5f6
+  - ~/.hpm/venvs/f6e5d4c3b2a1
+  - ~/.hpm/venvs/9x8y7z6w5v4u
+Total disk space freed: 280 MB
 ```
 
 **Exit Codes:**
