@@ -1,81 +1,49 @@
-# Claude Code Configuration for HPM (Houdini Package Manager)
+# Claude Code Configuration for HPM
 
-This directory contains Claude Code configuration for software development of HPM, a Rust-based package manager for SideFX Houdini. HPM provides package management capabilities for the Houdini ecosystem.
+This directory contains Claude Code configuration for the HPM (Houdini Package Manager) project.
 
-## Directory Structure
+## Essential Files
 
-### `/commands/`
-Specialized slash commands for HPM development workflows:
-- `/dev/create-dev-agents.md` - Create development sub-agents
-- `/hpm/` - Package management operations and commands
+### Configuration
+- `settings.json` - Project-specific permissions and hooks for Rust development
+- `claude-code-maintenance-guide.md` - Official maintenance guide using verified Claude Code features
 
-### `/agents/`
-Sub-agent configurations (individual .md files with YAML frontmatter):
-- `rust-expert.md` - Rust development specialist
-- `testing-specialist.md` - Testing and QA specialist
-- `code-reviewer.md` - Code quality and security specialist  
-- `documentation-expert.md` - Technical documentation specialist
-- `package-expert.md` - Package management specialist
+### Agents
+- `agents/hpm-developer.md` - HPM-specific domain expert agent
+- `agents/README.md` - Agent documentation
 
-### `/workflows/`
-Development workflow templates:
-- `multi-agent-development.md` - Software development with sub-agents
-- `package-development.md` - Package creation and publishing workflow
-- `cli-development.md` - Command-line interface development workflow
+## Documentation Archive
 
-### `/contexts/`
-Project context information:
-- `hpm-architecture.md` - HPM system architecture and design
-- `hmp-manifest-spec.md` - HPM package manifest specification
-- `rust-conventions.md` - Rust coding conventions and patterns
+### Architecture Documentation
+- `architecture-analysis.md` - Project architecture analysis and lessons learned
+- `package-storage-architecture.md` - Two-tier storage system design
+- `package-storage-summary.md` - Storage architecture summary
+- `project-aware-cleanup-design.md` - Cleanup system design documentation
 
-### `/templates/`
-Code generation templates:
-- `code-generation.md` - Rust development code templates
-- `package-templates.md` - Package structure templates
+### Historical Documentation
+- `implementation-plan.md` - Development implementation roadmap
+- `improvement-plan.md` - Project improvement recommendations
+- `philosophy.md` - Project philosophy and design principles
+
+### MCP Integration
+- `mcp-integration.md` - MCP server integration details
+- `mcp-setup.md` - MCP configuration and setup guide
+
+### Legacy Directories
+- `commands/` - Contains outdated slash command references (deprecated)
+- `contexts/` - Historical context files
 
 ## Usage
 
-### Use Development Sub-Agents
+For maintenance tasks, use the official Claude Code approach:
 ```bash
-# Sub-agents are ready to use with the Task tool
-# Example: Use specialized agent for specific tasks
-# Task tool will automatically select appropriate sub-agents
+# Interactive maintenance
+claude "Help me with HPM development and maintenance"
+
+# Configuration management
+claude config list
+claude doctor
+claude update
 ```
 
-### Development Workflows
-```bash
-# Feature development with Task tool delegation
-# The Task tool will automatically select appropriate sub-agents
-# based on the task requirements and available expertise
-```
-
-### Package Operations
-```bash
-# Package management commands
-/hpm/init
-/hpm/build
-/hpm/publish
-```
-
-## Cost Optimization
-
-This configuration reduces token usage through:
-- Agent specialization for focused context
-- MCP server integration for direct tool access
-- Structured responses from external tools
-- Reduced command output interpretation overhead
-
-## Focus
-
-This setup is specifically for:
-**Scope:**
-- Rust software development for HPM project
-- Houdini package management functionality
-- CLI development and user experience
-- Development productivity and code quality
-- Houdini ecosystem integration
-
-**Out of Scope:**
-- Houdini content creation (HDAs, scenes, etc.)
-- Production VFX workflows
+See `claude-code-maintenance-guide.md` for comprehensive maintenance procedures.

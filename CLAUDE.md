@@ -48,21 +48,177 @@ HPM delivers comprehensive package management for Houdini:
 
 ## MCP Integration
 
-HPM is integrated with Model Context Protocol (MCP) servers for enhanced development capabilities:
+HPM leverages Claude Code's built-in capabilities and selective MCP servers for enhanced development functionality:
+
+### Built-in Claude Code Tools
+Claude Code provides comprehensive built-in tools that eliminate the need for redundant MCP server configurations:
+- **Filesystem Operations**: `Read`, `Write`, `Edit`, `MultiEdit`, `Glob`, `LS`, `Bash`
+- **GitHub Integration**: Complete GitHub API access via `mcp__github__*` tools
+- **Sequential Thinking**: Advanced reasoning via `mcp__sequential__sequentialthinking`
+- **IDE Integration**: VSCode integration with file references, diagnostics, and diff viewing
 
 ### Configured MCP Servers
-- **Filesystem Server**: Project file operations and management
-- **GitHub Server**: Repository management and API integration
-- **Sequential Thinking Server**: Complex task breakdown and planning
-- **PostgreSQL Server**: Database operations for registry development
+Current optimized configuration includes only non-redundant servers:
 
-### MCP Usage
-- Use `@filesystem` to access project files and resources
-- Use `/thinking` for structured problem-solving workflows
-- Access GitHub resources for repository operations
-- Database queries and schema management for package registry
+#### Global (User-level)
+- **awesome-claude-code**: Access to Claude Code best practices and community resources
 
-For detailed MCP setup and troubleshooting, see `.claude/mcp-setup.md`.
+#### Local (Project-level)  
+- **postgres**: Database operations for HPM registry development
+
+## Claude Code Configuration
+
+HPM follows official Claude Code configuration standards with project-specific optimizations.
+
+### Official Configuration Structure
+
+#### Settings.json Configuration
+Claude Code officially supports `.claude/settings.json` for project configuration:
+
+```json
+{
+  "permissions": {
+    "allow": ["Task(*)", "Bash(cargo *)", "Read(**/*.rs)"],
+    "deny": ["Bash(rm *)", "Read(./.env*)"]
+  },
+  "model": "claude-3-5-sonnet-20241022",
+  "env": {
+    "HPM_DEV": "1"
+  },
+  "hooks": {
+    "pre-edit": {
+      "command": "cargo clippy --manifest-path $WORKSPACE/Cargo.toml -- -D warnings",
+      "description": "Lint check before editing Rust files",
+      "patterns": ["**/*.rs"]
+    }
+  }
+}
+```
+
+#### Agent Configuration
+Agents are configured as separate `.md` files in `.claude/agents/` directories:
+
+**User-Level Agents** (`~/.claude/agents/`):
+- `architecture-advisor.md` - System design and architectural decisions
+- `documentation-writer.md` - Technical documentation and guides
+- `performance-specialist.md` - Performance analysis and optimization
+- `rust-formatter.md` - Code formatting and style consistency
+- `security-auditor.md` - Security analysis and vulnerability scanning
+- `test-specialist.md` - Unit and integration testing
+
+**Project-Level Agents** (`.claude/agents/`):
+- `hpm-developer.md` - HPM-specific implementation and maintenance
+
+### Configuration Hierarchy
+1. **User-Level** (`~/.claude/settings.json`) - General permissions and global settings
+2. **Project-Level** (`.claude/settings.json`) - Project-specific permissions and hooks
+3. **Agent Files** (`.claude/agents/*.md`) - Specialized agent configurations
+
+### Best Practices
+- **Agent Scope Separation**: General-purpose agents at user level, project-specific agents at project level
+- **Permission Management**: Broad permissions at user level, restrictive overrides at project level
+- **Interactive Maintenance**: Use Claude Code's built-in features for configuration management
+
+## Official Claude Code Maintenance
+
+HPM follows the official Claude Code maintenance approach using built-in features rather than custom scripts.
+
+### Recommended Maintenance Routine
+
+#### Monthly Interactive Maintenance
+```bash
+# Start interactive maintenance session
+claude "Help me with monthly Claude Code maintenance for the HPM project"
+```
+
+#### Built-in Maintenance Commands
+```bash
+# Health diagnostics
+claude doctor
+
+# Configuration management
+claude config list
+claude config get <setting>
+claude config set <setting> <value>
+
+# Interactive maintenance sessions
+claude "Help me with monthly Claude Code maintenance for the HPM project"
+claude "Help me review my configuration and optimize my setup"
+claude "Help me manage my custom agents and ensure they're working properly"
+
+# Updates
+claude update
+
+# MCP server management
+claude mcp list
+claude mcp add <name> <transport>
+claude mcp remove <name>
+```
+
+#### Configuration Management
+```bash
+# View current configuration
+claude config list
+
+# Modify settings using official commands
+claude config set model claude-3-5-sonnet-20241022
+claude config add permissions.allow "Bash(cargo test)"
+claude config remove permissions.allow "old-permission"
+```
+
+### Cross-Project Analysis
+For workspace-level insights that complement built-in features:
+```bash
+./scripts/workspace-analysis.sh
+```
+
+This provides cross-project configuration discovery and recommendations for using official Claude Code features.
+
+### Official vs. Custom Approach
+- **Primary**: Use Claude Code's built-in interactive features for maintenance
+- **Supplementary**: Use minimal scripts only for cross-project analysis
+- **Philosophy**: Let Claude Code be your maintenance assistant, don't replace it with automation
+
+For comprehensive guidance, see `.claude/claude-code-maintenance-guide.md`.
+
+### MCP Configuration Management
+
+#### Redundancy Detection
+Before adding new MCP servers, verify they don't duplicate built-in functionality:
+
+```bash
+# Check current MCP servers
+claude mcp list
+
+# Analyze server details and scope
+claude mcp get <server-name>
+
+# Review available built-in tools in Claude Code context
+```
+
+#### Server Management Commands
+```bash
+# Add servers (prefer user scope for cross-project utility)
+claude mcp add -s user <name> <url>                    # Global server
+claude mcp add -s local <name> <url>                   # Project-specific server
+
+# Remove redundant servers
+claude mcp remove <server-name> -s <scope>
+
+# Check server health and connectivity
+claude mcp list
+```
+
+### MCP Maintenance Workflow
+
+Regular maintenance prevents configuration bloat and ensures optimal performance:
+
+1. **Monthly Review**: Audit configured servers against built-in capabilities
+2. **Redundancy Check**: Remove servers that duplicate VSCode/Claude Code built-in tools
+3. **Scope Optimization**: Move servers to appropriate scope (user vs local)
+4. **Documentation Sync**: Update this documentation with configuration changes
+
+For comprehensive MCP maintenance procedures, see the MCP Maintenance Workflow section below.
 
 ## Project Architecture Analysis
 
@@ -228,6 +384,580 @@ cargo test --test integration_tests -p hpm-registry
 
 # Build registry with all features
 cargo build --release --all-features -p hpm-registry
+```
+
+### MCP Configuration Maintenance
+```bash
+# MCP server health check and redundancy audit
+claude mcp list                           # List all configured servers with status
+
+# Server analysis and cleanup
+claude mcp get <server-name>              # Get detailed server information
+claude mcp remove <server-name> -s <scope>  # Remove redundant servers
+
+# Configuration optimization
+claude mcp add -s user <name> <url>       # Add global servers
+claude mcp add -s local <name> <url>      # Add project-specific servers
+
+# Regular maintenance check (run monthly)
+echo "MCP Maintenance Checklist:"
+echo "1. claude mcp list - Check all server status"
+echo "2. Compare with built-in Claude Code tools"
+echo "3. Remove redundant filesystem/github/sequential servers"
+echo "4. Verify awesome-claude-code global accessibility"
+echo "5. Update CLAUDE.md documentation"
+```
+
+## MCP Maintenance Workflow
+
+### Overview
+
+This workflow ensures optimal MCP configuration by preventing redundancy with Claude Code's built-in capabilities and maintaining clean, efficient server configurations.
+
+### Built-in vs External MCP Capabilities
+
+#### ✅ Built-in Tools (No MCP Server Needed)
+- **Filesystem Operations**: `Read`, `Write`, `Edit`, `MultiEdit`, `Glob`, `LS`, `Bash`
+- **GitHub Integration**: `mcp__github__*` tools for comprehensive GitHub API access
+- **Sequential Thinking**: `mcp__sequential__sequentialthinking` for complex reasoning
+- **IDE Integration**: VSCode extension provides file references, diagnostics, diff viewing
+
+#### ✅ Valid External MCP Servers
+- **Content Sources**: Git repositories, documentation sites, knowledge bases
+- **Specialized APIs**: Database connections, external services, domain-specific tools
+- **Project-specific Tools**: Custom tooling not covered by built-in capabilities
+
+### Monthly Maintenance Procedure
+
+#### 1. Server Health Assessment
+```bash
+# Check all configured servers
+claude mcp list
+
+# Analyze each server's purpose and status
+for server in $(claude mcp list --format=names); do
+    claude mcp get "$server"
+done
+```
+
+#### 2. Redundancy Analysis
+Review each server against built-in capabilities:
+
+| MCP Server Type | Built-in Alternative | Action |
+|----------------|---------------------|--------|
+| `@modelcontextprotocol/server-filesystem` | `Read`, `Write`, `Edit`, `Glob`, `LS` | ❌ Remove |
+| `@modelcontextprotocol/server-github` | `mcp__github__*` tools | ❌ Remove |
+| `@modelcontextprotocol/server-sequential-thinking` | `mcp__sequential__sequentialthinking` | ❌ Remove |
+| Content repositories (git-mcp) | No built-in equivalent | ✅ Keep |
+| Database connections | No built-in equivalent | ✅ Keep |
+
+#### 3. Cleanup Implementation
+```bash
+# Remove redundant servers (examples from our cleanup)
+claude mcp remove filesystem -s local     # Redundant with built-in file operations
+claude mcp remove github -s local        # Redundant with built-in GitHub integration
+claude mcp remove sequential -s local    # Redundant with built-in sequential thinking
+
+# Verify cleanup
+claude mcp list
+```
+
+#### 4. Scope Optimization
+Move servers to appropriate scope based on usage:
+
+- **User scope (Global)**: Cross-project utilities, content sources, reference materials
+- **Local scope (Project)**: Project-specific databases, custom APIs, specialized tooling
+
+```bash
+# Example: Move content source to global scope
+claude mcp remove awesome-claude-code -s local
+claude mcp add -s user awesome-claude-code https://gitmcp.io/hesreallyhim/awesome-claude-code
+```
+
+#### 5. Documentation Update
+Update this document with:
+- Current server configurations
+- Rationale for each server
+- Changes made during maintenance
+
+### Best Practices
+
+#### Before Adding New MCP Servers
+1. **Check Built-in Capabilities**: Review available tools in Claude Code context
+2. **Verify Uniqueness**: Ensure the server provides functionality not covered by built-ins
+3. **Choose Appropriate Scope**: Global for cross-project, local for project-specific
+4. **Document Purpose**: Add clear rationale to CLAUDE.md
+
+#### Server Addition Guidelines
+```bash
+# Good: Unique content source
+claude mcp add -s user awesome-claude-code https://gitmcp.io/hesreallyhim/awesome-claude-code
+
+# Good: Project-specific database
+claude mcp add -s local postgres npx @modelcontextprotocol/server-postgres postgresql://localhost:5432
+
+# Bad: Redundant filesystem server
+# claude mcp add filesystem npx @modelcontextprotocol/server-filesystem  # DON'T DO THIS
+```
+
+#### Configuration Health Indicators
+- ✅ **Healthy**: 2-4 MCP servers total, no redundant functionality
+- ⚠️ **Review Needed**: 5+ servers, potential overlap with built-ins  
+- ❌ **Problematic**: 10+ servers, clear redundancy with Claude Code capabilities
+
+### Troubleshooting
+
+#### Common Issues
+- **Server Connection Failed**: Check network connectivity and server URL
+- **Redundant Functionality**: Remove servers that duplicate built-in tools
+- **Scope Confusion**: Move cross-project servers to user scope, project-specific to local
+
+#### Recovery Procedures
+```bash
+# Reset MCP configuration (nuclear option)
+# Backup first: cp ~/.claude.json ~/.claude.json.backup
+
+# Remove all local servers
+claude mcp list --local | xargs -I {} claude mcp remove {} -s local
+
+# Remove all user servers  
+claude mcp list --user | xargs -I {} claude mcp remove {} -s user
+
+# Re-add only essential servers
+claude mcp add -s user awesome-claude-code https://gitmcp.io/hesreallyhim/awesome-claude-code
+```
+
+### Success Metrics
+- **Minimal Configuration**: Only non-redundant servers configured
+- **Fast Startup**: No connection delays from unnecessary servers
+- **Clear Documentation**: Each server's purpose documented and justified
+- **Scope Alignment**: Servers in appropriate scope (user vs local)
+
+## User-Level Development Workflows
+
+### Overview
+
+These workflows provide systematic approaches to software development and project management tasks, ensuring consistency and quality across all development activities.
+
+### Claude Maintenance Workflow
+
+#### Purpose
+Maintain optimal Claude Code configuration, performance, and integration across all projects with intelligent learning from project configurations.
+
+#### Frequency: Monthly
+
+#### Enhanced Features
+- **Configuration Learning**: Analyzes project setups to improve user-level configuration
+- **Redundancy Elimination**: Removes duplicate settings between user and project levels
+- **Agent Optimization**: Recommends moving generalizable agents to user level
+- **Pattern Recognition**: Identifies common development patterns across projects
+
+#### Checklist
+```bash
+#!/bin/bash
+# Claude Maintenance Workflow
+# Run monthly to maintain optimal Claude Code setup
+
+echo "🔧 Claude Code Maintenance Workflow"
+echo "=================================="
+
+# 1. MCP Configuration Audit
+echo "1. MCP Configuration Audit"
+claude mcp list
+echo "   ✓ Review server health and status"
+echo "   ✓ Check for redundant servers vs built-in tools"
+echo "   ✓ Verify scope alignment (user vs local)"
+
+# 2. Configuration Health Check
+echo -e "\n2. Configuration Health Check"
+echo "   Current Claude Code version:"
+claude --version
+echo "   ✓ Check for Claude Code updates"
+echo "   ✓ Review ~/.claude.json for anomalies"
+
+# 3. Memory Management
+echo -e "\n3. Memory Management"
+echo "   ✓ Review CLAUDE.md files across projects"
+echo "   ✓ Update project-specific context"
+echo "   ✓ Archive outdated memory entries"
+
+# 4. Integration Testing
+echo -e "\n4. Integration Testing"
+echo "   ✓ Test VSCode extension functionality"
+echo "   ✓ Verify MCP server connectivity"
+echo "   ✓ Check file operations and GitHub integration"
+
+# 5. Performance Optimization
+echo -e "\n5. Performance Optimization"
+echo "   ✓ Clear unnecessary cache data"
+echo "   ✓ Review startup time and responsiveness"
+echo "   ✓ Optimize token usage patterns"
+
+# 6. Agent Configuration Review
+echo -e "\n6. Agent Configuration Review"
+echo "   ✓ Review user-level vs project-level agent separation"
+echo "   ✓ Verify agent cost optimization (model selection)"
+
+# 7. Configuration Consolidation
+echo -e "\n7. Configuration Consolidation"
+echo "   ✓ Scan project configurations for learning opportunities"
+echo "   ✓ Enhance user-level settings with common patterns"
+echo "   ✓ Remove redundant project-level configurations"
+echo "   ✓ Recommend agent migrations to user level"
+
+# 8. Documentation Update
+echo -e "\n8. Documentation Update"
+echo "   ✓ Update CLAUDE.md with new learnings"
+echo "   ✓ Document workflow improvements"
+echo "   ✓ Sync configuration changes"
+
+echo -e "\n✅ Claude Maintenance Complete"
+```
+
+#### Detailed Actions
+
+##### 1. MCP Configuration Audit
+```bash
+# Check current configuration
+claude mcp list
+
+# Remove redundant servers
+for server in filesystem github sequential; do
+    if claude mcp get "$server" 2>/dev/null; then
+        echo "⚠️  Redundant server detected: $server"
+        claude mcp remove "$server" -s local
+    fi
+done
+
+# Verify essential servers
+claude mcp get awesome-claude-code || echo "❌ Missing awesome-claude-code server"
+claude mcp get postgres || echo "ℹ️  Project-specific postgres server not configured"
+```
+
+##### 2. Configuration Health Check
+```bash
+# Check Claude Code version and updates
+claude --version
+echo "Check https://github.com/anthropics/claude-code/releases for updates"
+
+# Validate configuration file
+if jq empty ~/.claude.json 2>/dev/null; then
+    echo "✅ ~/.claude.json is valid JSON"
+else
+    echo "❌ ~/.claude.json has JSON syntax errors"
+fi
+```
+
+##### 3. Memory Management
+```bash
+# Review CLAUDE.md files across projects
+find ~/Documents/workspace -name "CLAUDE.md" -exec echo "Project: {}" \; -exec head -3 {} \;
+
+# Check memory usage patterns
+echo "Review /memory command usage and clean up outdated entries"
+```
+
+#### Success Metrics
+- ✅ All MCP servers healthy and non-redundant
+- ✅ Claude Code version up to date
+- ✅ Configuration files valid and optimized
+- ✅ Memory entries current and relevant
+- ✅ Performance within acceptable ranges
+
+### Project Setup Workflow
+
+#### Purpose
+Standardize new project initialization with Claude Code integration and best practices.
+
+#### Frequency: Per new project
+
+#### Checklist
+```bash
+#!/bin/bash
+# Project Setup Workflow
+# Run when starting a new project
+
+PROJECT_NAME="$1"
+PROJECT_TYPE="$2"  # rust, python, typescript, etc.
+
+echo "🚀 Project Setup Workflow: $PROJECT_NAME ($PROJECT_TYPE)"
+echo "=================================================="
+
+# 1. Project Structure Creation
+echo "1. Creating project structure..."
+mkdir -p "$PROJECT_NAME"
+cd "$PROJECT_NAME"
+
+# 2. CLAUDE.md Creation
+echo "2. Creating CLAUDE.md..."
+cat > CLAUDE.md << EOF
+# $PROJECT_NAME
+
+## Project Overview
+[Brief description of the project]
+
+## Technology Stack
+- **Primary Language**: $PROJECT_TYPE
+- **Build System**: [Build tool]
+- **Testing**: [Test framework]
+- **Dependencies**: [Key dependencies]
+
+## Development Commands
+\`\`\`bash
+# Build
+[build command]
+
+# Test
+[test command]
+
+# Lint
+[lint command]
+\`\`\`
+
+## Architecture
+[Project structure and design decisions]
+
+## Contributing
+[Development workflow and standards]
+EOF
+
+# 3. Git Initialization
+echo "3. Initializing Git repository..."
+git init
+git add CLAUDE.md
+git commit -m "feat: initialize project with Claude Code integration"
+
+# 4. Claude Code Integration
+echo "4. Setting up Claude Code integration..."
+echo "   ✓ CLAUDE.md created and committed"
+echo "   ✓ Ready for Claude Code development"
+
+echo -e "\n✅ Project setup complete for $PROJECT_NAME"
+```
+
+### Code Quality Workflow
+
+#### Purpose
+Maintain consistent code quality standards across all development activities.
+
+#### Frequency: Pre-commit, weekly review
+
+#### Checklist
+```bash
+#!/bin/bash
+# Code Quality Workflow
+# Run before commits and during weekly reviews
+
+echo "🔍 Code Quality Workflow"
+echo "======================="
+
+# 1. Formatting and Style
+echo "1. Code Formatting and Style"
+case "$PROJECT_TYPE" in
+    rust)
+        cargo fmt --check
+        cargo clippy --all-features -- -D warnings
+        ;;
+    python)
+        black --check .
+        flake8 .
+        mypy .
+        ;;
+    typescript)
+        npm run format:check
+        npm run lint
+        npm run type-check
+        ;;
+esac
+
+# 2. Testing
+echo -e "\n2. Testing"
+case "$PROJECT_TYPE" in
+    rust)
+        cargo test --workspace
+        cargo test --doc
+        ;;
+    python)
+        pytest --cov
+        ;;
+    typescript)
+        npm run test
+        npm run test:integration
+        ;;
+esac
+
+# 3. Security Audit
+echo -e "\n3. Security Audit"
+case "$PROJECT_TYPE" in
+    rust)
+        cargo audit
+        ;;
+    python)
+        pip-audit
+        ;;
+    typescript)
+        npm audit
+        ;;
+esac
+
+# 4. Documentation
+echo -e "\n4. Documentation"
+echo "   ✓ CLAUDE.md up to date with changes"
+echo "   ✓ API documentation generated"
+echo "   ✓ README reflects current functionality"
+
+# 5. Dependency Management
+echo -e "\n5. Dependency Management"
+case "$PROJECT_TYPE" in
+    rust)
+        cargo machete
+        ;;
+    python)
+        pip-check
+        ;;
+    typescript)
+        npm-check-updates
+        ;;
+esac
+
+echo -e "\n✅ Code Quality Check Complete"
+```
+
+### Release Workflow
+
+#### Purpose
+Standardize release preparation and deployment processes.
+
+#### Frequency: Per release
+
+#### Checklist
+```bash
+#!/bin/bash
+# Release Workflow
+# Run when preparing for a new release
+
+RELEASE_VERSION="$1"
+
+echo "📦 Release Workflow: v$RELEASE_VERSION"
+echo "================================="
+
+# 1. Pre-release Validation
+echo "1. Pre-release Validation"
+echo "   ✓ All tests passing"
+echo "   ✓ Code quality checks pass"
+echo "   ✓ Documentation updated"
+echo "   ✓ Dependencies audited"
+
+# 2. Version Bumping
+echo -e "\n2. Version Bumping"
+case "$PROJECT_TYPE" in
+    rust)
+        # Update Cargo.toml versions
+        sed -i '' "s/version = \"[^\"]*\"/version = \"$RELEASE_VERSION\"/" Cargo.toml
+        ;;
+    python)
+        # Update pyproject.toml or setup.py
+        sed -i '' "s/version = \"[^\"]*\"/version = \"$RELEASE_VERSION\"/" pyproject.toml
+        ;;
+    typescript)
+        # Update package.json
+        npm version "$RELEASE_VERSION" --no-git-tag-version
+        ;;
+esac
+
+# 3. Changelog Generation
+echo -e "\n3. Changelog Generation"
+echo "   ✓ Update CHANGELOG.md with release notes"
+echo "   ✓ Document breaking changes"
+echo "   ✓ List new features and bug fixes"
+
+# 4. Release Commit and Tag
+echo -e "\n4. Release Commit and Tag"
+git add -A
+git commit -m "chore: release v$RELEASE_VERSION"
+git tag -a "v$RELEASE_VERSION" -m "Release v$RELEASE_VERSION"
+
+# 5. Release Validation
+echo -e "\n5. Release Validation"
+echo "   ✓ Final build successful"
+echo "   ✓ Release artifacts generated"
+echo "   ✓ Ready for deployment"
+
+echo -e "\n✅ Release v$RELEASE_VERSION prepared"
+```
+
+### Weekly Development Review
+
+#### Purpose
+Regular assessment of development progress, code quality, and process improvements.
+
+#### Frequency: Weekly
+
+#### Template
+```markdown
+# Weekly Development Review - [Date]
+
+## Accomplishments
+- [ ] Features completed
+- [ ] Bugs fixed
+- [ ] Documentation updated
+- [ ] Technical debt addressed
+
+## Code Quality Metrics
+- [ ] Test coverage: [%]
+- [ ] Build times: [duration]
+- [ ] Dependency count: [number]
+- [ ] Code quality score: [metric]
+
+## Process Improvements
+- [ ] Workflow optimizations implemented
+- [ ] Tool configurations updated
+- [ ] Documentation improvements made
+- [ ] Learning objectives achieved
+
+## Next Week Priorities
+- [ ] Feature development goals
+- [ ] Technical debt items
+- [ ] Process improvement initiatives
+- [ ] Learning and development activities
+
+## Action Items
+- [ ] [Action item 1]
+- [ ] [Action item 2]
+- [ ] [Action item 3]
+
+## Notes
+[Any additional observations, concerns, or insights]
+```
+
+### Workflow Automation
+
+#### Integration with Claude Code
+```bash
+# Create workflow scripts in project root
+mkdir -p scripts/workflows
+
+# Make workflows executable
+chmod +x scripts/workflows/*.sh
+
+# Add to CLAUDE.md for easy reference
+echo "## Development Workflows" >> CLAUDE.md
+echo "See scripts/workflows/ for automated development procedures" >> CLAUDE.md
+```
+
+#### Usage Examples
+```bash
+# Run Claude maintenance
+./scripts/workflows/claude-maintenance.sh
+
+# Setup new project
+./scripts/workflows/project-setup.sh my-new-project rust
+
+# Quality check before commit
+./scripts/workflows/code-quality.sh
+
+# Prepare release
+./scripts/workflows/release.sh 1.2.0
 ```
 
 ## Project Architecture
