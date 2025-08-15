@@ -1052,10 +1052,9 @@ HPM provides comprehensive package management through industry-standard CLI patt
 - `hpm install` - Install dependencies from hpm.toml manifest
 - `hpm remove` - Remove package dependencies from hpm.toml manifest (preserves downloaded packages)
 - `hpm update` - Update packages to latest versions
-- `hpm list` - Display HPM and Python dependencies from hmp.toml manifest
+- `hpm list` - Display comprehensive package information and dependencies from hmp.toml manifest
 - `hpm search` - Search registry for packages
 - `hpm publish` - Publish packages to registry
-- `hpm info` - Show detailed package information
 - `hpm run` - Execute package scripts
 - `hpm check` - Validate package configuration and Houdini compatibility
 - `hpm clean` - Project-aware package cleanup with orphan detection
@@ -1198,9 +1197,10 @@ When Python dependencies are specified in hpm.toml, the install command:
 
 ### List Command
 
-The `hpm list` command provides comprehensive visibility into package dependencies from HPM projects.
+The `hpm list` command provides comprehensive visibility into package information and dependencies from HPM projects. This is the primary command for viewing package details and dependency information in HPM.
 
 #### Functionality
+- Displays package metadata (name, version, description, Houdini compatibility)
 - Lists HPM package dependencies from hmp.toml manifest files
 - Lists Python package dependencies from hmp.toml manifest files
 - Supports flexible manifest targeting via `--package` flag

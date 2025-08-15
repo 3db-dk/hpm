@@ -1,10 +1,13 @@
 //! HPM List Command
 //!
-//! This module implements the `hpm list` command for displaying package dependencies from HPM projects.
+//! This module implements the `hpm list` command for displaying comprehensive package information
+//! and dependencies from HPM projects. This command serves as the primary way to view package
+//! details and dependency information in HPM.
 //!
 //! ## Functionality
 //!
-//! The list command provides comprehensive dependency visibility:
+//! The list command provides comprehensive package and dependency visibility:
+//! - Displays package metadata (name, version, description, Houdini compatibility)
 //! - Lists HPM package dependencies from hpm.toml manifest files
 //! - Lists Python package dependencies from hpm.toml manifest files
 //! - Supports flexible manifest targeting via `--package` flag
@@ -26,11 +29,29 @@
 //!
 //! ## Output Format
 //!
-//! The command displays dependencies in organized sections:
-//! - Package information (name and version)
-//! - HPM Dependencies section
-//! - Python Dependencies section
+//! The command displays information in organized sections:
+//! - Package information (name, version, description, Houdini compatibility)
+//! - HPM Dependencies section with version specs, git sources, optional markers
+//! - Python Dependencies section with version specs, extras, optional markers
 //! - Clear indication when no dependencies are found
+//!
+//! ## Example Output
+//!
+//! ```text
+//! Package: geometry-tools v1.2.0
+//! Description: Advanced geometry manipulation tools for Houdini
+//! Houdini compatibility: min: 20.0, max: 21.0
+//!
+//! HPM Dependencies:
+//!   utility-nodes ^2.1.0
+//!   material-library 1.5 (optional)
+//!   mesh-utils git: https://github.com/example/mesh-utils (tag: v1.0)
+//!
+//! Python Dependencies:
+//!   numpy >=1.20.0
+//!   matplotlib ^3.5.0 (optional)
+//!   requests >=2.25.0 [security,socks]
+//! ```
 //!
 //! ## Implementation Details
 //!
@@ -45,7 +66,11 @@ use hpm_package::{DependencySpec, PackageManifest, PythonDependencySpec};
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-/// List package dependencies from hpm.toml manifest
+/// Display comprehensive package information and dependencies from hpm.toml manifest
+///
+/// This is the primary command for viewing package details and dependency information in HPM.
+/// It provides a complete overview of the package including metadata, HPM dependencies, and
+/// Python dependencies.
 ///
 /// # Arguments
 ///

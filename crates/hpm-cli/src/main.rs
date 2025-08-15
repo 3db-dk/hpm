@@ -79,7 +79,7 @@ enum Commands {
     },
     /// Update packages
     Update,
-    /// List installed packages
+    /// Display package information and dependencies
     List {
         /// Path to directory containing hpm.toml or direct path to hpm.toml file
         #[arg(short = 'p', long = "package")]
@@ -92,11 +92,6 @@ enum Commands {
     },
     /// Publish a package
     Publish,
-    /// Show package information
-    Info {
-        /// Package name
-        package: String,
-    },
     /// Install dependencies from hpm.toml
     Install {
         /// Path to hpm.toml file (defaults to current directory)
@@ -163,9 +158,6 @@ async fn main() -> Result<()> {
         }
         Commands::Publish => {
             println!("Publishing package");
-        }
-        Commands::Info { package } => {
-            println!("Package info for: {}", package);
         }
         Commands::Install { manifest } => {
             commands::install::install_dependencies(manifest).await?;
