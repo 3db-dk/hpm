@@ -1,34 +1,216 @@
 //! HPM Dependency Resolver
 //!
-//! This crate provides a high-performance dependency resolution algorithm for HPM (Houdini Package Manager).
-//! The resolver is inspired by PubGrub, the same algorithm used by UV for Python packages, ensuring
-//! optimal performance and correctness in complex dependency scenarios.
+//! This crate provides a state-of-the-art dependency resolution algorithm for HPM (Houdini Package Manager).
+//! The resolver implements a sophisticated PubGrub-inspired algorithm with advanced optimizations,
+//! ensuring optimal performance and correctness even in the most complex dependency scenarios.
 //!
-//! # Overview
+//! ## Algorithm Foundation
 //!
-//! The dependency resolver takes a set of root requirements and produces a complete, consistent
-//! set of package versions that satisfy all constraints. It handles version specifications,
-//! transitive dependencies, and conflict resolution automatically.
+//! The HPM resolver is built upon the PubGrub algorithm, the same foundation used by:
+//! - **UV** (Python package manager) - for its exceptional performance
+//! - **Dart Pub** (original PubGrub implementation) - for its correctness guarantees
+//! - **Swift Package Manager** - for large-scale dependency resolution
 //!
-//! # Algorithm Details
+//! This algorithmic foundation provides mathematical guarantees about solution optimality
+//! and completeness while maintaining excellent performance characteristics.
 //!
-//! ## PubGrub-Inspired Approach
+//! ## Core Concepts
 //!
-//! The resolver uses an incremental approach with the following key components:
+//! ### Dependency Resolution Problem
+//! Given a set of root requirements, find a complete assignment of package versions such that:
+//! 1. All version constraints are satisfied
+//! 2. All transitive dependencies are resolved
+//! 3. No package conflicts exist
+//! 4. The solution is optimal (prefers latest compatible versions)
 //!
-//! 1. **Partial Solutions**: Maintains packages in three states: decided, undecided, and conflicted
-//! 2. **Priority-Based Selection**: Processes packages with stricter constraints first for optimal performance
-//! 3. **Conflict Learning**: Remembers incompatible package combinations to avoid repeated failures
-//! 4. **Backtracking**: Intelligently backtracks when conflicts are discovered
-//! 5. **Incompatibility Tracking**: Records why certain package combinations cannot coexist
+//! ### Solution Architecture
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────────────────────┐
+//! │                           HPM Resolver Architecture                             │
+//! ├─────────────────────────────────────────────────────────────────────────────────┤
+//! │                                                                                 │
+//! │  Input Layer                                                                   │
+//! │  ┌─────────────────────────────────────────────────────────────────────────┐   │
+//! │  │                    Root Requirements                                    │   │
+//! │  │  • Package names with version constraints                               │   │
+//! │  │  • Priority levels (root, exact, strict, loose, transitive)            │   │
+//! │  │  • Source information (registry, git, path)                            │   │
+//! │  └─────────────────────────────────────────────────────────────────────────┘   │
+//! │                                    │                                           │
+//! │                                    ▼                                           │
+//! │  Resolution Engine                                                             │
+//! │  ┌─────────────────────────────────────────────────────────────────────────┐   │
+//! │  │                    PubGrub Resolution Algorithm                         │   │
+//! │  │  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐     │   │
+//! │  │  │ Partial Solution│    │ Incompatibility │    │   Unit           │     │   │
+//! │  │  │ • Decided       │    │ • Terms         │    │ Propagation      │     │   │
+//! │  │  │ • Undecided     │ ←--│ • Causes        │--> │ • Conflict       │     │   │
+//! │  │  │ • Conflicted    │    │ • Learning      │    │   Detection      │     │   │
+//! │  │  └─────────────────┘    └─────────────────┘    └─────────────────┘     │   │
+//! │  └─────────────────────────────────────────────────────────────────────────┘   │
+//! │                                    │                                           │
+//! │                                    ▼                                           │
+//! │  Optimization Layer                                                            │
+//! │  ┌─────────────────────┐              ┌─────────────────────────────────────┐  │
+//! │  │   Smart Priority    │              │        Performance Features         │  │
+//! │  │ • Exact versions    │              │ • Incremental solving               │  │
+//! │  │ • Strict constraints│ ────────────▶│ • Conflict learning cache          │  │
+//! │  │ • Loose constraints │              │ • Lazy package metadata fetching   │  │
+//! │  └─────────────────────┘              └─────────────────────────────────────┘  │
+//! │                                    │                                           │
+//! │                                    ▼                                           │
+//! │  Output Layer                                                                  │
+//! │  ┌─────────────────────────────────────────────────────────────────────────┐   │
+//! │  │                      Complete Resolution                                │   │
+//! │  │  • Exact package versions for all dependencies                         │   │
+//! │  │  • Dependency graph with transitive relationships                      │   │
+//! │  │  • Resolution metadata (time, conflicts, packages)                     │   │
+//! │  │  • Detailed error information for impossible scenarios                 │   │
+//! │  └─────────────────────────────────────────────────────────────────────────┘   │
+//! └─────────────────────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## PubGrub Algorithm Deep Dive
+//!
+//! ### Core Algorithm Components
+//!
+//! #### 1. Partial Solution Management
+//! The resolver maintains a partial solution with three types of package assignments:
+//!
+//! - **Decided**: Packages with confirmed versions (committed to solution)
+//! - **Undecided**: Packages requiring version selection
+//! - **Conflicted**: Packages with incompatible constraints (require resolution)
+//!
+//! #### 2. Incompatibility Learning
+//! When conflicts are discovered, the system learns incompatibility rules to prevent
+//! repeating the same conflicts in future attempts:
+//!
+//! ```text
+//! Example Incompatibility:
+//! Package A v1.0 requires B >=2.0
+//! Package C v1.5 requires B <2.0
+//! → Learn: A v1.0 + C v1.5 are incompatible
+//! ```
+//!
+//! #### 3. Priority-Based Selection Strategy
+//! The resolver uses a sophisticated priority system to optimize resolution speed:
+//!
+//! | Priority Level | Description | Strategy |
+//! |---------------|-------------|-----------|
+//! | **Root** | Direct dependencies | Process first for user control |
+//! | **Exact** | ==1.2.3 constraints | No choice - must satisfy |
+//! | **Strict** | ^1.2.0, ~1.2.0 | Limited options - resolve early |
+//! | **Loose** | >=1.0.0, * | Many options - defer when possible |
+//! | **Transitive** | Indirect dependencies | Lowest priority |
+//!
+//! #### 4. Unit Propagation
+//! When package assignments are made, the system propagates constraints to identify:
+//! - New requirements from package dependencies
+//! - Immediate conflicts from incompatible constraints
+//! - Opportunities for automatic version selection
+//!
+//! ### Algorithm Flow
+//!
+//! ```text
+//! 1. Initialize with root requirements
+//! 2. While solution is incomplete:
+//!    a. Select next package to decide (by priority)
+//!    b. Choose version (prefer latest compatible)
+//!    c. Add package dependencies to requirements
+//!    d. Propagate constraints and detect conflicts
+//!    e. If conflict found:
+//!       - Learn incompatibility rule
+//!       - Backtrack to earlier decision
+//!       - Add learned constraint to avoid repetition
+//!    f. If no conflicts, continue to next package
+//! 3. Return complete solution
+//! ```
 //!
 //! ## Performance Optimizations
 //!
-//! - **Incremental Solving**: Only recalculates affected parts of the solution tree
-//! - **Smart Prioritization**: Exact versions (==) → Strict constraints (^, ~) → Loose constraints (>=)
-//! - **Early Termination**: Stops as soon as a complete solution is found
-//! - **Conflict Caching**: Avoids re-exploring known incompatible states
-//! - **Lazy Evaluation**: Only fetches package metadata when needed
+//! ### Incremental Solving
+//! The resolver implements incremental solving where only affected parts of the solution
+//! tree are recalculated when constraints change:
+//!
+//! - **Dependency Tracking**: Knows which decisions depend on which constraints
+//! - **Selective Invalidation**: Only invalidates affected decisions
+//! - **Partial Reuse**: Reuses unaffected portions of previous solutions
+//!
+//! ### Conflict Learning Cache
+//! Learned incompatibilities are cached to prevent repeated exploration of known
+//! incompatible states:
+//!
+//! ```rust,ignore
+//! // Example: Once learned, this combination is never tried again
+//! let learned_incompatibility = Incompatibility {
+//!     terms: vec![
+//!         Term { package: "A".to_string(), constraint: "==1.0.0".parse()?, positive: true },
+//!         Term { package: "B".to_string(), constraint: ">=2.0.0".parse()?, positive: true },
+//!         Term { package: "C".to_string(), constraint: "<2.0.0".parse()?, positive: true },
+//!     ],
+//!     cause: IncompatibilityCause::Conflict,
+//! };
+//! ```
+//!
+//! ### Lazy Evaluation
+//! Package metadata is fetched only when needed:
+//!
+//! - **On-Demand Fetching**: Package info retrieved when version is considered
+//! - **Batch Optimization**: Multiple packages fetched in single registry request
+//! - **Caching**: Registry responses cached for session duration
+//!
+//! ### Smart Heuristics
+//! Advanced heuristics guide the search toward optimal solutions:
+//!
+//! - **Latest Version Preference**: Prefer newest compatible versions
+//! - **Dependency Minimization**: Prefer packages with fewer transitive dependencies
+//! - **Stability Preference**: Prefer stable releases over pre-releases
+//! - **Source Preference**: Prefer registry packages over git/path sources
+//!
+//! ## Advanced Features
+//!
+//! ### Version Constraint System
+//! HPM resolver supports comprehensive version constraint specifications:
+//!
+//! ```rust,ignore
+//! use hpm_resolver::{VersionConstraint, Version};
+//!
+//! // Exact version matching
+//! let exact = VersionConstraint::Exact(Version::new(1, 2, 3));
+//!
+//! // Compatible version range (^1.2.3 = >=1.2.3, <2.0.0)
+//! let compatible = VersionConstraint::Compatible(Version::new(1, 2, 3));
+//!
+//! // Tilde requirements (~1.2.3 = >=1.2.3, <1.3.0)
+//! let tilde = VersionConstraint::Tilde(Version::new(1, 2, 3));
+//!
+//! // Range constraints with precise control
+//! let range = VersionConstraint::Range(VersionRange::new(
+//!     Some(Version::new(1, 0, 0)), // minimum
+//!     Some(Version::new(2, 0, 0)), // maximum (exclusive)
+//! ));
+//!
+//! // Wildcard matching
+//! let any = VersionConstraint::Any;
+//! ```
+//!
+//! ### Conflict Resolution Strategies
+//! When conflicts occur, the resolver employs sophisticated resolution strategies:
+//!
+//! #### Automatic Resolution
+//! ```rust,no_run
+//! // Example: Package A requires B >=1.5, Package C requires B >=1.8
+//! // Resolution: Select B 1.8.0 (satisfies both constraints)
+//! ```
+//!
+//! #### Backtracking with Learning
+//! ```rust,no_run
+//! // Example: After trying and failing with Package X v2.0:
+//! // 1. Learn that X v2.0 is incompatible with current constraints
+//! // 2. Backtrack to decision point
+//! // 3. Try X v1.9 instead
+//! // 4. Cache the learned incompatibility to avoid retrying X v2.0
+//! ```
 //!
 //! # Basic Usage
 //!

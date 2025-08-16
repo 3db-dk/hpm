@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9ae12b8fef0cfc1c2ffd60efbf637f15c9f1744d2debd33308f69593a5291b11 # shrinks to c1 = LessThan(Version { major: 0, minor: 1, patch: 1, pre: [], build: [] }), c2 = GreaterThan(Version { major: 0, minor: 0, patch: 0, pre: [], build: [] })
+cc 7ff4f24738937b10212e5cde0ba84e31cccff59b3be52dfdc4371b7041030140 # shrinks to version = Version { major: 0, minor: 0, patch: 0, pre: ["a.0"], build: [] }

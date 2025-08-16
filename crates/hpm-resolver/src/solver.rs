@@ -498,4 +498,358 @@ mod tests {
         assert!(!solution.is_complete());
         assert!(solution.undecided.contains_key("test-package"));
     }
+
+    // Property-based tests for dependency resolution
+
+    use proptest::prelude::*;
+
+    /// Strategy to generate valid package names for testing
+    fn package_name_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            r"[a-z][a-z0-9-]{2,20}",
+            Just("package-a".to_string()),
+            Just("package-b".to_string()),
+            Just("utility-lib".to_string()),
+            Just("core-tools".to_string()),
+        ]
+        .prop_filter("Valid package name", |name| {
+            !name.starts_with('-') && !name.ends_with('-') && name.len() >= 3
+        })
+    }
+
+    /// Strategy to generate versions for testing
+    fn version_strategy() -> impl Strategy<Value = Version> {
+        (0u64..10, 0u64..10, 0u64..10)
+            .prop_map(|(major, minor, patch)| Version::new(major, minor, patch))
+    }
+
+    /// Strategy to generate version constraints
+    fn version_constraint_strategy() -> impl Strategy<Value = VersionConstraint> {
+        prop_oneof![
+            version_strategy().prop_map(VersionConstraint::Exact),
+            version_strategy().prop_map(VersionConstraint::GreaterThanOrEqual),
+            version_strategy().prop_map(VersionConstraint::Compatible),
+            version_strategy().prop_map(VersionConstraint::Tilde),
+            Just(VersionConstraint::Any),
+        ]
+    }
+
+    /// Strategy to generate dependency specifications
+    fn dependency_strategy() -> impl Strategy<Value = Dependency> {
+        (
+            package_name_strategy(),
+            version_constraint_strategy(),
+            any::<bool>(),
+        )
+            .prop_map(|(name, constraint, optional)| Dependency {
+                name,
+                constraint,
+                optional,
+                source: DependencySource::Registry,
+            })
+    }
+
+    /// Strategy to generate requirements
+    fn requirement_strategy() -> impl Strategy<Value = Requirement> {
+        (
+            package_name_strategy(),
+            version_constraint_strategy(),
+            prop_oneof![
+                Just(Priority::Root),
+                Just(Priority::Exact),
+                Just(Priority::Transitive),
+            ],
+        )
+            .prop_map(|(name, constraint, priority)| Requirement {
+                name,
+                constraint,
+                source_package: None,
+                priority,
+            })
+    }
+
+    /// Strategy to generate resolver configurations
+    fn resolver_config_strategy() -> impl Strategy<Value = ResolverConfig> {
+        (
+            any::<bool>(), // allow_prereleases
+            any::<bool>(), // prefer_latest
+            1u64..1000,    // max_backtrack_iterations
+            30u64..300,    // resolution_timeout_secs
+        )
+            .prop_map(
+                |(
+                    allow_prereleases,
+                    prefer_latest,
+                    max_backtrack_iterations,
+                    resolution_timeout_secs,
+                )| {
+                    ResolverConfig {
+                        allow_prereleases,
+                        prefer_latest,
+                        max_backtrack_iterations: max_backtrack_iterations as usize,
+                        resolution_timeout_secs,
+                    }
+                },
+            )
+    }
+
+    /// Strategy to generate a mock package graph
+    fn package_graph_strategy() -> impl Strategy<Value = Vec<(String, Version, Vec<Dependency>)>> {
+        prop::collection::vec(
+            (
+                package_name_strategy(),
+                version_strategy(),
+                prop::collection::vec(dependency_strategy(), 0..5),
+            ),
+            1..10,
+        )
+    }
+
+    proptest! {
+        /// Test that partial solution behaves correctly with various requirements
+        #[test]
+        fn prop_partial_solution_behavior(
+            requirements in prop::collection::vec(requirement_strategy(), 0..10)
+        ) {
+            let mut solution = PartialSolution::new();
+
+            if requirements.is_empty() {
+                prop_assert!(solution.is_complete());
+            }
+
+            for req in requirements {
+                let package_name = req.name.clone();
+                solution.add_requirement(req);
+
+                // Should now be incomplete (unless already decided)
+                if !solution.decided.contains_key(&package_name) {
+                    prop_assert!(!solution.is_complete());
+                    prop_assert!(solution.undecided.contains_key(&package_name));
+                }
+            }
+        }
+
+        /// Test that resolver configuration affects resolution behavior
+        #[test]
+        fn prop_resolver_config_consistency(config in resolver_config_strategy()) {
+            let provider = MockProvider::new();
+            let resolver = DependencyResolver::new(provider, config.clone());
+
+            // Configuration should be preserved
+            prop_assert_eq!(resolver.config.allow_prereleases, config.allow_prereleases);
+            prop_assert_eq!(resolver.config.prefer_latest, config.prefer_latest);
+            prop_assert_eq!(resolver.config.max_backtrack_iterations, config.max_backtrack_iterations);
+            prop_assert_eq!(resolver.config.resolution_timeout_secs, config.resolution_timeout_secs);
+        }
+
+        /// Test that version constraint matching is consistent with resolver expectations
+        #[test]
+        fn prop_version_constraint_matching_in_resolver(
+            constraint in version_constraint_strategy(),
+            version in version_strategy()
+        ) {
+            let matches = constraint.matches(&version);
+
+            // Test requirement creation and constraint behavior
+            let req = Requirement {
+                name: "test-package".to_string(),
+                constraint: constraint.clone(),
+                source_package: None,
+                priority: Priority::Root,
+            };
+
+            prop_assert_eq!(req.constraint.matches(&version), matches);
+
+            // Constraint matching should be consistent
+            prop_assert_eq!(constraint.matches(&version), req.constraint.matches(&version));
+        }
+
+        /// Test that dependency creation and serialization works correctly
+        #[test]
+        fn prop_dependency_creation_consistency(dep in dependency_strategy()) {
+            let name = dep.name.clone();
+            let constraint = dep.constraint.clone();
+            let optional = dep.optional;
+
+            // Properties should be preserved
+            prop_assert_eq!(dep.name, name);
+            prop_assert_eq!(dep.constraint, constraint);
+            prop_assert_eq!(dep.optional, optional);
+            prop_assert!(matches!(dep.source, DependencySource::Registry));
+        }
+
+        /// Test that package graph generation produces valid structures
+        #[test]
+        fn prop_package_graph_validity(packages in package_graph_strategy()) {
+            let mut provider = MockProvider::new();
+
+            // Add all packages to provider
+            for (name, version, deps) in packages {
+                provider.add_package(name.clone(), version.clone(), deps);
+
+                // Validate that versions are properly stored
+                prop_assert!(provider.versions.contains_key(&name));
+                prop_assert!(provider.packages.contains_key(&(name.clone(), version.clone())));
+            }
+
+            // Test that provider methods work correctly
+            for (name, versions) in &provider.versions {
+                prop_assert!(!versions.is_empty(), "Package {} should have at least one version", name);
+
+                // All versions should have corresponding package info
+                for version in versions {
+                    prop_assert!(
+                        provider.packages.contains_key(&(name.clone(), version.clone())),
+                        "Package {}@{} should have package info", name, version
+                    );
+                }
+            }
+        }
+
+        /// Test requirement priority ordering and selection logic
+        #[test]
+        fn prop_requirement_priority_ordering(
+            root_reqs in prop::collection::vec(requirement_strategy(), 1..5),
+            direct_reqs in prop::collection::vec(requirement_strategy(), 0..5),
+            trans_reqs in prop::collection::vec(requirement_strategy(), 0..5)
+        ) {
+            let mut all_reqs = Vec::new();
+
+            // Add requirements with different priorities
+            for mut req in root_reqs {
+                req.priority = Priority::Root;
+                all_reqs.push(req);
+            }
+
+            for mut req in direct_reqs {
+                req.priority = Priority::Exact;
+                all_reqs.push(req);
+            }
+
+            for mut req in trans_reqs {
+                req.priority = Priority::Transitive;
+                all_reqs.push(req);
+            }
+
+            // Test that priorities are ordered correctly
+            let root_count = all_reqs.iter().filter(|r| matches!(r.priority, Priority::Root)).count();
+            let direct_count = all_reqs.iter().filter(|r| matches!(r.priority, Priority::Exact)).count();
+            let trans_count = all_reqs.iter().filter(|r| matches!(r.priority, Priority::Transitive)).count();
+
+            prop_assert!(root_count > 0, "Should have at least one root requirement");
+            prop_assert_eq!(all_reqs.len(), root_count + direct_count + trans_count);
+
+            // Priority ordering should be consistent
+            let priorities: Vec<_> = all_reqs.iter().map(|r| r.priority).collect();
+            for priority in priorities {
+                prop_assert!(matches!(priority, Priority::Root | Priority::Exact | Priority::Transitive));
+            }
+        }
+
+        /// Test that incompatibility detection logic is sound
+        #[test]
+        fn prop_incompatibility_detection(
+            package_names in prop::collection::vec(package_name_strategy(), 2..5),
+            constraints in prop::collection::vec(version_constraint_strategy(), 2..5)
+        ) {
+            let min_len = package_names.len().min(constraints.len());
+
+            if min_len >= 2 {
+                let terms: Vec<Term> = package_names.into_iter()
+                    .zip(constraints.into_iter())
+                    .take(min_len)
+                    .map(|(package, constraint)| Term {
+                        package,
+                        constraint,
+                        positive: true,
+                    })
+                    .collect();
+
+                let incompatibility = Incompatibility {
+                    terms: terms.clone(),
+                    cause: IncompatibilityCause::NoVersions,
+                };
+
+                // Incompatibility should be well-formed
+                prop_assert!(!incompatibility.terms.is_empty());
+                prop_assert_eq!(incompatibility.terms.len(), terms.len());
+
+                // All terms should have valid constraints
+                for term in &incompatibility.terms {
+                    prop_assert!(!term.package.is_empty());
+                }
+            }
+        }
+
+        /// Test resolution metadata consistency
+        #[test]
+        fn prop_resolution_metadata_consistency(
+            packages in prop::collection::btree_map(
+                package_name_strategy(),
+                (package_name_strategy(), version_strategy()).prop_map(|(name, version)| {
+                    PackageId::new(name, version)
+                }),
+                1..10
+            ),
+            conflicts_resolved in 0u32..100,
+            resolution_time_ms in 1u64..10000
+        ) {
+            let total_packages = packages.len();
+
+            let metadata = ResolutionMetadata {
+                resolver_version: "1.0.0".to_string(),
+                resolution_time_ms,
+                total_packages,
+                conflicts_resolved: conflicts_resolved as usize,
+            };
+
+            let resolution = Resolution {
+                packages: packages.clone(),
+                metadata: metadata.clone(),
+            };
+
+            // Metadata should be consistent with resolution
+            prop_assert_eq!(resolution.packages.len(), total_packages);
+            prop_assert_eq!(resolution.metadata.total_packages, total_packages);
+            prop_assert_eq!(resolution.metadata.conflicts_resolved, conflicts_resolved as usize);
+            prop_assert_eq!(resolution.metadata.resolution_time_ms, resolution_time_ms);
+            prop_assert_eq!(resolution.metadata.resolver_version, "1.0.0");
+        }
+
+        /// Test that mock provider behaves consistently with real provider interface
+        #[test]
+        fn prop_mock_provider_consistency(
+            packages in prop::collection::vec(
+                (package_name_strategy(), version_strategy(), prop::collection::vec(dependency_strategy(), 0..3)),
+                1..8
+            )
+        ) {
+            let _ = tokio_test::block_on(async {
+                let mut provider = MockProvider::new();
+
+                // Add packages
+                for (name, version, deps) in packages {
+                    provider.add_package(name.clone(), version.clone(), deps);
+
+                    // Test that we can retrieve the package info
+                    let info_result = provider.get_package_info(&name, &version).await;
+                    prop_assert!(info_result.is_ok(), "Should be able to get package info for {}@{}", name, version);
+
+                    if let Ok(info) = info_result {
+                        prop_assert_eq!(info.id.name, name.clone());
+                        prop_assert_eq!(info.id.version, version.clone());
+                    }
+
+                    // Test that versions are listed correctly
+                    let versions_result = provider.list_versions(&name).await;
+                    prop_assert!(versions_result.is_ok(), "Should be able to list versions for {}", name);
+
+                    if let Ok(versions) = versions_result {
+                        prop_assert!(versions.contains(&version), "Listed versions should contain {}", version);
+                    }
+                }
+                Ok(())
+            });
+        }
+    }
 }

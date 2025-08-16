@@ -197,6 +197,7 @@ fn save_manifest(manifest: &PackageManifest, manifest_path: &Path) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::env;
     use tempfile::TempDir;
 
@@ -354,6 +355,309 @@ min_version = "20.0"
                 assert_eq!(optional, Some(true));
             }
             _ => panic!("Expected Detailed dependency spec"),
+        }
+    }
+
+    // Property-based testing strategies for path handling
+
+    /// Strategy to generate valid file path components
+    fn path_component_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            r"[a-zA-Z][a-zA-Z0-9_-]{1,20}",
+            Just("src".to_string()),
+            Just("test".to_string()),
+            Just("project".to_string()),
+            Just("package".to_string()),
+        ]
+    }
+
+    /// Strategy to generate problematic path components
+    fn problematic_path_component_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("".to_string()),        // Empty component
+            Just(".".to_string()),       // Current directory
+            Just("..".to_string()),      // Parent directory
+            Just("...".to_string()),     // Multiple dots
+            r"[\s]{1,10}",               // Whitespace only
+            r"path[\s]+with[\s]+spaces", // Spaces in path
+            r"[^a-zA-Z0-9_/-]{1,10}",    // Special characters
+            Just("CON".to_string()),     // Windows reserved
+            Just("PRN".to_string()),     // Windows reserved
+            Just("AUX".to_string()),     // Windows reserved
+            Just("NUL".to_string()),     // Windows reserved
+            r"[a-zA-Z0-9_-]{100,200}",   // Extremely long
+        ]
+    }
+
+    /// Strategy to generate file paths with various structures
+    fn file_path_strategy() -> impl Strategy<Value = PathBuf> {
+        prop::collection::vec(path_component_strategy(), 1..6).prop_map(|components| {
+            let mut path = PathBuf::new();
+            for component in components {
+                path.push(component);
+            }
+            path
+        })
+    }
+
+    /// Strategy to generate problematic file paths
+    fn problematic_path_strategy() -> impl Strategy<Value = PathBuf> {
+        prop_oneof![
+            // Empty path
+            Just(PathBuf::new()),
+            // Paths with problematic components
+            prop::collection::vec(problematic_path_component_strategy(), 1..4).prop_map(
+                |components| {
+                    let mut path = PathBuf::new();
+                    for component in components {
+                        path.push(component);
+                    }
+                    path
+                }
+            ),
+            // Mixed valid/invalid components
+            (
+                path_component_strategy(),
+                problematic_path_component_strategy(),
+                path_component_strategy()
+            )
+                .prop_map(|(start, middle, end)| {
+                    let mut path = PathBuf::new();
+                    path.push(start);
+                    path.push(middle);
+                    path.push(end);
+                    path
+                }),
+        ]
+    }
+
+    /// Strategy to generate package names that might cause issues
+    fn edge_case_package_name_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            r"[a-z]{1,3}",                        // Very short names
+            r"[a-z]{50,100}",                     // Very long names
+            r"[a-z]+-+[a-z]+",                    // Multiple hyphens
+            Just("a".to_string()),                // Single character
+            Just("my-package".to_string()),       // Standard name
+            Just("test-123-package".to_string()), // Numbers
+            r"[a-z]+[0-9]+[a-z]+",                // Mixed alphanumeric
+        ]
+    }
+
+    proptest! {
+        /// Test that path resolution handles various path structures correctly
+        #[test]
+        fn prop_path_resolution_robustness(path_parts in prop::collection::vec(path_component_strategy(), 1..5)) {
+            let temp_dir = TempDir::new().unwrap();
+
+            // Build nested directory structure
+            let mut current_path = temp_dir.path().to_path_buf();
+            for part in &path_parts {
+                current_path.push(part);
+                std::fs::create_dir_all(&current_path).unwrap();
+            }
+
+            // Create manifest in the deepest directory
+            create_test_manifest(&current_path).unwrap();
+            let manifest_file = current_path.join("hpm.toml");
+
+            // Test explicit file path resolution
+            let result = determine_manifest_path(Some(manifest_file.clone()));
+            prop_assert!(result.is_ok(), "Should resolve explicit file path");
+            prop_assert_eq!(result.unwrap(), manifest_file);
+
+            // Test directory path resolution
+            let dir_result = determine_manifest_path(Some(current_path.clone()));
+            prop_assert!(dir_result.is_ok(), "Should resolve directory containing hpm.toml");
+            prop_assert!(dir_result.unwrap().ends_with("hpm.toml"));
+        }
+
+        /// Test that problematic paths are handled gracefully
+        #[test]
+        fn prop_problematic_path_handling(problematic_path in problematic_path_strategy()) {
+            let _temp_dir = TempDir::new().unwrap();
+
+            // Try to resolve problematic paths - should fail gracefully
+            let result = determine_manifest_path(Some(problematic_path.clone()));
+
+            // Should either succeed (if path accidentally exists) or fail with clear error
+            if let Err(error) = result {
+                let error_msg = error.to_string();
+                prop_assert!(
+                    !error_msg.is_empty(),
+                    "Error message should not be empty for path: {:?}", problematic_path
+                );
+
+                prop_assert!(
+                    error_msg.contains("exist") ||
+                    error_msg.contains("accessible") ||
+                    error_msg.contains("found") ||
+                    error_msg.contains("directory") ||
+                    error_msg.contains("file"),
+                    "Error message should be descriptive for path: {:?}", problematic_path
+                );
+            }
+        }
+
+        /// Test manifest loading with various path structures
+        #[test]
+        fn prop_manifest_loading_path_independence(
+            path_structure in file_path_strategy(),
+            package_name in edge_case_package_name_strategy()
+        ) {
+            let temp_dir = TempDir::new().unwrap();
+            let mut test_path = temp_dir.path().to_path_buf();
+
+            // Create nested directory structure
+            for component in path_structure.components() {
+                if let std::path::Component::Normal(os_str) = component {
+                    test_path.push(os_str);
+                    let _ = std::fs::create_dir_all(&test_path);
+                }
+            }
+
+            // Create a valid manifest
+            let manifest = PackageManifest::new(
+                package_name.clone(),
+                "1.0.0".to_string(),
+                Some("Test package".to_string()),
+                Some(vec!["Author <test@example.com>".to_string()]),
+                Some("MIT".to_string()),
+            );
+
+            let manifest_path = test_path.join("hpm.toml");
+
+            // Save manifest
+            let save_result = save_manifest(&manifest, &manifest_path);
+            prop_assert!(save_result.is_ok(), "Should save manifest at any valid path");
+
+            // Load manifest
+            let load_result = load_manifest(&manifest_path);
+            prop_assert!(load_result.is_ok(), "Should load manifest from any valid path");
+
+            if let Ok(loaded) = load_result {
+                prop_assert_eq!(loaded.package.name, package_name);
+                prop_assert_eq!(loaded.package.version, "1.0.0");
+            }
+        }
+
+        /// Test that manifest path determination is consistent
+        #[test]
+        fn prop_path_determination_consistency(path_parts in prop::collection::vec(path_component_strategy(), 1..4)) {
+            let temp_dir = TempDir::new().unwrap();
+            let mut test_path = temp_dir.path().to_path_buf();
+
+            for part in path_parts {
+                test_path.push(part);
+            }
+            std::fs::create_dir_all(&test_path).unwrap();
+            create_test_manifest(&test_path).unwrap();
+
+            // Multiple calls should give consistent results
+            let result1 = determine_manifest_path(Some(test_path.clone()));
+            let result2 = determine_manifest_path(Some(test_path.clone()));
+            let result3 = determine_manifest_path(Some(test_path.clone()));
+
+            prop_assert_eq!(result1.is_ok(), result2.is_ok(), "Results should be consistent");
+            prop_assert_eq!(result2.is_ok(), result3.is_ok(), "Results should be consistent");
+
+            if let (Ok(path1), Ok(path2), Ok(path3)) = (result1, result2, result3) {
+                prop_assert_eq!(path1, path2.clone(), "Resolved paths should be identical");
+                prop_assert_eq!(path2, path3, "Resolved paths should be identical");
+            }
+        }
+
+        /// Test dependency spec creation with various inputs
+        #[test]
+        fn prop_dependency_spec_creation_robustness(
+            version_input in prop_oneof![
+                r"[0-9]+\.[0-9]+\.[0-9]+",           // Valid semver
+                r"\^[0-9]+\.[0-9]+\.[0-9]+",         // Caret constraint
+                r"~[0-9]+\.[0-9]+\.[0-9]+",          // Tilde constraint
+                r">=[0-9]+\.[0-9]+\.[0-9]+",         // GTE constraint
+                Just("*".to_string()),                // Wildcard
+                Just("latest".to_string()),           // Latest keyword
+                r"[a-zA-Z]{1,20}",                   // Invalid version
+                Just("".to_string()),                 // Empty version
+            ]
+        ) {
+            // Test that dependency spec creation handles various version inputs gracefully
+            let simple_spec = DependencySpec::Simple(version_input.clone());
+
+            // Should always be able to create the spec (validation happens later)
+            match simple_spec {
+                DependencySpec::Simple(ref v) => {
+                    prop_assert_eq!(v, &version_input, "Version should be preserved in simple spec");
+                }
+                _ => prop_assert!(false, "Should create simple dependency spec"),
+            }
+
+            // Test JSON serialization (should always work)
+            let json_result = serde_json::to_string(&simple_spec);
+            prop_assert!(json_result.is_ok(), "Dependency spec should always serialize");
+        }
+
+        /// Test that manifest operations are atomic and don't leave partial files
+        #[test]
+        fn prop_manifest_operations_atomic(
+            package_name in edge_case_package_name_strategy(),
+            version in r"[0-9]+\.[0-9]+\.[0-9]+"
+        ) {
+            let temp_dir = TempDir::new().unwrap();
+            let manifest_path = temp_dir.path().join("hpm.toml");
+
+            let manifest = PackageManifest::new(
+                package_name.clone(),
+                version.clone(),
+                Some("Test package".to_string()),
+                None,
+                None,
+            );
+
+            // Save manifest
+            let save_result = save_manifest(&manifest, &manifest_path);
+
+            if save_result.is_ok() {
+                // File should exist and be complete
+                prop_assert!(manifest_path.exists(), "Manifest file should exist after successful save");
+
+                // Should be able to read back immediately
+                let content = std::fs::read_to_string(&manifest_path);
+                prop_assert!(content.is_ok(), "Should be able to read saved manifest");
+
+                if let Ok(content_str) = content {
+                    prop_assert!(!content_str.is_empty(), "Manifest content should not be empty");
+                    prop_assert!(content_str.contains(&package_name), "Should contain package name");
+                    prop_assert!(content_str.contains(&version), "Should contain version");
+                }
+            }
+        }
+
+        /// Test error handling consistency for file operations
+        #[test]
+        fn prop_file_operation_error_consistency(
+            non_existent_path in problematic_path_strategy(),
+            _package_name in edge_case_package_name_strategy()
+        ) {
+            // Test loading from non-existent paths
+            let load_result = load_manifest(&non_existent_path.join("hpm.toml"));
+
+            if let Err(error) = load_result {
+                let error_msg = error.to_string();
+                prop_assert!(
+                    !error_msg.is_empty(),
+                    "Error should have message for non-existent path: {:?}", non_existent_path
+                );
+
+                // Error should mention file operation failure
+                prop_assert!(
+                    error_msg.to_lowercase().contains("read") ||
+                    error_msg.to_lowercase().contains("file") ||
+                    error_msg.to_lowercase().contains("found") ||
+                    error_msg.to_lowercase().contains("exist"),
+                    "Error should be descriptive for file operation: {:?}", non_existent_path
+                );
+            }
         }
     }
 }

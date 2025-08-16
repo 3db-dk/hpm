@@ -1,29 +1,284 @@
 //! # HPM CLI - Houdini Package Manager Command Line Interface
 //!
-//! The HPM CLI provides a comprehensive command-line interface for managing Houdini packages,
-//! dependencies, and project workflows.
+//! The HPM CLI provides a comprehensive, professional command-line interface for managing
+//! Houdini packages, dependencies, and project workflows. Built with industry-standard
+//! patterns and UV-inspired error handling for an optimal developer experience.
 //!
-//! ## Available Commands
+//! ## CLI Architecture
 //!
-//! ### Fully Implemented
-//! - `init` - Initialize new Houdini packages with templates
-//! - `add` - Add package dependencies with version specifications
-//! - `remove` - Remove package dependencies from manifests
-//! - `install` - Install dependencies from hpm.toml with Python support
-//! - `list` - Display package information and dependencies
-//! - `check` - Validate package configuration and Houdini compatibility
-//! - `clean` - Project-aware package cleanup with orphan detection
+//! The HPM CLI implements a modular, extensible architecture designed for reliability and user experience:
 //!
-//! ### Recently Implemented  
-//! - `update` - Update packages to latest versions with efficient dependency resolution
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────────────────────────┐
+//! │                              HPM CLI Architecture                               │
+//! ├─────────────────────────────────────────────────────────────────────────────────┤
+//! │                                                                                 │
+//! │  User Interface Layer                                                          │
+//! │  ┌─────────────────────────────────────────────────────────────────────────┐   │
+//! │  │                         Command Parser (Clap)                          │   │
+//! │  │  • Argument validation and type conversion                              │   │
+//! │  │  • Help generation and usage information                                │   │
+//! │  │  • Subcommand routing and option handling                               │   │
+//! │  └─────────────────────────────────────────────────────────────────────────┘   │
+//! │                                    │                                           │
+//! │                                    ▼                                           │
+//! │  Output & Console Management                                                   │
+//! │  ┌─────────────────────┐              ┌─────────────────────────────────────┐  │
+//! │  │   Console System    │              │        Output Formats              │  │
+//! │  │ • Styled output     │              │ • Human-readable (colors, icons)   │  │
+//! │  │ • Color management  │ ────────────▶│ • JSON (machine-readable)          │  │
+//! │  │ • Verbosity levels  │              │ • JSON Lines (streaming)           │  │
+//! │  └─────────────────────┘              └─────────────────────────────────────┘  │
+//! │                                    │                                           │
+//! │                                    ▼                                           │
+//! │  Error Handling & Reporting                                                    │
+//! │  ┌─────────────────────────────────────────────────────────────────────────┐   │
+//! │  │                     Structured Error System                            │   │
+//! │  │  • Domain-specific error types (Config, Package, Network, etc.)        │   │
+//! │  │  • Contextual help and suggestions                                     │   │
+//! │  │  • Standardized exit codes                                             │   │
+//! │  │  • Machine-readable error formats                                      │   │
+//! │  └─────────────────────────────────────────────────────────────────────────┘   │
+//! │                                    │                                           │
+//! │                                    ▼                                           │
+//! │  Command Implementation Layer                                                   │
+//! │  ┌─────────────────────────────────────────────────────────────────────────┐   │
+//! │  │  init   add   remove   install   list   clean   update   check   ...   │   │
+//! │  │   │      │      │        │       │      │       │       │               │   │
+//! │  │   ▼      ▼      ▼        ▼       ▼      ▼       ▼       ▼               │   │
+//! │  │                  Integration with Core Modules                          │   │
+//! │  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │   │
+//! │  │  │hpm-core │  │hmp-pkg  │  │hpm-python│ │hpm-config│ │hpm-registry    │       │
+//! │  │  └─────────┘  └─────────┘  └─────────┘  └─────────┘  └─────────┘       │   │
+//! │  └─────────────────────────────────────────────────────────────────────────┘   │
+//! └─────────────────────────────────────────────────────────────────────────────────┘
+//! ```
 //!
-//! ### Planned for Future Implementation
-//! - `search` - Search registry for packages
-//! - `publish` - Publish packages to registry
-//! - `run` - Execute package scripts
+//! ## Command Categories
 //!
-//! The CLI is built using [clap](https://docs.rs/clap/) for argument parsing and provides
-//! comprehensive help information for all commands and options.
+//! ### Project Management Commands
+//! Commands for creating and managing Houdini package projects:
+//!
+//! - **`init`** - Initialize new Houdini packages with standardized templates
+//!   - Standard template: Full package structure with all directories
+//!   - Bare template: Minimal structure with only `hpm.toml`
+//!   - Version control integration (Git initialization)
+//!   - Configurable metadata (author, license, Houdini versions)
+//!
+//! - **`check`** - Validate package configuration and Houdini compatibility
+//!   - Manifest validation (syntax, required fields, version constraints)
+//!   - Houdini version compatibility checking
+//!   - Dependency constraint validation
+//!   - Package structure verification
+//!
+//! ### Dependency Management Commands
+//! Commands for managing package dependencies and installations:
+//!
+//! - **`add`** - Add package dependencies with semantic versioning
+//!   - Automatic dependency resolution and installation
+//!   - Version specification support (^, ~, >=, exact)
+//!   - Optional dependency marking
+//!   - Flexible manifest targeting
+//!
+//! - **`remove`** - Remove package dependencies from manifests
+//!   - Non-destructive removal (preserves downloaded packages)
+//!   - Lock file synchronization
+//!   - Validation and error handling
+//!
+//! - **`install`** - Install dependencies from `hpm.toml` manifests
+//!   - HPM package dependency resolution
+//!   - Python dependency management with virtual environments
+//!   - Project structure setup and integration
+//!   - Lock file generation and validation
+//!
+//! - **`update`** - Update packages to latest compatible versions
+//!   - Intelligent dependency resolution with conflict detection
+//!   - Dry-run mode for preview
+//!   - Selective package updates
+//!   - Multiple output formats for automation
+//!
+//! ### Information and Analysis Commands
+//! Commands for inspecting packages and dependencies:
+//!
+//! - **`list`** - Display comprehensive package information
+//!   - Package metadata (name, version, description, compatibility)
+//!   - HPM dependency specifications with version constraints
+//!   - Python dependency specifications with extras
+//!   - Optional dependency indicators
+//!
+//! ### Maintenance Commands
+//! Commands for system maintenance and optimization:
+//!
+//! - **`clean`** - Project-aware package cleanup with safety guarantees
+//!   - Orphaned package detection and removal
+//!   - Python virtual environment cleanup
+//!   - Comprehensive cleanup (packages + Python environments)
+//!   - Dry-run mode with detailed preview
+//!   - Interactive confirmation for safety
+//!
+//! ### Future Commands (Planned)
+//! Commands planned for future releases:
+//!
+//! - **`search`** - Search registry for packages with filtering
+//! - **`publish`** - Publish packages to registry with validation
+//! - **`run`** - Execute package scripts and workflows
+//!
+//! ## Error Handling Philosophy
+//!
+//! HPM CLI implements professional error handling inspired by UV's approach:
+//!
+//! ### Structured Error Types
+//! ```rust
+//! pub enum CliError {
+//!     Config { source: anyhow::Error, help: Option<String> },    // Configuration issues
+//!     Package { source: anyhow::Error, help: Option<String> },   // Package operation failures
+//!     Network { source: anyhow::Error, help: Option<String> },   // Registry connectivity issues
+//!     Io { source: anyhow::Error, help: Option<String> },        // File system operations
+//!     Internal { source: anyhow::Error, help: Option<String> },  // Unexpected errors
+//!     External { source: anyhow::Error, help: Option<String> },  // External command failures
+//! }
+//! ```
+//!
+//! ### Exit Code Standards
+//! - **0**: Success - command completed successfully
+//! - **1**: User error - configuration, input, or package issues
+//! - **2**: Internal error - bugs or unexpected conditions
+//! - **N**: External command exit code (when running external tools)
+//!
+//! ### User Experience Features
+//! - **Contextual Help**: Error messages include suggested solutions
+//! - **Progressive Verbosity**: More details available with `-v` flags
+//! - **Color-Coded Output**: Success (green), warnings (yellow), errors (red)
+//! - **Accessibility**: Symbols alongside colors for color-blind users
+//!
+//! ## Output Format Support
+//!
+//! HPM CLI supports multiple output formats for different use cases:
+//!
+//! ### Human-Readable (Default)
+//! Styled output with colors, symbols, and formatting optimized for terminal use:
+//! ```text
+//! [SUCCESS] Package 'geometry-tools' initialized successfully
+//! [WARNING] Warning: No Python dependencies specified
+//! [ERROR] Error: Package 'nonexistent-package' not found
+//! ```
+//!
+//! ### Machine-Readable Formats
+//! Structured output for automation and integration:
+//!
+//! - **JSON**: Pretty-printed for human-readable automation
+//! - **JSON Lines**: Single-line JSON for streaming and log processing
+//! - **JSON Compact**: Minimal JSON for bandwidth efficiency
+//!
+//! ```json
+//! {
+//!   "success": true,
+//!   "command": "install",
+//!   "message": "3 packages installed",
+//!   "elapsed_ms": 1250
+//! }
+//! ```
+//!
+//! ## Usage Examples
+//!
+//! ### Project Initialization
+//! ```bash
+//! # Create standard package with full structure
+//! hpm init my-houdini-tools --author "Artist <artist@studio.com>"
+//!
+//! # Create minimal package structure
+//! hpm init --bare minimal-package --houdini-min 20.0
+//!
+//! # Initialize with custom metadata
+//! hpm init advanced-tools \
+//!   --description "Advanced geometry manipulation tools" \
+//!   --license Apache-2.0 \
+//!   --houdini-min 19.5 \
+//!   --houdini-max 21.0
+//! ```
+//!
+//! ### Dependency Management
+//! ```bash
+//! # Add latest version of a package
+//! hpm add utility-nodes
+//!
+//! # Add specific version with constraints
+//! hpm add geometry-tools --version "^2.1.0"
+//!
+//! # Add optional dependency
+//! hpm add material-library --version "1.5.0" --optional
+//!
+//! # Remove dependency
+//! hpm remove old-package
+//!
+//! # Install all dependencies
+//! hpm install
+//! ```
+//!
+//! ### Package Updates
+//! ```bash
+//! # Preview available updates
+//! hpm update --dry-run
+//!
+//! # Update all packages
+//! hpm update
+//!
+//! # Update specific packages
+//! hpm update numpy geometry-tools
+//!
+//! # Automated update with JSON output
+//! hpm update --yes --output json
+//! ```
+//!
+//! ### System Maintenance
+//! ```bash
+//! # Preview cleanup operations
+//! hpm clean --dry-run
+//!
+//! # Clean orphaned packages interactively
+//! hpm clean
+//!
+//! # Automated comprehensive cleanup
+//! hpm clean --comprehensive --yes
+//!
+//! # Clean only Python virtual environments
+//! hpm clean --python-only --dry-run
+//! ```
+//!
+//! ### Information and Analysis
+//! ```bash
+//! # List dependencies from current project
+//! hpm list
+//!
+//! # List dependencies from specific project
+//! hpm list --package /path/to/project/
+//!
+//! # Validate package configuration
+//! hpm check
+//!
+//! # Check specific project
+//! hpm check --package /path/to/project/
+//! ```
+//!
+//! ## Global Options
+//!
+//! All commands support these global options for consistent behavior:
+//!
+//! - **`-v, --verbose`**: Increase verbosity (can be used multiple times)
+//! - **`-q, --quiet`**: Suppress output except for errors
+//! - **`--color <WHEN>`**: Control color output (auto, always, never)
+//! - **`--output <FORMAT>`**: Set output format (human, json, json-lines, json-compact)
+//! - **`-C, --directory <DIR>`**: Run command in specified directory
+//!
+//! ## Integration with Core Systems
+//!
+//! The CLI seamlessly integrates with all HPM subsystems:
+//!
+//! - **HPM Core**: Package storage, project discovery, dependency analysis
+//! - **HPM Python**: Python dependency management and virtual environments
+//! - **HPM Registry**: Package search, download, and publishing (planned)
+//! - **HPM Config**: Configuration management and project settings
+//! - **HPM Package**: Manifest processing and Houdini integration
 
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
@@ -34,6 +289,9 @@ mod commands;
 mod console;
 mod error;
 mod output;
+
+#[cfg(test)]
+mod cli_validation_tests;
 
 use commands::init_package;
 use console::{ColorChoice, Console, Verbosity};
@@ -58,6 +316,10 @@ struct Cli {
     /// Output format
     #[arg(long, value_enum)]
     output: Option<OutputFormatArg>,
+
+    /// Directory to run command in (defaults to current directory)
+    #[arg(short = 'C', long)]
+    directory: Option<std::path::PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -246,7 +508,7 @@ async fn main() -> ExitCode {
     init_logging(verbosity);
 
     // Execute command and handle errors
-    let result = match run_command(&cli.command, &mut console, output_format).await {
+    let result = match run_command(&cli.command, &mut console, output_format, cli.directory).await {
         Ok(status) => status,
         Err(error) => {
             // Print the error using our structured error system
@@ -284,6 +546,7 @@ async fn run_command(
     command: &Commands,
     console: &mut Console,
     output_format: OutputFormat,
+    directory: Option<std::path::PathBuf>,
 ) -> CliResult<ExitStatus> {
     match command {
         Commands::Init {
@@ -307,7 +570,7 @@ async fn run_command(
                 houdini_max: houdini_max.clone(),
                 bare: *bare,
                 vcs: vcs.clone(),
-                base_dir: None, // Use current working directory for CLI usage
+                base_dir: directory.clone(), // Use directory from CLI flag
             };
 
             init_package(options).await.map_err(|e| {
@@ -429,12 +692,14 @@ async fn run_command(
             }
         }
         Commands::Check => {
-            commands::check::check_package().await.map_err(|e| {
-                CliError::package(
-                    e,
-                    Some("Use 'hpm check --help' for usage information".to_string()),
-                )
-            })?;
+            commands::check::check_package(directory.clone())
+                .await
+                .map_err(|e| {
+                    CliError::package(
+                        e,
+                        Some("Use 'hpm check --help' for usage information".to_string()),
+                    )
+                })?;
 
             if output_format == OutputFormat::Human {
                 console.success("Package configuration is valid");

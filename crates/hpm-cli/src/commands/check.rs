@@ -46,8 +46,11 @@ impl ValidationResult {
     }
 }
 
-pub async fn check_package() -> Result<()> {
-    let current_dir = std::env::current_dir().context("Failed to get current directory")?;
+pub async fn check_package(directory: Option<std::path::PathBuf>) -> Result<()> {
+    let current_dir = match directory {
+        Some(dir) => dir,
+        None => std::env::current_dir().context("Failed to get current directory")?,
+    };
     let mut result = ValidationResult::new();
 
     info!("Checking HPM package configuration...");

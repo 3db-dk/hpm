@@ -3,7 +3,6 @@
 //! These tests verify end-to-end functionality by running the actual CLI binary
 //! and testing complete workflows in isolated environments.
 
-use std::env;
 use std::fs;
 use std::process::Command;
 use tempfile::TempDir;
@@ -36,14 +35,12 @@ fn test_cli_help() {
 #[test]
 fn test_init_workflow() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = env::current_dir().unwrap();
 
-    // Change to temp directory
-    env::set_current_dir(temp_dir.path()).unwrap();
-
-    // Test standard package creation
+    // Test standard package creation using --directory flag
     let output = hpm_binary()
         .args([
+            "--directory",
+            temp_dir.path().to_str().unwrap(),
             "init",
             "test-integration-package",
             "--description",
@@ -61,8 +58,6 @@ fn test_init_workflow() {
         ])
         .output()
         .expect("Failed to execute hpm init");
-
-    env::set_current_dir(original_dir).unwrap();
 
     assert!(output.status.success(), "hpm init should succeed");
 
@@ -90,12 +85,11 @@ fn test_init_workflow() {
 #[test]
 fn test_init_bare_workflow() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = env::current_dir().unwrap();
-
-    env::set_current_dir(temp_dir.path()).unwrap();
 
     let output = hpm_binary()
         .args([
+            "--directory",
+            temp_dir.path().to_str().unwrap(),
             "init",
             "test-bare-package",
             "--bare",
@@ -106,8 +100,6 @@ fn test_init_bare_workflow() {
         ])
         .output()
         .expect("Failed to execute hpm init --bare");
-
-    env::set_current_dir(original_dir).unwrap();
 
     assert!(output.status.success());
 
@@ -164,53 +156,63 @@ fn test_list_nonexistent_manifest() {
 #[test]
 fn test_add_remove_workflow() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = env::current_dir().unwrap();
 
     // First create a package
-    env::set_current_dir(temp_dir.path()).unwrap();
-
     let _init_output = hpm_binary()
-        .args(["init", "test-deps-package", "--vcs", "none"])
+        .args([
+            "--directory",
+            temp_dir.path().to_str().unwrap(),
+            "init",
+            "test-deps-package",
+            "--vcs",
+            "none",
+        ])
         .output()
         .expect("Failed to create test package");
 
     let package_dir = temp_dir.path().join("test-deps-package");
-    env::set_current_dir(&package_dir).unwrap();
 
     // Test add command
     let add_output = hpm_binary()
-        .args(["add", "test-package", "--version", "^1.0.0"])
+        .args([
+            "--directory",
+            package_dir.to_str().unwrap(),
+            "add",
+            "test-package",
+            "--version",
+            "^1.0.0",
+        ])
         .output()
         .expect("Failed to execute hpm add");
 
     // Add should succeed (even though package doesn't exist in registry)
     // This tests manifest modification logic
     if add_output.status.success() {
-        let hpm_toml = fs::read_to_string("hpm.toml").unwrap();
+        let hpm_toml = fs::read_to_string(package_dir.join("hpm.toml")).unwrap();
         assert!(hpm_toml.contains("test-package"));
     }
-
-    env::set_current_dir(original_dir).unwrap();
 }
 
 /// Test error handling for directory that already exists
 #[test]
 fn test_init_directory_exists_error() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = env::current_dir().unwrap();
-
-    env::set_current_dir(temp_dir.path()).unwrap();
 
     // Create directory first
-    fs::create_dir("existing-package").unwrap();
+    fs::create_dir(temp_dir.path().join("existing-package")).unwrap();
 
     // Try to init with same name
     let output = hpm_binary()
-        .args(["init", "existing-package", "--vcs", "none"])
+        .args([
+            "--directory",
+            temp_dir.path().to_str().unwrap(),
+            "init",
+            "existing-package",
+            "--vcs",
+            "none",
+        ])
         .output()
         .expect("Failed to execute hpm init");
-
-    env::set_current_dir(original_dir).unwrap();
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -235,11 +237,8 @@ fn test_clean_command() {
 #[test]
 fn test_check_command() {
     let temp_dir = TempDir::new().unwrap();
-    let original_dir = env::current_dir().unwrap();
 
     // Create a simple hpm.toml to check
-    env::set_current_dir(temp_dir.path()).unwrap();
-
     let manifest_content = r#"
 [package]
 name = "test-check-package"
@@ -249,14 +248,12 @@ description = "Test package for check command"
 [houdini]
 min_version = "19.5"
 "#;
-    fs::write("hpm.toml", manifest_content).unwrap();
+    fs::write(temp_dir.path().join("hpm.toml"), manifest_content).unwrap();
 
     let output = hpm_binary()
-        .arg("check")
+        .args(["--directory", temp_dir.path().to_str().unwrap(), "check"])
         .output()
         .expect("Failed to execute hpm check");
-
-    env::set_current_dir(original_dir).unwrap();
 
     // Check command should process the manifest
     assert!(output.status.success() || !output.stderr.is_empty());
