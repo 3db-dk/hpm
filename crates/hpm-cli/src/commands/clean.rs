@@ -30,8 +30,11 @@ pub struct CleanArgs {
 pub async fn execute_clean(args: &CleanArgs) -> anyhow::Result<()> {
     info!("Starting package cleanup");
 
-    // Load configuration
-    let config = Config::default(); // TODO: Load from actual config file
+    // Load configuration from config files (falls back to defaults if no config exists)
+    let config = Config::load().unwrap_or_else(|e| {
+        tracing::warn!("Failed to load config file, using defaults: {}", e);
+        Config::default()
+    });
 
     // Initialize storage manager
     let storage_manager = StorageManager::new(config.storage.clone())?;

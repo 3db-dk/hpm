@@ -7,10 +7,10 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 pub mod types;
-pub use types::{InstalledPackage, PackageSpec};
+pub use types::{InstalledPackage, PackageSpec, VersionReq};
 
 /// Result of comprehensive cleanup including both packages and Python environments
 #[derive(Debug)]
@@ -157,16 +157,135 @@ impl StorageManager {
     ) -> Result<InstalledPackage, StorageError> {
         info!("Installing package: {} {}", spec.name, spec.version_req);
 
-        // TODO: This is a placeholder implementation
-        // Real implementation would:
-        // 1. Resolve version from registry
-        // 2. Download package archive
-        // 3. Extract to storage directory
-        // 4. Validate package structure
+        // Check if we already have a compatible version installed
+        let installed = self.list_installed()?;
+        for pkg in &installed {
+            if pkg.name == spec.name && pkg.is_compatible_with(&spec.version_req) {
+                info!(
+                    "Package {} already installed with compatible version {}",
+                    spec.name, pkg.version
+                );
+                return Ok(pkg.clone());
+            }
+        }
 
-        Err(StorageError::NotImplemented(
-            "Package installation not yet implemented".to_string(),
-        ))
+        // For now, return an error indicating the package needs to be installed
+        // In a full implementation, this would:
+        // 1. Query the registry for available versions matching spec.version_req
+        // 2. Download the best matching version
+        // 3. Extract and validate the package
+        Err(StorageError::PackageNotFound(format!(
+            "Package {} {} not found in registry. Use 'hpm install --from-path <path>' to install from a local directory.",
+            spec.name, spec.version_req
+        )))
+    }
+
+    /// Install a package from a local directory path.
+    /// The directory must contain a valid hpm.toml manifest.
+    pub async fn install_from_path(
+        &self,
+        source_path: &std::path::Path,
+    ) -> Result<InstalledPackage, StorageError> {
+        info!("Installing package from path: {}", source_path.display());
+
+        // Read and parse the manifest
+        let manifest_path = source_path.join("hpm.toml");
+        if !manifest_path.exists() {
+            return Err(StorageError::ManifestRead(format!(
+                "No hpm.toml found in {}",
+                source_path.display()
+            )));
+        }
+
+        let manifest_content = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| StorageError::ManifestRead(e.to_string()))?;
+
+        let manifest: PackageManifest = toml::from_str(&manifest_content)
+            .map_err(|e| StorageError::ManifestParse(e.to_string()))?;
+
+        let name = &manifest.package.name;
+        let version = &manifest.package.version;
+
+        info!("Installing {}@{} from {}", name, version, source_path.display());
+
+        // Create the target directory
+        let target_dir = self.config.package_dir(name, version);
+
+        // Check if already installed
+        if target_dir.exists() {
+            warn!("Package {}@{} already exists, removing old version", name, version);
+            std::fs::remove_dir_all(&target_dir)
+                .map_err(|e| StorageError::DirectoryRemoval(e.to_string()))?;
+        }
+
+        // Copy the package directory
+        self.copy_directory(source_path, &target_dir)?;
+
+        info!("Successfully installed {}@{}", name, version);
+
+        // Return the installed package info
+        let metadata = std::fs::metadata(&target_dir)
+            .map_err(|e| StorageError::MetadataRead(e.to_string()))?;
+
+        Ok(InstalledPackage {
+            name: name.clone(),
+            version: version.clone(),
+            manifest,
+            install_path: target_dir,
+            installed_at: metadata.created().unwrap_or_else(|_| std::time::SystemTime::now()),
+        })
+    }
+
+    /// Copy a directory recursively
+    fn copy_directory(
+        &self,
+        source: &std::path::Path,
+        target: &std::path::Path,
+    ) -> Result<(), StorageError> {
+        std::fs::create_dir_all(target)
+            .map_err(|e| StorageError::DirectoryCreation(e.to_string()))?;
+
+        for entry in walkdir::WalkDir::new(source)
+            .min_depth(1)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let relative_path = entry
+                .path()
+                .strip_prefix(source)
+                .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
+            let target_path = target.join(relative_path);
+
+            if entry.file_type().is_dir() {
+                std::fs::create_dir_all(&target_path)
+                    .map_err(|e| StorageError::DirectoryCreation(e.to_string()))?;
+            } else {
+                // Ensure parent directory exists
+                if let Some(parent) = target_path.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| StorageError::DirectoryCreation(e.to_string()))?;
+                }
+                std::fs::copy(entry.path(), &target_path)
+                    .map_err(|e| StorageError::DirectoryRead(format!("Failed to copy file: {}", e)))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Find the best installed version matching a requirement
+    pub fn find_installed(&self, name: &str, version_req: &VersionReq) -> Option<InstalledPackage> {
+        let installed = self.list_installed().ok()?;
+        installed
+            .into_iter()
+            .filter(|pkg| pkg.name == name && pkg.is_compatible_with(version_req))
+            .max_by(|a, b| {
+                // Compare versions - prefer higher versions
+                match (semver::Version::parse(&a.version), semver::Version::parse(&b.version)) {
+                    (Ok(va), Ok(vb)) => va.cmp(&vb),
+                    _ => a.version.cmp(&b.version),
+                }
+            })
     }
 
     pub async fn remove_package(&self, name: &str, version: &str) -> Result<(), StorageError> {

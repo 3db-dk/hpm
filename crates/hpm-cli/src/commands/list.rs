@@ -242,7 +242,13 @@ fn display_python_dependencies(manifest: &PackageManifest) {
 fn format_dependency_spec(spec: &DependencySpec) -> String {
     match spec {
         DependencySpec::Simple(version) => version.clone(),
-        DependencySpec::Detailed {
+        DependencySpec::Git { git, commit, .. } => {
+            format!("git: {} (commit: {})", git, &commit[..commit.len().min(12)])
+        }
+        DependencySpec::Path { path, .. } => {
+            format!("path: {}", path)
+        }
+        DependencySpec::Legacy {
             version,
             git,
             tag,
@@ -281,7 +287,9 @@ fn format_dependency_spec(spec: &DependencySpec) -> String {
 fn is_optional_dependency(spec: &DependencySpec) -> bool {
     match spec {
         DependencySpec::Simple(_) => false,
-        DependencySpec::Detailed { optional, .. } => optional.unwrap_or(false),
+        DependencySpec::Git { optional, .. } => *optional,
+        DependencySpec::Path { optional, .. } => *optional,
+        DependencySpec::Legacy { optional, .. } => optional.unwrap_or(false),
     }
 }
 
@@ -580,8 +588,8 @@ matplotlib = { version = "^3.5.0", optional = true }
     }
 
     #[test]
-    fn test_format_dependency_spec_detailed_version() {
-        let spec = DependencySpec::Detailed {
+    fn test_format_dependency_spec_legacy_version() {
+        let spec = DependencySpec::Legacy {
             version: Some("2.1.0".to_string()),
             git: None,
             tag: None,
@@ -595,16 +603,13 @@ matplotlib = { version = "^3.5.0", optional = true }
 
     #[test]
     fn test_format_dependency_spec_git() {
-        let spec = DependencySpec::Detailed {
-            version: None,
-            git: Some("https://github.com/example/repo".to_string()),
-            tag: Some("v1.0".to_string()),
-            branch: None,
-            optional: None,
-            registry: None,
+        let spec = DependencySpec::Git {
+            git: "https://github.com/example/repo".to_string(),
+            commit: "abc123def456".to_string(),
+            optional: false,
         };
         let result = format_dependency_spec(&spec);
-        assert_eq!(result, "git: https://github.com/example/repo (tag: v1.0)");
+        assert_eq!(result, "git: https://github.com/example/repo (commit: abc123def456)");
     }
 
     #[test]
@@ -612,23 +617,17 @@ matplotlib = { version = "^3.5.0", optional = true }
         let simple = DependencySpec::Simple("^1.0.0".to_string());
         assert!(!is_optional_dependency(&simple));
 
-        let optional = DependencySpec::Detailed {
-            version: Some("1.0.0".to_string()),
-            git: None,
-            tag: None,
-            branch: None,
-            optional: Some(true),
-            registry: None,
+        let optional = DependencySpec::Git {
+            git: "https://github.com/example/repo".to_string(),
+            commit: "abc123".to_string(),
+            optional: true,
         };
         assert!(is_optional_dependency(&optional));
 
-        let not_optional = DependencySpec::Detailed {
-            version: Some("1.0.0".to_string()),
-            git: None,
-            tag: None,
-            branch: None,
-            optional: Some(false),
-            registry: None,
+        let not_optional = DependencySpec::Git {
+            git: "https://github.com/example/repo".to_string(),
+            commit: "abc123".to_string(),
+            optional: false,
         };
         assert!(!is_optional_dependency(&not_optional));
     }

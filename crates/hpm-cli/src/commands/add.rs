@@ -6,7 +6,8 @@
 //!
 //! The add command provides comprehensive dependency management:
 //! - Adds package dependencies to hpm.toml manifest files
-//! - Supports version specifications (semantic versioning patterns)
+//! - Supports Git archive-based dependencies with `--git` and `--commit` flags
+//! - Supports local path dependencies with `--path` flag
 //! - Handles optional dependencies with `--optional` flag
 //! - Flexible manifest targeting via `--package` flag
 //! - Automatic dependency resolution and installation
@@ -15,18 +16,17 @@
 //! ## Usage Examples
 //!
 //! ```bash
-//! # Add latest version of a package
-//! hpm add awesome-houdini-tools
+//! # Add a Git-based dependency (recommended)
+//! hpm add geometry-tools --git https://github.com/studio/geometry-tools --commit abc123
 //!
-//! # Add specific version
-//! hpm add utility-nodes --version "^2.1.0"
+//! # Add a local path dependency (for development)
+//! hpm add local-tools --path ../local-tools
 //!
 //! # Add optional dependency
-//! hpm add material-library --optional
+//! hpm add material-library --git https://github.com/studio/materials --commit def456 --optional
 //!
 //! # Target specific manifest file
-//! hpm add geometry-tools --package /path/to/project/
-//! hpm add mesh-utilities --package /path/to/project/hpm.toml
+//! hpm add geometry-tools --git https://github.com/studio/geometry-tools --commit abc123 --package /path/to/project/
 //! ```
 //!
 //! ## Implementation Details
@@ -45,20 +45,46 @@
 //! 3. Updates the project's hpm.lock file
 //! 4. Sets up project-specific package references
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use hpm_package::{DependencySpec, PackageManifest};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 /// Add a package dependency to hpm.toml manifest
+///
+/// # Arguments
+///
+/// * `package_name` - Name of the package to add
+/// * `git_url` - Git repository URL (recommended for dependencies)
+/// * `commit` - Git commit hash (required when using git_url)
+/// * `path` - Local path to package directory (for development dependencies)
+/// * `version` - Legacy version specification (prefer git or path)
+/// * `manifest_path` - Path to the manifest file or directory
+/// * `optional` - Whether the dependency is optional
 pub async fn add_package(
     package_name: String,
+    git_url: Option<String>,
+    commit: Option<String>,
+    path: Option<PathBuf>,
     version: Option<String>,
     manifest_path: Option<PathBuf>,
     optional: bool,
 ) -> Result<()> {
     info!("Adding package dependency: {}", package_name);
+
+    // Validate arguments
+    if git_url.is_some() && commit.is_none() {
+        bail!("--commit is required when using --git. Please specify a commit hash.");
+    }
+
+    if git_url.is_some() && path.is_some() {
+        bail!("Cannot specify both --git and --path. Choose one source type.");
+    }
+
+    if (git_url.is_some() || path.is_some()) && version.is_some() {
+        warn!("--version is ignored when using --git or --path");
+    }
 
     // Determine manifest path
     let manifest_path = determine_manifest_path(manifest_path)?;
@@ -68,33 +94,68 @@ pub async fn add_package(
     let mut manifest = load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
 
-    // Prepare dependency specification
-    let dependency_spec = if let Some(version_str) = version {
-        if version_str == "latest" {
-            DependencySpec::Simple("*".to_string())
-        } else {
-            DependencySpec::Simple(version_str)
+    // Prepare dependency specification based on source type
+    let dependency_spec = if let Some(url) = git_url {
+        // Git-based dependency (recommended)
+        let commit_hash = commit.unwrap(); // Already validated above
+        DependencySpec::Git {
+            git: url,
+            commit: commit_hash,
+            optional,
         }
-    } else {
-        // Default to latest version if no version specified
-        DependencySpec::Simple("*".to_string())
-    };
-
-    // Add optional flag if specified
-    let dependency_spec = if optional {
-        match dependency_spec {
-            DependencySpec::Simple(version) => DependencySpec::Detailed {
-                version: Some(version),
+    } else if let Some(local_path) = path {
+        // Path-based dependency (for development)
+        let path_str = local_path.to_string_lossy().to_string();
+        DependencySpec::Path {
+            path: path_str,
+            optional,
+        }
+    } else if let Some(version_str) = version {
+        // Legacy version-based dependency
+        warn!("Version-based dependencies are deprecated. Consider using --git with a commit hash.");
+        if version_str == "latest" {
+            if optional {
+                DependencySpec::Legacy {
+                    version: Some("*".to_string()),
+                    git: None,
+                    tag: None,
+                    branch: None,
+                    optional: Some(true),
+                    registry: None,
+                }
+            } else {
+                DependencySpec::Simple("*".to_string())
+            }
+        } else if optional {
+            DependencySpec::Legacy {
+                version: Some(version_str),
                 git: None,
                 tag: None,
                 branch: None,
                 optional: Some(true),
                 registry: None,
-            },
-            detailed => detailed, // Already detailed, just update optional flag
+            }
+        } else {
+            DependencySpec::Simple(version_str)
         }
     } else {
-        dependency_spec
+        // No source specified - show help
+        bail!(
+            "Please specify a dependency source:\n\
+             \n\
+             For Git-based dependencies (recommended):\n\
+             \n\
+             \x20 hpm add {} --git <repository-url> --commit <commit-hash>\n\
+             \n\
+             For local path dependencies (development):\n\
+             \n\
+             \x20 hpm add {} --path <local-path>\n\
+             \n\
+             Example:\n\
+             \n\
+             \x20 hpm add {} --git https://github.com/user/repo --commit abc123",
+            package_name, package_name, package_name
+        );
     };
 
     // Add to dependencies
@@ -166,8 +227,23 @@ fn determine_manifest_path(provided_path: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
+/// Maximum allowed manifest file size (1 MB) to prevent DoS attacks.
+const MAX_MANIFEST_SIZE: u64 = 1024 * 1024;
+
 /// Load and parse the package manifest
 fn load_manifest(manifest_path: &Path) -> Result<PackageManifest> {
+    // Security check: verify manifest file size to prevent DoS
+    let metadata = std::fs::metadata(manifest_path)
+        .with_context(|| format!("Failed to read manifest metadata: {}", manifest_path.display()))?;
+
+    if metadata.len() > MAX_MANIFEST_SIZE {
+        anyhow::bail!(
+            "Manifest file too large ({} bytes). Maximum allowed size is {} bytes.",
+            metadata.len(),
+            MAX_MANIFEST_SIZE
+        );
+    }
+
     let content = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("Failed to read manifest file: {}", manifest_path.display()))?;
 
@@ -338,7 +414,7 @@ min_version = "20.0"
 
     #[test]
     fn test_dependency_spec_creation_optional() {
-        let spec = DependencySpec::Detailed {
+        let spec = DependencySpec::Legacy {
             version: Some("1.0.0".to_string()),
             git: None,
             tag: None,
@@ -348,13 +424,13 @@ min_version = "20.0"
         };
 
         match spec {
-            DependencySpec::Detailed {
+            DependencySpec::Legacy {
                 version, optional, ..
             } => {
                 assert_eq!(version, Some("1.0.0".to_string()));
                 assert_eq!(optional, Some(true));
             }
-            _ => panic!("Expected Detailed dependency spec"),
+            _ => panic!("Expected Legacy dependency spec"),
         }
     }
 

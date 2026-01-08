@@ -289,6 +289,7 @@ mod commands;
 mod console;
 mod error;
 mod output;
+pub mod progress;
 
 #[cfg(test)]
 mod cli_validation_tests;
@@ -405,7 +406,19 @@ enum Commands {
         /// Package name to add
         package: String,
 
-        /// Version specification (e.g., "^1.0.0", "latest")
+        /// Git repository URL (e.g., "https://github.com/user/repo")
+        #[arg(long)]
+        git: Option<String>,
+
+        /// Git commit hash (required when using --git)
+        #[arg(long)]
+        commit: Option<String>,
+
+        /// Local path to package directory
+        #[arg(long)]
+        path: Option<std::path::PathBuf>,
+
+        /// Version specification (legacy, prefer --git or --path)
         #[arg(short, long)]
         version: Option<String>,
 
@@ -589,12 +602,18 @@ async fn run_command(
         }
         Commands::Add {
             package,
+            git,
+            commit,
+            path,
             version,
             manifest,
             optional,
         } => {
             commands::add::add_package(
                 package.clone(),
+                git.clone(),
+                commit.clone(),
+                path.clone(),
                 version.clone(),
                 manifest.clone(),
                 *optional,
@@ -662,13 +681,28 @@ async fn run_command(
                     )
                 })?;
         }
-        Commands::Search { query: _ } => {
-            console.warn("Search command not yet implemented");
-            console.info("This feature is planned for a future release");
+        Commands::Search { query } => {
+            let json_output = output_format != OutputFormat::Human;
+            commands::search::search_packages(query.clone(), None, json_output)
+                .await
+                .map_err(|e| {
+                    CliError::network(
+                        e,
+                        Some("Use 'hpm search --help' for usage information".to_string()),
+                    )
+                })?;
         }
         Commands::Publish => {
-            console.warn("Publish command not yet implemented");
-            console.info("This feature is planned for a future release");
+            console.info("HPM uses Git archive-based dependencies.");
+            console.info("Publishing is done by pushing to a Git repository.");
+            println!();
+            println!("To publish your package:");
+            println!("  1. Commit your changes: git commit -m \"Release v1.0.0\"");
+            println!("  2. Push to remote: git push origin main");
+            println!("  3. Share the repository URL and commit hash with users");
+            println!();
+            println!("Users can then add your package with:");
+            println!("  hpm add --git <your-repo-url> --commit <commit-hash>");
         }
         Commands::Run { script, args: _ } => {
             console.warn("Run command not yet implemented");

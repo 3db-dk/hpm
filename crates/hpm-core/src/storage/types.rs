@@ -1,4 +1,5 @@
 use hpm_package::PackageManifest;
+use semver::{Version, VersionReq as SemverVersionReq};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -18,20 +19,35 @@ pub struct PackageSpec {
     pub registry: Option<String>,
 }
 
+/// Version requirement with proper semantic versioning support.
+/// Supports: exact versions, ^, ~, >=, <=, >, <, and * (any)
 #[derive(Debug, Clone)]
 pub struct VersionReq {
     requirement: String,
+    parsed: Option<SemverVersionReq>,
 }
 
 impl VersionReq {
     pub fn new(requirement: &str) -> Result<Self, String> {
-        // Basic validation for now
-        if requirement.trim().is_empty() {
+        let trimmed = requirement.trim();
+        if trimmed.is_empty() {
             return Err("Version requirement cannot be empty or whitespace-only".to_string());
         }
 
+        // Handle wildcard
+        if trimmed == "*" {
+            return Ok(Self {
+                requirement: trimmed.to_string(),
+                parsed: Some(SemverVersionReq::STAR),
+            });
+        }
+
+        // Try to parse as semver requirement
+        let parsed = SemverVersionReq::parse(trimmed).ok();
+
         Ok(Self {
-            requirement: requirement.to_string(),
+            requirement: trimmed.to_string(),
+            parsed,
         })
     }
 
@@ -41,6 +57,24 @@ impl VersionReq {
 
     pub fn as_str(&self) -> &str {
         &self.requirement
+    }
+
+    /// Check if a version string matches this requirement
+    pub fn matches(&self, version: &str) -> bool {
+        // Wildcard matches everything
+        if self.requirement == "*" {
+            return true;
+        }
+
+        // Try to parse the version and check against semver requirement
+        if let Some(ref req) = self.parsed {
+            if let Ok(ver) = Version::parse(version) {
+                return req.matches(&ver);
+            }
+        }
+
+        // Fallback to exact string match
+        self.requirement == version
     }
 }
 
@@ -93,14 +127,9 @@ impl InstalledPackage {
         format!("{}@{}", self.name, self.version)
     }
 
+    /// Check if this installed package satisfies a version requirement
     pub fn is_compatible_with(&self, version_req: &VersionReq) -> bool {
-        // TODO: Implement proper version matching
-        // For now, just do exact match or wildcard
-        match version_req.as_str() {
-            "*" => true,
-            req if req == self.version => true,
-            _ => false,
-        }
+        version_req.matches(&self.version)
     }
 }
 

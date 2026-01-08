@@ -303,18 +303,170 @@ pub struct HoudiniConfig {
     pub max_version: Option<String>,
 }
 
+/// Dependency specification for HPM packages.
+///
+/// HPM uses Git archive-based dependencies with explicit commit hashes for
+/// reproducibility and security. Tags are not supported because they can be
+/// redefined, which poses a security risk.
+///
+/// # Examples
+///
+/// ```toml
+/// [dependencies]
+/// # Git dependency with commit hash (recommended)
+/// geometry-tools = { git = "https://github.com/studio/geometry-tools", commit = "abc123def456" }
+///
+/// # Local path dependency (for development)
+/// my-local-pkg = { path = "../my-local-package" }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DependencySpec {
-    Simple(String),
-    Detailed {
+    /// Git repository with explicit commit hash
+    Git {
+        /// The Git repository URL
+        git: String,
+        /// The full commit hash (40 hex characters recommended)
+        commit: String,
+        /// Whether this dependency is optional
+        #[serde(default)]
+        optional: bool,
+    },
+
+    /// Local filesystem path
+    Path {
+        /// Path to the package directory (absolute or relative to manifest)
+        path: String,
+        /// Whether this dependency is optional
+        #[serde(default)]
+        optional: bool,
+    },
+
+    /// Legacy format for backward compatibility during migration
+    /// This will be deprecated and removed in future versions
+    #[serde(rename = "legacy")]
+    Legacy {
+        #[serde(default)]
         version: Option<String>,
+        #[serde(default)]
         git: Option<String>,
+        #[serde(default)]
         tag: Option<String>,
+        #[serde(default)]
         branch: Option<String>,
+        #[serde(default)]
         optional: Option<bool>,
+        #[serde(default)]
         registry: Option<String>,
     },
+
+    /// Simple version string (legacy, for backward compatibility)
+    Simple(String),
+}
+
+impl DependencySpec {
+    /// Create a new Git dependency.
+    pub fn git(url: impl Into<String>, commit: impl Into<String>) -> Self {
+        DependencySpec::Git {
+            git: url.into(),
+            commit: commit.into(),
+            optional: false,
+        }
+    }
+
+    /// Create a new path dependency.
+    pub fn path(path: impl Into<String>) -> Self {
+        DependencySpec::Path {
+            path: path.into(),
+            optional: false,
+        }
+    }
+
+    /// Check if this is a Git dependency.
+    pub fn is_git(&self) -> bool {
+        matches!(self, DependencySpec::Git { .. })
+    }
+
+    /// Check if this is a path dependency.
+    pub fn is_path(&self) -> bool {
+        matches!(self, DependencySpec::Path { .. })
+    }
+
+    /// Check if this is a legacy dependency format.
+    pub fn is_legacy(&self) -> bool {
+        matches!(self, DependencySpec::Simple(_) | DependencySpec::Legacy { .. })
+    }
+
+    /// Check if this dependency is optional.
+    pub fn is_optional(&self) -> bool {
+        match self {
+            DependencySpec::Git { optional, .. } => *optional,
+            DependencySpec::Path { optional, .. } => *optional,
+            DependencySpec::Legacy { optional, .. } => optional.unwrap_or(false),
+            DependencySpec::Simple(_) => false,
+        }
+    }
+
+    /// Get the Git URL if this is a Git dependency.
+    pub fn git_url(&self) -> Option<&str> {
+        match self {
+            DependencySpec::Git { git, .. } => Some(git),
+            DependencySpec::Legacy { git: Some(g), .. } => Some(g),
+            _ => None,
+        }
+    }
+
+    /// Get the commit hash if this is a Git dependency.
+    pub fn git_commit(&self) -> Option<&str> {
+        match self {
+            DependencySpec::Git { commit, .. } => Some(commit),
+            _ => None,
+        }
+    }
+
+    /// Get the path if this is a path dependency.
+    pub fn local_path(&self) -> Option<&str> {
+        match self {
+            DependencySpec::Path { path, .. } => Some(path),
+            _ => None,
+        }
+    }
+
+    /// Validate the dependency spec.
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            DependencySpec::Git { git, commit, .. } => {
+                if git.is_empty() {
+                    return Err("Git URL cannot be empty".to_string());
+                }
+                if !git.starts_with("https://") && !git.starts_with("http://") {
+                    return Err(format!("Git URL must start with https:// or http://: {}", git));
+                }
+                if commit.is_empty() {
+                    return Err("Commit hash cannot be empty".to_string());
+                }
+                if !commit.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Err(format!("Commit hash must be hexadecimal: {}", commit));
+                }
+                Ok(())
+            }
+            DependencySpec::Path { path, .. } => {
+                if path.is_empty() {
+                    return Err("Path cannot be empty".to_string());
+                }
+                Ok(())
+            }
+            DependencySpec::Legacy { .. } => {
+                Err("Legacy dependency format is deprecated. Use Git or Path format.".to_string())
+            }
+            DependencySpec::Simple(version) => {
+                Err(format!(
+                    "Simple version string '{}' is no longer supported. Use Git or Path format.",
+                    version
+                ))
+            }
+        }
+    }
 }
 
 /// Python dependency specification
@@ -555,26 +707,22 @@ mod tests {
     /// Strategy to generate dependency specifications
     fn dependency_spec_strategy() -> impl Strategy<Value = DependencySpec> {
         prop_oneof![
+            // Git dependency with commit hash
+            (url_strategy(), commit_hash_strategy(), any::<bool>()).prop_map(
+                |(git, commit, optional)| DependencySpec::Git { git, commit, optional }
+            ),
+            // Path dependency
+            (prop::string::string_regex(r"\.?\./[a-z0-9-/]{3,30}").unwrap(), any::<bool>()).prop_map(
+                |(path, optional)| DependencySpec::Path { path, optional }
+            ),
+            // Legacy simple version (for backward compatibility testing)
             version_req_strategy().prop_map(DependencySpec::Simple),
-            (
-                prop::option::of(version_req_strategy()),
-                prop::option::of(url_strategy()),
-                prop::option::of("[a-z0-9-]{3,20}"),
-                prop::option::of("[a-z0-9-]{3,20}"),
-                prop::option::of(any::<bool>()),
-                prop::option::of(url_strategy()),
-            )
-                .prop_map(|(version, git, tag, branch, optional, registry)| {
-                    DependencySpec::Detailed {
-                        version,
-                        git,
-                        tag,
-                        branch,
-                        optional,
-                        registry,
-                    }
-                })
         ]
+    }
+
+    /// Strategy to generate commit hashes
+    fn commit_hash_strategy() -> impl Strategy<Value = String> {
+        prop::string::string_regex("[0-9a-f]{40}").unwrap()
     }
 
     /// Strategy to generate Python dependency specifications
@@ -954,22 +1102,27 @@ mod tests {
                 edge_case_url_strategy(),
             ]
         ) {
-            // Test simple dependency spec
+            // Test simple dependency spec (legacy format)
             let simple_spec = DependencySpec::Simple(version.clone());
             let json_result = serde_json::to_string(&simple_spec);
             prop_assert!(json_result.is_ok(), "Simple spec serialization should always work");
 
-            // Test detailed dependency spec
-            let detailed_spec = DependencySpec::Detailed {
-                version: Some(version),
-                git: Some(git_url),
-                tag: None,
-                branch: None,
-                optional: Some(true),
-                registry: None,
+            // Test Git dependency spec (new format)
+            let git_spec = DependencySpec::Git {
+                git: git_url.clone(),
+                commit: "abc123def456789012345678901234567890abcd".to_string(),
+                optional: true,
             };
-            let detailed_json = serde_json::to_string(&detailed_spec);
-            prop_assert!(detailed_json.is_ok(), "Detailed spec serialization should always work");
+            let git_json = serde_json::to_string(&git_spec);
+            prop_assert!(git_json.is_ok(), "Git spec serialization should always work");
+
+            // Test Path dependency spec (new format)
+            let path_spec = DependencySpec::Path {
+                path: "../local-package".to_string(),
+                optional: false,
+            };
+            let path_json = serde_json::to_string(&path_spec);
+            prop_assert!(path_json.is_ok(), "Path spec serialization should always work");
         }
 
         /// Test that Houdini package generation handles missing/invalid data

@@ -113,28 +113,36 @@ fn test_init_bare_workflow() {
     assert!(!package_path.join("python").exists());
 }
 
-/// Test that unimplemented commands give helpful messages
+/// Test that deprecated commands give helpful messages
 #[test]
-fn test_unimplemented_commands() {
-    let commands = ["search test", "publish"];
+fn test_deprecated_commands() {
+    // Test search command (deprecated - uses Git archive-based dependencies)
+    let search_output = hpm_binary()
+        .args(["search", "test"])
+        .output()
+        .expect("Failed to execute hpm search");
 
-    for cmd in &commands {
-        let args: Vec<&str> = cmd.split_whitespace().collect();
-        let output = hpm_binary()
-            .args(&args)
-            .output()
-            .unwrap_or_else(|_| panic!("Failed to execute hpm {}", cmd));
+    assert!(search_output.status.success());
+    let stdout = String::from_utf8_lossy(&search_output.stdout);
+    assert!(
+        stdout.contains("Git archive-based dependencies"),
+        "Expected Git archive info in search output. stdout: '{}'",
+        stdout
+    );
 
-        assert!(output.status.success());
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stdout.contains("not yet implemented") || stderr.contains("not yet implemented"),
-            "Expected 'not yet implemented' in output. stdout: '{}', stderr: '{}'",
-            stdout,
-            stderr
-        );
-    }
+    // Test publish command (deprecated - uses Git push)
+    let publish_output = hpm_binary()
+        .args(["publish"])
+        .output()
+        .expect("Failed to execute hpm publish");
+
+    assert!(publish_output.status.success());
+    let stdout = String::from_utf8_lossy(&publish_output.stdout);
+    assert!(
+        stdout.contains("Publishing is done by pushing to a Git repository"),
+        "Expected Git push info in publish output. stdout: '{}'",
+        stdout
+    );
 }
 
 /// Test list command with nonexistent manifest

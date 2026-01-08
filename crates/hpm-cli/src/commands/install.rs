@@ -1,7 +1,10 @@
+use crate::progress::OperationProgress;
 use anyhow::{Context, Result};
+use hpm_core::{ArchiveFetcher, LockFile, LockedDependency, LockedPythonDependency, PackageSource};
 use hpm_package::PackageManifest;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Install dependencies from hpm.toml manifest
 ///
@@ -11,11 +14,15 @@ use tracing::{info, warn};
 pub async fn install_dependencies(manifest_path: Option<PathBuf>) -> Result<()> {
     info!("Starting dependency installation");
 
+    let mut progress = OperationProgress::new();
+    progress.start("Installing dependencies");
+
     // Determine manifest path
     let manifest_path = determine_manifest_path(manifest_path)?;
     info!("Using manifest: {}", manifest_path.display());
 
     // Load and validate manifest
+    progress.set_message("Loading manifest");
     let manifest = load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
 
@@ -30,27 +37,35 @@ pub async fn install_dependencies(manifest_path: Option<PathBuf>) -> Result<()> 
         .context("Manifest file has no parent directory")?;
     let hpm_dir = project_dir.join(".hpm");
 
+    progress.set_message("Setting up project directory");
     setup_hpm_directory(&hpm_dir)
         .await
         .context("Failed to setup .hpm directory")?;
 
     // Install HPM dependencies
-    if let Some(dependencies) = &manifest.dependencies {
+    let install_results = if let Some(dependencies) = &manifest.dependencies {
         if !dependencies.is_empty() {
+            progress.set_message(format!("Installing {} HPM dependencies", dependencies.len()));
             info!("Installing {} HPM dependencies", dependencies.len());
             install_hpm_dependencies(dependencies, &hpm_dir)
                 .await
-                .context("Failed to install HPM dependencies")?;
+                .context("Failed to install HPM dependencies")?
         } else {
             info!("No HPM dependencies to install");
+            HashMap::new()
         }
     } else {
         info!("No HPM dependencies specified");
-    }
+        HashMap::new()
+    };
 
     // Install Python dependencies
     if let Some(python_deps) = &manifest.python_dependencies {
         if !python_deps.is_empty() {
+            progress.set_message(format!(
+                "Installing {} Python dependencies",
+                python_deps.len()
+            ));
             info!("Installing {} Python dependencies", python_deps.len());
             install_python_dependencies(&manifest, &hpm_dir)
                 .await
@@ -63,10 +78,12 @@ pub async fn install_dependencies(manifest_path: Option<PathBuf>) -> Result<()> 
     }
 
     // Generate or update lock file
-    generate_lock_file(&manifest, project_dir)
+    progress.set_message("Generating lock file");
+    generate_lock_file(&manifest, project_dir, &install_results)
         .await
         .context("Failed to generate lock file")?;
 
+    progress.finish_success("Dependencies installed");
     info!("Dependency installation completed successfully");
     Ok(())
 }
@@ -107,8 +124,23 @@ fn determine_manifest_path(provided_path: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
+/// Maximum allowed manifest file size (1 MB) to prevent DoS attacks.
+const MAX_MANIFEST_SIZE: u64 = 1024 * 1024;
+
 /// Load and parse the package manifest
 fn load_manifest(manifest_path: &Path) -> Result<PackageManifest> {
+    // Security check: verify manifest file size to prevent DoS
+    let metadata = std::fs::metadata(manifest_path)
+        .with_context(|| format!("Failed to read manifest metadata: {}", manifest_path.display()))?;
+
+    if metadata.len() > MAX_MANIFEST_SIZE {
+        anyhow::bail!(
+            "Manifest file too large ({} bytes). Maximum allowed size is {} bytes.",
+            metadata.len(),
+            MAX_MANIFEST_SIZE
+        );
+    }
+
     let content = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("Failed to read manifest file: {}", manifest_path.display()))?;
 
@@ -148,21 +180,64 @@ async fn setup_hpm_directory(hpm_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Result of installing a single package.
+#[derive(Debug)]
+struct PackageInstallResult {
+    /// SHA-256 checksum of the installed package contents.
+    checksum: String,
+}
+
 /// Install HPM package dependencies
 async fn install_hpm_dependencies(
     dependencies: &std::collections::HashMap<String, hpm_package::DependencySpec>,
-    _hpm_dir: &Path,
-) -> Result<()> {
+    hpm_dir: &Path,
+) -> Result<HashMap<String, PackageInstallResult>> {
     info!("Installing HPM dependencies...");
+
+    let mut results = HashMap::new();
+
+    // Get global storage directories from config
+    let config = hpm_config::Config::load().unwrap_or_default();
+    let cache_dir = config.storage.cache_dir.clone();
+    let packages_dir = config.storage.packages_dir.clone();
+
+    // Create the archive fetcher
+    let fetcher = ArchiveFetcher::new(cache_dir, packages_dir.clone())
+        .context("Failed to initialize archive fetcher")?;
+
+    // Project packages directory (for symlinks/references)
+    let project_packages_dir = hpm_dir.join("packages");
+    tokio::fs::create_dir_all(&project_packages_dir)
+        .await
+        .context("Failed to create project packages directory")?;
 
     for (name, spec) in dependencies {
         info!("Processing dependency: {}", name);
 
-        match spec {
-            hpm_package::DependencySpec::Simple(version) => {
-                info!("  Version spec: {}", version);
+        // Convert dependency spec to package source
+        let source = match spec {
+            hpm_package::DependencySpec::Git { git, commit, optional } => {
+                info!("  Git URL: {}", git);
+                info!("  Commit: {}", &commit[..commit.len().min(12)]);
+                if *optional {
+                    debug!("  Optional dependency");
+                }
+                PackageSource::git(git, commit)
+                    .context("Invalid Git URL")?
             }
-            hpm_package::DependencySpec::Detailed {
+            hpm_package::DependencySpec::Path { path, optional } => {
+                info!("  Local path: {}", path);
+                if *optional {
+                    debug!("  Optional dependency");
+                }
+                PackageSource::path(path)
+            }
+            hpm_package::DependencySpec::Simple(version) => {
+                warn!("  Version spec '{}' requires registry (deprecated)", version);
+                warn!("  Skipping {} - please convert to Git dependency", name);
+                continue;
+            }
+            hpm_package::DependencySpec::Legacy {
                 version,
                 git,
                 tag,
@@ -170,37 +245,91 @@ async fn install_hpm_dependencies(
                 optional,
                 registry,
             } => {
-                if let Some(v) = version {
-                    info!("  Version: {}", v);
-                }
-                if let Some(g) = git {
-                    info!("  Git: {}", g);
-                }
-                if let Some(t) = tag {
-                    info!("  Tag: {}", t);
-                }
-                if let Some(b) = branch {
-                    info!("  Branch: {}", b);
+                // Handle legacy format
+                if let Some(_git_url) = git {
+                    // Legacy git dependency - need a commit hash
+                    if let Some(tag_name) = tag {
+                        warn!("  Legacy tag '{}' used - tags can be redefined, consider using commit hash", tag_name);
+                    }
+                    if let Some(branch_name) = branch {
+                        warn!("  Legacy branch '{}' used - branches change over time, consider using commit hash", branch_name);
+                    }
+                    warn!("  Legacy dependency format for {} - please convert to Git format with explicit commit", name);
+                    continue;
+                } else if let Some(v) = version {
+                    warn!("  Version spec '{}' requires registry (deprecated)", v);
                 }
                 if let Some(r) = registry {
-                    info!("  Registry: {}", r);
+                    warn!("  Registry '{}' is deprecated", r);
                 }
                 if optional.unwrap_or(false) {
-                    info!("  Optional dependency");
+                    debug!("  Optional dependency");
                 }
+                warn!("  Skipping {} - please convert to Git dependency", name);
+                continue;
+            }
+        };
+
+        // Fetch the package
+        info!("  Fetching package...");
+        let fetch_result = fetcher.fetch(&source, name)
+            .await
+            .with_context(|| format!("Failed to fetch package: {}", name))?;
+
+        if fetch_result.from_cache {
+            info!("  Package {} found in cache", name);
+        } else {
+            info!("  Package {} downloaded and extracted", name);
+        }
+
+        debug!("  Checksum: {}", &fetch_result.checksum[..fetch_result.checksum.len().min(16)]);
+
+        // Create reference in project packages directory
+        let project_pkg_link = project_packages_dir.join(name);
+
+        // Remove existing link/directory if it exists
+        if project_pkg_link.exists() {
+            if project_pkg_link.is_symlink() || project_pkg_link.is_file() {
+                tokio::fs::remove_file(&project_pkg_link).await.ok();
+            } else if project_pkg_link.is_dir() {
+                tokio::fs::remove_dir_all(&project_pkg_link).await.ok();
             }
         }
 
-        // TODO: Implement actual package installation logic
-        // This would involve:
-        // 1. Resolve version constraints
-        // 2. Download package from registry
-        // 3. Extract to global storage (~/.hpm/packages/)
-        // 4. Create symlink/reference in project .hpm/packages/
-        warn!("HPM package installation not yet implemented for: {}", name);
+        // Create symlink to the global package directory
+        #[cfg(unix)]
+        {
+            tokio::fs::symlink(&fetch_result.package_path, &project_pkg_link)
+                .await
+                .with_context(|| format!(
+                    "Failed to create symlink for {}: {:?} -> {:?}",
+                    name, project_pkg_link, fetch_result.package_path
+                ))?;
+        }
+
+        #[cfg(windows)]
+        {
+            // On Windows, use directory junction or regular symlink
+            // Note: symlinks may require elevated privileges on some Windows configurations
+            if let Err(e) = tokio::fs::symlink_dir(&fetch_result.package_path, &project_pkg_link).await {
+                // Fall back to writing a reference file
+                warn!("  Could not create symlink ({}), creating reference file", e);
+                let ref_file = project_packages_dir.join(format!("{}.hpmref", name));
+                tokio::fs::write(&ref_file, fetch_result.package_path.to_string_lossy().as_bytes())
+                    .await
+                    .with_context(|| format!("Failed to create reference file for {}", name))?;
+            }
+        }
+
+        results.insert(name.clone(), PackageInstallResult {
+            checksum: fetch_result.checksum,
+        });
+
+        info!("  {} installed successfully", name);
     }
 
-    Ok(())
+    info!("Installed {} HPM packages", results.len());
+    Ok(results)
 }
 
 /// Install Python dependencies using the hpm-python crate
@@ -295,18 +424,96 @@ async fn generate_houdini_integration(manifest: &PackageManifest, venv_path: &Pa
 }
 
 /// Generate or update the hpm.lock file
-async fn generate_lock_file(manifest: &PackageManifest, project_dir: &Path) -> Result<()> {
+async fn generate_lock_file(
+    manifest: &PackageManifest,
+    project_dir: &Path,
+    install_results: &HashMap<String, PackageInstallResult>,
+) -> Result<()> {
     info!("Generating lock file");
 
     let lock_file_path = project_dir.join("hpm.lock");
 
-    // Create a basic lock file structure
-    // TODO: Implement proper lock file with resolved versions and checksums
-    let lock_content = format!(
-        "# HPM Lock File\n# Generated by hpm install\n\n[package]\nname = \"{}\"\nversion = \"{}\"\n",
-        manifest.package.name,
-        manifest.package.version
+    // Create a new lock file
+    let mut lock_file = LockFile::new(
+        manifest.package.name.clone(),
+        manifest.package.version.clone(),
     );
+
+    // Add HPM dependencies with resolved versions and checksums
+    if let Some(dependencies) = &manifest.dependencies {
+        for (name, spec) in dependencies {
+            // Get the checksum from installation results if available
+            let checksum = install_results.get(name).map(|r| r.checksum.clone());
+
+            let locked_dep = match spec {
+                hpm_package::DependencySpec::Simple(v) => {
+                    // Legacy simple version - skipped during install
+                    LockedDependency::from_git(
+                        v.clone(),
+                        "https://placeholder.example.com".to_string(),
+                        "0000000000000000000000000000000000000000".to_string(),
+                        None,
+                    )
+                }
+                hpm_package::DependencySpec::Git { git, commit, .. } => {
+                    LockedDependency::from_git(
+                        "git".to_string(),
+                        git.clone(),
+                        commit.clone(),
+                        checksum,
+                    )
+                }
+                hpm_package::DependencySpec::Path { path, .. } => {
+                    LockedDependency::from_path(
+                        "local".to_string(),
+                        path.clone(),
+                        checksum,
+                    )
+                }
+                hpm_package::DependencySpec::Legacy { version, git, .. } => {
+                    // Legacy format - skipped during install
+                    let ver = version.clone().unwrap_or_else(|| "*".to_string());
+                    if let Some(git_url) = git {
+                        LockedDependency::from_git(
+                            ver,
+                            git_url.clone(),
+                            "0000000000000000000000000000000000000000".to_string(),
+                            None,
+                        )
+                    } else {
+                        LockedDependency::from_git(
+                            ver,
+                            "https://placeholder.example.com".to_string(),
+                            "0000000000000000000000000000000000000000".to_string(),
+                            None,
+                        )
+                    }
+                }
+            };
+
+            lock_file.add_dependency(name.clone(), locked_dep);
+        }
+    }
+
+    // Add Python dependencies with resolved versions
+    if let Some(python_deps) = &manifest.python_dependencies {
+        for (name, spec) in python_deps {
+            let version = match spec {
+                hpm_package::PythonDependencySpec::Simple(v) => v.clone(),
+                hpm_package::PythonDependencySpec::Detailed { version, .. } => {
+                    version.clone().unwrap_or_else(|| "*".to_string())
+                }
+            };
+
+            let locked_python_dep = LockedPythonDependency::new(version);
+            lock_file.add_python_dependency(name.clone(), locked_python_dep);
+        }
+    }
+
+    // Write the lock file
+    let lock_content = lock_file
+        .to_toml()
+        .context("Failed to serialize lock file")?;
 
     tokio::fs::write(&lock_file_path, lock_content)
         .await

@@ -270,13 +270,16 @@ mod tests {
         ) {
             let add_cmd = Commands::Add {
                 package: package_name.clone(),
+                git: None,
+                commit: None,
+                path: None,
                 version: version.clone(),
                 manifest: manifest_path.clone(),
                 optional,
             };
 
             match add_cmd {
-                Commands::Add { package, version: v, manifest, optional: opt } => {
+                Commands::Add { package, version: v, manifest, optional: opt, .. } => {
                     prop_assert_eq!(package, package_name);
                     prop_assert_eq!(v, version);
                     prop_assert_eq!(manifest, manifest_path);
@@ -340,6 +343,9 @@ mod tests {
         ) {
             let add_cmd = Commands::Add {
                 package: problematic_name.clone(),
+                git: None,
+                commit: None,
+                path: None,
                 version: Some(version),
                 manifest: None,
                 optional: false,
@@ -362,6 +368,9 @@ mod tests {
         ) {
             let add_cmd = Commands::Add {
                 package: package_name,
+                git: None,
+                commit: None,
+                path: None,
                 version: Some(problematic_version.clone()),
                 manifest: None,
                 optional: false,

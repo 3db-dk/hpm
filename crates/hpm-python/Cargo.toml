@@ -32,6 +32,10 @@ indexmap = { workspace = true, features = ["serde"] }
 chrono = { workspace = true }
 which = { workspace = true }
 semver = "1.0"
+reqwest = { workspace = true }
+flate2 = "1.0"
+tar = "0.4"
+zip = "2.2"
 
 [dev-dependencies]
 tokio-test = { workspace = true }

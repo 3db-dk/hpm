@@ -4,7 +4,7 @@ use hpm_package::{HoudiniPackage, PackageManifest};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 #[derive(Debug)]
 pub struct ProjectManager {
@@ -95,15 +95,16 @@ impl ProjectManager {
     pub async fn remove_dependency(&self, name: &str) -> Result<(), ProjectError> {
         info!("Removing dependency: {}", name);
 
-        // 1. Remove Houdini package manifest
+        // 1. Remove from project manifest (hpm.toml)
+        self.remove_from_project_manifest(name)?;
+
+        // 2. Remove Houdini package manifest from project
         let manifest_path = self.project_config.package_manifest_path(name);
         if manifest_path.exists() {
             std::fs::remove_file(&manifest_path)
                 .map_err(|e| ProjectError::ManifestRemoval(e.to_string()))?;
+            debug!("Removed Houdini manifest: {:?}", manifest_path);
         }
-
-        // 2. Update project manifest
-        // TODO: Remove from hpm.toml dependencies
 
         info!("Successfully removed dependency: {}", name);
         Ok(())
@@ -122,9 +123,18 @@ impl ProjectManager {
 
         if let Some(dependencies) = project_manifest.dependencies {
             for (name, dep_spec) in dependencies {
+                // Extract version string based on dependency type
                 let version_req = match dep_spec {
                     hpm_package::DependencySpec::Simple(version) => version,
-                    hpm_package::DependencySpec::Detailed { version, .. } => {
+                    hpm_package::DependencySpec::Git { commit, .. } => {
+                        // For Git dependencies, use short commit as version identifier
+                        commit[..commit.len().min(12)].to_string()
+                    }
+                    hpm_package::DependencySpec::Path { .. } => {
+                        // For path dependencies, use "local" as version
+                        "local".to_string()
+                    }
+                    hpm_package::DependencySpec::Legacy { version, .. } => {
                         version.unwrap_or_else(|| "*".to_string())
                     }
                 };
@@ -233,10 +243,96 @@ impl ProjectManager {
         })
     }
 
-    fn update_project_manifest(&self, _spec: &PackageSpec) -> Result<(), ProjectError> {
-        // TODO: Update hpm.toml with new dependency
-        // This would require parsing TOML, updating, and writing back
-        warn!("Project manifest update not yet implemented");
+    fn update_project_manifest(&self, spec: &PackageSpec) -> Result<(), ProjectError> {
+        // Read existing manifest or create new one
+        let manifest_path = &self.project_config.manifest_file;
+
+        let content = if manifest_path.exists() {
+            std::fs::read_to_string(manifest_path)
+                .map_err(|e| ProjectError::ManifestRead(e.to_string()))?
+        } else {
+            // Return error if no manifest exists - user should run `hpm init` first
+            return Err(ProjectError::ManifestRead(
+                "No hpm.toml found. Run 'hpm init' to create a package first.".to_string(),
+            ));
+        };
+
+        // Parse as editable TOML document
+        let mut doc: toml_edit::DocumentMut = content
+            .parse()
+            .map_err(|e: toml_edit::TomlError| ProjectError::ManifestParse(e.to_string()))?;
+
+        // Ensure [dependencies] table exists
+        if !doc.contains_key("dependencies") {
+            doc["dependencies"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+
+        // Add or update the dependency
+        let deps_table = doc["dependencies"]
+            .as_table_mut()
+            .ok_or_else(|| ProjectError::ManifestParse("[dependencies] is not a table".to_string()))?;
+
+        let version_str = spec.version_req.as_str();
+
+        // Use simple string format for simple version specs, inline table for complex ones
+        if version_str == "*" || version_str.starts_with('^') || version_str.starts_with('~')
+            || version_str.starts_with('>') || version_str.starts_with('<')
+            || version_str.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+            deps_table[&spec.name] = toml_edit::value(version_str);
+        } else {
+            // For complex specs, use inline table
+            let mut inline = toml_edit::InlineTable::new();
+            inline.insert("version", version_str.into());
+            deps_table[&spec.name] = toml_edit::Item::Value(toml_edit::Value::InlineTable(inline));
+        }
+
+        // Write back to file
+        std::fs::write(manifest_path, doc.to_string())
+            .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
+
+        info!("Updated hpm.toml with dependency: {} = \"{}\"", spec.name, version_str);
+        Ok(())
+    }
+
+    fn remove_from_project_manifest(&self, name: &str) -> Result<(), ProjectError> {
+        let manifest_path = &self.project_config.manifest_file;
+
+        if !manifest_path.exists() {
+            return Ok(()); // Nothing to remove
+        }
+
+        let content = std::fs::read_to_string(manifest_path)
+            .map_err(|e| ProjectError::ManifestRead(e.to_string()))?;
+
+        // Parse as editable TOML document
+        let mut doc: toml_edit::DocumentMut = content
+            .parse()
+            .map_err(|e: toml_edit::TomlError| ProjectError::ManifestParse(e.to_string()))?;
+
+        // Remove from [dependencies] if it exists
+        if let Some(deps) = doc.get_mut("dependencies") {
+            if let Some(table) = deps.as_table_mut() {
+                if table.contains_key(name) {
+                    table.remove(name);
+                    info!("Removed {} from [dependencies]", name);
+                }
+            }
+        }
+
+        // Also check [dev-dependencies]
+        if let Some(deps) = doc.get_mut("dev-dependencies") {
+            if let Some(table) = deps.as_table_mut() {
+                if table.contains_key(name) {
+                    table.remove(name);
+                    info!("Removed {} from [dev-dependencies]", name);
+                }
+            }
+        }
+
+        // Write back to file
+        std::fs::write(manifest_path, doc.to_string())
+            .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
+
         Ok(())
     }
 

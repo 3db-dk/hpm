@@ -192,8 +192,6 @@ use hpm_config::Config;
 use hpm_core::manager::PackageManager;
 use hpm_package::PackageManifest;
 use hpm_python::update::PythonUpdateManager;
-// Registry integration will be implemented when registry client is ready
-// use hpm_registry::client::{operations as registry_ops, RegistryClient};
 use std::path::PathBuf;
 use tracing::info as log_info;
 
@@ -235,8 +233,11 @@ struct PackageUpdate {
 pub async fn update_packages(options: UpdateOptions) -> Result<()> {
     log_info!("Starting package update process");
 
-    // Load configuration
-    let config = Config::default();
+    // Load configuration from config files (falls back to defaults if no config exists)
+    let config = Config::load().unwrap_or_else(|e| {
+        tracing::warn!("Failed to load config file, using defaults: {}", e);
+        Config::default()
+    });
 
     // Determine manifest path
     let manifest_path = determine_manifest_path(&options.package)?;

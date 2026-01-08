@@ -229,17 +229,26 @@
 //! - Package organization supports Houdini's package loading mechanisms
 //! - Generated manifests integrate with Houdini's environment system
 
+pub mod archive_fetcher;
 pub mod dependency;
 pub mod discovery;
 pub mod integration_test;
+pub mod lock;
 pub mod manager;
+pub mod package_source;
 pub mod project;
 pub mod storage;
 
+pub use archive_fetcher::{ArchiveFetcher, FetchError, FetchResult};
 pub use dependency::{
     DependencyError, DependencyGraph, DependencyResolver, PackageId, PackageNode,
 };
 pub use discovery::{DiscoveredProject, DiscoveryError, ProjectDiscovery};
+pub use lock::{
+    DependencySource, LockError, LockFile, LockMetadata, LockPackageInfo, LockedDependency,
+    LockedPythonDependency,
+};
 pub use manager::PackageManager;
+pub use package_source::{GitProvider, PackageSource, PackageSourceError};
 pub use project::{ProjectDependency, ProjectError, ProjectManager};
 pub use storage::{StorageError, StorageManager};

@@ -1,3 +1,7 @@
+// Allow unused_assignments warning because thiserror's #[source] macro
+// uses the source fields internally but the compiler doesn't detect this usage.
+#![allow(unused_assignments)]
+
 //! Error handling for HPM CLI
 //!
 //! This module provides a comprehensive error handling system inspired by UV's approach
@@ -264,9 +268,9 @@ impl CliError {
     ///     Some("Create ~/.hpm/config.toml or run 'hpm init'".to_string())
     /// );
     /// ```
-    pub fn config(source: impl Into<anyhow::Error>, help: Option<String>) -> Self {
+    pub fn config(err: impl Into<anyhow::Error>, help: Option<String>) -> Self {
         Self::Config {
-            source: source.into(),
+            source: err.into(),
             help,
         }
     }
@@ -286,9 +290,9 @@ impl CliError {
     ///     Some("Check your hpm.toml syntax with 'hpm check'".to_string())
     /// );
     /// ```
-    pub fn package(source: impl Into<anyhow::Error>, help: Option<String>) -> Self {
+    pub fn package(err: impl Into<anyhow::Error>, help: Option<String>) -> Self {
         Self::Package {
-            source: source.into(),
+            source: err.into(),
             help,
         }
     }
@@ -308,9 +312,9 @@ impl CliError {
     ///     Some("Check your internet connection and try again".to_string())
     /// );
     /// ```
-    pub fn network(source: impl Into<anyhow::Error>, help: Option<String>) -> Self {
+    pub fn network(err: impl Into<anyhow::Error>, help: Option<String>) -> Self {
         Self::Network {
-            source: source.into(),
+            source: err.into(),
             help,
         }
     }
@@ -330,9 +334,9 @@ impl CliError {
     ///     Some("Make sure the file exists and you have read permission".to_string())
     /// );
     /// ```
-    pub fn io(source: impl Into<anyhow::Error>, help: Option<String>) -> Self {
+    pub fn io(err: impl Into<anyhow::Error>, help: Option<String>) -> Self {
         Self::Io {
-            source: source.into(),
+            source: err.into(),
             help,
         }
     }
@@ -352,9 +356,9 @@ impl CliError {
     ///     Some("This is likely a bug in HPM. Please file an issue.".to_string())
     /// );
     /// ```
-    pub fn internal(source: impl Into<anyhow::Error>, help: Option<String>) -> Self {
+    pub fn internal(err: impl Into<anyhow::Error>, help: Option<String>) -> Self {
         Self::Internal {
-            source: source.into(),
+            source: err.into(),
             help,
         }
     }
@@ -376,10 +380,10 @@ impl CliError {
     ///     Some("Check that the repository URL is correct and you have access".to_string())
     /// );
     /// ```
-    pub fn external(command: String, exit_code: u8, help: Option<String>) -> Self {
+    pub fn external(cmd: String, code: u8, help: Option<String>) -> Self {
         Self::External {
-            command,
-            exit_code,
+            command: cmd,
+            exit_code: code,
             help,
         }
     }
@@ -535,81 +539,8 @@ where
     }
 }
 
-// Future specialized error types for specific operations
-// These are kept for future use but currently unused
-
-#[allow(dead_code)]
-#[derive(Error, Debug, Diagnostic)]
-enum InitError {
-    #[error("Directory '{name}' already exists")]
-    #[diagnostic(
-        code(hpm::init::directory_exists),
-        help("Choose a different name or remove the existing directory")
-    )]
-    DirectoryExists { name: String },
-
-    #[error("Invalid package name '{name}'")]
-    #[diagnostic(
-        code(hpm::init::invalid_name),
-        help("Package names must be valid identifiers (lowercase, hyphens allowed)")
-    )]
-    InvalidName { name: String },
-
-    #[error("Failed to create package structure")]
-    #[diagnostic(code(hpm::init::creation_failed))]
-    CreationFailed {
-        #[source]
-        source: std::io::Error,
-    },
-}
-
-#[allow(dead_code)]
-#[derive(Error, Debug, Diagnostic)]
-enum InstallError {
-    #[error("Package manifest not found")]
-    #[diagnostic(
-        code(hpm::install::no_manifest),
-        help("Run 'hpm init' to create a new package or specify a valid manifest path")
-    )]
-    NoManifest,
-
-    #[error("Dependency resolution failed for '{package}'")]
-    #[diagnostic(code(hpm::install::resolution_failed))]
-    ResolutionFailed {
-        package: String,
-        #[source]
-        source: anyhow::Error,
-    },
-
-    #[error("Download failed for package '{package}'")]
-    #[diagnostic(
-        code(hpm::install::download_failed),
-        help("Check your network connection and registry availability")
-    )]
-    DownloadFailed {
-        package: String,
-        #[source]
-        source: anyhow::Error,
-    },
-}
-
-#[allow(dead_code)]
-#[derive(Error, Debug, Diagnostic)]
-enum CleanError {
-    #[error("No HPM projects found")]
-    #[diagnostic(
-        code(hpm::clean::no_projects),
-        help("Configure project discovery in ~/.hpm/config.toml or specify project paths")
-    )]
-    NoProjects,
-
-    #[error("Failed to analyze package dependencies")]
-    #[diagnostic(code(hpm::clean::analysis_failed))]
-    AnalysisFailed {
-        #[source]
-        source: anyhow::Error,
-    },
-}
+// Note: Specialized error types were removed as they were unused.
+// Error handling is done through the generic CliError variants.
 
 #[cfg(test)]
 mod tests {
