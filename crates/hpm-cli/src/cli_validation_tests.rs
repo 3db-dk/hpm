@@ -45,36 +45,29 @@ mod tests {
         ]
     }
 
-    /// Strategy to generate version specifications
-    fn version_spec_strategy() -> impl Strategy<Value = String> {
+    /// Strategy to generate git URLs
+    fn git_url_strategy() -> impl Strategy<Value = String> {
         prop_oneof![
-            r"[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,3}",   // Semantic versions
-            r"\^[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,3}", // Caret constraints
-            r"~[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,3}",  // Tilde constraints
-            r">=[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,3}", // GTE constraints
-            Just("*".to_string()),                   // Wildcard
-            Just("latest".to_string()),              // Latest keyword
+            Just("https://github.com/example/package".to_string()),
+            Just("https://github.com/studio/utility-nodes".to_string()),
+            Just("https://github.com/artist/material-library".to_string()),
+            Just("https://gitlab.com/team/houdini-tools".to_string()),
+            r"https://github\.com/[a-z]+/[a-z-]+",
         ]
     }
 
-    /// Strategy to generate problematic version specifications
-    fn problematic_version_spec_strategy() -> impl Strategy<Value = String> {
+    /// Strategy to generate commit hashes
+    fn commit_hash_strategy() -> impl Strategy<Value = String> {
+        prop::string::string_regex("[0-9a-f]{40}").unwrap()
+    }
+
+    /// Strategy to generate package versions (semver-like)
+    fn package_version_strategy() -> impl Strategy<Value = String> {
         prop_oneof![
-            Just("".to_string()),        // Empty version
-            Just("v1.0.0".to_string()),  // With 'v' prefix
-            Just("1".to_string()),       // Missing minor/patch
-            Just("1.0".to_string()),     // Missing patch
-            Just("1.0.0.0".to_string()), // Too many components
-            Just("1.0.0-".to_string()),  // Trailing hyphen
-            Just("1.0.0+".to_string()),  // Trailing plus
-            Just("01.0.0".to_string()),  // Leading zeros
-            r"[a-zA-Z]{1,20}",           // Non-numeric
-            Just("-1.0.0".to_string()),  // Negative numbers
-            Just("1.-1.0".to_string()),
-            Just("1.0.-1".to_string()),
-            Just("..".to_string()),            // Just dots
-            Just("1..3".to_string()),          // Double dots
-            r"[^a-zA-Z0-9\.\-\+^~>=<*]{1,10}", // Invalid characters
+            Just("1.0.0".to_string()),
+            Just("0.1.0".to_string()),
+            Just("2.5.3".to_string()),
+            r"[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,3}",
         ]
     }
 
@@ -189,7 +182,7 @@ mod tests {
         #[test]
         fn prop_init_command_package_name_validation(
             package_name in package_name_strategy(),
-            version in version_spec_strategy(),
+            version in package_version_strategy(),
             author in author_strategy(),
             license in license_strategy(),
             houdini_min in prop::option::of(houdini_version_strategy()),
@@ -264,24 +257,25 @@ mod tests {
         #[test]
         fn prop_add_command_validation(
             package_name in package_name_strategy(),
-            version in prop::option::of(version_spec_strategy()),
+            git_url in prop::option::of(git_url_strategy()),
+            commit_hash in prop::option::of(commit_hash_strategy()),
             manifest_path in prop::option::of(file_path_strategy()),
             optional in any::<bool>()
         ) {
             let add_cmd = Commands::Add {
                 package: package_name.clone(),
-                git: None,
-                commit: None,
+                git: git_url.clone(),
+                commit: commit_hash.clone(),
                 path: None,
-                version: version.clone(),
                 manifest: manifest_path.clone(),
                 optional,
             };
 
             match add_cmd {
-                Commands::Add { package, version: v, manifest, optional: opt, .. } => {
+                Commands::Add { package, git, commit, manifest, optional: opt, .. } => {
                     prop_assert_eq!(package, package_name);
-                    prop_assert_eq!(v, version);
+                    prop_assert_eq!(git, git_url);
+                    prop_assert_eq!(commit, commit_hash);
                     prop_assert_eq!(manifest, manifest_path);
                     prop_assert_eq!(opt, optional);
                 }
@@ -339,14 +333,14 @@ mod tests {
         #[test]
         fn prop_problematic_package_names(
             problematic_name in problematic_package_name_strategy(),
-            version in version_spec_strategy()
+            git_url in git_url_strategy(),
+            commit_hash in commit_hash_strategy()
         ) {
             let add_cmd = Commands::Add {
                 package: problematic_name.clone(),
-                git: None,
-                commit: None,
+                git: Some(git_url),
+                commit: Some(commit_hash),
                 path: None,
-                version: Some(version),
                 manifest: None,
                 optional: false,
             };
@@ -357,31 +351,6 @@ mod tests {
                     prop_assert_eq!(package, problematic_name);
                 }
                 _ => prop_assert!(false, "Should construct Add command even with problematic name"),
-            }
-        }
-
-        /// Test that problematic version specs are handled gracefully
-        #[test]
-        fn prop_problematic_version_specs(
-            package_name in package_name_strategy(),
-            problematic_version in problematic_version_spec_strategy()
-        ) {
-            let add_cmd = Commands::Add {
-                package: package_name,
-                git: None,
-                commit: None,
-                path: None,
-                version: Some(problematic_version.clone()),
-                manifest: None,
-                optional: false,
-            };
-
-            // Command construction should succeed (validation happens later)
-            match add_cmd {
-                Commands::Add { version, .. } => {
-                    prop_assert_eq!(version, Some(problematic_version));
-                }
-                _ => prop_assert!(false, "Should construct Add command even with problematic version"),
             }
         }
 
@@ -416,7 +385,7 @@ mod tests {
             name in prop::option::of(package_name_strategy()),
             description in prop::option::of("[A-Za-z0-9 ]{10,100}"),
             author in prop::option::of(author_strategy()),
-            version in version_spec_strategy(),
+            version in package_version_strategy(),
             license in license_strategy(),
             houdini_min in prop::option::of(houdini_version_strategy()),
             houdini_max in prop::option::of(houdini_version_strategy()),

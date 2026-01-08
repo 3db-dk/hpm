@@ -73,7 +73,7 @@ version = "1.0.0"
 description = "Test project"
 
 [dependencies]
-package-a = "1.0.0"
+package-a = { git = "https://github.com/example/package-a", commit = "1234567890abcdef1234567890abcdef12345678" }
 "#,
         )
         .unwrap();
@@ -161,7 +161,7 @@ version = "1.0.0"
 description = "Package A"
 
 [dependencies]
-package-c = "1.0.0"
+package-c = { git = "https://github.com/example/package-c", commit = "abcdef1234567890abcdef1234567890abcdef12" }
 "#,
         )
         .unwrap();
@@ -206,7 +206,7 @@ version = "1.0.0"
 description = "Test project"
 
 [dependencies]
-package-a = "1.0.0"
+package-a = { git = "https://github.com/example/package-a", commit = "1234567890abcdef1234567890abcdef12345678" }
 "#,
         )
         .unwrap();

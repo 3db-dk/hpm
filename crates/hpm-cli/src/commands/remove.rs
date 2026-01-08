@@ -141,8 +141,8 @@ license = "MIT"
 min_version = "20.0"
 
 [dependencies]
-utility-nodes = "^2.1.0"
-material-library = { version = "1.5", optional = true }
+utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc123def456789012345678901234567890abcd" }
+material-library = { path = "../material-library", optional = true }
 "#;
 
         std::fs::write(path.join("hpm.toml"), manifest_content)?;
@@ -256,11 +256,18 @@ min_version = "20.0"
         let mut dependencies = HashMap::new();
         dependencies.insert(
             "keep-me".to_string(),
-            DependencySpec::Simple("^1.0.0".to_string()),
+            DependencySpec::Git {
+                git: "https://github.com/example/keep-me".to_string(),
+                commit: "abc123def456789012345678901234567890abcd".to_string(),
+                optional: false,
+            },
         );
         dependencies.insert(
             "remove-me".to_string(),
-            DependencySpec::Simple("^2.0.0".to_string()),
+            DependencySpec::Path {
+                path: "../remove-me".to_string(),
+                optional: false,
+            },
         );
         manifest.dependencies = Some(dependencies);
 
@@ -352,7 +359,8 @@ min_version = "20.0"
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(remove_package("some-package".to_string(), None));
 
-        env::set_current_dir(original_dir).unwrap();
+        // Restore original directory (ignore errors - may fail on Windows with parallel tests)
+        let _ = env::set_current_dir(original_dir);
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();

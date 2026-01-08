@@ -166,42 +166,6 @@ async fn install_hpm_dependencies(
                 }
                 PackageSource::path(path)
             }
-            hpm_package::DependencySpec::Simple(version) => {
-                warn!("  Version spec '{}' requires registry (deprecated)", version);
-                warn!("  Skipping {} - please convert to Git dependency", name);
-                continue;
-            }
-            hpm_package::DependencySpec::Legacy {
-                version,
-                git,
-                tag,
-                branch,
-                optional,
-                registry,
-            } => {
-                // Handle legacy format
-                if let Some(_git_url) = git {
-                    // Legacy git dependency - need a commit hash
-                    if let Some(tag_name) = tag {
-                        warn!("  Legacy tag '{}' used - tags can be redefined, consider using commit hash", tag_name);
-                    }
-                    if let Some(branch_name) = branch {
-                        warn!("  Legacy branch '{}' used - branches change over time, consider using commit hash", branch_name);
-                    }
-                    warn!("  Legacy dependency format for {} - please convert to Git format with explicit commit", name);
-                    continue;
-                } else if let Some(v) = version {
-                    warn!("  Version spec '{}' requires registry (deprecated)", v);
-                }
-                if let Some(r) = registry {
-                    warn!("  Registry '{}' is deprecated", r);
-                }
-                if optional.unwrap_or(false) {
-                    debug!("  Optional dependency");
-                }
-                warn!("  Skipping {} - please convert to Git dependency", name);
-                continue;
-            }
         };
 
         // Fetch the package
@@ -380,15 +344,6 @@ async fn generate_lock_file(
             let checksum = install_results.get(name).map(|r| r.checksum.clone());
 
             let locked_dep = match spec {
-                hpm_package::DependencySpec::Simple(v) => {
-                    // Legacy simple version - skipped during install
-                    LockedDependency::from_git(
-                        v.clone(),
-                        "https://placeholder.example.com".to_string(),
-                        "0000000000000000000000000000000000000000".to_string(),
-                        None,
-                    )
-                }
                 hpm_package::DependencySpec::Git { git, commit, .. } => {
                     LockedDependency::from_git(
                         "git".to_string(),
@@ -403,25 +358,6 @@ async fn generate_lock_file(
                         path.clone(),
                         checksum,
                     )
-                }
-                hpm_package::DependencySpec::Legacy { version, git, .. } => {
-                    // Legacy format - skipped during install
-                    let ver = version.clone().unwrap_or_else(|| "*".to_string());
-                    if let Some(git_url) = git {
-                        LockedDependency::from_git(
-                            ver,
-                            git_url.clone(),
-                            "0000000000000000000000000000000000000000".to_string(),
-                            None,
-                        )
-                    } else {
-                        LockedDependency::from_git(
-                            ver,
-                            "https://placeholder.example.com".to_string(),
-                            "0000000000000000000000000000000000000000".to_string(),
-                            None,
-                        )
-                    }
                 }
             };
 
@@ -477,8 +413,8 @@ license = "MIT"
 min_version = "20.0"
 
 [dependencies]
-utility-nodes = "^2.1.0"
-material-library = { version = "1.5", optional = true }
+utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc123def456789012345678901234567890abcd" }
+material-library = { path = "../material-library", optional = true }
 "#,
         );
 
@@ -628,7 +564,8 @@ version = "1.0.0"
         let temp_dir = TempDir::new().unwrap();
         let original_dir = env::current_dir().unwrap();
 
-        // Create test manifest without Python dependencies to avoid Python system requirements
+        // Create test manifest without dependencies to test directory and lock file setup
+        // (testing actual package installation requires network access and is not unit-testable)
         let manifest_content = r#"[package]
 name = "test-install-package"
 version = "1.0.0"
@@ -638,20 +575,18 @@ license = "MIT"
 
 [houdini]
 min_version = "20.0"
-
-[dependencies]
-utility-nodes = "^2.1.0"
 "#;
         std::fs::write(temp_dir.path().join("hpm.toml"), manifest_content).unwrap();
 
         env::set_current_dir(temp_dir.path()).unwrap();
 
-        // Install dependencies (should not fail even though we don't have real packages)
+        // Install dependencies (no deps, so this tests directory setup and lock file creation)
         let result = install_dependencies(None).await;
 
-        env::set_current_dir(original_dir).unwrap();
+        // Restore original directory (ignore errors - may fail on Windows with async tests)
+        let _ = env::set_current_dir(original_dir);
 
-        // The function should complete successfully even though actual package installation is not implemented
+        // The function should complete successfully for manifests without dependencies
         // This tests the manifest parsing and directory setup logic
         assert!(result.is_ok());
 
@@ -674,13 +609,12 @@ utility-nodes = "^2.1.0"
         let temp_dir = TempDir::new().unwrap();
         let manifest_path = temp_dir.path().join("custom-manifest.toml");
 
+        // Create test manifest without dependencies to test directory setup only
+        // (testing actual package installation requires network access)
         let manifest_content = r#"[package]
 name = "custom-path-package"
 version = "2.0.0"
 description = "Test custom manifest path"
-
-[dependencies]
-test-dep = "1.0.0"
 "#;
         std::fs::write(&manifest_path, manifest_content).unwrap();
 

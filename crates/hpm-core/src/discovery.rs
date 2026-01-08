@@ -186,7 +186,7 @@ version = "1.0.0"
 description = "A test project"
 
 [dependencies]
-utility-nodes = "^2.1.0"
+utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc123def456789012345678901234567890abcd" }
 "#;
         std::fs::write(project_dir.join("hpm.toml"), manifest_content).unwrap();
 
@@ -312,11 +312,18 @@ description = "Test project {}"
         let mut deps = std::collections::HashMap::new();
         deps.insert(
             "utility-nodes".to_string(),
-            hpm_package::DependencySpec::Simple("^2.1.0".to_string()),
+            hpm_package::DependencySpec::Git {
+                git: "https://github.com/studio/utility-nodes".to_string(),
+                commit: "abc123def456789012345678901234567890abcd".to_string(),
+                optional: false,
+            },
         );
         deps.insert(
             "material-lib".to_string(),
-            hpm_package::DependencySpec::Simple("1.0.0".to_string()),
+            hpm_package::DependencySpec::Path {
+                path: "../material-lib".to_string(),
+                optional: false,
+            },
         );
         manifest2.dependencies = Some(deps);
 

@@ -206,7 +206,8 @@ min_version = "20.0"
 
         let result = determine_manifest_path(None);
 
-        env::set_current_dir(&original_dir).unwrap();
+        // Restore original directory (ignore errors - may fail on Windows with parallel tests)
+        let _ = env::set_current_dir(&original_dir);
 
         assert!(result.is_ok());
         let manifest_path = result.unwrap();
@@ -293,7 +294,11 @@ min_version = "20.0"
         let mut dependencies = HashMap::new();
         dependencies.insert(
             "test-dep".to_string(),
-            DependencySpec::Simple("^1.0.0".to_string()),
+            DependencySpec::Git {
+                git: "https://github.com/example/test-dep".to_string(),
+                commit: "abc123def456789012345678901234567890abcd".to_string(),
+                optional: false,
+            },
         );
         manifest.dependencies = Some(dependencies);
 

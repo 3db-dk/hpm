@@ -238,37 +238,15 @@ fn display_python_dependencies(manifest: &PackageManifest) {
 ///
 /// # Examples
 ///
-/// * Simple: `"^1.0.0"` → `"^1.0.0"`
-/// * Git with tag: `{git: "...", tag: "v1.0"}` → `"git: ... (tag: v1.0)"`
+/// * Git: `{git: "...", commit: "abc123"}` → `"git: ... (commit: abc123)"`
+/// * Path: `{path: "../local"}` → `"path: ../local"`
 fn format_dependency_spec(spec: &DependencySpec) -> String {
     match spec {
-        DependencySpec::Simple(version) => version.clone(),
         DependencySpec::Git { git, commit, .. } => {
             format!("git: {} (commit: {})", git, &commit[..commit.len().min(12)])
         }
         DependencySpec::Path { path, .. } => {
             format!("path: {}", path)
-        }
-        DependencySpec::Legacy {
-            version,
-            git,
-            tag,
-            branch,
-            ..
-        } => {
-            if let Some(git_url) = git {
-                let mut git_info = format!("git: {}", git_url);
-                if let Some(tag_name) = tag {
-                    git_info.push_str(&format!(" (tag: {})", tag_name));
-                } else if let Some(branch_name) = branch {
-                    git_info.push_str(&format!(" (branch: {})", branch_name));
-                }
-                git_info
-            } else if let Some(version_str) = version {
-                version_str.clone()
-            } else {
-                "*".to_string()
-            }
         }
     }
 }
@@ -276,7 +254,6 @@ fn format_dependency_spec(spec: &DependencySpec) -> String {
 /// Check if HPM dependency is optional
 ///
 /// Determines whether a dependency specification marks the dependency as optional.
-/// Simple dependencies are never optional; detailed dependencies may have an optional flag.
 ///
 /// # Arguments
 ///
@@ -287,10 +264,8 @@ fn format_dependency_spec(spec: &DependencySpec) -> String {
 /// `true` if the dependency is marked as optional, `false` otherwise
 fn is_optional_dependency(spec: &DependencySpec) -> bool {
     match spec {
-        DependencySpec::Simple(_) => false,
         DependencySpec::Git { optional, .. } => *optional,
         DependencySpec::Path { optional, .. } => *optional,
-        DependencySpec::Legacy { optional, .. } => optional.unwrap_or(false),
     }
 }
 
@@ -431,9 +406,9 @@ max_version = "20.5"
             manifest_content.push_str(
                 r#"
 [dependencies]
-utility-nodes = "^2.1.0"
-material-library = { version = "1.5", optional = true }
-geometry-tools = { git = "https://github.com/example/geometry-tools", tag = "v1.0" }
+utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc123def456789012345678901234567890abcd" }
+material-library = { path = "../material-library", optional = true }
+geometry-tools = { git = "https://github.com/example/geometry-tools", commit = "def456abc789012345678901234567890abcdef12" }
 "#,
             );
         }
@@ -513,27 +488,6 @@ matplotlib = { version = "^3.5.0", optional = true }
     }
 
     #[test]
-    fn test_format_dependency_spec_simple() {
-        let spec = DependencySpec::Simple("^1.0.0".to_string());
-        let result = format_dependency_spec(&spec);
-        assert_eq!(result, "^1.0.0");
-    }
-
-    #[test]
-    fn test_format_dependency_spec_legacy_version() {
-        let spec = DependencySpec::Legacy {
-            version: Some("2.1.0".to_string()),
-            git: None,
-            tag: None,
-            branch: None,
-            optional: Some(false),
-            registry: None,
-        };
-        let result = format_dependency_spec(&spec);
-        assert_eq!(result, "2.1.0");
-    }
-
-    #[test]
     fn test_format_dependency_spec_git() {
         let spec = DependencySpec::Git {
             git: "https://github.com/example/repo".to_string(),
@@ -545,23 +499,42 @@ matplotlib = { version = "^3.5.0", optional = true }
     }
 
     #[test]
-    fn test_is_optional_dependency() {
-        let simple = DependencySpec::Simple("^1.0.0".to_string());
-        assert!(!is_optional_dependency(&simple));
+    fn test_format_dependency_spec_path() {
+        let spec = DependencySpec::Path {
+            path: "../local-package".to_string(),
+            optional: false,
+        };
+        let result = format_dependency_spec(&spec);
+        assert_eq!(result, "path: ../local-package");
+    }
 
-        let optional = DependencySpec::Git {
+    #[test]
+    fn test_is_optional_dependency() {
+        let git_optional = DependencySpec::Git {
             git: "https://github.com/example/repo".to_string(),
             commit: "abc123".to_string(),
             optional: true,
         };
-        assert!(is_optional_dependency(&optional));
+        assert!(is_optional_dependency(&git_optional));
 
-        let not_optional = DependencySpec::Git {
+        let git_not_optional = DependencySpec::Git {
             git: "https://github.com/example/repo".to_string(),
             commit: "abc123".to_string(),
             optional: false,
         };
-        assert!(!is_optional_dependency(&not_optional));
+        assert!(!is_optional_dependency(&git_not_optional));
+
+        let path_optional = DependencySpec::Path {
+            path: "../local".to_string(),
+            optional: true,
+        };
+        assert!(is_optional_dependency(&path_optional));
+
+        let path_not_optional = DependencySpec::Path {
+            path: "../local".to_string(),
+            optional: false,
+        };
+        assert!(!is_optional_dependency(&path_not_optional));
     }
 
     #[test]
@@ -626,7 +599,8 @@ matplotlib = { version = "^3.5.0", optional = true }
 
         let result = list_dependencies(None).await;
 
-        env::set_current_dir(&original_dir).unwrap();
+        // Restore original directory (ignore errors - may fail on Windows with async tests)
+        let _ = env::set_current_dir(&original_dir);
 
         // Should complete successfully without errors
         assert!(result.is_ok());
@@ -660,7 +634,7 @@ version = "2.0.0"
 description = "Test custom manifest path"
 
 [dependencies]
-test-dep = "1.0.0"
+test-dep = { git = "https://github.com/example/test-dep", commit = "1234567890abcdef1234567890abcdef12345678" }
 "#;
         std::fs::write(&manifest_path, manifest_content).unwrap();
 

@@ -418,10 +418,6 @@ enum Commands {
         #[arg(long)]
         path: Option<std::path::PathBuf>,
 
-        /// Version specification (legacy, prefer --git or --path)
-        #[arg(short, long)]
-        version: Option<String>,
-
         /// Path to directory containing hpm.toml or direct path to hpm.toml file
         #[arg(short = 'p', long = "package")]
         manifest: Option<std::path::PathBuf>,
@@ -605,7 +601,6 @@ async fn run_command(
             git,
             commit,
             path,
-            version,
             manifest,
             optional,
         } => {
@@ -614,7 +609,6 @@ async fn run_command(
                 git.clone(),
                 commit.clone(),
                 path.clone(),
-                version.clone(),
                 manifest.clone(),
                 *optional,
             )

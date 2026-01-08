@@ -111,22 +111,26 @@
 //! #     None,
 //! #     None,
 //! # );
-//! // Add HPM dependencies
+//! // Add HPM dependencies (Git or Path sources only)
 //! let mut dependencies = HashMap::new();
 //! dependencies.insert(
 //!     "utility-nodes".to_string(),
-//!     DependencySpec::Simple("^2.1.0".to_string())
+//!     DependencySpec::git(
+//!         "https://github.com/studio/utility-nodes",
+//!         "abc123def456789012345678901234567890abcd"
+//!     )
 //! );
 //! dependencies.insert(
 //!     "mesh-tools".to_string(),
-//!     DependencySpec::Detailed {
-//!         version: Some(">=1.5.0".to_string()),
-//!         git: Some("https://github.com/studio/mesh-tools".to_string()),
-//!         tag: Some("v1.0".to_string()),
-//!         branch: None,
-//!         optional: Some(true),
-//!         registry: None,
+//!     DependencySpec::Git {
+//!         git: "https://github.com/studio/mesh-tools".to_string(),
+//!         commit: "def456789012345678901234567890abcdef12".to_string(),
+//!         optional: true,
 //!     }
+//! );
+//! dependencies.insert(
+//!     "local-tools".to_string(),
+//!     DependencySpec::path("../local-tools")
 //! );
 //! manifest.dependencies = Some(dependencies);
 //!
@@ -254,11 +258,14 @@
 //! let mut dev_deps = HashMap::new();
 //! dev_deps.insert(
 //!     "test-assets".to_string(),
-//!     DependencySpec::Simple("0.1.0".to_string())
+//!     DependencySpec::git(
+//!         "https://github.com/studio/test-assets",
+//!         "abc123def456789012345678901234567890abcd"
+//!     )
 //! );
 //! dev_deps.insert(
 //!     "benchmark-suite".to_string(),
-//!     DependencySpec::Simple("1.0.0".to_string())
+//!     DependencySpec::path("../benchmark-suite")
 //! );
 //!
 //! // Development dependencies would be installed during development
@@ -341,27 +348,6 @@ pub enum DependencySpec {
         #[serde(default)]
         optional: bool,
     },
-
-    /// Legacy format for backward compatibility during migration
-    /// This will be deprecated and removed in future versions
-    #[serde(rename = "legacy")]
-    Legacy {
-        #[serde(default)]
-        version: Option<String>,
-        #[serde(default)]
-        git: Option<String>,
-        #[serde(default)]
-        tag: Option<String>,
-        #[serde(default)]
-        branch: Option<String>,
-        #[serde(default)]
-        optional: Option<bool>,
-        #[serde(default)]
-        registry: Option<String>,
-    },
-
-    /// Simple version string (legacy, for backward compatibility)
-    Simple(String),
 }
 
 impl DependencySpec {
@@ -392,18 +378,11 @@ impl DependencySpec {
         matches!(self, DependencySpec::Path { .. })
     }
 
-    /// Check if this is a legacy dependency format.
-    pub fn is_legacy(&self) -> bool {
-        matches!(self, DependencySpec::Simple(_) | DependencySpec::Legacy { .. })
-    }
-
     /// Check if this dependency is optional.
     pub fn is_optional(&self) -> bool {
         match self {
             DependencySpec::Git { optional, .. } => *optional,
             DependencySpec::Path { optional, .. } => *optional,
-            DependencySpec::Legacy { optional, .. } => optional.unwrap_or(false),
-            DependencySpec::Simple(_) => false,
         }
     }
 
@@ -411,7 +390,6 @@ impl DependencySpec {
     pub fn git_url(&self) -> Option<&str> {
         match self {
             DependencySpec::Git { git, .. } => Some(git),
-            DependencySpec::Legacy { git: Some(g), .. } => Some(g),
             _ => None,
         }
     }
@@ -455,15 +433,6 @@ impl DependencySpec {
                     return Err("Path cannot be empty".to_string());
                 }
                 Ok(())
-            }
-            DependencySpec::Legacy { .. } => {
-                Err("Legacy dependency format is deprecated. Use Git or Path format.".to_string())
-            }
-            DependencySpec::Simple(version) => {
-                Err(format!(
-                    "Simple version string '{}' is no longer supported. Use Git or Path format.",
-                    version
-                ))
             }
         }
     }
@@ -715,8 +684,6 @@ mod tests {
             (prop::string::string_regex(r"\.?\./[a-z0-9-/]{3,30}").unwrap(), any::<bool>()).prop_map(
                 |(path, optional)| DependencySpec::Path { path, optional }
             ),
-            // Legacy simple version (for backward compatibility testing)
-            version_req_strategy().prop_map(DependencySpec::Simple),
         ]
     }
 
@@ -1090,24 +1057,13 @@ mod tests {
         /// Test that dependency specifications handle edge cases
         #[test]
         fn prop_dependency_spec_edge_cases(
-            _name in package_name_strategy(),
-            version in prop_oneof![
-                version_strategy(),
-                malformed_version_strategy(),
-                Just("*".to_string()),
-                Just("latest".to_string()),
-            ],
             git_url in prop_oneof![
                 url_strategy(),
                 edge_case_url_strategy(),
-            ]
+            ],
+            path in prop::string::string_regex(r"\.?\./[a-z0-9-/]{3,30}").unwrap()
         ) {
-            // Test simple dependency spec (legacy format)
-            let simple_spec = DependencySpec::Simple(version.clone());
-            let json_result = serde_json::to_string(&simple_spec);
-            prop_assert!(json_result.is_ok(), "Simple spec serialization should always work");
-
-            // Test Git dependency spec (new format)
+            // Test Git dependency spec
             let git_spec = DependencySpec::Git {
                 git: git_url.clone(),
                 commit: "abc123def456789012345678901234567890abcd".to_string(),
@@ -1116,9 +1072,9 @@ mod tests {
             let git_json = serde_json::to_string(&git_spec);
             prop_assert!(git_json.is_ok(), "Git spec serialization should always work");
 
-            // Test Path dependency spec (new format)
+            // Test Path dependency spec
             let path_spec = DependencySpec::Path {
-                path: "../local-package".to_string(),
+                path: path.clone(),
                 optional: false,
             };
             let path_json = serde_json::to_string(&path_spec);
@@ -1282,10 +1238,26 @@ mod tests {
     }
 
     #[test]
-    fn dependency_spec_simple_serialization() {
-        let spec = DependencySpec::Simple("^1.0.0".to_string());
+    fn dependency_spec_git_serialization() {
+        let spec = DependencySpec::Git {
+            git: "https://github.com/owner/repo".to_string(),
+            commit: "abc123def456789012345678901234567890abcd".to_string(),
+            optional: false,
+        };
         let json = serde_json::to_string(&spec).unwrap();
-        assert_eq!(json, r#""^1.0.0""#);
+        assert!(json.contains("github.com/owner/repo"));
+        assert!(json.contains("abc123def456789012345678901234567890abcd"));
+    }
+
+    #[test]
+    fn dependency_spec_path_serialization() {
+        let spec = DependencySpec::Path {
+            path: "../local-package".to_string(),
+            optional: true,
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains("../local-package"));
+        assert!(json.contains("true"));
     }
 
     #[test]

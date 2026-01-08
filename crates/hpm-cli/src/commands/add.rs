@@ -60,7 +60,6 @@ use tracing::{info, warn};
 /// * `git_url` - Git repository URL (recommended for dependencies)
 /// * `commit` - Git commit hash (required when using git_url)
 /// * `path` - Local path to package directory (for development dependencies)
-/// * `version` - Legacy version specification (prefer git or path)
 /// * `manifest_path` - Path to the manifest file or directory
 /// * `optional` - Whether the dependency is optional
 pub async fn add_package(
@@ -68,7 +67,6 @@ pub async fn add_package(
     git_url: Option<String>,
     commit: Option<String>,
     path: Option<PathBuf>,
-    version: Option<String>,
     manifest_path: Option<PathBuf>,
     optional: bool,
 ) -> Result<()> {
@@ -81,10 +79,6 @@ pub async fn add_package(
 
     if git_url.is_some() && path.is_some() {
         bail!("Cannot specify both --git and --path. Choose one source type.");
-    }
-
-    if (git_url.is_some() || path.is_some()) && version.is_some() {
-        warn!("--version is ignored when using --git or --path");
     }
 
     // Determine manifest path
@@ -110,34 +104,6 @@ pub async fn add_package(
         DependencySpec::Path {
             path: path_str,
             optional,
-        }
-    } else if let Some(version_str) = version {
-        // Legacy version-based dependency
-        warn!("Version-based dependencies are deprecated. Consider using --git with a commit hash.");
-        if version_str == "latest" {
-            if optional {
-                DependencySpec::Legacy {
-                    version: Some("*".to_string()),
-                    git: None,
-                    tag: None,
-                    branch: None,
-                    optional: Some(true),
-                    registry: None,
-                }
-            } else {
-                DependencySpec::Simple("*".to_string())
-            }
-        } else if optional {
-            DependencySpec::Legacy {
-                version: Some(version_str),
-                git: None,
-                tag: None,
-                branch: None,
-                optional: Some(true),
-                registry: None,
-            }
-        } else {
-            DependencySpec::Simple(version_str)
         }
     } else {
         // No source specified - show help
@@ -303,11 +269,15 @@ min_version = "20.0"
             Some("MIT".to_string()),
         );
 
-        // Add a dependency
+        // Add a Git dependency
         let mut dependencies = HashMap::new();
         dependencies.insert(
             "test-dep".to_string(),
-            DependencySpec::Simple("^1.0.0".to_string()),
+            DependencySpec::Git {
+                git: "https://github.com/owner/repo".to_string(),
+                commit: "abc123def456789012345678901234567890abcd".to_string(),
+                optional: false,
+            },
         );
         manifest.dependencies = Some(dependencies);
 
@@ -328,34 +298,36 @@ min_version = "20.0"
     }
 
     #[test]
-    fn test_dependency_spec_creation_simple() {
-        let spec = DependencySpec::Simple("^1.0.0".to_string());
+    fn test_dependency_spec_creation_git() {
+        let spec = DependencySpec::Git {
+            git: "https://github.com/owner/repo".to_string(),
+            commit: "abc123def456789012345678901234567890abcd".to_string(),
+            optional: false,
+        };
 
         match spec {
-            DependencySpec::Simple(version) => assert_eq!(version, "^1.0.0"),
-            _ => panic!("Expected Simple dependency spec"),
+            DependencySpec::Git { git, commit, optional } => {
+                assert_eq!(git, "https://github.com/owner/repo");
+                assert_eq!(commit, "abc123def456789012345678901234567890abcd");
+                assert!(!optional);
+            }
+            _ => panic!("Expected Git dependency spec"),
         }
     }
 
     #[test]
-    fn test_dependency_spec_creation_optional() {
-        let spec = DependencySpec::Legacy {
-            version: Some("1.0.0".to_string()),
-            git: None,
-            tag: None,
-            branch: None,
-            optional: Some(true),
-            registry: None,
+    fn test_dependency_spec_creation_path_optional() {
+        let spec = DependencySpec::Path {
+            path: "../local-package".to_string(),
+            optional: true,
         };
 
         match spec {
-            DependencySpec::Legacy {
-                version, optional, ..
-            } => {
-                assert_eq!(version, Some("1.0.0".to_string()));
-                assert_eq!(optional, Some(true));
+            DependencySpec::Path { path, optional } => {
+                assert_eq!(path, "../local-package");
+                assert!(optional);
             }
-            _ => panic!("Expected Legacy dependency spec"),
+            _ => panic!("Expected Path dependency spec"),
         }
     }
 
@@ -571,31 +543,53 @@ min_version = "20.0"
         /// Test dependency spec creation with various inputs
         #[test]
         fn prop_dependency_spec_creation_robustness(
-            version_input in prop_oneof![
-                r"[0-9]+\.[0-9]+\.[0-9]+",           // Valid semver
-                r"\^[0-9]+\.[0-9]+\.[0-9]+",         // Caret constraint
-                r"~[0-9]+\.[0-9]+\.[0-9]+",          // Tilde constraint
-                r">=[0-9]+\.[0-9]+\.[0-9]+",         // GTE constraint
-                Just("*".to_string()),                // Wildcard
-                Just("latest".to_string()),           // Latest keyword
-                r"[a-zA-Z]{1,20}",                   // Invalid version
-                Just("".to_string()),                 // Empty version
-            ]
+            git_url in prop_oneof![
+                Just("https://github.com/owner/repo".to_string()),
+                Just("https://gitlab.com/owner/repo".to_string()),
+                r"https://[a-z]+\.[a-z]+/[a-z]+/[a-z]+",
+            ],
+            commit_hash in prop::string::string_regex("[0-9a-f]{40}").unwrap(),
+            path in prop_oneof![
+                Just("../local-package".to_string()),
+                Just("./sibling-package".to_string()),
+                r"\.\./[a-z-]+",
+            ],
+            optional in any::<bool>()
         ) {
-            // Test that dependency spec creation handles various version inputs gracefully
-            let simple_spec = DependencySpec::Simple(version_input.clone());
+            // Test Git dependency spec creation
+            let git_spec = DependencySpec::Git {
+                git: git_url.clone(),
+                commit: commit_hash.clone(),
+                optional,
+            };
 
-            // Should always be able to create the spec (validation happens later)
-            match simple_spec {
-                DependencySpec::Simple(ref v) => {
-                    prop_assert_eq!(v, &version_input, "Version should be preserved in simple spec");
+            match &git_spec {
+                DependencySpec::Git { git, commit, .. } => {
+                    prop_assert_eq!(git, &git_url, "Git URL should be preserved");
+                    prop_assert_eq!(commit, &commit_hash, "Commit hash should be preserved");
                 }
-                _ => prop_assert!(false, "Should create simple dependency spec"),
+                _ => prop_assert!(false, "Should create Git dependency spec"),
+            }
+
+            // Test Path dependency spec creation
+            let path_spec = DependencySpec::Path {
+                path: path.clone(),
+                optional,
+            };
+
+            match &path_spec {
+                DependencySpec::Path { path: p, .. } => {
+                    prop_assert_eq!(p, &path, "Path should be preserved");
+                }
+                _ => prop_assert!(false, "Should create Path dependency spec"),
             }
 
             // Test JSON serialization (should always work)
-            let json_result = serde_json::to_string(&simple_spec);
-            prop_assert!(json_result.is_ok(), "Dependency spec should always serialize");
+            let git_json = serde_json::to_string(&git_spec);
+            prop_assert!(git_json.is_ok(), "Git dependency spec should always serialize");
+
+            let path_json = serde_json::to_string(&path_spec);
+            prop_assert!(path_json.is_ok(), "Path dependency spec should always serialize");
         }
 
         /// Test that manifest operations are atomic and don't leave partial files

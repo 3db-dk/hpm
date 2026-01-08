@@ -370,16 +370,11 @@ impl DependencyResolver {
 
     fn extract_version_from_spec(&self, spec: &DependencySpec) -> String {
         match spec {
-            DependencySpec::Simple(version) => version.clone(),
             DependencySpec::Git { commit, .. } => {
                 // Use short commit hash as version identifier
                 commit[..commit.len().min(12)].to_string()
             }
             DependencySpec::Path { .. } => "local".to_string(),
-            DependencySpec::Legacy {
-                version: Some(v), ..
-            } => v.clone(),
-            DependencySpec::Legacy { version: None, .. } => "unknown".to_string(),
         }
     }
 }

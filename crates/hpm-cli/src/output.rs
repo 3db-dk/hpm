@@ -441,11 +441,9 @@ struct DependencyInfo {
 #[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 enum DependencySource {
-    Registry,
     Git {
         url: String,
-        tag: Option<String>,
-        branch: Option<String>,
+        commit: String,
     },
     Path {
         path: String,
@@ -499,15 +497,8 @@ impl Output for PackageInfo {
                             write!(writer, " (optional)")?;
                         }
                         match &dep.source {
-                            DependencySource::Registry => {}
-                            DependencySource::Git { url, tag, branch } => {
-                                write!(writer, " git: {}", url)?;
-                                if let Some(tag) = tag {
-                                    write!(writer, " (tag: {})", tag)?;
-                                }
-                                if let Some(branch) = branch {
-                                    write!(writer, " (branch: {})", branch)?;
-                                }
+                            DependencySource::Git { url, commit } => {
+                                write!(writer, " git: {} ({})", url, &commit[..commit.len().min(12)])?;
                             }
                             DependencySource::Path { path } => {
                                 write!(writer, " path: {}", path)?;
