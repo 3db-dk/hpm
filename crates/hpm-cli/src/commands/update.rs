@@ -185,6 +185,7 @@
 //! hpm update --package /path/to/custom-manifest.toml
 //! ```
 
+use super::manifest_utils::determine_manifest_path;
 use crate::console;
 use crate::output::OutputFormat;
 use anyhow::{Context, Result};
@@ -240,7 +241,7 @@ pub async fn update_packages(options: UpdateOptions) -> Result<()> {
     });
 
     // Determine manifest path
-    let manifest_path = determine_manifest_path(&options.package)?;
+    let manifest_path = determine_manifest_path(options.package.clone())?;
 
     // Load current manifest
     let content = std::fs::read_to_string(&manifest_path)
@@ -467,23 +468,6 @@ fn output_update_results(updated: &[String], output: &OutputFormat) {
 
 // Helper functions
 
-fn determine_manifest_path(package_path: &Option<PathBuf>) -> Result<PathBuf> {
-    match package_path {
-        Some(path) => {
-            if path.is_file() && path.file_name() == Some("hpm.toml".as_ref()) {
-                Ok(path.clone())
-            } else if path.is_dir() {
-                Ok(path.join("hpm.toml"))
-            } else {
-                anyhow::bail!("Invalid package path: {}", path.display());
-            }
-        }
-        None => {
-            let current_dir = std::env::current_dir()?;
-            Ok(current_dir.join("hpm.toml"))
-        }
-    }
-}
 
 async fn get_current_installed_version(_package_name: &str) -> Option<String> {
     // Placeholder - would query storage manager for installed version
@@ -509,14 +493,14 @@ mod tests {
     fn test_determine_manifest_path() {
         let temp_dir = TempDir::new().unwrap();
         let manifest_path = temp_dir.path().join("hpm.toml");
-        std::fs::write(&manifest_path, "").unwrap();
+        std::fs::write(&manifest_path, "[package]\nname = \"test\"\nversion = \"1.0.0\"\n[houdini]\nmin_version = \"20.0\"").unwrap();
 
         // Test with file path
-        let result = determine_manifest_path(&Some(manifest_path.clone())).unwrap();
+        let result = determine_manifest_path(Some(manifest_path.clone())).unwrap();
         assert_eq!(result, manifest_path);
 
         // Test with directory path
-        let result = determine_manifest_path(&Some(temp_dir.path().to_path_buf())).unwrap();
+        let result = determine_manifest_path(Some(temp_dir.path().to_path_buf())).unwrap();
         assert_eq!(result, manifest_path);
 
         // Test with None (would use current directory in real usage)

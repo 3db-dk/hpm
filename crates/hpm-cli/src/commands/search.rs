@@ -12,9 +12,8 @@ use console::style;
 /// Users should browse Git repositories directly to discover packages.
 pub async fn search_packages(query: String, _limit: Option<u32>, _json_output: bool) -> Result<()> {
     println!(
-        "{} {}",
-        style("Note:").yellow().bold(),
-        "HPM uses Git archive-based dependencies."
+        "{} HPM uses Git archive-based dependencies.",
+        style("Note:").yellow().bold()
     );
     println!();
     println!(
@@ -32,10 +31,9 @@ pub async fn search_packages(query: String, _limit: Option<u32>, _json_output: b
     println!();
     println!("Example:");
     println!(
-        "  {} {} {} {}",
+        "  {} {} https://github.com/studio/geometry-tools {}",
         style("hpm add").cyan(),
         style("--git").green(),
-        "https://github.com/studio/geometry-tools",
         style("--commit abc123").dim()
     );
     println!();

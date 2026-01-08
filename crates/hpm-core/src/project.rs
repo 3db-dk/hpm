@@ -277,7 +277,7 @@ impl ProjectManager {
         // Use simple string format for simple version specs, inline table for complex ones
         if version_str == "*" || version_str.starts_with('^') || version_str.starts_with('~')
             || version_str.starts_with('>') || version_str.starts_with('<')
-            || version_str.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+            || version_str.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             deps_table[&spec.name] = toml_edit::value(version_str);
         } else {
             // For complex specs, use inline table

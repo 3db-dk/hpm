@@ -45,10 +45,11 @@
 //! 3. Updates the project's hpm.lock file
 //! 4. Sets up project-specific package references
 
+use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifest};
 use anyhow::{bail, Context, Result};
-use hpm_package::{DependencySpec, PackageManifest};
+use hpm_package::DependencySpec;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::{info, warn};
 
 /// Add a package dependency to hpm.toml manifest
@@ -191,90 +192,14 @@ pub async fn add_package(
     Ok(())
 }
 
-/// Determine the path to the hpm.toml manifest file
-fn determine_manifest_path(provided_path: Option<PathBuf>) -> Result<PathBuf> {
-    match provided_path {
-        Some(path) => {
-            if path.is_file() {
-                Ok(path)
-            } else if path.is_dir() {
-                let manifest_in_dir = path.join("hpm.toml");
-                if manifest_in_dir.exists() {
-                    Ok(manifest_in_dir)
-                } else {
-                    anyhow::bail!("No hpm.toml found in directory: {}", path.display());
-                }
-            } else {
-                anyhow::bail!(
-                    "Provided path does not exist or is not accessible: {}",
-                    path.display()
-                );
-            }
-        }
-        None => {
-            let current_dir = std::env::current_dir().context("Failed to get current directory")?;
-            let manifest_path = current_dir.join("hpm.toml");
-
-            if manifest_path.exists() {
-                Ok(manifest_path)
-            } else {
-                anyhow::bail!(
-                    "No hpm.toml found in current directory: {}. Use --package to specify a path.",
-                    current_dir.display()
-                );
-            }
-        }
-    }
-}
-
-/// Maximum allowed manifest file size (1 MB) to prevent DoS attacks.
-const MAX_MANIFEST_SIZE: u64 = 1024 * 1024;
-
-/// Load and parse the package manifest
-fn load_manifest(manifest_path: &Path) -> Result<PackageManifest> {
-    // Security check: verify manifest file size to prevent DoS
-    let metadata = std::fs::metadata(manifest_path)
-        .with_context(|| format!("Failed to read manifest metadata: {}", manifest_path.display()))?;
-
-    if metadata.len() > MAX_MANIFEST_SIZE {
-        anyhow::bail!(
-            "Manifest file too large ({} bytes). Maximum allowed size is {} bytes.",
-            metadata.len(),
-            MAX_MANIFEST_SIZE
-        );
-    }
-
-    let content = std::fs::read_to_string(manifest_path)
-        .with_context(|| format!("Failed to read manifest file: {}", manifest_path.display()))?;
-
-    let manifest: PackageManifest = toml::from_str(&content)
-        .with_context(|| format!("Failed to parse manifest file: {}", manifest_path.display()))?;
-
-    // Validate manifest
-    manifest
-        .validate()
-        .map_err(|e| anyhow::anyhow!("Manifest validation failed: {}", e))
-        .with_context(|| format!("Manifest validation failed: {}", manifest_path.display()))?;
-
-    Ok(manifest)
-}
-
-/// Save the package manifest to file
-fn save_manifest(manifest: &PackageManifest, manifest_path: &Path) -> Result<()> {
-    let toml_content =
-        toml::to_string_pretty(manifest).context("Failed to serialize manifest to TOML")?;
-
-    std::fs::write(manifest_path, toml_content)
-        .with_context(|| format!("Failed to write manifest file: {}", manifest_path.display()))?;
-
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hpm_package::PackageManifest;
     use proptest::prelude::*;
     use std::env;
+    use std::path::Path;
     use tempfile::TempDir;
 
     /// Create a test hpm.toml file with basic package info

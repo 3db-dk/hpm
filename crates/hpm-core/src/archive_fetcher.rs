@@ -297,7 +297,7 @@ impl ArchiveFetcher {
 
     /// Find the common prefix in a zip archive (e.g., "repo-abc123/").
     fn find_archive_prefix(&self, archive: &zip::ZipArchive<std::fs::File>) -> Result<Option<PathBuf>, FetchError> {
-        if archive.len() == 0 {
+        if archive.is_empty() {
             return Ok(None);
         }
 

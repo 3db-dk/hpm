@@ -18,7 +18,7 @@ tracing.workspace = true
 hpm-config = { path = "../hpm-config" }
 hpm-package = { path = "../hpm-package" }
 hpm-python = { path = "../hpm-python" }
-thiserror = "2.0"
+thiserror.workspace = true
 toml = "0.8"
 toml_edit = "0.22"
 tokio = { version = "1.43", features = ["macros", "rt", "fs"] }

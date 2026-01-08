@@ -172,24 +172,24 @@ pub struct LockMetadata {
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
     #[error("Failed to read lock file: {path}")]
-    ReadError {
+    Read {
         path: std::path::PathBuf,
         #[source]
         source: std::io::Error,
     },
 
     #[error("Failed to parse lock file: {path}")]
-    ParseError {
+    Parse {
         path: std::path::PathBuf,
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     #[error("Failed to serialize lock file")]
-    SerializeError(#[from] toml::ser::Error),
+    Serialize(#[from] toml::ser::Error),
 
     #[error("Failed to write lock file: {path}")]
-    WriteError {
+    Write {
         path: std::path::PathBuf,
         #[source]
         source: std::io::Error,
@@ -227,14 +227,14 @@ impl LockFile {
 
     /// Load a lock file from the given path
     pub fn load(path: &Path) -> Result<Self, LockError> {
-        let content = std::fs::read_to_string(path).map_err(|e| LockError::ReadError {
+        let content = std::fs::read_to_string(path).map_err(|e| LockError::Read {
             path: path.to_path_buf(),
             source: e,
         })?;
 
-        let lock_file: Self = toml::from_str(&content).map_err(|e| LockError::ParseError {
+        let lock_file: Self = toml::from_str(&content).map_err(|e| LockError::Parse {
             path: path.to_path_buf(),
-            source: e,
+            source: Box::new(e),
         })?;
 
         // Check version compatibility
@@ -251,7 +251,7 @@ impl LockFile {
     /// Save the lock file to the given path
     pub fn save(&self, path: &Path) -> Result<(), LockError> {
         let content = self.to_toml()?;
-        std::fs::write(path, content).map_err(|e| LockError::WriteError {
+        std::fs::write(path, content).map_err(|e| LockError::Write {
             path: path.to_path_buf(),
             source: e,
         })?;
@@ -457,7 +457,7 @@ fn compute_directory_checksum(dir: &Path) -> Result<String, LockError> {
         hasher.update(relative_path.as_bytes());
 
         // Hash file contents
-        let contents = std::fs::read(&path).map_err(|e| LockError::ReadError {
+        let contents = std::fs::read(&path).map_err(|e| LockError::Read {
             path: path.clone(),
             source: e,
         })?;

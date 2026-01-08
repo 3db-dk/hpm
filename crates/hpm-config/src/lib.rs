@@ -77,8 +77,8 @@
 //!
 //! // Load configuration with defaults
 //! let config = Config::default();
-//! println!("Registry URL: {}", config.registry.default);
 //! println!("Storage directory: {:?}", config.storage.home_dir);
+//! println!("Parallel downloads: {}", config.install.parallel_downloads);
 //! ```
 //!
 //! ### Project Configuration
@@ -227,21 +227,20 @@
 //! println!("Package stored at: {:?}", package_dir);
 //! ```
 //!
-//! ## Authentication Management
+//! ## Configuration Customization
 //!
-//! HPM supports secure token-based authentication for registry access:
+//! HPM configuration can be customized programmatically:
 //!
 //! ```rust
-//! use hpm_config::{Config, AuthConfig};
+//! use hpm_config::Config;
 //!
 //! let mut config = Config::default();
 //!
-//! // Set authentication token
-//! config.auth = Some(AuthConfig {
-//!     token: "your-secure-registry-token".to_string(),
-//! });
+//! // Customize installation settings
+//! config.install.parallel_downloads = 8;
 //!
-//! // Token can be used by registry clients for authenticated operations
+//! // Add project search locations
+//! config.projects.add_search_root("/my/projects".into());
 //! ```
 //!
 //! ## Error Handling and Validation
@@ -261,24 +260,24 @@ use tracing::{debug, info};
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("Failed to read config file: {path}")]
-    ReadError {
+    Read {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
 
     #[error("Failed to parse config file: {path}")]
-    ParseError {
+    Parse {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     #[error("Failed to serialize config")]
-    SerializeError(#[from] toml::ser::Error),
+    Serialize(#[from] toml::ser::Error),
 
     #[error("Failed to write config file: {path}")]
-    WriteError {
+    Write {
         path: PathBuf,
         #[source]
         source: std::io::Error,
@@ -387,7 +386,7 @@ impl Config {
 
     /// Load configuration from a specific path.
     pub fn load_from_path(path: &Path) -> Result<Self, ConfigError> {
-        let content = std::fs::read_to_string(path).map_err(|e| ConfigError::ReadError {
+        let content = std::fs::read_to_string(path).map_err(|e| ConfigError::Read {
             path: path.to_path_buf(),
             source: e,
         })?;
@@ -399,9 +398,9 @@ impl Config {
     fn parse_toml(content: &str, path: &Path) -> Result<Self, ConfigError> {
         // Parse into a partial config that allows missing fields
         let partial: PartialConfig =
-            toml::from_str(content).map_err(|e| ConfigError::ParseError {
+            toml::from_str(content).map_err(|e| ConfigError::Parse {
                 path: path.to_path_buf(),
-                source: e,
+                source: Box::new(e),
             })?;
 
         // Convert partial config to full config with defaults
@@ -443,14 +442,14 @@ impl Config {
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| ConfigError::WriteError {
+            std::fs::create_dir_all(parent).map_err(|e| ConfigError::Write {
                 path: path.to_path_buf(),
                 source: e,
             })?;
         }
 
         let content = toml::to_string_pretty(self)?;
-        std::fs::write(path, content).map_err(|e| ConfigError::WriteError {
+        std::fs::write(path, content).map_err(|e| ConfigError::Write {
             path: path.to_path_buf(),
             source: e,
         })?;
@@ -784,14 +783,14 @@ ignore_patterns = ["backup", ".cache", "temp"]
 
         let result = Config::load_from_path(&config_path);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigError::ParseError { .. }));
+        assert!(matches!(result.unwrap_err(), ConfigError::Parse { .. }));
     }
 
     #[test]
     fn config_load_nonexistent_file() {
         let result = Config::load_from_path(Path::new("/nonexistent/config.toml"));
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigError::ReadError { .. }));
+        assert!(matches!(result.unwrap_err(), ConfigError::Read { .. }));
     }
 
     #[test]

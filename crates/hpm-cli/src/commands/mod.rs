@@ -4,6 +4,7 @@ pub mod clean;
 pub mod init;
 pub mod install;
 pub mod list;
+pub mod manifest_utils;
 pub mod remove;
 pub mod search;
 pub mod update;
