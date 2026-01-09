@@ -177,7 +177,8 @@ min_version = "20.0"
 
         let result = determine_manifest_path(None);
 
-        env::set_current_dir(original_dir).unwrap();
+        // Restore original directory (ignore errors - may fail on Windows with parallel tests)
+        let _ = env::set_current_dir(original_dir);
 
         assert!(result.is_ok());
         let manifest_path = result.unwrap();

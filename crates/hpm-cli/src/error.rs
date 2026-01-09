@@ -489,59 +489,6 @@ impl CliError {
 /// ```
 pub type CliResult<T = ()> = Result<T, CliError>;
 
-#[allow(dead_code)]
-/// Convert common error types to CLI errors (future feature)
-///
-/// This trait provides ergonomic conversion from standard error types
-/// to categorized CLI errors. Currently unused but kept for future
-/// expansion of the error handling system.
-///
-/// # Examples
-///
-/// ```rust
-/// use hpm_cli::error::IntoCliError;
-/// use std::fs;
-///
-/// let result: Result<String, std::io::Error> = fs::read_to_string("file.txt");
-/// let cli_result = result.into_io_error(); // Converts to CliError::Io
-/// ```
-trait IntoCliError<T> {
-    fn into_config_error(self) -> CliResult<T>;
-    fn into_package_error(self) -> CliResult<T>;
-    fn into_network_error(self) -> CliResult<T>;
-    fn into_io_error(self) -> CliResult<T>;
-    fn into_internal_error(self) -> CliResult<T>;
-}
-
-#[allow(dead_code)]
-impl<T, E> IntoCliError<T> for Result<T, E>
-where
-    E: Into<anyhow::Error>,
-{
-    fn into_config_error(self) -> CliResult<T> {
-        self.map_err(|e| CliError::config(e, None))
-    }
-
-    fn into_package_error(self) -> CliResult<T> {
-        self.map_err(|e| CliError::package(e, None))
-    }
-
-    fn into_network_error(self) -> CliResult<T> {
-        self.map_err(|e| CliError::network(e, None))
-    }
-
-    fn into_io_error(self) -> CliResult<T> {
-        self.map_err(|e| CliError::io(e, None))
-    }
-
-    fn into_internal_error(self) -> CliResult<T> {
-        self.map_err(|e| CliError::internal(e, None))
-    }
-}
-
-// Note: Specialized error types were removed as they were unused.
-// Error handling is done through the generic CliError variants.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,16 +511,5 @@ mod tests {
 
         let external_error = CliError::external("git".to_string(), 128, None);
         assert_eq!(ExitStatus::from(&external_error), ExitStatus::External(128));
-    }
-
-    #[test]
-    fn test_error_conversion_trait() {
-        let result: Result<(), std::io::Error> = Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "file not found",
-        ));
-
-        let cli_result = result.into_io_error();
-        assert!(matches!(cli_result, Err(CliError::Io { .. })));
     }
 }

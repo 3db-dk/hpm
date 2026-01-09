@@ -31,10 +31,9 @@
 //! - **Performance**: Minimal overhead for quiet/silent modes
 
 use anstream::{stderr, stdout, AutoStream};
-use console::Term;
 use owo_colors::{OwoColorize, Style};
 use std::fmt::Display;
-use std::io::{self, Write};
+use std::io::Write;
 
 /// Console printer that controls terminal output with styling and verbosity
 #[derive(Debug)]
@@ -55,7 +54,6 @@ pub enum Verbosity {
     ///
     /// Use this for automated scripts where minimal output is desired.
     /// Only shows errors that prevent the program from continuing.
-    #[allow(dead_code)]
     Silent,
 
     /// Minimal output (warnings, errors, and essential information)
@@ -115,10 +113,8 @@ enum Level {
     /// Warning messages (yellow, warning symbol)
     Warning,
     /// Error messages (red, x-mark)
-    #[allow(dead_code)]
     Error,
     /// Debug messages (cyan, magnifier)
-    #[allow(dead_code)]
     Debug,
 }
 
@@ -242,7 +238,6 @@ impl Console {
     ///
     /// Error messages are always displayed (even in silent mode) and use red styling.
     /// They are routed to stderr for proper error handling in scripts.
-    #[allow(dead_code)]
     pub fn error(&mut self, message: impl Display) {
         if self.should_show(Level::Error) {
             self.print_styled(Level::Error, message);
@@ -376,98 +371,6 @@ pub fn success(message: impl Display) {
 pub fn info(message: impl Display) {
     let mut console = Console::new();
     console.info(message);
-}
-
-/// Display a warning message using default console settings
-#[allow(dead_code)]
-pub fn warn(message: impl Display) {
-    let mut console = Console::new();
-    console.warn(message);
-}
-
-/// Display an error message using default console settings
-#[allow(dead_code)]
-pub fn error(message: impl Display) {
-    let mut console = Console::new();
-    console.error(message);
-}
-
-// Future utility functions for interactive features
-// These are kept for future use but not currently exposed in the public API
-
-#[allow(dead_code)]
-/// Prompt the user for confirmation (future feature)
-///
-/// This function will be used for interactive confirmations in future versions.
-/// Currently unused but kept for upcoming features like `hpm clean --interactive`.
-fn confirm(message: &str, default: bool) -> io::Result<bool> {
-    let term = Term::stderr();
-    let prompt = format!(
-        "{} {} {} {} {}",
-        "?".style(Style::new().yellow().bold()),
-        message.style(Style::new().bold()),
-        "[y/n]".style(Style::new().bright_black()),
-        "›".style(Style::new().bright_black()),
-        if default { "yes" } else { "no" }.style(Style::new().cyan())
-    );
-
-    loop {
-        term.write_line(&prompt)?;
-        match term.read_char()? {
-            'y' | 'Y' => {
-                term.write_line("yes")?;
-                return Ok(true);
-            }
-            'n' | 'N' => {
-                term.write_line("no")?;
-                return Ok(false);
-            }
-            '\r' | '\n' => {
-                term.write_line(if default { "yes" } else { "no" })?;
-                return Ok(default);
-            }
-            _ => {
-                term.write_line("Please answer yes or no.")?;
-                continue;
-            }
-        }
-    }
-}
-
-#[allow(dead_code)]
-/// Prompt the user for text input (future feature)
-///
-/// This function will be used for interactive text input in future versions.
-/// Currently unused but kept for upcoming features.
-fn input(message: &str) -> io::Result<String> {
-    let term = Term::stderr();
-    let prompt = format!(
-        "{} {} {} ",
-        "?".style(Style::new().blue().bold()),
-        message.style(Style::new().bold()),
-        "›".style(Style::new().bright_black())
-    );
-
-    term.write_str(&prompt)?;
-    term.read_line()
-}
-
-#[allow(dead_code)]
-/// Print a formatted tree structure for directory listings (future feature)
-///
-/// This function will be used for displaying package dependency trees.
-/// Currently unused but kept for upcoming features.
-fn print_tree(items: &[(String, bool)]) {
-    for (i, (item, is_last)) in items.iter().enumerate() {
-        let prefix = if i == 0 {
-            "".to_string()
-        } else if *is_last {
-            "└── ".to_string()
-        } else {
-            "├── ".to_string()
-        };
-        println!("{}{}", prefix, item);
-    }
 }
 
 #[cfg(test)]

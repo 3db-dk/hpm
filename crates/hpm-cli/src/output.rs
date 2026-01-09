@@ -110,7 +110,6 @@ impl OutputFormat {
     /// assert_eq!(OutputFormat::from_str("jsonl"), Some(OutputFormat::JsonLines));
     /// assert_eq!(OutputFormat::from_str("invalid"), None);
     /// ```
-    #[allow(dead_code)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "human" => Some(Self::Human),
@@ -160,7 +159,6 @@ impl Display for OutputFormat {
 ///     }
 /// }
 /// ```
-#[allow(dead_code)]
 trait Output {
     /// Output the data in the specified format to a writer
     ///
@@ -261,7 +259,6 @@ impl CommandResult {
     /// assert!(result.success);
     /// assert_eq!(result.command, "install");
     /// ```
-    #[allow(dead_code)]
     pub fn success(command: &str) -> Self {
         Self {
             success: true,
@@ -289,7 +286,6 @@ impl CommandResult {
     ///     json!({"packages": ["foo", "bar"]})
     /// );
     /// ```
-    #[allow(dead_code)]
     pub fn success_with_data(command: &str, data: serde_json::Value) -> Self {
         Self {
             success: true,
@@ -314,7 +310,6 @@ impl CommandResult {
     /// assert!(!result.success);
     /// assert_eq!(result.message, Some("Package not found".to_string()));
     /// ```
-    #[allow(dead_code)]
     pub fn failure(command: &str, message: &str) -> Self {
         Self {
             success: false,
@@ -337,7 +332,6 @@ impl CommandResult {
     /// let result = CommandResult::success("install").with_elapsed(1250);
     /// assert_eq!(result.elapsed_ms, Some(1250));
     /// ```
-    #[allow(dead_code)]
     pub fn with_elapsed(mut self, elapsed_ms: u64) -> Self {
         self.elapsed_ms = Some(elapsed_ms);
         self
@@ -355,7 +349,6 @@ impl CommandResult {
     /// let result = CommandResult::success("install")
     ///     .with_message("3 packages installed");
     /// ```
-    #[allow(dead_code)]
     pub fn with_message(mut self, message: &str) -> Self {
         self.message = Some(message.to_string());
         self
@@ -387,204 +380,6 @@ impl Output for CommandResult {
                 }
                 if let Some(elapsed) = self.elapsed_ms {
                     writeln!(writer, "  Completed in {}ms", elapsed)?;
-                }
-            }
-            OutputFormat::Json => {
-                let json = serde_json::to_string_pretty(self)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                writeln!(writer, "{}", json)?;
-            }
-            OutputFormat::JsonLines => {
-                let json = serde_json::to_string(self)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                writeln!(writer, "{}", json)?;
-            }
-            OutputFormat::JsonCompact => {
-                let json = serde_json::to_string(self)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                write!(writer, "{}", json)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-//
-// Future data structures for structured output
-// These will be used when implementing full JSON output for specific commands
-//
-
-/// Package information for list command (future feature)
-#[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize)]
-struct PackageInfo {
-    pub name: String,
-    pub version: String,
-    pub description: Option<String>,
-    pub authors: Vec<String>,
-    pub license: Option<String>,
-    pub houdini_min: Option<String>,
-    pub houdini_max: Option<String>,
-    pub dependencies: Vec<DependencyInfo>,
-    pub python_dependencies: Vec<PythonDependencyInfo>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize)]
-struct DependencyInfo {
-    pub name: String,
-    pub version: String,
-    pub optional: bool,
-    pub source: DependencySource,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize)]
-enum DependencySource {
-    Git {
-        url: String,
-        commit: String,
-    },
-    Path {
-        path: String,
-    },
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize)]
-struct PythonDependencyInfo {
-    pub name: String,
-    pub version: String,
-    pub extras: Vec<String>,
-    pub optional: bool,
-}
-
-#[allow(dead_code)]
-impl Output for PackageInfo {
-    fn output(&self, format: OutputFormat, writer: &mut dyn Write) -> io::Result<()> {
-        match format {
-            OutputFormat::Human => {
-                writeln!(writer, "Package: {} v{}", self.name, self.version)?;
-                if let Some(ref desc) = self.description {
-                    writeln!(writer, "Description: {}", desc)?;
-                }
-                if !self.authors.is_empty() {
-                    writeln!(writer, "Authors: {}", self.authors.join(", "))?;
-                }
-                if let Some(ref license) = self.license {
-                    writeln!(writer, "License: {}", license)?;
-                }
-
-                // Houdini compatibility
-                match (&self.houdini_min, &self.houdini_max) {
-                    (Some(min), Some(max)) => {
-                        writeln!(writer, "Houdini compatibility: {} - {}", min, max)?
-                    }
-                    (Some(min), None) => {
-                        writeln!(writer, "Houdini compatibility: {} or later", min)?
-                    }
-                    (None, Some(max)) => {
-                        writeln!(writer, "Houdini compatibility: {} or earlier", max)?
-                    }
-                    (None, None) => {}
-                }
-
-                if !self.dependencies.is_empty() {
-                    writeln!(writer, "\nHPM Dependencies:")?;
-                    for dep in &self.dependencies {
-                        write!(writer, "  {} {}", dep.name, dep.version)?;
-                        if dep.optional {
-                            write!(writer, " (optional)")?;
-                        }
-                        match &dep.source {
-                            DependencySource::Git { url, commit } => {
-                                write!(writer, " git: {} ({})", url, &commit[..commit.len().min(12)])?;
-                            }
-                            DependencySource::Path { path } => {
-                                write!(writer, " path: {}", path)?;
-                            }
-                        }
-                        writeln!(writer)?;
-                    }
-                }
-
-                if !self.python_dependencies.is_empty() {
-                    writeln!(writer, "\nPython Dependencies:")?;
-                    for dep in &self.python_dependencies {
-                        write!(writer, "  {} {}", dep.name, dep.version)?;
-                        if dep.optional {
-                            write!(writer, " (optional)")?;
-                        }
-                        if !dep.extras.is_empty() {
-                            write!(writer, " [{}]", dep.extras.join(","))?;
-                        }
-                        writeln!(writer)?;
-                    }
-                }
-            }
-            OutputFormat::Json => {
-                let json = serde_json::to_string_pretty(self)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                writeln!(writer, "{}", json)?;
-            }
-            OutputFormat::JsonLines => {
-                let json = serde_json::to_string(self)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                writeln!(writer, "{}", json)?;
-            }
-            OutputFormat::JsonCompact => {
-                let json = serde_json::to_string(self)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                write!(writer, "{}", json)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Clean command result (future feature)
-#[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize)]
-struct CleanResult {
-    pub packages_removed: Vec<String>,
-    pub packages_kept: Vec<String>,
-    pub python_envs_removed: Vec<String>,
-    pub python_envs_kept: Vec<String>,
-    pub total_space_freed: u64,
-    pub dry_run: bool,
-}
-
-#[allow(dead_code)]
-impl Output for CleanResult {
-    fn output(&self, format: OutputFormat, writer: &mut dyn Write) -> io::Result<()> {
-        match format {
-            OutputFormat::Human => {
-                if self.dry_run {
-                    writeln!(writer, "Dry run - no changes made")?;
-                }
-
-                writeln!(writer, "Packages removed: {}", self.packages_removed.len())?;
-                for pkg in &self.packages_removed {
-                    writeln!(writer, "  - {}", pkg)?;
-                }
-
-                if !self.python_envs_removed.is_empty() {
-                    writeln!(
-                        writer,
-                        "Python environments removed: {}",
-                        self.python_envs_removed.len()
-                    )?;
-                    for env in &self.python_envs_removed {
-                        writeln!(writer, "  - {}", env)?;
-                    }
-                }
-
-                if self.total_space_freed > 0 {
-                    writeln!(
-                        writer,
-                        "Total space freed: {} bytes",
-                        self.total_space_freed
-                    )?;
                 }
             }
             OutputFormat::Json => {
