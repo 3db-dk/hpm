@@ -63,6 +63,7 @@
 
 use super::manifest_utils::{determine_manifest_path, load_manifest};
 use anyhow::{Context, Result};
+use console::style;
 use hpm_package::{DependencySpec, PackageManifest, PythonDependencySpec};
 use std::path::PathBuf;
 use tracing::info;
@@ -119,6 +120,138 @@ pub async fn list_dependencies(manifest_path: Option<PathBuf>) -> Result<()> {
     display_python_dependencies(&manifest);
 
     Ok(())
+}
+
+/// Display dependencies as a tree structure
+///
+/// Shows package dependencies in a visual tree format with box-drawing characters.
+/// This provides an easy-to-scan view of the dependency hierarchy.
+///
+/// # Arguments
+///
+/// * `manifest_path` - Optional path to hpm.toml file or directory containing one
+///
+/// # Output Format
+///
+/// ```text
+/// my-package v1.0.0
+/// ├── geometry-tools (git: github.com/...@abc1234)
+/// ├── utility-nodes (git: github.com/...@def5678) [optional]
+/// └── local-tools (path: ../local-tools)
+///
+/// Python dependencies:
+/// ├── numpy >=1.20.0
+/// └── matplotlib ^3.5.0 [optional]
+/// ```
+pub async fn list_dependencies_tree(manifest_path: Option<PathBuf>) -> Result<()> {
+    info!("Listing package dependencies as tree");
+
+    // Determine manifest path
+    let manifest_path = determine_manifest_path(manifest_path)?;
+    info!("Using manifest: {}", manifest_path.display());
+
+    // Load and validate manifest
+    let manifest = load_manifest(&manifest_path)
+        .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
+
+    // Display package header
+    println!(
+        "{} {}",
+        style(&manifest.package.name).cyan().bold(),
+        style(format!("v{}", manifest.package.version)).dim()
+    );
+
+    // Display HPM dependencies as tree
+    if let Some(dependencies) = &manifest.dependencies {
+        if !dependencies.is_empty() {
+            let count = dependencies.len();
+            for (idx, (name, spec)) in dependencies.iter().enumerate() {
+                let is_last = idx == count - 1;
+                let prefix = if is_last { "└── " } else { "├── " };
+
+                let source_info = format_tree_source_info(spec);
+                let optional_marker = if is_optional_dependency(spec) {
+                    style(" [optional]").dim().to_string()
+                } else {
+                    String::new()
+                };
+
+                println!(
+                    "{}{}{}{}",
+                    style(prefix).dim(),
+                    style(name).green(),
+                    style(format!(" {}", source_info)).dim(),
+                    optional_marker
+                );
+            }
+        }
+    }
+
+    // Display Python dependencies as tree
+    if let Some(py_deps) = &manifest.python_dependencies {
+        if !py_deps.is_empty() {
+            println!();
+            println!("{}", style("Python dependencies:").yellow().bold());
+
+            let count = py_deps.len();
+            for (idx, (name, spec)) in py_deps.iter().enumerate() {
+                let is_last = idx == count - 1;
+                let prefix = if is_last { "└── " } else { "├── " };
+
+                let version_info = format_python_dependency_spec(spec);
+                let extras_info = format_python_extras(spec);
+                let optional_marker = if is_optional_python_dependency(spec) {
+                    style(" [optional]").dim().to_string()
+                } else {
+                    String::new()
+                };
+
+                println!(
+                    "{}{}{}{}{}",
+                    style(prefix).dim(),
+                    style(name).green(),
+                    style(format!(" {}", version_info)).dim(),
+                    extras_info,
+                    optional_marker
+                );
+            }
+        }
+    }
+
+    // Show message if no dependencies
+    let has_hpm_deps = manifest
+        .dependencies
+        .as_ref()
+        .map_or(false, |d| !d.is_empty());
+    let has_py_deps = manifest
+        .python_dependencies
+        .as_ref()
+        .map_or(false, |d| !d.is_empty());
+
+    if !has_hpm_deps && !has_py_deps {
+        println!("{}", style("  (no dependencies)").dim());
+    }
+
+    Ok(())
+}
+
+/// Format source info for tree display (compact format)
+fn format_tree_source_info(spec: &DependencySpec) -> String {
+    match spec {
+        DependencySpec::Git { git, commit, .. } => {
+            // Extract repo name from URL for compact display
+            let repo_name = git
+                .rsplit('/')
+                .next()
+                .unwrap_or(git)
+                .trim_end_matches(".git");
+            let short_commit = &commit[..commit.len().min(7)];
+            format!("({}@{})", repo_name, short_commit)
+        }
+        DependencySpec::Path { path, .. } => {
+            format!("(path: {})", path)
+        }
+    }
 }
 
 /// Display package information header

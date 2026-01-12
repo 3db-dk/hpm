@@ -52,25 +52,30 @@ use indexmap::IndexMap;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-/// Add a package dependency to hpm.toml manifest
+/// Add package dependencies to hpm.toml manifest
 ///
 /// # Arguments
 ///
-/// * `package_name` - Name of the package to add
+/// * `package_names` - Names of the packages to add
 /// * `git_url` - Git repository URL (recommended for dependencies)
 /// * `commit` - Git commit hash (required when using git_url)
-/// * `path` - Local path to package directory (for development dependencies)
+/// * `path` - Local path to package directory (for development dependencies, single package only)
 /// * `manifest_path` - Path to the manifest file or directory
-/// * `optional` - Whether the dependency is optional
-pub async fn add_package(
-    package_name: String,
+/// * `optional` - Whether the dependencies are optional
+pub async fn add_packages(
+    package_names: Vec<String>,
     git_url: Option<String>,
     commit: Option<String>,
     path: Option<PathBuf>,
     manifest_path: Option<PathBuf>,
     optional: bool,
 ) -> Result<()> {
-    info!("Adding package dependency: {}", package_name);
+    // Validate at least one package specified
+    if package_names.is_empty() {
+        bail!("Please specify at least one package name");
+    }
+
+    info!("Adding package dependencies: {:?}", package_names);
 
     // Validate arguments
     if git_url.is_some() && commit.is_none() {
@@ -81,6 +86,11 @@ pub async fn add_package(
         bail!("Cannot specify both --git and --path. Choose one source type.");
     }
 
+    // Disallow --path with multiple packages
+    if path.is_some() && package_names.len() > 1 {
+        bail!("Cannot use --path with multiple packages. Add path dependencies one at a time.");
+    }
+
     // Determine manifest path
     let manifest_path = determine_manifest_path(manifest_path)?;
     info!("Using manifest: {}", manifest_path.display());
@@ -89,24 +99,12 @@ pub async fn add_package(
     let mut manifest = load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
 
-    // Prepare dependency specification based on source type
-    let dependency_spec = if let Some(url) = git_url {
-        // Git-based dependency (recommended)
-        let commit_hash = commit.unwrap(); // Already validated above
-        DependencySpec::Git {
-            git: url,
-            commit: commit_hash,
-            optional,
-        }
-    } else if let Some(local_path) = path {
-        // Path-based dependency (for development)
-        let path_str = local_path.to_string_lossy().to_string();
-        DependencySpec::Path {
-            path: path_str,
-            optional,
-        }
-    } else {
+    // Prepare dependency specification template based on source type
+    let (is_git, is_path) = (git_url.is_some(), path.is_some());
+
+    if !is_git && !is_path {
         // No source specified - show help
+        let example_pkg = package_names.first().unwrap();
         bail!(
             "Please specify a dependency source:\n\
              \n\
@@ -121,9 +119,9 @@ pub async fn add_package(
              Example:\n\
              \n\
              \x20 hpm add {} --git https://github.com/user/repo --commit abc123",
-            package_name, package_name, package_name
+            example_pkg, example_pkg, example_pkg
         );
-    };
+    }
 
     // Add to dependencies
     if manifest.dependencies.is_none() {
@@ -132,28 +130,51 @@ pub async fn add_package(
 
     let dependencies = manifest.dependencies.as_mut().unwrap();
 
-    // Check if dependency already exists
-    if dependencies.contains_key(&package_name) {
-        warn!("Dependency '{}' already exists, updating...", package_name);
-    }
+    // Add each package
+    for package_name in &package_names {
+        let dependency_spec = if let Some(ref url) = git_url {
+            // Git-based dependency (recommended)
+            let commit_hash = commit.clone().unwrap(); // Already validated above
+            DependencySpec::Git {
+                git: url.clone(),
+                commit: commit_hash,
+                optional,
+            }
+        } else if let Some(ref local_path) = path {
+            // Path-based dependency (for development)
+            let path_str = local_path.to_string_lossy().to_string();
+            DependencySpec::Path {
+                path: path_str,
+                optional,
+            }
+        } else {
+            unreachable!("Already validated source is specified");
+        };
 
-    dependencies.insert(package_name.clone(), dependency_spec);
+        // Check if dependency already exists
+        if dependencies.contains_key(package_name) {
+            warn!("Dependency '{}' already exists, updating...", package_name);
+        }
+
+        dependencies.insert(package_name.clone(), dependency_spec);
+        info!("Added dependency: {}", package_name);
+    }
 
     // Save updated manifest
     save_manifest(&manifest, &manifest_path)
         .with_context(|| format!("Failed to save manifest to {}", manifest_path.display()))?;
 
-    info!("Successfully added dependency: {}", package_name);
+    info!("Successfully added {} dependencies", package_names.len());
 
-    // Install the newly added dependency
+    // Install the newly added dependencies
     info!("Installing dependencies...");
     super::install::install_dependencies(Some(manifest_path))
         .await
-        .context("Failed to install dependencies after adding package")?;
+        .context("Failed to install dependencies after adding packages")?;
 
     info!(
-        "Package '{}' added and installed successfully",
-        package_name
+        "{} package(s) added and installed successfully",
+        package_names.len()
     );
     Ok(())
 }

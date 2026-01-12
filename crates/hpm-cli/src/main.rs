@@ -280,7 +280,8 @@
 //! - **HPM Config**: Configuration management and project settings
 //! - **HPM Package**: Manifest processing and Houdini integration
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Shell};
 use std::process::ExitCode;
 use std::time::Instant;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -401,10 +402,11 @@ enum Commands {
         #[arg(long, default_value = "git")]
         vcs: String,
     },
-    /// Add a package dependency
+    /// Add package dependencies
     Add {
-        /// Package name to add
-        package: String,
+        /// Package name(s) to add
+        #[arg(value_name = "PACKAGE", required = true)]
+        packages: Vec<String>,
 
         /// Git repository URL (e.g., "https://github.com/user/repo")
         #[arg(long)]
@@ -414,7 +416,7 @@ enum Commands {
         #[arg(long)]
         commit: Option<String>,
 
-        /// Local path to package directory
+        /// Local path to package directory (only with single package)
         #[arg(long)]
         path: Option<std::path::PathBuf>,
 
@@ -422,7 +424,7 @@ enum Commands {
         #[arg(short = 'p', long = "package")]
         manifest: Option<std::path::PathBuf>,
 
-        /// Mark dependency as optional
+        /// Mark dependencies as optional
         #[arg(long)]
         optional: bool,
     },
@@ -458,6 +460,10 @@ enum Commands {
         /// Path to directory containing hpm.toml or direct path to hpm.toml file
         #[arg(short = 'p', long = "package")]
         manifest: Option<std::path::PathBuf>,
+
+        /// Display dependencies as a tree
+        #[arg(long)]
+        tree: bool,
     },
     /// Search for packages
     Search {
@@ -484,6 +490,12 @@ enum Commands {
     Check,
     /// Clean orphaned packages
     Clean(commands::clean::CleanArgs),
+    /// Generate shell completions
+    Completions {
+        /// Target shell (bash, zsh, fish, powershell, elvish)
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 #[tokio::main]
@@ -597,15 +609,15 @@ async fn run_command(
             }
         }
         Commands::Add {
-            package,
+            packages,
             git,
             commit,
             path,
             manifest,
             optional,
         } => {
-            commands::add::add_package(
-                package.clone(),
+            commands::add::add_packages(
+                packages.clone(),
                 git.clone(),
                 commit.clone(),
                 path.clone(),
@@ -621,7 +633,12 @@ async fn run_command(
             })?;
 
             if output_format == OutputFormat::Human {
-                console.success(format!("Added dependency '{}'", package));
+                let msg = if packages.len() == 1 {
+                    format!("Added dependency '{}'", packages[0])
+                } else {
+                    format!("Added {} dependencies", packages.len())
+                };
+                console.success(msg);
             }
         }
         Commands::Remove { package, manifest } => {
@@ -665,15 +682,26 @@ async fn run_command(
                 console.success("Package update completed");
             }
         }
-        Commands::List { manifest } => {
-            commands::list::list_dependencies(manifest.clone())
-                .await
-                .map_err(|e| {
-                    CliError::package(
-                        e,
-                        Some("Use 'hpm list --help' for usage information".to_string()),
-                    )
-                })?;
+        Commands::List { manifest, tree } => {
+            if *tree {
+                commands::list::list_dependencies_tree(manifest.clone())
+                    .await
+                    .map_err(|e| {
+                        CliError::package(
+                            e,
+                            Some("Use 'hpm list --help' for usage information".to_string()),
+                        )
+                    })?;
+            } else {
+                commands::list::list_dependencies(manifest.clone())
+                    .await
+                    .map_err(|e| {
+                        CliError::package(
+                            e,
+                            Some("Use 'hpm list --help' for usage information".to_string()),
+                        )
+                    })?;
+            }
         }
         Commands::Search { query } => {
             let json_output = output_format != OutputFormat::Human;
@@ -744,6 +772,11 @@ async fn run_command(
             if output_format == OutputFormat::Human {
                 console.success("Cleanup completed successfully");
             }
+        }
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            generate(*shell, &mut cmd, "hpm", &mut std::io::stdout());
+            return Ok(ExitStatus::Success);
         }
     }
 

@@ -263,7 +263,7 @@ mod tests {
             optional in any::<bool>()
         ) {
             let add_cmd = Commands::Add {
-                package: package_name.clone(),
+                packages: vec![package_name.clone()],
                 git: git_url.clone(),
                 commit: commit_hash.clone(),
                 path: None,
@@ -272,8 +272,8 @@ mod tests {
             };
 
             match add_cmd {
-                Commands::Add { package, git, commit, manifest, optional: opt, .. } => {
-                    prop_assert_eq!(package, package_name);
+                Commands::Add { packages, git, commit, manifest, optional: opt, .. } => {
+                    prop_assert_eq!(packages, vec![package_name]);
                     prop_assert_eq!(git, git_url);
                     prop_assert_eq!(commit, commit_hash);
                     prop_assert_eq!(manifest, manifest_path);
@@ -337,7 +337,7 @@ mod tests {
             commit_hash in commit_hash_strategy()
         ) {
             let add_cmd = Commands::Add {
-                package: problematic_name.clone(),
+                packages: vec![problematic_name.clone()],
                 git: Some(git_url),
                 commit: Some(commit_hash),
                 path: None,
@@ -347,8 +347,8 @@ mod tests {
 
             // Command construction should succeed (validation happens later)
             match add_cmd {
-                Commands::Add { package, .. } => {
-                    prop_assert_eq!(package, problematic_name);
+                Commands::Add { packages, .. } => {
+                    prop_assert_eq!(packages, vec![problematic_name]);
                 }
                 _ => prop_assert!(false, "Should construct Add command even with problematic name"),
             }
@@ -361,10 +361,11 @@ mod tests {
             problematic_path in prop_oneof![problematic_file_path_strategy().prop_map(Some), Just(None)]
         ) {
             // Test with normal paths
-            let list_cmd = Commands::List { manifest: path.clone() };
+            let list_cmd = Commands::List { manifest: path.clone(), tree: false };
             match list_cmd {
-                Commands::List { manifest } => {
+                Commands::List { manifest, tree } => {
                     prop_assert_eq!(manifest, path);
+                    prop_assert!(!tree);
                 }
                 _ => prop_assert!(false, "Should construct List command"),
             }

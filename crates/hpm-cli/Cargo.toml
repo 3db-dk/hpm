@@ -18,6 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+clap_complete = "4.5"
 tokio.workspace = true
 anyhow.workspace = true
 futures.workspace = true
