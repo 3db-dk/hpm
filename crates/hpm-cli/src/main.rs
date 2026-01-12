@@ -752,7 +752,6 @@ async fn run_command(
 
 fn init_logging(verbosity: Verbosity) {
     let log_level = match verbosity {
-        Verbosity::Silent => "hpm=error",
         Verbosity::Quiet => "hpm=warn",
         Verbosity::Normal => "hpm=info",
         Verbosity::Verbose => "hpm=debug",

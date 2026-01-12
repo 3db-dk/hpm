@@ -4,6 +4,7 @@
 //! dependencies resolved during installation. This ensures reproducible builds
 //! across different machines and time.
 
+use crate::package_source::PackageSource;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -49,89 +50,15 @@ pub struct LockedDependency {
     pub checksum: Option<String>,
 
     /// Source information
-    pub source: DependencySource,
+    pub source: PackageSource,
 
     /// Transitive dependencies (just names, versions are in the main dependencies map)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<String>,
 }
 
-/// Source information for a locked dependency.
-///
-/// HPM uses Git archive-based dependencies with explicit commit hashes.
-/// Tags and branches are not supported because they can be redefined,
-/// which poses a security risk.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum DependencySource {
-    /// Package from a Git repository with explicit commit hash.
-    ///
-    /// The commit hash ensures reproducibility - tags can be redefined
-    /// but commit hashes are immutable.
-    Git {
-        /// The Git repository URL
-        url: String,
-        /// The full commit hash (40 hex characters)
-        commit: String,
-    },
-
-    /// Package from a local filesystem path.
-    ///
-    /// Used during development to reference packages without publishing.
-    Path {
-        /// Path to the package directory
-        path: String,
-    },
-}
-
-impl DependencySource {
-    /// Create a new Git source.
-    pub fn git(url: impl Into<String>, commit: impl Into<String>) -> Self {
-        DependencySource::Git {
-            url: url.into(),
-            commit: commit.into(),
-        }
-    }
-
-    /// Create a new path source.
-    pub fn path(path: impl Into<String>) -> Self {
-        DependencySource::Path { path: path.into() }
-    }
-
-    /// Check if this is a Git source.
-    pub fn is_git(&self) -> bool {
-        matches!(self, DependencySource::Git { .. })
-    }
-
-    /// Check if this is a path source.
-    pub fn is_path(&self) -> bool {
-        matches!(self, DependencySource::Path { .. })
-    }
-
-    /// Get the Git URL if this is a Git source.
-    pub fn git_url(&self) -> Option<&str> {
-        match self {
-            DependencySource::Git { url, .. } => Some(url),
-            _ => None,
-        }
-    }
-
-    /// Get the commit hash if this is a Git source.
-    pub fn git_commit(&self) -> Option<&str> {
-        match self {
-            DependencySource::Git { commit, .. } => Some(commit),
-            _ => None,
-        }
-    }
-
-    /// Get the path if this is a path source.
-    pub fn local_path(&self) -> Option<&str> {
-        match self {
-            DependencySource::Path { path } => Some(path),
-            _ => None,
-        }
-    }
-}
+/// Re-export PackageSource as DependencySource for backward compatibility
+pub use crate::package_source::PackageSource as DependencySource;
 
 /// A locked Python dependency
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,7 +293,7 @@ impl LockedDependency {
         Self {
             version,
             checksum,
-            source: DependencySource::Git { url, commit },
+            source: PackageSource::Git { url, commit },
             dependencies: Vec::new(),
         }
     }
@@ -377,11 +304,11 @@ impl LockedDependency {
     /// * `version` - The resolved version (from package manifest)
     /// * `path` - Path to the package directory
     /// * `checksum` - SHA256 checksum of the package contents
-    pub fn from_path(version: String, path: String, checksum: Option<String>) -> Self {
+    pub fn from_path(version: String, path: impl Into<std::path::PathBuf>, checksum: Option<String>) -> Self {
         Self {
             version,
             checksum,
-            source: DependencySource::Path { path },
+            source: PackageSource::Path { path: path.into() },
             dependencies: Vec::new(),
         }
     }
@@ -667,15 +594,15 @@ mod tests {
     fn test_locked_dependency_from_path() {
         let dep = LockedDependency::from_path(
             "0.1.0".to_string(),
-            "../local-package".to_string(),
+            "../local-package",
             Some("checksum123".to_string()),
         );
 
         assert_eq!(dep.version, "0.1.0");
         assert_eq!(dep.checksum, Some("checksum123".to_string()));
-        match dep.source {
-            DependencySource::Path { path } => {
-                assert_eq!(path, "../local-package");
+        match &dep.source {
+            PackageSource::Path { path } => {
+                assert_eq!(path, &std::path::PathBuf::from("../local-package"));
             }
             _ => panic!("Expected Path source"),
         }

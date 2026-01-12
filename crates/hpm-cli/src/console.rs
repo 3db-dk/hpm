@@ -50,13 +50,7 @@ pub struct Console {
 /// include all output from lower levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Verbosity {
-    /// Suppress all output except critical errors
-    ///
-    /// Use this for automated scripts where minimal output is desired.
-    /// Only shows errors that prevent the program from continuing.
-    Silent,
-
-    /// Minimal output (warnings, errors, and essential information)
+    /// Minimal output (warnings and essential information)
     ///
     /// Shows important information that users should be aware of,
     /// including successful operations and warnings about potential issues.
@@ -65,13 +59,12 @@ pub enum Verbosity {
     /// Standard output level (default)
     ///
     /// Provides a good balance of information for interactive use.
-    /// Shows success, info, warning, and error messages.
+    /// Shows success, info, and warning messages.
     Normal,
 
-    /// Verbose output (includes debug information)
+    /// Verbose output (includes additional details)
     ///
     /// Shows detailed information useful for troubleshooting.
-    /// Includes all message types and detailed operation information.
     Verbose,
 }
 
@@ -112,10 +105,6 @@ enum Level {
     Info,
     /// Warning messages (yellow, warning symbol)
     Warning,
-    /// Error messages (red, x-mark)
-    Error,
-    /// Debug messages (cyan, magnifier)
-    Debug,
 }
 
 impl Console {
@@ -234,36 +223,18 @@ impl Console {
         }
     }
 
-    /// Display an error message
-    ///
-    /// Error messages are always displayed (even in silent mode) and use red styling.
-    /// They are routed to stderr for proper error handling in scripts.
-    pub fn error(&mut self, message: impl Display) {
-        if self.should_show(Level::Error) {
-            self.print_styled(Level::Error, message);
-        }
-    }
-
     /// Check if we should show output for a given level
     ///
     /// Internal method that implements the verbosity logic for each message level.
     /// This ensures consistent behavior across all message types.
     fn should_show(&self, level: Level) -> bool {
         match (self.verbosity, level) {
-            // Silent: Only errors that prevent program continuation
-            (Verbosity::Silent, Level::Error) => true,
-            (Verbosity::Silent, _) => false,
-
-            // Quiet: Essential information (success, warnings, errors)
-            (Verbosity::Quiet, Level::Error | Level::Warning | Level::Success) => true,
+            // Quiet: Essential information (success, warnings)
+            (Verbosity::Quiet, Level::Warning | Level::Success) => true,
             (Verbosity::Quiet, _) => false,
 
-            // Normal: All except debug information
-            (Verbosity::Normal, Level::Debug) => false,
-            (Verbosity::Normal, _) => true,
-
-            // Verbose: Everything
-            (Verbosity::Verbose, _) => true,
+            // Normal and Verbose: Show all messages
+            (Verbosity::Normal | Verbosity::Verbose, _) => true,
         }
     }
 
@@ -284,9 +255,9 @@ impl Console {
             format!("{}: {}", level.prefix(), message)
         };
 
-        // Route errors and warnings to stderr, everything else to stdout
+        // Route warnings to stderr, everything else to stdout
         match level {
-            Level::Error | Level::Warning => {
+            Level::Warning => {
                 writeln!(self.stderr, "{}", formatted_message).ok();
                 self.stderr.flush().ok();
             }
@@ -321,18 +292,6 @@ impl Console {
                 "\u{26A0}".style(Style::new().yellow().bold()),
                 message.to_string().style(Style::new().yellow())
             ),
-            Level::Error => format!(
-                "{} {}",
-                // Unicode ballot X (U+2717) - standard CLI error symbol
-                "\u{2717}".style(Style::new().red().bold()),
-                message.to_string().style(Style::new().red())
-            ),
-            Level::Debug => format!(
-                "{} {}",
-                // Unicode magnifying glass (U+1F50D) - debug/search symbol
-                "\u{1F50D}".style(Style::new().cyan().bold()),
-                message.to_string().style(Style::new().bright_black())
-            ),
         }
     }
 }
@@ -353,8 +312,6 @@ impl Level {
             Level::Success => "SUCCESS",
             Level::Info => "INFO",
             Level::Warning => "WARNING",
-            Level::Error => "ERROR",
-            Level::Debug => "DEBUG",
         }
     }
 }
@@ -379,7 +336,6 @@ mod tests {
 
     #[test]
     fn test_verbosity_ordering() {
-        assert!(Verbosity::Silent < Verbosity::Quiet);
         assert!(Verbosity::Quiet < Verbosity::Normal);
         assert!(Verbosity::Normal < Verbosity::Verbose);
     }
@@ -391,8 +347,6 @@ mod tests {
         assert!(console.should_show(Level::Success));
         assert!(console.should_show(Level::Info));
         assert!(console.should_show(Level::Warning));
-        assert!(console.should_show(Level::Error));
-        assert!(!console.should_show(Level::Debug));
     }
 
     #[test]
@@ -402,18 +356,5 @@ mod tests {
         assert!(console.should_show(Level::Success));
         assert!(!console.should_show(Level::Info));
         assert!(console.should_show(Level::Warning));
-        assert!(console.should_show(Level::Error));
-        assert!(!console.should_show(Level::Debug));
-    }
-
-    #[test]
-    fn test_should_show_silent() {
-        let console = Console::with_settings(Verbosity::Silent, ColorChoice::Never);
-
-        assert!(!console.should_show(Level::Success));
-        assert!(!console.should_show(Level::Info));
-        assert!(!console.should_show(Level::Warning));
-        assert!(console.should_show(Level::Error));
-        assert!(!console.should_show(Level::Debug));
     }
 }

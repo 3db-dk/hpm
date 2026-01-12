@@ -775,6 +775,7 @@ dependencies = [
  "console",
  "hpm-config",
  "hpm-core",
+ "hpm-error",
  "hpm-package",
  "hpm-python",
  "indicatif",
