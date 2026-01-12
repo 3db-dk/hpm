@@ -869,4 +869,62 @@ ignore_patterns = ["backup", ".cache", "temp"]
             .to_string_lossy()
             .ends_with("hpm.toml"));
     }
+
+    // Error path tests
+
+    #[test]
+    fn config_load_with_wrong_type_values() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+
+        // Write config with wrong types (max_search_depth should be integer, not string)
+        std::fs::write(
+            &config_path,
+            r#"
+[projects]
+max_search_depth = "not_a_number"
+"#,
+        )
+        .unwrap();
+
+        let result = Config::load_from_path(&config_path);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn config_load_with_nested_invalid_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+
+        // Write config with syntactically invalid nested structure
+        std::fs::write(
+            &config_path,
+            r#"
+[install]
+path = "packages"
+[storage
+home_dir = "missing closing bracket"
+"#,
+        )
+        .unwrap();
+
+        let result = Config::load_from_path(&config_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn config_error_display_messages() {
+        // Test that error messages are informative
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        std::fs::write(&config_path, "invalid { toml").unwrap();
+
+        let result = Config::load_from_path(&config_path);
+        let err = result.unwrap_err();
+        let err_string = err.to_string();
+
+        // Error message should mention the path
+        assert!(err_string.contains("config.toml"));
+    }
 }

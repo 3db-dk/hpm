@@ -198,18 +198,18 @@
 //! When conflicts occur, the resolver employs sophisticated resolution strategies:
 //!
 //! #### Automatic Resolution
-//! ```rust,no_run
-//! // Example: Package A requires B >=1.5, Package C requires B >=1.8
-//! // Resolution: Select B 1.8.0 (satisfies both constraints)
+//! ```text
+//! Example: Package A requires B >=1.5, Package C requires B >=1.8
+//! Resolution: Select B 1.8.0 (satisfies both constraints)
 //! ```
 //!
 //! #### Backtracking with Learning
-//! ```rust,no_run
-//! // Example: After trying and failing with Package X v2.0:
-//! // 1. Learn that X v2.0 is incompatible with current constraints
-//! // 2. Backtrack to decision point
-//! // 3. Try X v1.9 instead
-//! // 4. Cache the learned incompatibility to avoid retrying X v2.0
+//! ```text
+//! Example: After trying and failing with Package X v2.0:
+//! 1. Learn that X v2.0 is incompatible with current constraints
+//! 2. Backtrack to decision point
+//! 3. Try X v1.9 instead
+//! 4. Cache the learned incompatibility to avoid retrying X v2.0
 //! ```
 //!
 //! # Basic Usage

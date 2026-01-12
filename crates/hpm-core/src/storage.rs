@@ -752,4 +752,125 @@ min_version = "19.5"
         assert_eq!(packages[0].name, "test-package");
         assert_eq!(packages[0].version, "1.0.0");
     }
+
+    // Error path tests
+
+    #[tokio::test]
+    async fn remove_nonexistent_package_fails() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        let result = storage_manager.remove_package("nonexistent", "1.0.0").await;
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::PackageNotFound(msg)) => {
+                assert!(msg.contains("nonexistent"));
+            }
+            _ => panic!("Expected PackageNotFound error"),
+        }
+    }
+
+    #[test]
+    fn list_packages_with_corrupted_manifest() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        // Create a package directory with a corrupted manifest
+        let package_dir = temp_dir.path().join("packages").join("corrupted-pkg-1.0.0");
+        std::fs::create_dir_all(&package_dir).unwrap();
+        std::fs::write(
+            package_dir.join("hpm.toml"),
+            "this is not valid toml { [ broken",
+        )
+        .unwrap();
+
+        let result = storage_manager.list_installed();
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::ManifestParse(_)) => {}
+            _ => panic!("Expected ManifestParse error"),
+        }
+    }
+
+    #[test]
+    fn list_packages_skips_non_directories() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        // Create the packages directory and add a file (not a directory)
+        std::fs::create_dir_all(temp_dir.path().join("packages")).unwrap();
+        std::fs::write(
+            temp_dir.path().join("packages").join("random-file.txt"),
+            "not a package",
+        )
+        .unwrap();
+
+        // Should not error, just skip the file
+        let packages = storage_manager.list_installed().unwrap();
+        assert!(packages.is_empty());
+    }
+
+    #[test]
+    fn list_packages_skips_directories_without_manifest() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        // Create a package directory without hpm.toml
+        let package_dir = temp_dir.path().join("packages").join("empty-pkg-1.0.0");
+        std::fs::create_dir_all(&package_dir).unwrap();
+        std::fs::write(package_dir.join("README.md"), "no manifest here").unwrap();
+
+        // Should not error, just skip directories without manifest
+        let packages = storage_manager.list_installed().unwrap();
+        assert!(packages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn install_from_path_without_manifest_fails() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        // Create a source directory without hpm.toml
+        let source_dir = temp_dir.path().join("source-pkg");
+        std::fs::create_dir_all(&source_dir).unwrap();
+
+        let result = storage_manager.install_from_path(&source_dir).await;
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::ManifestRead(msg)) => {
+                assert!(msg.contains("hpm.toml"));
+            }
+            _ => panic!("Expected ManifestRead error"),
+        }
+    }
 }

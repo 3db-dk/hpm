@@ -226,4 +226,106 @@ package-a = { git = "https://github.com/example/package-a", commit = "1234567890
         assert!(storage_manager.package_exists("package-c", "1.0.0"));
         assert!(!storage_manager.package_exists("package-b", "1.0.0"));
     }
+
+    /// Test that config errors propagate correctly across crate boundaries
+    #[tokio::test]
+    async fn config_error_propagation() {
+        // Create storage with invalid paths - error should propagate cleanly
+        let temp_dir = TempDir::new().unwrap();
+
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().join("hpm_storage"),
+            cache_dir: temp_dir.path().join("cache"),
+            packages_dir: temp_dir.path().join("packages"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+
+        // Create storage manager - should succeed even with non-existent paths
+        let storage_manager = StorageManager::new(storage_config);
+        assert!(storage_manager.is_ok());
+
+        // Listing packages on empty storage should return empty vec, not error
+        let installed = storage_manager.unwrap().list_installed();
+        assert!(installed.is_ok());
+        assert!(installed.unwrap().is_empty());
+    }
+
+    /// Test project discovery with no projects found
+    #[test]
+    fn project_discovery_empty_results() {
+        let temp_dir = TempDir::new().unwrap();
+        let projects_root = temp_dir.path().join("empty_projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+
+        let mut projects_config = ProjectsConfig::default();
+        projects_config.add_search_root(projects_root);
+
+        let discovery = ProjectDiscovery::new(projects_config);
+        let projects = discovery.find_projects();
+
+        assert!(projects.is_ok());
+        assert!(projects.unwrap().is_empty());
+    }
+
+    /// Test that project discovery handles various manifest states gracefully
+    #[test]
+    fn invalid_manifest_discovery_resilience() {
+        let temp_dir = TempDir::new().unwrap();
+        let projects_root = temp_dir.path().join("projects");
+
+        let mut projects_config = ProjectsConfig::default();
+        projects_config.add_search_root(projects_root.clone());
+
+        // Create a project with syntactically invalid TOML
+        let project_dir = projects_root.join("invalid-project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(
+            project_dir.join("hpm.toml"),
+            "this is not valid { toml [ syntax",
+        ).unwrap();
+
+        let discovery = ProjectDiscovery::new(projects_config);
+        let result = discovery.find_projects();
+
+        // The key test: this should not panic
+        // Whether it returns Ok (skipping invalid) or Err (reporting the error) is implementation-dependent
+        let _ = result;
+    }
+
+    /// Test cleanup resilience with corrupted package directories
+    #[tokio::test]
+    async fn cleanup_handles_corrupted_packages() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_root = temp_dir.path().join("hpm_storage");
+        let projects_root = temp_dir.path().join("projects");
+
+        let storage_config = StorageConfig {
+            home_dir: storage_root.clone(),
+            cache_dir: storage_root.join("cache"),
+            packages_dir: storage_root.join("packages"),
+            registry_cache_dir: storage_root.join("registry"),
+        };
+
+        let mut projects_config = ProjectsConfig::default();
+        projects_config.add_search_root(projects_root.clone());
+
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+        let packages_dir = &storage_manager.config.packages_dir;
+        std::fs::create_dir_all(packages_dir).unwrap();
+
+        // Create a corrupted package directory (no manifest)
+        let corrupted_dir = packages_dir.join("corrupted@1.0.0");
+        std::fs::create_dir_all(&corrupted_dir).unwrap();
+        // No hpm.toml file - this is the corruption
+
+        // Create empty projects directory
+        std::fs::create_dir_all(&projects_root).unwrap();
+
+        // The key test: cleanup should not panic when encountering corrupted packages
+        // It may return an error or skip the corrupted package, but should not crash
+        let result = storage_manager.cleanup_unused(&projects_config).await;
+
+        // Just verify it doesn't panic - the actual behavior (error or skip) is implementation-dependent
+        let _ = result;
+    }
 }

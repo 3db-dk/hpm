@@ -5,10 +5,183 @@
 
 use crate::package_source::{GitProvider, PackageSource, PackageSourceError};
 use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use tokio::io::AsyncWriteExt;
 use tracing::{debug, info, warn};
+
+/// Name of the checksum cache file stored in package directories.
+const CHECKSUM_CACHE_FILE: &str = ".hpm-checksum";
+
+/// Extract a zip archive to the target directory (blocking operation).
+///
+/// This is a standalone function designed to be called from `spawn_blocking`.
+fn extract_archive_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchError> {
+    let file = std::fs::File::open(archive_path)?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| FetchError::ExtractionError(e.to_string()))?;
+
+    // Find common prefix (Git archives typically have a single root directory)
+    let common_prefix = find_archive_prefix_sync(&archive)?;
+
+    // Create target directory
+    std::fs::create_dir_all(target_dir)?;
+
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| FetchError::ExtractionError(e.to_string()))?;
+
+        let raw_path = match file.enclosed_name() {
+            Some(p) => p.to_path_buf(),
+            None => {
+                warn!("Skipping file with invalid path in archive");
+                continue;
+            }
+        };
+
+        // Strip the common prefix
+        let relative_path = if let Some(ref prefix) = common_prefix {
+            match raw_path.strip_prefix(prefix) {
+                Ok(p) => p.to_path_buf(),
+                Err(_) => raw_path,
+            }
+        } else {
+            raw_path
+        };
+
+        // Skip empty paths (the root directory itself after stripping prefix)
+        if relative_path.as_os_str().is_empty() {
+            continue;
+        }
+
+        // Security check: ensure no path traversal
+        validate_path_safety_sync(&relative_path)?;
+
+        let target_path = target_dir.join(&relative_path);
+
+        if file.is_dir() {
+            std::fs::create_dir_all(&target_path)?;
+        } else {
+            // Ensure parent directory exists
+            if let Some(parent) = target_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            let mut outfile = std::fs::File::create(&target_path)?;
+            std::io::copy(&mut file, &mut outfile)?;
+
+            // Set permissions on Unix
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Some(mode) = file.unix_mode() {
+                    std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(mode))?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Find the common prefix in a zip archive (blocking operation).
+fn find_archive_prefix_sync(
+    archive: &zip::ZipArchive<std::fs::File>,
+) -> Result<Option<PathBuf>, FetchError> {
+    if archive.is_empty() {
+        return Ok(None);
+    }
+
+    let first_name = archive
+        .name_for_index(0)
+        .ok_or_else(|| FetchError::ExtractionError("Empty archive".to_string()))?;
+
+    let first_path = PathBuf::from(first_name);
+    if let Some(first_component) = first_path.components().next() {
+        let prefix = PathBuf::from(first_component.as_os_str());
+
+        // Verify all entries start with this prefix
+        for i in 0..archive.len() {
+            let name = archive
+                .name_for_index(i)
+                .ok_or_else(|| FetchError::ExtractionError("Invalid archive entry".to_string()))?;
+            if !name.starts_with(prefix.to_str().unwrap_or("")) {
+                return Ok(None);
+            }
+        }
+
+        return Ok(Some(prefix));
+    }
+
+    Ok(None)
+}
+
+/// Validate that a path doesn't contain traversal attempts.
+fn validate_path_safety_sync(path: &Path) -> Result<(), FetchError> {
+    for component in path.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(FetchError::PathTraversalDetected(path.display().to_string()));
+        }
+    }
+    Ok(())
+}
+
+/// Get the checksum for a directory, using cache if available (blocking operation).
+fn get_directory_checksum_sync(dir: &Path) -> Result<String, FetchError> {
+    // Try to read from cache first
+    let checksum_file = dir.join(CHECKSUM_CACHE_FILE);
+    if let Ok(cached) = std::fs::read_to_string(&checksum_file) {
+        debug!("Using cached checksum for {:?}", dir);
+        return Ok(cached.trim().to_string());
+    }
+
+    // Compute checksum and cache it
+    let checksum = compute_directory_checksum_sync(dir)?;
+    if let Err(e) = std::fs::write(&checksum_file, &checksum) {
+        warn!("Failed to cache checksum: {}", e);
+        // Non-fatal - we still have the checksum
+    }
+    Ok(checksum)
+}
+
+/// Compute a SHA-256 checksum of a directory's contents (blocking operation).
+fn compute_directory_checksum_sync(dir: &Path) -> Result<String, FetchError> {
+    let mut hasher = Sha256::new();
+
+    // Walk directory in sorted order for deterministic checksums
+    let mut entries: Vec<_> = walkdir::WalkDir::new(dir)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        // Skip the checksum cache file itself
+        .filter(|e| e.file_name() != CHECKSUM_CACHE_FILE)
+        .collect();
+
+    entries.sort_by(|a, b| a.path().cmp(b.path()));
+
+    for entry in entries {
+        // Include relative path in hash
+        let relative_path = entry.path().strip_prefix(dir).unwrap_or(entry.path());
+        hasher.update(relative_path.to_string_lossy().as_bytes());
+
+        // Include file contents in hash
+        let mut file = std::fs::File::open(entry.path())?;
+        let mut buffer = [0u8; 8192];
+        loop {
+            let bytes_read = file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..bytes_read]);
+        }
+    }
+
+    let result = hasher.finalize();
+    Ok(format!("{:x}", result))
+}
 
 /// Errors that can occur during archive fetching.
 #[derive(Debug, Error)]
@@ -128,10 +301,15 @@ impl ArchiveFetcher {
         let package_dir = self.packages_dir.join(&cache_key);
 
         // Check if already extracted
-        if package_dir.exists() {
+        if tokio::fs::try_exists(&package_dir).await.unwrap_or(false) {
             info!("Package {} already cached at {:?}", cache_key, package_dir);
             // Use cached checksum to avoid expensive directory walk
-            let checksum = self.get_directory_checksum(&package_dir)?;
+            let dir_for_checksum = package_dir.clone();
+            let checksum = tokio::task::spawn_blocking(move || {
+                get_directory_checksum_sync(&dir_for_checksum)
+            })
+            .await
+            .map_err(|e| FetchError::ExtractionError(format!("Checksum task join error: {}", e)))??;
             return Ok(FetchResult {
                 package_path: package_dir,
                 checksum,
@@ -148,15 +326,26 @@ impl ArchiveFetcher {
         // Download the archive
         let archive_path = self.download_archive(&archive_url, &cache_key).await?;
 
-        // Extract the archive
+        // Extract the archive (blocking operation wrapped in spawn_blocking)
         info!("Extracting package to {:?}", package_dir);
-        self.extract_archive(&archive_path, &package_dir)?;
+        let archive_path_clone = archive_path.clone();
+        let package_dir_clone = package_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            extract_archive_sync(&archive_path_clone, &package_dir_clone)
+        })
+        .await
+        .map_err(|e| FetchError::ExtractionError(format!("Task join error: {}", e)))??;
 
-        // Compute checksum of extracted contents and cache it
-        let checksum = self.get_directory_checksum(&package_dir)?;
+        // Compute checksum of extracted contents and cache it (blocking operation)
+        let package_dir_for_checksum = package_dir.clone();
+        let checksum = tokio::task::spawn_blocking(move || {
+            get_directory_checksum_sync(&package_dir_for_checksum)
+        })
+        .await
+        .map_err(|e| FetchError::ExtractionError(format!("Checksum task join error: {}", e)))??;
 
         // Clean up the archive file
-        if let Err(e) = std::fs::remove_file(&archive_path) {
+        if let Err(e) = tokio::fs::remove_file(&archive_path).await {
             warn!("Failed to clean up archive file: {}", e);
         }
 
@@ -173,14 +362,19 @@ impl ArchiveFetcher {
         path: &Path,
         _package_name: &str,
     ) -> Result<FetchResult, FetchError> {
-        if !path.exists() {
+        if !tokio::fs::try_exists(path).await.unwrap_or(false) {
             return Err(FetchError::PathNotFound(path.to_path_buf()));
         }
 
         // For path dependencies, we use the path directly without copying
         // Note: We don't cache checksums for path dependencies since the source
         // may change without our knowledge (it's a local directory)
-        let checksum = self.compute_directory_checksum(path)?;
+        let path_for_checksum = path.to_path_buf();
+        let checksum = tokio::task::spawn_blocking(move || {
+            compute_directory_checksum_sync(&path_for_checksum)
+        })
+        .await
+        .map_err(|e| FetchError::ExtractionError(format!("Checksum task join error: {}", e)))??;
 
         Ok(FetchResult {
             package_path: path.to_path_buf(),
@@ -198,7 +392,7 @@ impl ArchiveFetcher {
         let archive_path = self.cache_dir.join(format!("{}.zip", cache_key));
 
         // Check if already downloaded
-        if archive_path.exists() {
+        if tokio::fs::try_exists(&archive_path).await.unwrap_or(false) {
             debug!("Archive already cached at {:?}", archive_path);
             return Ok(archive_path);
         }
@@ -215,212 +409,16 @@ impl ArchiveFetcher {
         // Stream the response to a file
         let bytes = response.bytes().await?;
 
-        let mut file = std::fs::File::create(&archive_path)
+        let mut file = tokio::fs::File::create(&archive_path)
+            .await
             .map_err(FetchError::WriteError)?;
         file.write_all(&bytes)
+            .await
             .map_err(FetchError::WriteError)?;
 
         info!("Downloaded {} bytes to {:?}", bytes.len(), archive_path);
 
         Ok(archive_path)
-    }
-
-    /// Extract a zip archive to the target directory.
-    fn extract_archive(
-        &self,
-        archive_path: &Path,
-        target_dir: &Path,
-    ) -> Result<(), FetchError> {
-        let file = std::fs::File::open(archive_path)?;
-        let mut archive = zip::ZipArchive::new(file)
-            .map_err(|e| FetchError::ExtractionError(e.to_string()))?;
-
-        // Git archives typically have a single root directory
-        // e.g., "repo-abc123/" for GitHub archives
-        // We need to strip this prefix when extracting
-
-        // First, find the common prefix (if any)
-        let common_prefix = self.find_archive_prefix(&archive)?;
-
-        // Create target directory
-        std::fs::create_dir_all(target_dir)?;
-
-        for i in 0..archive.len() {
-            let mut file = archive.by_index(i)
-                .map_err(|e| FetchError::ExtractionError(e.to_string()))?;
-
-            let raw_path = match file.enclosed_name() {
-                Some(p) => p.to_path_buf(),
-                None => {
-                    warn!("Skipping file with invalid path in archive");
-                    continue;
-                }
-            };
-
-            // Strip the common prefix
-            let relative_path = if let Some(ref prefix) = common_prefix {
-                match raw_path.strip_prefix(prefix) {
-                    Ok(p) => p.to_path_buf(),
-                    Err(_) => raw_path,
-                }
-            } else {
-                raw_path
-            };
-
-            // Skip empty paths (the root directory itself after stripping prefix)
-            if relative_path.as_os_str().is_empty() {
-                continue;
-            }
-
-            // Security check: ensure no path traversal
-            self.validate_path_safety(&relative_path)?;
-
-            let target_path = target_dir.join(&relative_path);
-
-            if file.is_dir() {
-                std::fs::create_dir_all(&target_path)?;
-            } else {
-                // Ensure parent directory exists
-                if let Some(parent) = target_path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-
-                let mut outfile = std::fs::File::create(&target_path)?;
-                std::io::copy(&mut file, &mut outfile)?;
-
-                // Set permissions on Unix
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if let Some(mode) = file.unix_mode() {
-                        std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(mode))?;
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Find the common prefix in a zip archive (e.g., "repo-abc123/").
-    fn find_archive_prefix(&self, archive: &zip::ZipArchive<std::fs::File>) -> Result<Option<PathBuf>, FetchError> {
-        if archive.is_empty() {
-            return Ok(None);
-        }
-
-        // Get the first entry
-        let first_name = archive.name_for_index(0)
-            .ok_or_else(|| FetchError::ExtractionError("Empty archive".to_string()))?;
-
-        // Check if it looks like a root directory (ends with /)
-        let first_path = PathBuf::from(first_name);
-        if let Some(first_component) = first_path.components().next() {
-            let prefix = PathBuf::from(first_component.as_os_str());
-
-            // Verify all entries start with this prefix
-            for i in 0..archive.len() {
-                let name = archive.name_for_index(i)
-                    .ok_or_else(|| FetchError::ExtractionError("Invalid archive entry".to_string()))?;
-                if !name.starts_with(prefix.to_str().unwrap_or("")) {
-                    return Ok(None);
-                }
-            }
-
-            return Ok(Some(prefix));
-        }
-
-        Ok(None)
-    }
-
-    /// Validate that a path doesn't contain traversal attempts.
-    fn validate_path_safety(&self, path: &Path) -> Result<(), FetchError> {
-        for component in path.components() {
-            if matches!(component, std::path::Component::ParentDir) {
-                return Err(FetchError::PathTraversalDetected(
-                    path.display().to_string()
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// Name of the checksum cache file stored in package directories.
-    const CHECKSUM_CACHE_FILE: &'static str = ".hpm-checksum";
-
-    /// Read a cached checksum from a directory if it exists.
-    ///
-    /// Returns `None` if the cache file doesn't exist or can't be read.
-    fn read_cached_checksum(&self, dir: &Path) -> Option<String> {
-        let checksum_file = dir.join(Self::CHECKSUM_CACHE_FILE);
-        std::fs::read_to_string(&checksum_file)
-            .ok()
-            .map(|s| s.trim().to_string())
-    }
-
-    /// Write a checksum to the cache file in a directory.
-    fn write_cached_checksum(&self, dir: &Path, checksum: &str) -> Result<(), FetchError> {
-        let checksum_file = dir.join(Self::CHECKSUM_CACHE_FILE);
-        std::fs::write(&checksum_file, checksum)
-            .map_err(FetchError::WriteError)
-    }
-
-    /// Get the checksum for a directory, using cache if available.
-    ///
-    /// This avoids expensive directory walks on subsequent fetches.
-    fn get_directory_checksum(&self, dir: &Path) -> Result<String, FetchError> {
-        // Try to read from cache first
-        if let Some(cached) = self.read_cached_checksum(dir) {
-            debug!("Using cached checksum for {:?}", dir);
-            return Ok(cached);
-        }
-
-        // Compute checksum and cache it
-        let checksum = self.compute_directory_checksum(dir)?;
-        if let Err(e) = self.write_cached_checksum(dir, &checksum) {
-            warn!("Failed to cache checksum: {}", e);
-            // Non-fatal - we still have the checksum
-        }
-        Ok(checksum)
-    }
-
-    /// Compute a SHA-256 checksum of a directory's contents.
-    ///
-    /// This is expensive for large directories. Use `get_directory_checksum`
-    /// to leverage caching.
-    fn compute_directory_checksum(&self, dir: &Path) -> Result<String, FetchError> {
-        let mut hasher = Sha256::new();
-
-        // Walk directory in sorted order for deterministic checksums
-        let mut entries: Vec<_> = walkdir::WalkDir::new(dir)
-            .sort_by_file_name()
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            // Skip the checksum cache file itself
-            .filter(|e| e.file_name() != Self::CHECKSUM_CACHE_FILE)
-            .collect();
-
-        entries.sort_by(|a, b| a.path().cmp(b.path()));
-
-        for entry in entries {
-            // Include relative path in hash
-            let relative_path = entry.path().strip_prefix(dir).unwrap_or(entry.path());
-            hasher.update(relative_path.to_string_lossy().as_bytes());
-
-            // Include file contents in hash
-            let mut file = std::fs::File::open(entry.path())?;
-            let mut buffer = [0u8; 8192];
-            loop {
-                let bytes_read = file.read(&mut buffer)?;
-                if bytes_read == 0 {
-                    break;
-                }
-                hasher.update(&buffer[..bytes_read]);
-            }
-        }
-
-        let result = hasher.finalize();
-        Ok(format!("{:x}", result))
     }
 
     /// Check if a package is already cached.
@@ -475,19 +473,13 @@ mod tests {
 
     #[test]
     fn test_validate_path_safety() {
-        let temp_dir = TempDir::new().unwrap();
-        let fetcher = ArchiveFetcher::new(
-            temp_dir.path().join("cache"),
-            temp_dir.path().join("packages"),
-        ).unwrap();
-
         // Safe paths
-        assert!(fetcher.validate_path_safety(Path::new("foo/bar/baz.txt")).is_ok());
-        assert!(fetcher.validate_path_safety(Path::new("src/lib.rs")).is_ok());
+        assert!(validate_path_safety_sync(Path::new("foo/bar/baz.txt")).is_ok());
+        assert!(validate_path_safety_sync(Path::new("src/lib.rs")).is_ok());
 
         // Unsafe paths
-        assert!(fetcher.validate_path_safety(Path::new("../etc/passwd")).is_err());
-        assert!(fetcher.validate_path_safety(Path::new("foo/../../etc/passwd")).is_err());
+        assert!(validate_path_safety_sync(Path::new("../etc/passwd")).is_err());
+        assert!(validate_path_safety_sync(Path::new("foo/../../etc/passwd")).is_err());
     }
 
     #[test]
@@ -543,5 +535,72 @@ mod tests {
         let source = PackageSource::path("/nonexistent/path");
         let result = fetcher.fetch(&source, "my-package").await;
         assert!(result.is_err());
+    }
+
+    // Error path tests
+
+    #[test]
+    fn test_invalid_git_url() {
+        // Empty URL should fail
+        let result = PackageSource::git("", "abc123def456789012345678901234567890abcd");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_short_commit_hash_is_allowed() {
+        // Short commit hashes are valid (Git supports 7+ chars, but the code accepts any length)
+        let result = PackageSource::git("https://github.com/owner/repo", "abc12");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_empty_commit_hash_fails() {
+        // Empty commit hash should fail
+        let result = PackageSource::git("https://github.com/owner/repo", "");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_commit_hash_non_hex() {
+        // Commit hash must be hexadecimal
+        let result = PackageSource::git("https://github.com/owner/repo", "ghijklmnopqrstuvwxyz1234567890123456789");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_path_traversal_parent_directory() {
+        // Path traversal with parent directory reference
+        assert!(validate_path_safety_sync(Path::new("../secret")).is_err());
+    }
+
+    #[test]
+    fn test_path_traversal_embedded() {
+        // Path traversal embedded in path
+        assert!(validate_path_safety_sync(Path::new("foo/../../../etc/passwd")).is_err());
+    }
+
+    #[test]
+    fn test_path_traversal_windows_style() {
+        // Windows-style path separators shouldn't bypass checks
+        assert!(validate_path_safety_sync(Path::new("..\\secret")).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_returns_path_not_found_error() {
+        let temp_dir = TempDir::new().unwrap();
+        let fetcher = ArchiveFetcher::new(
+            temp_dir.path().join("cache"),
+            temp_dir.path().join("packages"),
+        ).unwrap();
+
+        let source = PackageSource::path("/definitely/does/not/exist/anywhere");
+        let result = fetcher.fetch(&source, "test-pkg").await;
+
+        match result {
+            Err(FetchError::PathNotFound(path)) => {
+                assert!(path.to_string_lossy().contains("definitely"));
+            }
+            _ => panic!("Expected PathNotFound error"),
+        }
     }
 }
