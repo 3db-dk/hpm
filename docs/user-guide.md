@@ -96,8 +96,8 @@ The typical HPM workflow follows these steps:
 hpm init advanced-geometry-tools
 
 # 2. Add dependencies
-hpm add utility-nodes --version "^2.1.0"
-hpm add material-library --optional
+hpm add utility-nodes --git https://github.com/studio/utility-nodes --commit abc1234
+hpm add material-library --git https://github.com/studio/materials --commit def5678 --optional
 
 # 3. Install all dependencies
 hpm install
@@ -149,24 +149,23 @@ hpm init advanced-tools \
 
 ### Adding Dependencies
 
-HPM uses semantic versioning for dependency management:
+HPM uses Git-based dependencies with commit pinning for security (commit hashes cannot be changed, unlike tags):
 
 ```bash
-# Add latest version
-hpm add utility-nodes
+# Add from Git repository (primary method)
+hpm add utility-nodes --git https://github.com/studio/utility-nodes --commit abc1234
 
-# Add specific version with constraints  
-hmp add geometry-tools --version "^2.1.0"    # Compatible with 2.1.x
-hpm add mesh-utils --version "~1.5.0"        # Compatible with 1.5.x  
-hpm add old-library --version ">=1.0.0"      # Minimum version 1.0.0
-hpm add exact-package --version "2.0.0"      # Exact version
+# Add multiple packages at once (from same repo)
+hpm add pkg1 pkg2 --git https://github.com/studio/tools --commit def5678
+
+# Add local path dependency
+hpm add local-tools --path ../my-local-tools
 
 # Add optional dependencies
-hpm add visualization-tools --optional
+hpm add visualization-tools --git https://github.com/studio/viz --commit 789xyz --optional
 
 # Add to specific project
-hpm add node-library --package /path/to/project/
-hpm add custom-tools --package /path/to/project/hpm.toml
+hpm add node-library --git https://github.com/studio/nodes --commit abc123 --package /path/to/project/
 ```
 
 ### Removing Dependencies
@@ -188,7 +187,7 @@ hpm remove legacy-tools --package /path/to/project/hpm.toml
 
 ### Installing Dependencies
 
-Install all dependencies specified in your `hmp.toml`:
+Install all dependencies specified in your `hpm.toml`:
 
 ```bash
 # Install from current directory
@@ -221,13 +220,13 @@ hpm update --dry-run
 hpm update
 
 # Update specific packages only
-hmp update numpy geometry-tools material-library
+hpm update numpy geometry-tools material-library
 
 # Update specific project
 hpm update --package /path/to/project/
 
 # Automated updates (for scripts/CI)
-hmp update --yes
+hpm update --yes
 
 # Machine-readable output for automation
 hpm update --dry-run --output json
@@ -244,7 +243,7 @@ hpm list
 
 # List dependencies from specific project
 hpm list --package /path/to/project/
-hmp list --package /path/to/project/hpm.toml
+hpm list --package /path/to/project/hpm.toml
 ```
 
 Example output:
@@ -294,7 +293,7 @@ hpm clean --dry-run
 hpm clean
 
 # Automated cleanup for scripts
-hmp clean --yes
+hpm clean --yes
 
 # Clean only Python virtual environments
 hpm clean --python-only --dry-run
@@ -331,16 +330,14 @@ All HPM commands support these global options:
 | Command | Purpose | Status |
 |---------|---------|--------|
 | [`init`](#init) | Initialize new HPM package | ✅ Fully Implemented |
-| [`add`](#add) | Add package dependency | ✅ Fully Implemented |
+| [`add`](#add) | Add package dependencies | ✅ Fully Implemented |
 | [`remove`](#remove) | Remove package dependency | ✅ Fully Implemented |
 | [`install`](#install) | Install dependencies from hpm.toml | ✅ Fully Implemented |
 | [`update`](#update) | Update packages to latest versions | ✅ Fully Implemented |
 | [`list`](#list) | Display package information | ✅ Fully Implemented |
 | [`check`](#check) | Validate package configuration | ✅ Fully Implemented |
 | [`clean`](#clean) | Clean orphaned packages | ✅ Fully Implemented |
-| [`search`](#search) | Search registry for packages | 🔧 Planned |
-| [`publish`](#publish) | Publish package to registry | 🔧 Planned |
-| [`run`](#run) | Execute package scripts | 🔧 Planned |
+| [`completions`](#completions) | Generate shell completions | ✅ Fully Implemented |
 
 ### init
 
@@ -382,34 +379,41 @@ hpm init advanced-tools \
 
 ### add
 
-Add a package dependency to your project's hpm.toml manifest.
+Add package dependencies to your project's hpm.toml manifest.
 
 ```bash
-hpm add [OPTIONS] <PACKAGE>
+hpm add [OPTIONS] <PACKAGE>...
 ```
 
 **Arguments:**
-- `PACKAGE` - Name of the package to add
+- `PACKAGE...` - One or more package names to add
 
 **Options:**
-- `-v, --version <VERSION>` - Version specification (e.g., "^1.0.0", "latest")
+- `--git <URL>` - Git repository URL (required for Git dependencies)
+- `--commit <HASH>` - Git commit hash (required for Git dependencies)
+- `--path <PATH>` - Local path to package (for path dependencies)
 - `-p, --package <PATH>` - Path to directory containing hpm.toml or direct path to hpm.toml file
 - `--optional` - Mark dependency as optional
 
 **Examples:**
 ```bash
-# Add latest version
-hpm add utility-nodes
+# Add from Git repository
+hpm add utility-nodes --git https://github.com/studio/utility-nodes --commit abc1234
 
-# Add with version constraint
-hpm add geometry-tools --version "^2.1.0"
+# Add multiple packages at once
+hpm add pkg1 pkg2 --git https://github.com/studio/tools --commit def5678
+
+# Add local path dependency
+hpm add local-tools --path ../my-local-tools
 
 # Add optional dependency
-hpm add material-library --version "1.5.0" --optional
+hpm add material-library --git https://github.com/studio/materials --commit 789xyz --optional
 
 # Add to specific project
-hpm add mesh-utils --package /path/to/project/
+hpm add mesh-utils --git https://github.com/studio/mesh --commit abc123 --package /path/to/project/
 ```
+
+**Note:** HPM uses Git-based dependencies with commit pinning for security. Commit hashes cannot be changed (unlike tags), ensuring reproducible builds.
 
 ### remove
 
@@ -423,12 +427,12 @@ hpm remove [OPTIONS] <PACKAGE>
 - `PACKAGE` - Name of the package to remove
 
 **Options:**
-- `-p, --package <PATH>` - Path to directory containing hmp.toml or direct path to hpm.toml file
+- `-p, --package <PATH>` - Path to directory containing hpm.toml or direct path to hpm.toml file
 
 **Examples:**
 ```bash
 # Remove from current project
-hmp remove old-package
+hpm remove old-package
 
 # Remove from specific project
 hpm remove unused-library --package /path/to/project/
@@ -467,7 +471,7 @@ hpm update [OPTIONS] [PACKAGES]...
 - `PACKAGES` - Only update these specific packages (optional)
 
 **Options:**
-- `-p, --package <PATH>` - Path to directory containing hpm.toml or direct path to hmp.toml file
+- `-p, --package <PATH>` - Path to directory containing hpm.toml or direct path to hpm.toml file
 - `--dry-run` - Preview changes without applying them
 - `-y, --yes` - Skip confirmation prompts
 
@@ -477,7 +481,7 @@ hpm update [OPTIONS] [PACKAGES]...
 hpm update --dry-run
 
 # Update all packages
-hmp update
+hpm update
 
 # Update specific packages
 hpm update numpy geometry-tools
@@ -495,15 +499,31 @@ hpm list [OPTIONS]
 ```
 
 **Options:**
-- `-p, --package <PATH>` - Path to directory containing hpm.toml or direct path to hmp.toml file
+- `-p, --package <PATH>` - Path to directory containing hpm.toml or direct path to hpm.toml file
+- `--tree` - Display dependencies as a visual tree
 
 **Examples:**
 ```bash
 # List current project dependencies
 hpm list
 
+# List as visual tree
+hpm list --tree
+
 # List specific project dependencies
 hpm list --package /path/to/project/
+```
+
+**Tree output example:**
+```
+my-package v1.0.0
+├── geometry-tools (repo@abc1234)
+├── utility-nodes (repo@def5678) [optional]
+└── local-tools (path: ../local-tools)
+
+Python dependencies:
+├── numpy >=1.20.0
+└── requests >=2.25.0
 ```
 
 ### check
@@ -552,6 +572,32 @@ hpm clean --comprehensive --yes
 hpm clean --python-only --dry-run
 ```
 
+### completions
+
+Generate shell completion scripts.
+
+```bash
+hpm completions <SHELL>
+```
+
+**Arguments:**
+- `SHELL` - Target shell: `bash`, `zsh`, `fish`, `powershell`, `elvish`
+
+**Examples:**
+```bash
+# Bash - add to ~/.bashrc
+eval "$(hpm completions bash)"
+
+# Zsh - add to ~/.zshrc
+eval "$(hpm completions zsh)"
+
+# Fish - add to ~/.config/fish/config.fish
+hpm completions fish | source
+
+# PowerShell - add to $PROFILE
+hpm completions powershell | Out-String | Invoke-Expression
+```
+
 ## Configuration
 
 ### Package Manifest (hpm.toml)
@@ -572,15 +618,11 @@ keywords = ["houdini", "geometry", "tools"]
 min_version = "19.5"
 max_version = "21.0"
 
-# HPM package dependencies
+# HPM package dependencies (Git-based with commit pinning)
 [dependencies]
-utility-nodes = "^2.1.0"
-material-library = { version = "1.5", optional = true }
-geometry-tools = { git = "https://github.com/example/geometry-tools", tag = "v1.0" }
-
-# Development-only dependencies
-[dev-dependencies]
-test-assets = "0.1.0"
+utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc1234" }
+material-library = { git = "https://github.com/studio/materials", commit = "def5678", optional = true }
+local-tools = { path = "../local-tools" }
 
 # Python dependencies with Houdini integration
 [python_dependencies]
@@ -620,53 +662,34 @@ The `[houdini]` section specifies Houdini compatibility:
 
 #### Dependencies
 
-HPM supports several dependency types:
+HPM uses Git-based dependencies with commit pinning for security and reproducibility:
 
-##### Version Specifications
+##### Git Dependencies
 ```toml
 [dependencies]
-# Caret requirements: compatible within major version
-utility-nodes = "^2.1.0"  # >=2.1.0, <3.0.0
+# Basic Git dependency with commit hash
+utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc1234def5678" }
 
-# Tilde requirements: compatible within minor version  
-material-library = "~1.5.0"  # >=1.5.0, <1.6.0
-
-# Range requirements
-geometry-tools = ">=1.0.0"  # At least 1.0.0
-old-package = "1.0.0"       # Exact version
+# Optional Git dependency
+material-library = { git = "https://github.com/studio/materials", commit = "def5678", optional = true }
 ```
 
-##### Advanced Dependencies
+##### Path Dependencies
 ```toml
 [dependencies]
-# Optional dependencies
-visualization-tools = { version = "^1.0.0", optional = true }
-
-# Git dependencies
-custom-nodes = { git = "https://github.com/user/custom-nodes" }
-dev-tools = { git = "https://github.com/user/dev-tools", tag = "v2.0" }
-experimental = { git = "https://github.com/user/experimental", branch = "main" }
+# Local path dependency (for development)
+local-tools = { path = "../my-local-tools" }
+dev-utilities = { path = "./packages/dev-utils", optional = true }
 ```
+
+**Note:** HPM requires commit hashes (not tags or branches) for Git dependencies. This ensures reproducible builds since commit hashes are immutable.
 
 ### Global Configuration (~/.hpm/config.toml)
 
 Global HPM settings stored in your home directory:
 
 ```toml
-[registry]
-# Default registry URL
-default = "https://packages.houdini.org"
-
-# Additional registries
-[registry.sources]
-internal = "https://internal.company.com/hpm"
-experimental = "https://experimental.houdini.org"
-
 [install]
-# Parallel download configuration
-parallel_downloads = 8
-timeout_seconds = 300
-
 # Package installation paths
 package_dir = "packages"
 cache_dir = "cache"
@@ -686,10 +709,6 @@ explicit_paths = [
   "/critical/project2"
 ]
 
-[auth]
-# Registry authentication token
-token = "your-registry-token-here"
-
 [python]
 # Python environment configuration
 cache_dir = "python-cache"
@@ -697,7 +716,7 @@ max_environments = 50
 cleanup_threshold_days = 30
 
 [ui]
-# User interface preferences  
+# User interface preferences
 color = "auto"  # auto, always, never
 progress_bars = true
 confirm_destructive = true
@@ -860,7 +879,7 @@ When you run `hpm install`, HPM creates a project integration structure:
 
 ```
 your-project/
-├── hmp.toml             # Project manifest
+├── hpm.toml             # Project manifest
 ├── hpm.lock             # Dependency lock file (generated)
 ├── .hpm/                # HPM project directory
 │   └── packages/        # Package installation references
@@ -884,8 +903,7 @@ HPM manages a global storage system for efficient package sharing:
 │   │   └── lib/python/site-packages/
 │   └── f6e5d4c3b2a1/
 ├── cache/                         # Download cache and metadata
-├── registry/                      # Registry index cache
-├── uv-cache/                     # Isolated UV package cache
+├── uv-cache/                      # Isolated UV package cache
 ├── config.toml                   # Global configuration
 └── logs/                         # Operation logs
 ```
@@ -912,10 +930,10 @@ HPM automatically generates and manages these files:
   "load_package_once": true,
   "env": [
     {
-      "PYTHONPATH": "/Users/user/.hmp/venvs/a1b2c3d4e5f6/lib/python/site-packages:$PYTHONPATH"
+      "PYTHONPATH": "/Users/user/.hpm/venvs/a1b2c3d4e5f6/lib/python/site-packages:$PYTHONPATH"
     }
   ],
-  "hmp_managed": true,
+  "hpm_managed": true,
   "hpm_package": "my-package",
   "hpm_version": "1.0.0"
 }
@@ -927,9 +945,9 @@ HPM automatically generates and manages these files:
 # Do not modify manually
 
 [[package]]
-name = "utility-nodes"  
-version = "2.1.0"
-source = "registry+https://packages.houdini.org/"
+name = "utility-nodes"
+git = "https://github.com/studio/utility-nodes"
+commit = "abc1234def5678901234567890abcdef12345678"
 
 [[package]]
 name = "numpy"
@@ -945,10 +963,9 @@ python_version = "3.9"
 #### Package Not Found
 ```bash
 Error: Package error: Package 'nonexistent-package' not found
-help: Use 'hpm search' to find available packages
 ```
 
-**Solution**: Verify the package name spelling or check if the package exists in the registry.
+**Solution**: Verify the package name and ensure the Git repository URL and commit hash are correct. HPM uses Git-based dependencies, so the package must be available in the specified Git repository.
 
 #### Directory Already Exists
 ```bash
@@ -977,7 +994,7 @@ help: Check your internet connection and proxy settings
 #### Python Environment Issues
 ```bash
 Error: Python dependency resolution failed: Could not find compatible Python version
-help: Ensure Houdini version is correctly specified in hmp.toml
+help: Ensure Houdini version is correctly specified in hpm.toml
 ```
 
 **Solution**: Check your `houdini.min_version` setting in `hpm.toml` and ensure it's valid.
@@ -1045,7 +1062,7 @@ du -sh ~/.hpm/venvs/
 cp ~/.hpm/config.toml ~/.hpm/config.toml.backup
 
 # Remove all HPM data (nuclear option)
-rm -rf ~/.hmp/
+rm -rf ~/.hpm/
 
 # Reinstall packages
 hpm install
@@ -1070,7 +1087,7 @@ hpm init --help
 hpm clean --help
 
 # Version information
-hmp --version
+hpm --version
 ```
 
 #### Verbose Output
@@ -1084,7 +1101,7 @@ hpm -vv clean --dry-run  # Very verbose
 
 - **Issues**: [GitHub Issues](https://github.com/hpm-org/hpm/issues) for bug reports
 - **Discussions**: [GitHub Discussions](https://github.com/hpm-org/hpm/discussions) for questions
-- **Documentation**: [CLAUDE.md](https://github.com/hmp-org/hpm/blob/main/CLAUDE.md) for development guidelines
+- **Documentation**: [CLAUDE.md](https://github.com/hpm-org/hpm/blob/main/CLAUDE.md) for development guidelines
 
 ## Advanced Usage
 
@@ -1165,8 +1182,8 @@ fi
 hpm install
 
 # Add common development dependencies
-hpm add test-assets --version "^0.1.0" 
-hpm add debug-tools --optional
+hpm add test-assets --git https://github.com/studio/test-assets --commit abc123
+hpm add debug-tools --git https://github.com/studio/debug --commit def456 --optional
 
 echo "Development environment ready!"
 ```
@@ -1200,13 +1217,13 @@ Add to your `.bashrc` or `.zshrc`:
 # HPM environment setup
 export PATH="/path/to/hpm/target/release:$PATH"
 
-# Enable HPM shell completions (when available)
-eval "$(hpm completion bash)"  # or zsh, fish
+# Enable HPM shell completions
+eval "$(hpm completions bash)"  # or zsh, fish, powershell
 
 # HPM aliases for common operations
-alias hpm-update="hmp update --dry-run && hpm update"
+alias hpm-update="hpm update --dry-run && hpm update"
 alias hpm-clean="hpm clean --dry-run && hpm clean"
-alias hmp-check="hpm check && hpm list"
+alias hpm-check="hpm check && hpm list"
 ```
 
 #### Studio Integration

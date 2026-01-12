@@ -2,51 +2,69 @@
 
 Welcome to the comprehensive documentation for HPM (Houdini Package Manager) - a modern, Rust-based package management system for SideFX Houdini.
 
-## 📚 Documentation Overview
-
-### 🎯 For Users
-- **[User Guide](user-guide.md)** - Complete user documentation covering installation, usage, and troubleshooting
-- **[CLI Reference](cli-reference.md)** - Comprehensive reference for all CLI commands and options
-- **[Python User Guide](python-user-guide.md)** - Managing Python dependencies in Houdini packages
-- **[Tutorials](tutorials.md)** - Step-by-step guides for common workflows
-
-### 👨‍💻 For Developers
-- **[Developer Guide](developer-guide.md)** - Architecture overview, development setup, and contribution guidelines
-- **[API Reference](api-reference.md)** - Complete API documentation for all public interfaces
-- **[Testing Guide](testing-guide.md)** - Comprehensive testing documentation and best practices
-- **[Property-Based Testing Guide](property-based-testing-guide.md)** - Advanced testing with property-based techniques
-
-### 🏗️ Technical Documentation
-- **[Architecture Overview](architecture-overview.md)** - High-level system architecture and design decisions
-- **[Registry System](registry-architecture.md)** - QUIC/gRPC registry implementation details
-- **[Dependency Resolution](dependency-resolution.md)** - PubGrub algorithm implementation and optimization
-- **[Python Dependency Management](python-dependency-management.md)** - Virtual environment isolation and content-addressable sharing
-- **[Cleanup System](cleanup-system.md)** - Project-aware cleanup with orphan detection
-
-### 📋 Implementation Details
-- **[CLI Design](cli-design.md)** - Command-line interface design and implementation
-- **[Update Command](update-command.md)** - Package update system design
-- **[Registry Implementation](registry-implementation-plan.md)** - Registry server and client implementation
-- **[Testing Configuration](testing-configuration.md)** - Test suite organization and configuration
-
-## 🚀 Quick Navigation
+## Quick Navigation
 
 ### New to HPM?
 Start with the **[User Guide](user-guide.md)** for installation and basic usage.
 
 ### Want to Contribute?
-Read the **[Developer Guide](developer-guide.md)** and **[Testing Guide](testing-guide.md)**.
+Read the **[Developer Documentation](developer-documentation.md)** and **[Testing Guide](testing.md)**.
 
 ### Need Command Help?
-Check the **[CLI Reference](cli-reference.md)** for detailed command documentation.
+Check the **[CLI Design](cli-design.md)** for detailed command documentation.
 
 ### Working with Python?
-See the **[Python User Guide](python-user-guide.md)** for Python dependency management.
+See the **[Python Guide](python-guide.md)** for Python dependency management.
 
-### Understanding the System?
-Review the **[Architecture Overview](architecture-overview.md)** for system design.
+## Documentation Overview
 
-## 📖 Documentation Standards
+### For Users
+- **[User Guide](user-guide.md)** - Complete user documentation covering installation, usage, and troubleshooting
+- **[CLI Design](cli-design.md)** - Command-line interface design and command reference
+- **[Python Guide](python-guide.md)** - Managing Python dependencies in Houdini packages
+- **[Tutorials & Examples](tutorials-and-examples.md)** - Step-by-step guides and real-world scenarios
+
+### For Developers
+- **[Developer Documentation](developer-documentation.md)** - Architecture overview, development setup, and contribution guidelines
+- **[API Reference](api-reference.md)** - Complete API documentation for all public interfaces
+- **[Testing Guide](testing.md)** - Comprehensive testing guide including property-based testing
+
+### Technical Documentation
+- **[Technical Architecture](technical-architecture.md)** - High-level system architecture and design decisions
+- **[System Deep Dives](system-deep-dives.md)** - Detailed explanations of complex systems
+- **[Cleanup System](cleanup-system.md)** - Project-aware cleanup with orphan detection
+- **[Update Command](update-command.md)** - Package update system design
+
+### Archived Documentation
+Documentation for planned but not yet implemented features:
+- **[Archive](archive/)** - Registry system design docs and historical implementation notes
+
+## Documentation Structure
+
+```
+docs/
+├── README.md                           # This overview
+├── user-guide.md                       # Complete user documentation
+├── developer-documentation.md          # Developer documentation
+├── api-reference.md                    # API documentation
+├── cli-design.md                       # CLI design and command reference
+├── tutorials-and-examples.md           # Step-by-step tutorials
+├── technical-architecture.md           # System architecture
+├── system-deep-dives.md                # Detailed system explanations
+├── python-guide.md                     # Python dependency management
+├── cleanup-system.md                   # Cleanup system details
+├── update-command.md                   # Update system design
+├── testing.md                          # Comprehensive testing guide
+└── archive/                            # Archived/future feature docs
+    ├── README.md
+    ├── registry-architecture.md
+    ├── registry-overview.md
+    ├── registry-implementation-plan.md
+    ├── registry-system-summary.md
+    └── update-implementation-summary.md
+```
+
+## Documentation Standards
 
 All HPM documentation follows these standards:
 - **Accuracy**: All examples are tested and verified
@@ -54,38 +72,8 @@ All HPM documentation follows these standards:
 - **Accessibility**: Clear language suitable for different experience levels
 - **Maintainability**: Regular updates to reflect current implementation
 
-## 🤝 Contributing to Documentation
+## Contributing to Documentation
 
-Documentation improvements are welcome! See the **[Developer Guide](developer-guide.md)** for contribution guidelines.
-
-### Documentation Structure
-```
-docs/
-├── README.md                           # This overview
-├── user-guide.md                       # Complete user documentation
-├── developer-guide.md                  # Developer documentation
-├── cli-reference.md                    # CLI command reference
-├── api-reference.md                    # API documentation
-├── testing-guide.md                    # Testing documentation
-├── tutorials.md                        # Step-by-step tutorials
-├── architecture-overview.md            # System architecture
-├── registry-architecture.md            # Registry system details
-├── dependency-resolution.md            # Dependency algorithm details
-├── python-dependency-management.md     # Python integration
-├── cleanup-system.md                   # Cleanup system details
-├── cli-design.md                       # CLI implementation
-├── update-command.md                   # Update system design
-├── registry-implementation-plan.md     # Registry implementation
-├── testing-configuration.md            # Test configuration
-└── property-based-testing-guide.md     # Advanced testing
-```
-
-## 📊 Documentation Health
-
-- ✅ **Complete Coverage**: All major features documented
-- ✅ **Current**: Reflects latest implementation (v0.1.0)  
-- ✅ **Tested**: All code examples verified
-- ✅ **Organized**: Clear structure and navigation
-- ✅ **Accessible**: Multiple entry points for different users
+Documentation improvements are welcome! See the **[Developer Documentation](developer-documentation.md)** for contribution guidelines.
 
 For questions or suggestions about documentation, please open an issue on GitHub.

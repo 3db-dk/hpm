@@ -1,8 +1,28 @@
-# HPM Python Dependencies User Guide
+# HPM Python Dependencies Guide
+
+This guide covers Python dependency management for Houdini packages, including usage, configuration, and technical details.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Quick Start](#quick-start)
+- [Python Dependency Specifications](#python-dependency-specifications)
+- [Houdini Version Mapping](#houdini-version-mapping)
+- [Virtual Environment Sharing](#virtual-environment-sharing)
+- [Package Management](#package-management)
+- [Cleanup and Maintenance](#cleanup-and-maintenance)
+- [Troubleshooting](#troubleshooting)
+- [Best Practices](#best-practices)
+- [Technical Architecture](#technical-architecture)
 
 ## Overview
 
-HPM provides comprehensive Python dependency management for Houdini packages, solving the common problem of conflicting Python package requirements across multiple packages. This guide explains how to define, manage, and troubleshoot Python dependencies in your HPM packages.
+HPM provides comprehensive Python dependency management for Houdini packages, solving the common problem of conflicting Python package requirements across multiple packages. Key features:
+
+- **Automatic dependency resolution** using UV (80x faster than pip)
+- **Virtual environment isolation** prevents conflicts between packages
+- **Content-addressable sharing** optimizes disk usage
+- **Seamless Houdini integration** via automatic PYTHONPATH injection
 
 ## Quick Start
 
@@ -35,7 +55,7 @@ When you install a package with Python dependencies, HPM automatically:
 4. Generates the appropriate Houdini `package.json` with PYTHONPATH integration
 
 ```bash
-hpm add my-geometry-tools
+hpm install
 ```
 
 ### 3. Use Python Packages in Houdini
@@ -75,10 +95,10 @@ requests = { version = ">=2.25.0", extras = ["security", "socks"] }
 plotly = { version = ">=5.0.0", optional = true }
 
 # Detailed specification
-scikit-learn = { 
-    version = "^1.0.0", 
-    extras = ["tests"], 
-    optional = false 
+scikit-learn = {
+    version = "^1.0.0",
+    extras = ["tests"],
+    optional = false
 }
 ```
 
@@ -115,7 +135,7 @@ max_version = "20.5"  # Optional compatibility upper bound
 
 ## Virtual Environment Sharing
 
-HPM optimizes disk usage and installation time through intelligent virtual environment sharing:
+HPM optimizes disk usage and installation time through intelligent virtual environment sharing.
 
 ### How It Works
 
@@ -126,9 +146,9 @@ HPM optimizes disk usage and installation time through intelligent virtual envir
 ### Example
 
 ```bash
-# Package A needs: numpy==1.24.0, scipy==1.10.1 → Hash: abc123
-# Package B needs: numpy==1.24.0, scipy==1.10.1 → Hash: abc123 (same!)
-# Package C needs: numpy==1.25.0, scipy==1.10.1 → Hash: def456 (different)
+# Package A needs: numpy==1.24.0, scipy==1.10.1 -> Hash: abc123
+# Package B needs: numpy==1.24.0, scipy==1.10.1 -> Hash: abc123 (same!)
+# Package C needs: numpy==1.25.0, scipy==1.10.1 -> Hash: def456 (different)
 
 # Result:
 # - Packages A and B share virtual environment abc123
@@ -146,14 +166,11 @@ HPM optimizes disk usage and installation time through intelligent virtual envir
 ### Installing Packages with Python Dependencies
 
 ```bash
-# Install a single package
-hpm add geometry-tools
+# Install all dependencies from hpm.toml
+hpm install
 
-# Install multiple packages (HPM resolves all Python dependencies together)
-hpm add geometry-tools visualization-tools mesh-processing
-
-# Install with specific version
-hpm add "geometry-tools@2.1.0"
+# Install with optional dependencies
+hpm install --all-optional
 ```
 
 ### Viewing Python Dependencies
@@ -162,9 +179,6 @@ hpm add "geometry-tools@2.1.0"
 # List installed packages and their Python environments
 hpm list
 
-# Show detailed package information including Python dependencies
-hpm info geometry-tools
-
 # Show dependency tree including Python packages
 hpm list --tree
 ```
@@ -172,14 +186,11 @@ hpm list --tree
 ### Updating Packages
 
 ```bash
-# Update a package (may create new virtual environment if dependencies changed)
-hpm update geometry-tools
-
-# Update all packages
+# Update all packages (may create new virtual environment if dependencies changed)
 hpm update
 
-# Update Python dependencies only (within version constraints)
-hpm update --python-only
+# Preview updates
+hpm update --dry-run
 ```
 
 ## Cleanup and Maintenance
@@ -204,9 +215,6 @@ hpm clean --python-only
 # Comprehensive cleanup (both packages and Python environments)
 hpm clean --comprehensive --dry-run
 hpm clean --comprehensive
-
-# Interactive cleanup with confirmation prompts
-hpm clean --comprehensive
 ```
 
 ### Cleanup Output Example
@@ -216,13 +224,12 @@ $ hpm clean --python-only --dry-run
 
 Analyzing Python virtual environments for cleanup (dry run)...
 Found 3 orphaned virtual environments that would be removed:
-  - /Users/user/.hpm/venvs/abc123def (145 MB, created 30 days ago)
-  - /Users/user/.hpm/venvs/def456ghi (89 MB, created 15 days ago)
-  - /Users/user/.hpm/venvs/ghi789jkl (234 MB, created 7 days ago)
+  - ~/.hpm/venvs/abc123def (145 MB, created 30 days ago)
+  - ~/.hpm/venvs/def456ghi (89 MB, created 15 days ago)
+  - ~/.hpm/venvs/ghi789jkl (234 MB, created 7 days ago)
 Would free approximately: 468 MB
 
 Run 'hpm clean --python-only' to remove these virtual environments
-Run 'hpm clean --python-only --yes' to remove without confirmation
 ```
 
 ## Troubleshooting
@@ -234,7 +241,7 @@ Run 'hpm clean --python-only --yes' to remove without confirmation
 **Problem**: HPM reports conflicting Python package versions.
 
 ```
-Error: Conflicting versions for package numpy: 
+Error: Conflicting versions for package numpy:
   - geometry-tools requires numpy>=1.20,<1.21
   - mesh-tools requires numpy>=1.25
 ```
@@ -273,12 +280,12 @@ print(sys.path)
 
 **Solutions**:
 ```bash
-# Check UV status
+# Check with debug logging
 RUST_LOG=debug hpm clean --python-only --dry-run
 
 # Manually clear cache and retry
 rm -rf ~/.hpm/uv-cache/
-hpm add your-package
+hpm install
 ```
 
 #### 4. Large Virtual Environment Sizes
@@ -304,16 +311,9 @@ ls -la ~/.hpm/venvs/
 Enable detailed logging to troubleshoot issues:
 
 ```bash
-RUST_LOG=debug hpm add your-package
+RUST_LOG=debug hpm install
 RUST_LOG=debug hpm clean --comprehensive --dry-run
 ```
-
-### Getting Help
-
-1. **Check Installation**: Ensure your package's `hpm.toml` Python dependencies are correct
-2. **Verify Environment**: Check that virtual environments were created in `~/.hpm/venvs/`
-3. **Review Logs**: Use `RUST_LOG=debug` for detailed operation information
-4. **Test Isolation**: Create a minimal test package to isolate the issue
 
 ## Best Practices
 
@@ -328,7 +328,7 @@ requests = ">=2.25.0"      # Minimum version with flexibility
 # Avoid: Too restrictive
 numpy = "==1.20.5"         # Blocks all updates, prevents sharing
 
-# Avoid: Too permissive  
+# Avoid: Too permissive
 requests = "*"             # Could install incompatible versions
 ```
 
@@ -364,46 +364,90 @@ jupyter = { version = ">=1.0.0", optional = true }
 - **Monitor Size**: Regular cleanup prevents excessive disk usage
 - **Cache Awareness**: Let HPM manage UV cache automatically
 
-## Advanced Topics
+## Technical Architecture
 
-### Custom Python Versions
+### Storage Structure
 
-While HPM automatically maps Houdini versions to Python versions, you can influence this:
+HPM stores Python-related data in a structured directory:
 
-```toml
-[houdini]
-min_version = "20.0"       # Primary version requirement
-max_version = "20.5"       # Optional: prevents installation on newer versions
-
-# The min_version determines Python version:
-# 20.0 → Python 3.9
-# 20.5 → Python 3.10
+```
+~/.hpm/
+├── packages/                    # HPM package storage
+├── venvs/                       # Virtual environment storage
+│   ├── {hash1}/                 # Shared venv for compatible dependency sets
+│   │   ├── metadata.json        # Tracks which packages use this venv
+│   │   ├── pyvenv.cfg           # Standard Python venv configuration
+│   │   ├── bin/                 # Python executables
+│   │   └── lib/                 # Installed Python packages
+│   └── {hash2}/
+├── tools/
+│   └── uv                       # Bundled UV binary
+├── uv-cache/                    # UV package cache (isolated from system UV)
+└── uv-config/                   # UV configuration (isolated from system UV)
 ```
 
-### Development Dependencies
+### UV Isolation
 
-```toml
-[python_dependencies]
-# Production dependencies
-numpy = ">=1.20.0"
-scipy = ">=1.7.0"
+HPM bundles its own UV binary and maintains complete isolation from any existing system UV installation:
 
-# Development/testing dependencies (not installed in production)
-pytest = { version = ">=6.0.0", optional = true }
-black = { version = ">=22.0.0", optional = true }
-mypy = { version = ">=0.950", optional = true }
+- **Dedicated UV Binary**: HPM bundles its own UV in `~/.hpm/tools/uv`
+- **Isolated Cache**: All UV cache operations use `~/.hpm/uv-cache/`
+- **Isolated Configuration**: UV configuration stored in `~/.hpm/uv-config/`
+- **No System Interference**: HPM's UV operations never affect your existing Python workflows
+
+### Environment Identification
+
+Virtual environments are identified by SHA-256 hash of resolved dependency set:
+
+```rust
+pub struct ResolvedDependencySet {
+    pub packages: BTreeMap<String, String>,  // name -> exact_version
+    pub python_version: String,              // Python version requirement
+}
 ```
 
-### Integration with CI/CD
+The hash ensures:
+- Packages with identical resolved dependencies share environments
+- Any change in dependencies creates a new environment
+- Deterministic environment creation across systems
 
-```bash
-# In CI/CD pipeline
-hpm clean --comprehensive --yes    # Clean before tests
-hpm add your-package              # Install with dependencies
-hpm list                          # Verify installation
+### Houdini Integration
 
-# Test Python imports
-houdini -c "import numpy; print('Success')"
+HPM generates Houdini `package.json` files with PYTHONPATH injection:
+
+```json
+{
+    "path": "$HPM_PACKAGE_ROOT",
+    "env": [
+        {
+            "PYTHONPATH": "/path/to/venv/lib/python3.9/site-packages:$PYTHONPATH"
+        }
+    ]
+}
 ```
 
-This user guide covers the essential aspects of using HPM's Python dependency management. For technical implementation details, see `python-dependency-management.md`.
+Cross-platform path handling:
+- **Unix/macOS**: `{venv}/lib/python3.x/site-packages:$PYTHONPATH`
+- **Windows**: `{venv}\Lib\site-packages;%PYTHONPATH%`
+
+### Performance Characteristics
+
+| Operation | Performance | Notes |
+|-----------|-------------|-------|
+| Environment Reuse | ~50ms | When hash matches existing |
+| New Environment Creation | 5-15s | Includes Python + packages |
+| Environment Cleanup | ~100ms | Removing unused environments |
+| UV Dependency Resolution | 1-3s | Depends on package count |
+
+### Expected Benefits
+
+- **Shared environments**: Reduce disk usage by up to 80% for compatible packages
+- **UV speed**: 80x faster dependency resolution compared to pip
+- **Caching**: Global package cache reduces download times
+- **Parallel operations**: Concurrent environment creation when possible
+
+## Resources
+
+- [UV Documentation](https://docs.astral.sh/uv/) - The underlying Python package manager
+- [PEP 440](https://peps.python.org/pep-0440/) - Version specifiers for Python packages
+- [Houdini Package System](https://www.sidefx.com/docs/houdini/ref/plugins.html) - SideFX documentation

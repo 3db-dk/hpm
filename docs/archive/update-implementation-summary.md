@@ -1,3 +1,6 @@
+> **ARCHIVED DOCUMENT**: This is a historical implementation summary.
+> For current update command usage, see the [User Guide](../user-guide.md).
+
 # HPM Update Command - Implementation Summary
 
 ## Overview

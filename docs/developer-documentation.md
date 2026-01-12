@@ -201,7 +201,7 @@ hpm/
 - High-level package operations
 
 **hpm-package**: Package manifest processing
-- HPM manifest (`hmp.toml`) parsing and validation
+- HPM manifest (`hpm.toml`) parsing and validation
 - Package template generation
 - Houdini integration file generation
 - Package metadata management
@@ -625,7 +625,7 @@ cargo test --workspace --all-features
 
 # Test specific interactions
 cargo test -p hpm-core integration_test
-cargo test -p hmp-python integration_tests
+cargo test -p hpm-python integration_tests
 
 # Performance testing
 hyperfine 'cargo run -- install' --warmup 3 --runs 10
@@ -1599,7 +1599,7 @@ RUST_LOG=debug cargo run -- clean --dry-run --verbose
 ##### File System Permission Issues
 ```bash
 # Check permissions on HPM directories
-ls -la ~/.hmp/
+ls -la ~/.hpm/
 ls -la ~/.hpm/packages/
 
 # Fix permissions if needed
@@ -1659,7 +1659,7 @@ time cargo run -- install
 cargo test --jobs 8
 
 # Time individual test suites
-time cargo test -p hmp-core
+time cargo test -p hpm-core
 time cargo test -p hpm-python
 
 # Property test performance

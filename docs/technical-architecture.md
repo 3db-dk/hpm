@@ -552,7 +552,7 @@ Each project maintains lightweight references to globally stored packages:
 project/
 ├── hpm.toml                             # Project manifest
 ├── hpm.lock                             # Dependency lock file
-├── .hmp/                                # HPM project directory
+├── .hpm/                                # HPM project directory
 │   └── packages/                        # Package references
 │       ├── utility-nodes.json          # Reference to global package
 │       └── material-library.json

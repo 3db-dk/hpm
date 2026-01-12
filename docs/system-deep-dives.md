@@ -1547,7 +1547,7 @@ impl BundledUvManager {
             .join(".hpm");
         
         let cache_dir = hpm_dir.join("uv-cache");
-        let config_dir = hmp_dir.join("uv-config");
+        let config_dir = hpm_dir.join("uv-config");
         
         // Ensure directories exist
         fs::create_dir_all(&cache_dir).await?;

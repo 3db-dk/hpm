@@ -33,7 +33,7 @@ HPM is organized as a modular workspace where each crate provides specific funct
 │                                    ▼                                           │
 │  Core Functionality                                                            │
 │  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │  hmp-core       │ Storage, discovery, dependency analysis, cleanup     │   │
+│  │  hpm-core       │ Storage, discovery, dependency analysis, cleanup     │   │
 │  │  hpm-package    │ Manifest processing, templates, Houdini integration  │   │
 │  │  hpm-python     │ Python venv management, UV integration, cleanup      │   │
 │  │  hpm-resolver   │ PubGrub dependency resolution engine                 │   │
@@ -1472,7 +1472,7 @@ pub enum PackageTemplate {
         vcs: Option<VcsType>,
     },
     
-    /// Minimal structure with only hmp.toml
+    /// Minimal structure with only hpm.toml
     Bare {
         vcs: Option<VcsType>,
     },
@@ -1580,8 +1580,8 @@ pub struct EnvironmentVariable {
 
 #[derive(Debug, Clone)]
 pub struct HpmIntegrationMetadata {
-    pub hmp_managed: bool,
-    pub hmp_package: String,
+    pub hpm_managed: bool,
+    pub hpm_package: String,
     pub hpm_version: String,
     pub python_environment: Option<PathBuf>,
 }

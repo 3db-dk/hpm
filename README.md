@@ -11,7 +11,7 @@ A modern, Rust-based package management system for SideFX Houdini, providing ind
 ### 🎯 Package Management
 - **Package Initialization** - Create standardized Houdini packages with templates (standard/bare)
 - **Dependency Management** - Add, remove, and list dependencies with semantic versioning
-- **Smart Installation** - Install dependencies from hmp.toml manifests with dependency resolution
+- **Smart Installation** - Install dependencies from hpm.toml manifests with dependency resolution
 - **Project-Aware Cleanup** - Intelligent orphan detection with safety guarantees
 
 ### 🐍 Python Integration
@@ -22,7 +22,7 @@ A modern, Rust-based package management system for SideFX Houdini, providing ind
 
 ### 🏗️ Advanced Architecture
 - **PubGrub Dependency Resolution** - State-of-the-art algorithm with conflict learning
-- **QUIC/gRPC Registry System** - High-performance package distribution (3.69x faster than HTTP/2)
+- **Git-Based Dependencies** - Secure dependency pinning with commit hashes
 - **Professional CLI** - UV-inspired error handling with machine-readable output
 - **Comprehensive Testing** - 245+ tests with property-based testing and 100% pass rate
 
@@ -37,11 +37,11 @@ A modern, Rust-based package management system for SideFX Houdini, providing ind
 - **Cleanup System**: `hpm clean` with project-aware orphan detection
 - **Configuration Validation**: `hpm check` for package and Houdini compatibility
 
-### 🔧 Registry Integration (Ready, CLI Integration Pending)
-- **Registry Server**: Complete QUIC/gRPC implementation with pluggable storage
-- **Package Search**: Find packages in the registry
-- **Package Publishing**: Publish packages with authentication
-- **Package Updates**: Update packages to latest versions
+### 🔧 Additional Features
+- **Shell Completions**: `hpm completions` for bash, zsh, fish, PowerShell
+- **Multi-Package Add**: Add multiple packages in a single command
+- **Tree View**: `hpm list --tree` for visual dependency display
+- **Package Updates**: `hpm update` for keeping dependencies current
 
 ## 📦 Quick Installation
 
@@ -71,9 +71,17 @@ hpm init my-package --bare
 
 ### Manage Dependencies
 ```bash
-# Add dependencies with semantic versioning
-hpm add utility-nodes --version "^2.1.0"
-hmp add material-library --optional
+# Add dependencies from Git (with commit pinning for security)
+hpm add utility-nodes --git https://github.com/studio/utility-nodes --commit abc1234
+
+# Add multiple packages at once
+hpm add pkg1 pkg2 --git https://github.com/studio/tools --commit def5678
+
+# Add local path dependency
+hpm add local-tools --path ../my-local-tools
+
+# Add optional dependency
+hpm add material-library --git https://github.com/studio/materials --commit 789xyz --optional
 
 # Install all dependencies (including Python packages)
 hpm install
@@ -81,13 +89,16 @@ hpm install
 # List current dependencies
 hpm list
 
+# View as tree
+hpm list --tree
+
 # Remove dependencies
 hpm remove old-package
 ```
 
 ### Python Dependencies
-```bash
-# Python dependencies are specified in hmp.toml
+```toml
+# Python dependencies are specified in hpm.toml
 [python_dependencies]
 numpy = ">=1.20.0"
 requests = { version = ">=2.25.0", extras = ["security"] }
@@ -145,10 +156,10 @@ keywords = ["houdini"]
 min_version = "19.5"
 max_version = "21.0"
 
-# HPM dependencies
+# HPM dependencies (Git-based with commit pinning)
 [dependencies]
-utility-nodes = "^2.1.0"
-material-library = { version = "1.5", optional = true }
+utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc1234" }
+material-library = { git = "https://github.com/studio/materials", commit = "def5678", optional = true }
 
 # Python dependencies (managed in isolated virtual environments)
 [python_dependencies]
@@ -201,26 +212,17 @@ HPM implements a sophisticated modular architecture optimized for package manage
 │  │ • Virtual environment sharing and cleanup              │   │
 │  │ • Automatic Houdini integration                        │   │
 │  └─────────────────────────────────────────────────────────┘   │
-│                              │                                  │
-│  Registry System             ▼                                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │ High-Performance QUIC/gRPC Registry (hmp-registry)     │   │
-│  │ • 3.69x faster than HTTP/2                            │   │
-│  │ • Pluggable storage backends                           │   │
-│  │ • Built-in authentication and compression              │   │
-│  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Crate Organization
-- **`hmp-cli`** - Command-line interface with comprehensive commands
+- **`hpm-cli`** - Command-line interface with comprehensive commands
 - **`hpm-core`** - Core functionality (storage, discovery, cleanup systems)
-- **`hmp-config`** - Configuration management with project discovery
+- **`hpm-config`** - Configuration management with project discovery
 - **`hpm-package`** - Package manifest processing and Houdini integration
 - **`hpm-python`** - Python dependency management with virtual environment isolation
-- **`hpm-registry`** - High-performance QUIC/gRPC package registry
 - **`hpm-resolver`** - PubGrub-inspired dependency resolution engine
-- **`hmp-error`** - Structured error handling infrastructure
+- **`hpm-error`** - Structured error handling infrastructure
 
 ## 📊 Technical Excellence
 
@@ -268,15 +270,14 @@ cargo-machete  # Check for unused dependencies
 ```bash
 # Run HPM CLI commands during development
 cargo run -- init test-package
-cargo run -- add some-dependency --version "^1.0.0"
+cargo run -- add some-pkg --git https://github.com/example/repo --commit abc123
 cargo run -- install
+cargo run -- list --tree
 cargo run -- clean --dry-run
-
-# Run registry server for testing
-cargo run -p hmp-registry --example basic_server
+cargo run -- completions bash
 
 # Debug mode with logging
-RUST_LOG=debug cargo run -- install some-package
+RUST_LOG=debug cargo run -- install
 ```
 
 ## 📚 Comprehensive Documentation
@@ -288,14 +289,14 @@ HPM provides enterprise-grade documentation (16,000+ lines) for all audiences:
 - **[Tutorials & Examples](docs/tutorials-and-examples.md)** - Step-by-step workflows and real-world scenarios
 - **[Python Integration Guide](docs/python-user-guide.md)** - Managing Python dependencies in Houdini
 
-### 👨‍💻 For Developers  
+### 👨‍💻 For Developers
 - **[Developer Guide](docs/developer-documentation.md)** - Architecture overview and contribution guidelines
 - **[API Reference](docs/api-reference.md)** - Complete API documentation for all public interfaces
-- **[Testing Guide](docs/testing-guide.md)** - Comprehensive testing documentation and best practices
+- **[Testing Guide](docs/testing-configuration.md)** - Comprehensive testing documentation and best practices
 
 ### 🏗️ For Architecture
 - **[Technical Deep Dives](docs/system-deep-dives.md)** - Detailed explanations of complex systems
-- **[Registry Architecture](docs/registry-architecture.md)** - QUIC/gRPC registry implementation
+- **[Technical Architecture](docs/technical-architecture.md)** - System architecture and design patterns
 - **[Cleanup System](docs/cleanup-system.md)** - Project-aware cleanup with safety guarantees
 
 **[📖 Complete Documentation Index](docs/README.md)** - Full documentation overview and navigation
@@ -326,7 +327,7 @@ See **[Developer Guide](docs/developer-documentation.md)** for detailed contribu
 
 ## 📈 Project Metrics
 
-- **Lines of Code**: ~12,000 lines of Rust across 8 crates
+- **Lines of Code**: ~12,000 lines of Rust across 7 crates
 - **Test Coverage**: 245+ tests with 100% pass rate
 - **Documentation**: 16,000+ lines of comprehensive documentation
 - **Dependencies**: Minimal, well-audited dependency tree
@@ -339,7 +340,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🆘 Support & Community
 
-- **[GitHub Issues](https://github.com/hpm-org/hmp/issues)** - Bug reports and feature requests
+- **[GitHub Issues](https://github.com/hpm-org/hpm/issues)** - Bug reports and feature requests
 - **[GitHub Discussions](https://github.com/hpm-org/hpm/discussions)** - Community discussions and questions  
 - **[Complete Documentation](docs/README.md)** - Comprehensive guides and references
 

@@ -1,3 +1,6 @@
+> **ARCHIVED DOCUMENT**: This describes a planned feature that has not been implemented.
+> HPM currently uses Git-based dependencies with commit pinning. See the [User Guide](../user-guide.md) for current functionality.
+
 # HPM Package Registry Architecture
 
 ## Executive Summary
