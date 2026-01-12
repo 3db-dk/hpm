@@ -82,7 +82,7 @@ pub async fn remove_package(package_name: String, manifest_path: Option<PathBuf>
     }
 
     // Remove the dependency
-    dependencies.remove(&package_name);
+    dependencies.shift_remove(&package_name);
     info!("Removed dependency: {}", package_name);
 
     // If dependencies is now empty, we could optionally remove the section
@@ -123,7 +123,7 @@ pub async fn remove_package(package_name: String, manifest_path: Option<PathBuf>
 mod tests {
     use super::*;
     use hpm_package::DependencySpec;
-    use std::collections::HashMap;
+    use indexmap::IndexMap;
     use std::env;
     use std::path::Path;
     use tempfile::TempDir;
@@ -254,7 +254,7 @@ min_version = "20.0"
         );
 
         // Add dependencies
-        let mut dependencies = HashMap::new();
+        let mut dependencies = IndexMap::new();
         dependencies.insert(
             "keep-me".to_string(),
             DependencySpec::Git {
@@ -280,7 +280,7 @@ min_version = "20.0"
         // Load, remove dependency, and save again
         let mut loaded_manifest = load_manifest(&manifest_path).unwrap();
         let deps = loaded_manifest.dependencies.as_mut().unwrap();
-        deps.remove("remove-me");
+        deps.shift_remove("remove-me");
 
         save_manifest(&loaded_manifest, &manifest_path).unwrap();
 

@@ -1,6 +1,7 @@
 use super::manifest_utils::{determine_manifest_path, load_manifest};
 use crate::progress::OperationProgress;
 use anyhow::{Context, Result};
+use futures::future::join_all;
 use hpm_core::{ArchiveFetcher, LockFile, LockedDependency, LockedPythonDependency, PackageSource};
 use hpm_package::PackageManifest;
 use std::collections::HashMap;
@@ -122,20 +123,21 @@ struct PackageInstallResult {
 }
 
 /// Install HPM package dependencies
+///
+/// This function fetches all dependencies in parallel for improved performance,
+/// then creates symlinks/references sequentially to avoid race conditions.
 async fn install_hpm_dependencies(
-    dependencies: &std::collections::HashMap<String, hpm_package::DependencySpec>,
+    dependencies: &indexmap::IndexMap<String, hpm_package::DependencySpec>,
     hpm_dir: &Path,
 ) -> Result<HashMap<String, PackageInstallResult>> {
     info!("Installing HPM dependencies...");
-
-    let mut results = HashMap::new();
 
     // Get global storage directories from config
     let config = hpm_config::Config::load().unwrap_or_default();
     let cache_dir = config.storage.cache_dir.clone();
     let packages_dir = config.storage.packages_dir.clone();
 
-    // Create the archive fetcher
+    // Create the archive fetcher (Clone is cheap - reqwest::Client is internally Arc-ed)
     let fetcher = ArchiveFetcher::new(cache_dir, packages_dir.clone())
         .context("Failed to initialize archive fetcher")?;
 
@@ -145,45 +147,66 @@ async fn install_hpm_dependencies(
         .await
         .context("Failed to create project packages directory")?;
 
-    for (name, spec) in dependencies {
-        info!("Processing dependency: {}", name);
+    // Phase 1: Prepare all fetch operations and their metadata
+    let fetch_tasks: Vec<_> = dependencies
+        .iter()
+        .map(|(name, spec)| {
+            let fetcher = fetcher.clone();
+            let name = name.clone();
+            let spec = spec.clone();
 
-        // Convert dependency spec to package source
-        let source = match spec {
-            hpm_package::DependencySpec::Git { git, commit, optional } => {
-                info!("  Git URL: {}", git);
-                info!("  Commit: {}", &commit[..commit.len().min(12)]);
-                if *optional {
-                    debug!("  Optional dependency");
+            async move {
+                info!("Processing dependency: {}", name);
+
+                // Convert dependency spec to package source
+                let source = match &spec {
+                    hpm_package::DependencySpec::Git { git, commit, optional } => {
+                        info!("  {} - Git: {} @ {}", name, git, &commit[..commit.len().min(12)]);
+                        if *optional {
+                            debug!("  {} is optional", name);
+                        }
+                        PackageSource::git(git, commit)
+                            .context("Invalid Git URL")?
+                    }
+                    hpm_package::DependencySpec::Path { path, optional } => {
+                        info!("  {} - Path: {}", name, path);
+                        if *optional {
+                            debug!("  {} is optional", name);
+                        }
+                        PackageSource::path(path)
+                    }
+                };
+
+                // Fetch the package (this is the expensive network/disk operation)
+                let fetch_result = fetcher.fetch(&source, &name)
+                    .await
+                    .with_context(|| format!("Failed to fetch package: {}", name))?;
+
+                if fetch_result.from_cache {
+                    info!("  {} found in cache", name);
+                } else {
+                    info!("  {} downloaded and extracted", name);
                 }
-                PackageSource::git(git, commit)
-                    .context("Invalid Git URL")?
+
+                debug!("  {} checksum: {}", name, &fetch_result.checksum[..fetch_result.checksum.len().min(16)]);
+
+                Ok::<_, anyhow::Error>((name, fetch_result))
             }
-            hpm_package::DependencySpec::Path { path, optional } => {
-                info!("  Local path: {}", path);
-                if *optional {
-                    debug!("  Optional dependency");
-                }
-                PackageSource::path(path)
-            }
-        };
+        })
+        .collect();
 
-        // Fetch the package
-        info!("  Fetching package...");
-        let fetch_result = fetcher.fetch(&source, name)
-            .await
-            .with_context(|| format!("Failed to fetch package: {}", name))?;
+    // Phase 2: Execute all fetches in parallel
+    info!("Fetching {} packages in parallel...", fetch_tasks.len());
+    let fetch_results = join_all(fetch_tasks).await;
 
-        if fetch_result.from_cache {
-            info!("  Package {} found in cache", name);
-        } else {
-            info!("  Package {} downloaded and extracted", name);
-        }
+    // Phase 3: Process results and create symlinks sequentially
+    let mut results = HashMap::new();
 
-        debug!("  Checksum: {}", &fetch_result.checksum[..fetch_result.checksum.len().min(16)]);
+    for result in fetch_results {
+        let (name, fetch_result) = result?;
 
         // Create reference in project packages directory
-        let project_pkg_link = project_packages_dir.join(name);
+        let project_pkg_link = project_packages_dir.join(&name);
 
         // Remove existing link/directory if it exists
         if project_pkg_link.exists() {
@@ -212,7 +235,7 @@ async fn install_hpm_dependencies(
             if let Err(e) = tokio::fs::symlink_dir(&fetch_result.package_path, &project_pkg_link).await {
                 // Fall back to writing a reference file
                 warn!("  Could not create symlink ({}), creating reference file", e);
-                let ref_file = project_packages_dir.join(format!("{}.hpmref", name));
+                let ref_file = project_packages_dir.join(format!("{}.hpmref", &name));
                 tokio::fs::write(&ref_file, fetch_result.package_path.to_string_lossy().as_bytes())
                     .await
                     .with_context(|| format!("Failed to create reference file for {}", name))?;

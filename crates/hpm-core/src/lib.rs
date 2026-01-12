@@ -21,15 +21,6 @@
 //! │                               HPM Core Architecture                             │
 //! ├─────────────────────────────────────────────────────────────────────────────────┤
 //! │                                                                                 │
-//! │  High-Level Operations Layer                                                   │
-//! │  ┌─────────────────────────────────────────────────────────────────────────┐   │
-//! │  │                         PackageManager                                  │   │
-//! │  │  • Install, Remove, Update Operations                                   │   │
-//! │  │  • Dependency Conflict Resolution                                       │   │
-//! │  │  • Integration with Registry Client                                     │   │
-//! │  └─────────────────────────────────────────────────────────────────────────┘   │
-//! │                                    │                                           │
-//! │                                    ▼                                           │
 //! │  Analysis & Discovery Layer                                                    │
 //! │  ┌─────────────────────┐              ┌─────────────────────────────────────┐  │
 //! │  │   ProjectDiscovery  │              │        DependencyGraph              │  │
@@ -232,12 +223,13 @@
 pub mod archive_fetcher;
 pub mod dependency;
 pub mod discovery;
-pub mod integration_test;
 pub mod lock;
-pub mod manager;
 pub mod package_source;
 pub mod project;
 pub mod storage;
+
+#[cfg(test)]
+mod integration_test;
 
 pub use archive_fetcher::{ArchiveFetcher, FetchError, FetchResult};
 pub use dependency::{
@@ -248,7 +240,6 @@ pub use lock::{
     DependencySource, LockError, LockFile, LockMetadata, LockPackageInfo, LockedDependency,
     LockedPythonDependency,
 };
-pub use manager::PackageManager;
 pub use package_source::{GitProvider, PackageSource, PackageSourceError};
 pub use project::{ProjectDependency, ProjectError, ProjectManager};
 pub use storage::{StorageError, StorageManager};

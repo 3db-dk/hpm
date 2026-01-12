@@ -56,8 +56,12 @@ pub struct FetchResult {
 }
 
 /// Fetches and extracts packages from Git archives or local paths.
+///
+/// This struct is cheaply cloneable and can be shared across async tasks
+/// for parallel package fetching.
+#[derive(Clone)]
 pub struct ArchiveFetcher {
-    /// HTTP client for downloading archives
+    /// HTTP client for downloading archives (internally Arc-ed by reqwest)
     http_client: reqwest::Client,
     /// Directory for caching downloaded archives
     cache_dir: PathBuf,
@@ -126,7 +130,8 @@ impl ArchiveFetcher {
         // Check if already extracted
         if package_dir.exists() {
             info!("Package {} already cached at {:?}", cache_key, package_dir);
-            let checksum = self.compute_directory_checksum(&package_dir)?;
+            // Use cached checksum to avoid expensive directory walk
+            let checksum = self.get_directory_checksum(&package_dir)?;
             return Ok(FetchResult {
                 package_path: package_dir,
                 checksum,
@@ -147,8 +152,8 @@ impl ArchiveFetcher {
         info!("Extracting package to {:?}", package_dir);
         self.extract_archive(&archive_path, &package_dir)?;
 
-        // Compute checksum of extracted contents
-        let checksum = self.compute_directory_checksum(&package_dir)?;
+        // Compute checksum of extracted contents and cache it
+        let checksum = self.get_directory_checksum(&package_dir)?;
 
         // Clean up the archive file
         if let Err(e) = std::fs::remove_file(&archive_path) {
@@ -173,6 +178,8 @@ impl ArchiveFetcher {
         }
 
         // For path dependencies, we use the path directly without copying
+        // Note: We don't cache checksums for path dependencies since the source
+        // may change without our knowledge (it's a local directory)
         let checksum = self.compute_directory_checksum(path)?;
 
         Ok(FetchResult {
@@ -328,28 +335,58 @@ impl ArchiveFetcher {
     /// Validate that a path doesn't contain traversal attempts.
     fn validate_path_safety(&self, path: &Path) -> Result<(), FetchError> {
         for component in path.components() {
-            match component {
-                std::path::Component::ParentDir => {
-                    return Err(FetchError::PathTraversalDetected(
-                        path.display().to_string()
-                    ));
-                }
-                std::path::Component::Normal(s) => {
-                    let s_str = s.to_string_lossy();
-                    // Also check for Windows-style parent refs
-                    if s_str == ".." {
-                        return Err(FetchError::PathTraversalDetected(
-                            path.display().to_string()
-                        ));
-                    }
-                }
-                _ => {}
+            if matches!(component, std::path::Component::ParentDir) {
+                return Err(FetchError::PathTraversalDetected(
+                    path.display().to_string()
+                ));
             }
         }
         Ok(())
     }
 
+    /// Name of the checksum cache file stored in package directories.
+    const CHECKSUM_CACHE_FILE: &'static str = ".hpm-checksum";
+
+    /// Read a cached checksum from a directory if it exists.
+    ///
+    /// Returns `None` if the cache file doesn't exist or can't be read.
+    fn read_cached_checksum(&self, dir: &Path) -> Option<String> {
+        let checksum_file = dir.join(Self::CHECKSUM_CACHE_FILE);
+        std::fs::read_to_string(&checksum_file)
+            .ok()
+            .map(|s| s.trim().to_string())
+    }
+
+    /// Write a checksum to the cache file in a directory.
+    fn write_cached_checksum(&self, dir: &Path, checksum: &str) -> Result<(), FetchError> {
+        let checksum_file = dir.join(Self::CHECKSUM_CACHE_FILE);
+        std::fs::write(&checksum_file, checksum)
+            .map_err(FetchError::WriteError)
+    }
+
+    /// Get the checksum for a directory, using cache if available.
+    ///
+    /// This avoids expensive directory walks on subsequent fetches.
+    fn get_directory_checksum(&self, dir: &Path) -> Result<String, FetchError> {
+        // Try to read from cache first
+        if let Some(cached) = self.read_cached_checksum(dir) {
+            debug!("Using cached checksum for {:?}", dir);
+            return Ok(cached);
+        }
+
+        // Compute checksum and cache it
+        let checksum = self.compute_directory_checksum(dir)?;
+        if let Err(e) = self.write_cached_checksum(dir, &checksum) {
+            warn!("Failed to cache checksum: {}", e);
+            // Non-fatal - we still have the checksum
+        }
+        Ok(checksum)
+    }
+
     /// Compute a SHA-256 checksum of a directory's contents.
+    ///
+    /// This is expensive for large directories. Use `get_directory_checksum`
+    /// to leverage caching.
     fn compute_directory_checksum(&self, dir: &Path) -> Result<String, FetchError> {
         let mut hasher = Sha256::new();
 
@@ -359,6 +396,8 @@ impl ArchiveFetcher {
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
+            // Skip the checksum cache file itself
+            .filter(|e| e.file_name() != Self::CHECKSUM_CACHE_FILE)
             .collect();
 
         entries.sort_by(|a, b| a.path().cmp(b.path()));

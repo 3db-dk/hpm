@@ -142,7 +142,7 @@ fn map_houdini_to_python_version(houdini_version: &str) -> Result<PythonVersion>
 mod tests {
     use super::*;
     use hpm_package::{HoudiniConfig, PackageInfo};
-    use std::collections::HashMap;
+    use indexmap::IndexMap;
 
     #[tokio::test]
     async fn test_empty_dependency_collection() {
@@ -153,7 +153,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dependency_collection_with_python_deps() {
-        let mut python_deps = HashMap::new();
+        let mut python_deps = IndexMap::new();
         python_deps.insert(
             "numpy".to_string(),
             PythonDependencySpec::Simple(">=1.20.0".to_string()),

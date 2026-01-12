@@ -102,7 +102,7 @@
 //!
 //! ```rust
 //! use hpm_package::{PackageManifest, DependencySpec, PythonDependencySpec};
-//! use std::collections::HashMap;
+//! use indexmap::IndexMap;
 //!
 //! # let mut manifest = PackageManifest::new(
 //! #     "example-package".to_string(),
@@ -112,7 +112,7 @@
 //! #     None,
 //! # );
 //! // Add HPM dependencies (Git or Path sources only)
-//! let mut dependencies = HashMap::new();
+//! let mut dependencies = IndexMap::new();
 //! dependencies.insert(
 //!     "utility-nodes".to_string(),
 //!     DependencySpec::git(
@@ -135,7 +135,7 @@
 //! manifest.dependencies = Some(dependencies);
 //!
 //! // Add Python dependencies
-//! let mut python_deps = HashMap::new();
+//! let mut python_deps = IndexMap::new();
 //! python_deps.insert(
 //!     "numpy".to_string(),
 //!     PythonDependencySpec::Simple(">=1.20.0".to_string())
@@ -244,7 +244,7 @@
 //!
 //! ```rust
 //! use hpm_package::{PackageManifest, DependencySpec};
-//! use std::collections::HashMap;
+//! use indexmap::IndexMap;
 //!
 //! # let mut manifest = PackageManifest::new(
 //! #     "example-package".to_string(),
@@ -255,7 +255,7 @@
 //! # );
 //! // Note: This example shows planned dev_dependencies field structure
 //! // Currently not implemented in PackageManifest
-//! let mut dev_deps = HashMap::new();
+//! let mut dev_deps = IndexMap::new();
 //! dev_deps.insert(
 //!     "test-assets".to_string(),
 //!     DependencySpec::git(
@@ -272,6 +272,7 @@
 //! // and testing, not for production deployments
 //! ```
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -280,12 +281,15 @@ pub mod template;
 pub use template::PackageTemplate;
 
 /// HPM package manifest (hpm.toml)
+///
+/// Uses `IndexMap` for dependencies and python_dependencies to preserve
+/// insertion order during serialization, ensuring deterministic TOML output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageManifest {
     pub package: PackageInfo,
     pub houdini: Option<HoudiniConfig>,
-    pub dependencies: Option<HashMap<String, DependencySpec>>,
-    pub python_dependencies: Option<HashMap<String, PythonDependencySpec>>,
+    pub dependencies: Option<IndexMap<String, DependencySpec>>,
+    pub python_dependencies: Option<IndexMap<String, PythonDependencySpec>>,
     pub scripts: Option<HashMap<String, String>>,
 }
 

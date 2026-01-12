@@ -192,9 +192,10 @@ impl DependencyResolver {
         info!("Building dependency graph from {} projects", projects.len());
 
         // Create a map of installed packages for quick lookup
-        let installed_map: HashMap<String, &InstalledPackage> = installed_packages
+        // Use &str keys to avoid cloning package names
+        let installed_map: HashMap<&str, &InstalledPackage> = installed_packages
             .iter()
-            .map(|pkg| (pkg.name.clone(), pkg))
+            .map(|pkg| (pkg.name.as_str(), pkg))
             .collect();
 
         // Process each project
@@ -225,147 +226,156 @@ impl DependencyResolver {
         Ok(graph)
     }
 
-    fn process_project_dependencies(
+    fn process_project_dependencies<'a>(
         &self,
-        project: &DiscoveredProject,
-        installed_map: &HashMap<String, &InstalledPackage>,
+        project: &'a DiscoveredProject,
+        installed_map: &HashMap<&str, &'a InstalledPackage>,
         graph: &mut DependencyGraph,
-        visited: &mut HashSet<String>,
+        visited: &mut HashSet<&'a str>,
     ) -> Result<(), DependencyError> {
-        if let Some(dependencies) = &project.manifest.dependencies {
-            for (dep_name, dep_spec) in dependencies {
-                // Skip if we've already processed this dependency in this traversal
-                if visited.contains(dep_name) {
-                    continue;
-                }
-                visited.insert(dep_name.clone());
+        let Some(dependencies) = &project.manifest.dependencies else {
+            return Ok(());
+        };
 
-                if let Some(installed_package) = installed_map.get(dep_name) {
-                    let package_id = PackageId::from(*installed_package);
+        for (dep_name, dep_spec) in dependencies {
+            if visited.contains(dep_name.as_str()) {
+                continue;
+            }
+            visited.insert(dep_name.as_str());
 
-                    // Add or update the package node
-                    if let Some(existing_node) = graph.nodes.get_mut(&package_id) {
-                        // Add this project to the list of projects requiring this package
-                        if !existing_node.required_by_projects.contains(&project.path) {
-                            existing_node
-                                .required_by_projects
-                                .push(project.path.clone());
-                        }
-                        existing_node.is_root = true;
-                    } else {
-                        // Create new package node
-                        let node = PackageNode {
-                            id: package_id.clone(),
-                            installed_package: Some((*installed_package).clone()),
-                            required_by_projects: vec![project.path.clone()],
-                            is_root: true,
-                        };
-                        graph.add_node(node);
-                    }
+            let (package_id, installed_package) =
+                self.resolve_dependency(dep_name, dep_spec, installed_map);
 
-                    // Recursively process this package's dependencies
-                    self.process_package_dependencies(
-                        installed_package,
-                        installed_map,
-                        graph,
-                        visited,
-                        &package_id,
-                    )?;
-                } else {
-                    // Package is required but not installed - could be an issue
-                    debug!(
-                        "Project {} requires {} but it's not installed",
-                        project.path.display(),
-                        dep_name
-                    );
+            // For project dependencies, mark as root and track requiring project
+            self.ensure_node(
+                graph,
+                package_id.clone(),
+                installed_package.cloned(),
+                Some(&project.path),
+                true, // is_root
+            );
 
-                    // Create a placeholder node for missing package
-                    let version = self.extract_version_from_spec(dep_spec);
-                    let package_id = PackageId::new(dep_name.clone(), version);
+            if installed_package.is_none() {
+                debug!(
+                    "Project {} requires {} but it's not installed",
+                    project.path.display(),
+                    dep_name
+                );
+                continue;
+            }
 
-                    let node = PackageNode {
-                        id: package_id,
-                        installed_package: None,
-                        required_by_projects: vec![project.path.clone()],
-                        is_root: true,
-                    };
-                    graph.add_node(node);
-                }
+            // Recursively process transitive dependencies
+            self.process_transitive_dependencies(
+                installed_package.unwrap(),
+                installed_map,
+                graph,
+                visited,
+                &package_id,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    fn process_transitive_dependencies<'a>(
+        &self,
+        package: &'a InstalledPackage,
+        installed_map: &HashMap<&str, &'a InstalledPackage>,
+        graph: &mut DependencyGraph,
+        visited: &mut HashSet<&'a str>,
+        parent_id: &PackageId,
+    ) -> Result<(), DependencyError> {
+        let Some(dependencies) = &package.manifest.dependencies else {
+            return Ok(());
+        };
+
+        for (dep_name, dep_spec) in dependencies {
+            if visited.contains(dep_name.as_str()) {
+                continue;
+            }
+
+            let (dep_id, dep_package) =
+                self.resolve_dependency(dep_name, dep_spec, installed_map);
+
+            // Add dependency edge from parent
+            graph.add_dependency(parent_id, &dep_id);
+
+            // Add node if not exists (transitive deps are not roots)
+            self.ensure_node(
+                graph,
+                dep_id.clone(),
+                dep_package.cloned(),
+                None, // no project path for transitive deps
+                false, // not a root
+            );
+
+            if let Some(dep_pkg) = dep_package {
+                // Recursively process with cycle prevention
+                visited.insert(dep_name.as_str());
+                self.process_transitive_dependencies(
+                    dep_pkg,
+                    installed_map,
+                    graph,
+                    visited,
+                    &dep_id,
+                )?;
+                visited.remove(dep_name.as_str());
+            } else {
+                debug!(
+                    "Package {} requires {} but it's not installed",
+                    package.identifier(),
+                    dep_name
+                );
             }
         }
 
         Ok(())
     }
 
-    fn process_package_dependencies(
+    /// Resolve a dependency name to its PackageId and optional installed package.
+    fn resolve_dependency<'a>(
         &self,
-        package: &InstalledPackage,
-        installed_map: &HashMap<String, &InstalledPackage>,
+        dep_name: &str,
+        dep_spec: &DependencySpec,
+        installed_map: &HashMap<&str, &'a InstalledPackage>,
+    ) -> (PackageId, Option<&'a InstalledPackage>) {
+        if let Some(installed) = installed_map.get(dep_name) {
+            (PackageId::from(*installed), Some(*installed))
+        } else {
+            let version = self.extract_version_from_spec(dep_spec);
+            (PackageId::new(dep_name.to_string(), version), None)
+        }
+    }
+
+    /// Ensure a node exists in the graph, updating it if it already exists.
+    fn ensure_node(
+        &self,
         graph: &mut DependencyGraph,
-        visited: &mut HashSet<String>,
-        parent_id: &PackageId,
-    ) -> Result<(), DependencyError> {
-        if let Some(dependencies) = &package.manifest.dependencies {
-            for (dep_name, dep_spec) in dependencies {
-                // Skip if we've already processed this dependency
-                if visited.contains(dep_name) {
-                    continue;
-                }
-
-                if let Some(dep_package) = installed_map.get(dep_name) {
-                    let dep_id = PackageId::from(*dep_package);
-
-                    // Add dependency edge
-                    graph.add_dependency(parent_id, &dep_id);
-
-                    // Add or update dependency node
-                    if !graph.nodes.contains_key(&dep_id) {
-                        let node = PackageNode {
-                            id: dep_id.clone(),
-                            installed_package: Some((*dep_package).clone()),
-                            required_by_projects: vec![],
-                            is_root: false,
-                        };
-                        graph.add_node(node);
-                    }
-
-                    // Recursively process transitive dependencies
-                    visited.insert(dep_name.clone());
-                    self.process_package_dependencies(
-                        dep_package,
-                        installed_map,
-                        graph,
-                        visited,
-                        &dep_id,
-                    )?;
-                    visited.remove(dep_name);
-                } else {
-                    // Missing transitive dependency
-                    debug!(
-                        "Package {} requires {} but it's not installed",
-                        package.identifier(),
-                        dep_name
-                    );
-
-                    let version = self.extract_version_from_spec(dep_spec);
-                    let dep_id = PackageId::new(dep_name.clone(), version);
-
-                    graph.add_dependency(parent_id, &dep_id);
-
-                    if !graph.nodes.contains_key(&dep_id) {
-                        let node = PackageNode {
-                            id: dep_id,
-                            installed_package: None,
-                            required_by_projects: vec![],
-                            is_root: false,
-                        };
-                        graph.add_node(node);
-                    }
+        id: PackageId,
+        installed_package: Option<InstalledPackage>,
+        project_path: Option<&PathBuf>,
+        is_root: bool,
+    ) {
+        if let Some(existing) = graph.nodes.get_mut(&id) {
+            // Update existing node
+            if is_root {
+                existing.is_root = true;
+            }
+            if let Some(path) = project_path {
+                if !existing.required_by_projects.contains(path) {
+                    existing.required_by_projects.push(path.clone());
                 }
             }
+        } else {
+            // Create new node
+            let node = PackageNode {
+                id: id.clone(),
+                installed_package,
+                required_by_projects: project_path.map(|p| vec![p.clone()]).unwrap_or_default(),
+                is_root,
+            };
+            graph.add_node(node);
         }
-
-        Ok(())
     }
 
     fn extract_version_from_spec(&self, spec: &DependencySpec) -> String {

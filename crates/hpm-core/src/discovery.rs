@@ -309,7 +309,7 @@ description = "Test project {}"
         );
 
         // Add dependencies to project-2
-        let mut deps = std::collections::HashMap::new();
+        let mut deps = indexmap::IndexMap::new();
         deps.insert(
             "utility-nodes".to_string(),
             hpm_package::DependencySpec::Git {

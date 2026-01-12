@@ -2,7 +2,7 @@
 
 use crate::*;
 use hpm_package::{HoudiniConfig, PackageInfo, PackageManifest, PythonDependencySpec};
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 #[tokio::test]
 async fn test_end_to_end_python_workflow() {
@@ -14,7 +14,7 @@ async fn test_end_to_end_python_workflow() {
     // 5. Houdini package.json generation with PYTHONPATH
 
     // Create test package manifests with Python dependencies
-    let mut python_deps_a = HashMap::new();
+    let mut python_deps_a = IndexMap::new();
     python_deps_a.insert(
         "numpy".to_string(),
         PythonDependencySpec::Simple(">=1.20.0".to_string()),
@@ -51,7 +51,7 @@ async fn test_end_to_end_python_workflow() {
         scripts: None,
     };
 
-    let mut python_deps_b = HashMap::new();
+    let mut python_deps_b = IndexMap::new();
     python_deps_b.insert(
         "numpy".to_string(),
         PythonDependencySpec::Simple(">=1.20.0".to_string()),
@@ -252,7 +252,7 @@ async fn test_virtual_environment_sharing() {
 async fn test_houdini_python_version_mapping_edge_cases() {
     // Test edge cases in Houdini -> Python version mapping through dependency collection
     use hpm_package::{HoudiniConfig, PackageInfo};
-    use std::collections::HashMap;
+    use indexmap::IndexMap;
 
     // Test with invalid Houdini version - should fall back to default Python version
     let manifest = PackageManifest {
@@ -274,7 +274,7 @@ async fn test_houdini_python_version_mapping_edge_cases() {
             max_version: None,
         }),
         dependencies: None,
-        python_dependencies: Some(HashMap::new()),
+        python_dependencies: Some(IndexMap::new()),
         scripts: None,
     };
 

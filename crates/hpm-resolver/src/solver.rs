@@ -35,16 +35,6 @@ struct PartialSolution {
 struct Assignment {
     package_id: PackageId,
     decision_level: usize,
-    #[allow(dead_code)] // Will be used in future conflict resolution improvements
-    reason: AssignmentReason,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)] // Will be used in future conflict resolution improvements
-enum AssignmentReason {
-    Root,
-    Dependency { from: PackageId },
-    Conflict { incompatibility_index: usize },
 }
 
 impl<P: PackageProvider> DependencyResolver<P> {
@@ -250,7 +240,6 @@ impl<P: PackageProvider> DependencyResolver<P> {
         let assignment = Assignment {
             package_id: package_id.clone(),
             decision_level: self.solution.decided.len(),
-            reason: AssignmentReason::Root, // Simplified for now
         };
 
         // Add to decided packages

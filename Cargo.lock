@@ -773,11 +773,13 @@ dependencies = [
  "anyhow",
  "clap",
  "console",
+ "futures",
  "hpm-config",
  "hpm-core",
  "hpm-error",
  "hpm-package",
  "hpm-python",
+ "indexmap",
  "indicatif",
  "miette",
  "owo-colors",
@@ -814,6 +816,7 @@ dependencies = [
  "hpm-config",
  "hpm-package",
  "hpm-python",
+ "indexmap",
  "proptest",
  "reqwest",
  "semver",
@@ -842,6 +845,7 @@ dependencies = [
 name = "hpm-package"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
  "proptest",
  "serde",
  "serde_json",

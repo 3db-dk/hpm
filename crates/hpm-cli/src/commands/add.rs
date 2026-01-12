@@ -48,7 +48,7 @@
 use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifest};
 use anyhow::{bail, Context, Result};
 use hpm_package::DependencySpec;
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
@@ -127,7 +127,7 @@ pub async fn add_package(
 
     // Add to dependencies
     if manifest.dependencies.is_none() {
-        manifest.dependencies = Some(HashMap::new());
+        manifest.dependencies = Some(IndexMap::new());
     }
 
     let dependencies = manifest.dependencies.as_mut().unwrap();
@@ -270,7 +270,7 @@ min_version = "20.0"
         );
 
         // Add a Git dependency
-        let mut dependencies = HashMap::new();
+        let mut dependencies = IndexMap::new();
         dependencies.insert(
             "test-dep".to_string(),
             DependencySpec::Git {

@@ -174,7 +174,7 @@ pub fn save_manifest(manifest: &PackageManifest, manifest_path: &Path) -> Result
 mod tests {
     use super::*;
     use hpm_package::DependencySpec;
-    use std::collections::HashMap;
+    use indexmap::IndexMap;
     use std::env;
     use tempfile::TempDir;
 
@@ -291,7 +291,7 @@ min_version = "20.0"
         );
 
         // Add a dependency
-        let mut dependencies = HashMap::new();
+        let mut dependencies = IndexMap::new();
         dependencies.insert(
             "test-dep".to_string(),
             DependencySpec::Git {

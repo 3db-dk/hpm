@@ -190,7 +190,6 @@ use crate::console;
 use crate::output::OutputFormat;
 use anyhow::{Context, Result};
 use hpm_config::Config;
-use hpm_core::manager::PackageManager;
 use hpm_package::PackageManifest;
 use hpm_python::update::PythonUpdateManager;
 use std::path::PathBuf;
@@ -256,7 +255,6 @@ pub async fn update_packages(options: UpdateOptions) -> Result<()> {
     ));
 
     // Initialize managers
-    let _package_manager = PackageManager::new();
     let mut python_manager = PythonUpdateManager::new(config.storage.home_dir.clone())?;
     // Registry client will be initialized when registry is ready
 

@@ -158,11 +158,13 @@ impl ProjectManager {
             .project_config
             .package_manifest_path(&installed_package.name);
 
-        let manifest_json = serde_json::to_string_pretty(&houdini_package)
-            .map_err(|e| ProjectError::JsonSerialization(e.to_string()))?;
-
-        std::fs::write(&manifest_path, manifest_json)
+        // Write directly to file using buffered writer to avoid intermediate string allocation
+        let file = std::fs::File::create(&manifest_path)
             .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
+        let writer = std::io::BufWriter::new(file);
+
+        serde_json::to_writer_pretty(writer, &houdini_package)
+            .map_err(|e| ProjectError::JsonSerialization(e.to_string()))?;
 
         debug!("Generated Houdini manifest for {}", installed_package.name);
         Ok(())

@@ -167,11 +167,26 @@ pub mod venv;
 #[cfg(test)]
 pub mod integration_tests;
 
-pub use dependency::*;
-pub use integration::*;
-pub use resolver::*;
-pub use types::*;
-pub use venv::*;
+// Dependency collection
+pub use dependency::collect_python_dependencies;
+
+// Houdini integration
+pub use integration::{
+    extract_python_env_from_package_json, generate_houdini_package_json,
+    update_package_json_with_python,
+};
+
+// UV resolver
+pub use resolver::resolve_dependencies;
+
+// Core types
+pub use types::{
+    OrphanedVenv, PythonDependencies, PythonDependency, PythonError, PythonResult, PythonVersion,
+    ResolvedDependencySet, VenvMetadata, VersionSpec,
+};
+
+// Virtual environment management
+pub use venv::VenvManager;
 
 use anyhow::Result;
 use std::path::PathBuf;

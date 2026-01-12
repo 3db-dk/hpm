@@ -16,6 +16,7 @@ description = "package functionality for HPM (Houdini Package Manager)"
 serde.workspace = true
 toml.workspace = true
 serde_json.workspace = true
+indexmap.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

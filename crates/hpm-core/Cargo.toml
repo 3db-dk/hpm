@@ -15,6 +15,7 @@ description = "Core functionality for HPM (Houdini Package Manager)"
 [dependencies]
 serde.workspace = true
 tracing.workspace = true
+indexmap.workspace = true
 hpm-config = { path = "../hpm-config" }
 hpm-package = { path = "../hpm-package" }
 hpm-python = { path = "../hpm-python" }
