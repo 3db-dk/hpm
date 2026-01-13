@@ -56,9 +56,14 @@ mod tests {
         ]
     }
 
-    /// Strategy to generate commit hashes
-    fn commit_hash_strategy() -> impl Strategy<Value = String> {
-        prop::string::string_regex("[0-9a-f]{40}").unwrap()
+    /// Strategy to generate release tags
+    fn tag_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("v1.0.0".to_string()),
+            Just("v2.3.4".to_string()),
+            Just("1.0.0".to_string()),
+            r"v[0-9]+\.[0-9]+\.[0-9]+",
+        ]
     }
 
     /// Strategy to generate package versions (semver-like)
@@ -258,25 +263,24 @@ mod tests {
         fn prop_add_command_validation(
             package_name in package_name_strategy(),
             git_url in prop::option::of(git_url_strategy()),
-            commit_hash in prop::option::of(commit_hash_strategy()),
+            tag_name in prop::option::of(tag_strategy()),
             manifest_path in prop::option::of(file_path_strategy()),
             optional in any::<bool>()
         ) {
             let add_cmd = Commands::Add {
                 packages: vec![package_name.clone()],
                 git: git_url.clone(),
-                commit: commit_hash.clone(),
-                tag: None,
+                tag: tag_name.clone(),
                 path: None,
                 manifest: manifest_path.clone(),
                 optional,
             };
 
             match add_cmd {
-                Commands::Add { packages, git, commit, tag: _, manifest, optional: opt, .. } => {
+                Commands::Add { packages, git, tag, manifest, optional: opt, .. } => {
                     prop_assert_eq!(packages, vec![package_name]);
                     prop_assert_eq!(git, git_url);
-                    prop_assert_eq!(commit, commit_hash);
+                    prop_assert_eq!(tag, tag_name);
                     prop_assert_eq!(manifest, manifest_path);
                     prop_assert_eq!(opt, optional);
                 }
@@ -335,13 +339,12 @@ mod tests {
         fn prop_problematic_package_names(
             problematic_name in problematic_package_name_strategy(),
             git_url in git_url_strategy(),
-            commit_hash in commit_hash_strategy()
+            tag_name in tag_strategy()
         ) {
             let add_cmd = Commands::Add {
                 packages: vec![problematic_name.clone()],
                 git: Some(git_url),
-                commit: Some(commit_hash),
-                tag: None,
+                tag: Some(tag_name),
                 path: None,
                 manifest: None,
                 optional: false,

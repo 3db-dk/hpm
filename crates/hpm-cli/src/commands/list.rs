@@ -238,15 +238,14 @@ pub async fn list_dependencies_tree(manifest_path: Option<PathBuf>) -> Result<()
 /// Format source info for tree display (compact format)
 fn format_tree_source_info(spec: &DependencySpec) -> String {
     match spec {
-        DependencySpec::Git { git, commit, .. } => {
+        DependencySpec::Git { git, version, .. } => {
             // Extract repo name from URL for compact display
             let repo_name = git
                 .rsplit('/')
                 .next()
                 .unwrap_or(git)
                 .trim_end_matches(".git");
-            let short_commit = &commit[..commit.len().min(7)];
-            format!("({}@{})", repo_name, short_commit)
+            format!("({}@{})", repo_name, version)
         }
         DependencySpec::Path { path, .. } => {
             format!("(path: {})", path)
@@ -371,12 +370,12 @@ fn display_python_dependencies(manifest: &PackageManifest) {
 ///
 /// # Examples
 ///
-/// * Git: `{git: "...", commit: "abc123"}` → `"git: ... (commit: abc123)"`
+/// * Git: `{git: "...", version: "1.0.0"}` → `"git: ... (version: 1.0.0)"`
 /// * Path: `{path: "../local"}` → `"path: ../local"`
 fn format_dependency_spec(spec: &DependencySpec) -> String {
     match spec {
-        DependencySpec::Git { git, commit, .. } => {
-            format!("git: {} (commit: {})", git, &commit[..commit.len().min(12)])
+        DependencySpec::Git { git, version, .. } => {
+            format!("git: {} (version: {})", git, version)
         }
         DependencySpec::Path { path, .. } => {
             format!("path: {}", path)
@@ -539,9 +538,9 @@ max_version = "20.5"
             manifest_content.push_str(
                 r#"
 [dependencies]
-utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc123def456789012345678901234567890abcd" }
+utility-nodes = { git = "https://github.com/studio/utility-nodes", version = "1.0.0" }
 material-library = { path = "../material-library", optional = true }
-geometry-tools = { git = "https://github.com/example/geometry-tools", commit = "def456abc789012345678901234567890abcdef12" }
+geometry-tools = { git = "https://github.com/example/geometry-tools", version = "2.0.0" }
 "#,
             );
         }
@@ -624,11 +623,11 @@ matplotlib = { version = "^3.5.0", optional = true }
     fn test_format_dependency_spec_git() {
         let spec = DependencySpec::Git {
             git: "https://github.com/example/repo".to_string(),
-            commit: "abc123def456".to_string(),
+            version: "1.0.0".to_string(),
             optional: false,
         };
         let result = format_dependency_spec(&spec);
-        assert_eq!(result, "git: https://github.com/example/repo (commit: abc123def456)");
+        assert_eq!(result, "git: https://github.com/example/repo (version: 1.0.0)");
     }
 
     #[test]
@@ -645,14 +644,14 @@ matplotlib = { version = "^3.5.0", optional = true }
     fn test_is_optional_dependency() {
         let git_optional = DependencySpec::Git {
             git: "https://github.com/example/repo".to_string(),
-            commit: "abc123".to_string(),
+            version: "1.0.0".to_string(),
             optional: true,
         };
         assert!(is_optional_dependency(&git_optional));
 
         let git_not_optional = DependencySpec::Git {
             git: "https://github.com/example/repo".to_string(),
-            commit: "abc123".to_string(),
+            version: "1.0.0".to_string(),
             optional: false,
         };
         assert!(!is_optional_dependency(&git_not_optional));
@@ -767,7 +766,7 @@ version = "2.0.0"
 description = "Test custom manifest path"
 
 [dependencies]
-test-dep = { git = "https://github.com/example/test-dep", commit = "1234567890abcdef1234567890abcdef12345678" }
+test-dep = { git = "https://github.com/example/test-dep", version = "1.0.0" }
 "#;
         std::fs::write(&manifest_path, manifest_content).unwrap();
 

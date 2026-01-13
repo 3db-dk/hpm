@@ -282,18 +282,18 @@ impl LockedDependency {
     /// # Arguments
     /// * `version` - The resolved version (from package manifest)
     /// * `url` - The Git repository URL
-    /// * `commit` - The full commit hash (40 hex characters)
     /// * `checksum` - SHA256 checksum of the extracted package contents
+    ///
+    /// Note: The version is used both for the locked dependency and the package source.
     pub fn from_git(
         version: String,
         url: String,
-        commit: String,
         checksum: Option<String>,
     ) -> Self {
         Self {
-            version,
+            version: version.clone(),
             checksum,
-            source: PackageSource::Git { url, commit },
+            source: PackageSource::Git { url, version },
             dependencies: Vec::new(),
         }
     }
@@ -493,7 +493,6 @@ mod tests {
             LockedDependency::from_git(
                 "2.1.0".to_string(),
                 "https://github.com/studio/utility-nodes".to_string(),
-                "abc123def456789012345678901234567890abcd".to_string(),
                 Some("checksum123".to_string()),
             ),
         );
@@ -531,7 +530,6 @@ mod tests {
             LockedDependency::from_git(
                 "1.0.0".to_string(),
                 "https://github.com/studio/dep-a".to_string(),
-                "abc123def456789012345678901234567890abcd".to_string(),
                 None,
             ),
         );
@@ -562,7 +560,6 @@ mod tests {
             LockedDependency::from_git(
                 "1.0.0".to_string(),
                 "https://github.com/studio/new-dep".to_string(),
-                "abc123def456789012345678901234567890abcd".to_string(),
                 None,
             ),
         );
@@ -575,16 +572,15 @@ mod tests {
         let dep = LockedDependency::from_git(
             "1.0.0".to_string(),
             "https://github.com/user/repo.git".to_string(),
-            "abc123def456789012345678901234567890abcd".to_string(),
             Some("sha256checksum".to_string()),
         );
 
         assert_eq!(dep.version, "1.0.0");
         assert_eq!(dep.checksum, Some("sha256checksum".to_string()));
         match dep.source {
-            DependencySource::Git { url, commit } => {
+            PackageSource::Git { url, version } => {
                 assert_eq!(url, "https://github.com/user/repo.git");
-                assert_eq!(commit, "abc123def456789012345678901234567890abcd");
+                assert_eq!(version, "1.0.0");
             }
             _ => panic!("Expected Git source"),
         }
@@ -616,7 +612,6 @@ mod tests {
             LockedDependency::from_git(
                 "2.0.0".to_string(),
                 "https://github.com/studio/test-dep".to_string(),
-                "abc123def456789012345678901234567890abcd".to_string(),
                 Some("sha256abc".to_string()),
             ),
         );
@@ -639,7 +634,6 @@ mod tests {
             LockedDependency::from_git(
                 "1.0.0".to_string(),
                 "https://github.com/studio/dep".to_string(),
-                "abc123def456789012345678901234567890abcd".to_string(),
                 None,
             ),
         );

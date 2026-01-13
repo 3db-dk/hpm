@@ -62,6 +62,8 @@ impl TagResolver {
             GitProvider::GitHub => self.resolve_github(&owner, &repo, tag).await,
             GitProvider::GitLab => self.resolve_gitlab(&owner, &repo, tag).await,
             GitProvider::Bitbucket => self.resolve_bitbucket(&owner, &repo, tag).await,
+            GitProvider::Codeberg => self.resolve_gitea("codeberg.org", &owner, &repo, tag).await,
+            GitProvider::Gitea { ref host } => self.resolve_gitea(host, &owner, &repo, tag).await,
             GitProvider::Unknown => Err(TagResolveError::UnsupportedProvider),
         }
     }
@@ -207,6 +209,40 @@ impl TagResolver {
 
         Ok(tag_info.target.hash)
     }
+
+    /// Resolve a tag using Gitea's API (also works for Codeberg).
+    async fn resolve_gitea(
+        &self,
+        host: &str,
+        owner: &str,
+        repo: &str,
+        tag: &str,
+    ) -> Result<String, TagResolveError> {
+        // Gitea API: GET /api/v1/repos/{owner}/{repo}/tags/{tag}
+        let api_url = format!(
+            "https://{}/api/v1/repos/{}/{}/tags/{}",
+            host, owner, repo, tag
+        );
+
+        debug!("Gitea API request: {}", api_url);
+
+        let response = self.http_client.get(&api_url).send().await?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(TagResolveError::TagNotFound {
+                tag: tag.to_string(),
+                repo: format!("{}/{}", owner, repo),
+            });
+        }
+
+        let response = response.error_for_status()?;
+        let tag_info: GiteaTag = response
+            .json()
+            .await
+            .map_err(|e| TagResolveError::ParseError(e.to_string()))?;
+
+        Ok(tag_info.commit.sha)
+    }
 }
 
 impl Default for TagResolver {
@@ -285,6 +321,18 @@ struct BitbucketTag {
 #[derive(Debug, Deserialize)]
 struct BitbucketTarget {
     hash: String,
+}
+
+// Gitea/Codeberg API response types
+
+#[derive(Debug, Deserialize)]
+struct GiteaTag {
+    commit: GiteaCommit,
+}
+
+#[derive(Debug, Deserialize)]
+struct GiteaCommit {
+    sha: String,
 }
 
 #[cfg(test)]

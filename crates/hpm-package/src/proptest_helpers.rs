@@ -74,19 +74,14 @@ pub fn houdini_version_strategy() -> impl Strategy<Value = String> {
     ]
 }
 
-/// Strategy to generate commit hashes
-pub fn commit_hash_strategy() -> impl Strategy<Value = String> {
-    prop::string::string_regex("[0-9a-f]{40}").unwrap()
-}
-
 /// Strategy to generate dependency specifications
 pub fn dependency_spec_strategy() -> impl Strategy<Value = DependencySpec> {
     prop_oneof![
-        // Git dependency with commit hash
-        (url_strategy(), commit_hash_strategy(), any::<bool>()).prop_map(
-            |(git, commit, optional)| DependencySpec::Git {
+        // Git dependency with version (for release artifact download)
+        (url_strategy(), version_strategy(), any::<bool>()).prop_map(
+            |(git, version, optional)| DependencySpec::Git {
                 git,
-                commit,
+                version,
                 optional
             }
         ),
@@ -473,7 +468,7 @@ proptest! {
         // Test Git dependency spec
         let git_spec = DependencySpec::Git {
             git: git_url.clone(),
-            commit: "abc123def456789012345678901234567890abcd".to_string(),
+            version: "1.0.0".to_string(),
             optional: true,
         };
         let git_json = serde_json::to_string(&git_spec);

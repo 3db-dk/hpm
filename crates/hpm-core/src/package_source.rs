@@ -1,7 +1,7 @@
-//! Package source definitions for Git archive-based dependencies.
+//! Package source definitions for Git release-based dependencies.
 //!
 //! This module defines the types for specifying where packages come from.
-//! HPM uses Git archives as the primary package distribution mechanism,
+//! HPM uses Git release artifacts as the primary package distribution mechanism,
 //! with local path dependencies for development.
 
 use serde::{Deserialize, Serialize};
@@ -14,8 +14,8 @@ pub enum PackageSourceError {
     #[error("Invalid Git URL: {0}")]
     InvalidGitUrl(String),
 
-    #[error("Invalid commit hash: {0}")]
-    InvalidCommitHash(String),
+    #[error("Invalid version: {0}")]
+    InvalidVersion(String),
 
     #[error("Path does not exist: {0}")]
     PathNotFound(PathBuf),
@@ -27,21 +27,21 @@ pub enum PackageSourceError {
 /// Represents where a package comes from.
 ///
 /// HPM supports two package sources:
-/// - Git repositories (via archive download)
+/// - Git repositories (via release artifact download)
 /// - Local filesystem paths (for development)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum PackageSource {
-    /// A Git repository with a specific commit hash.
+    /// A Git repository with a specific version.
     ///
-    /// The package will be fetched as an archive from the Git hosting provider.
-    /// Using commit hashes instead of tags ensures reproducibility, since
-    /// tags can be redefined.
+    /// The package will be fetched as a release artifact from the Git hosting provider.
+    /// Package authors must create releases with artifacts following the naming
+    /// convention `{package-name}-{version}.zip`.
     Git {
         /// The Git repository URL (e.g., "https://github.com/owner/repo")
         url: String,
-        /// The full commit hash (40 hex characters for SHA-1)
-        commit: String,
+        /// The version (e.g., "1.0.0", extracted from tag like "v1.0.0")
+        version: String,
     },
 
     /// A local filesystem path.
@@ -58,13 +58,13 @@ impl PackageSource {
     ///
     /// # Arguments
     /// * `url` - The Git repository URL
-    /// * `commit` - The full commit hash
+    /// * `version` - The package version
     ///
     /// # Errors
-    /// Returns an error if the URL or commit hash is invalid.
-    pub fn git(url: impl Into<String>, commit: impl Into<String>) -> Result<Self, PackageSourceError> {
+    /// Returns an error if the URL or version is invalid.
+    pub fn git(url: impl Into<String>, version: impl Into<String>) -> Result<Self, PackageSourceError> {
         let url = url.into();
-        let commit = commit.into();
+        let version = version.into();
 
         // Validate URL has a reasonable format
         if !url.starts_with("https://") && !url.starts_with("http://") {
@@ -73,21 +73,21 @@ impl PackageSource {
             ));
         }
 
-        // Validate commit hash format (should be hex, typically 40 chars for full SHA-1)
-        if commit.is_empty() {
-            return Err(PackageSourceError::InvalidCommitHash(
-                "Commit hash cannot be empty".to_string()
+        // Validate version format
+        if version.is_empty() {
+            return Err(PackageSourceError::InvalidVersion(
+                "Version cannot be empty".to_string()
             ));
         }
 
-        // Allow short hashes (7+ chars) but prefer full 40-char hashes
-        if !commit.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(PackageSourceError::InvalidCommitHash(
-                format!("Commit hash must be hexadecimal: {}", commit)
+        // Version should be a valid semver-like string
+        if version.starts_with('.') || version.ends_with('.') {
+            return Err(PackageSourceError::InvalidVersion(
+                format!("Version has invalid format: {}", version)
             ));
         }
 
-        Ok(PackageSource::Git { url, commit })
+        Ok(PackageSource::Git { url, version })
     }
 
     /// Create a new path source.
@@ -116,10 +116,10 @@ impl PackageSource {
         }
     }
 
-    /// Get the commit hash if this is a Git source.
-    pub fn git_commit(&self) -> Option<&str> {
+    /// Get the version if this is a Git source.
+    pub fn git_version(&self) -> Option<&str> {
         match self {
-            PackageSource::Git { commit, .. } => Some(commit),
+            PackageSource::Git { version, .. } => Some(version),
             _ => None,
         }
     }
@@ -134,11 +134,11 @@ impl PackageSource {
 
     /// Generate a unique cache key for this source.
     ///
-    /// For Git sources, this is based on the URL and commit hash.
+    /// For Git sources, this is based on the URL and version.
     /// For path sources, this is based on the absolute path.
     pub fn cache_key(&self) -> String {
         match self {
-            PackageSource::Git { url, commit } => {
+            PackageSource::Git { url, version } => {
                 // Extract owner/repo from URL for a readable cache key
                 let repo_part = url
                     .trim_end_matches(".git")
@@ -150,9 +150,7 @@ impl PackageSource {
                     .collect::<Vec<_>>()
                     .join("-");
 
-                // Use short commit hash for brevity
-                let short_commit = &commit[..commit.len().min(12)];
-                format!("{}-{}", repo_part, short_commit)
+                format!("{}-{}", repo_part, version)
             }
             PackageSource::Path { path } => {
                 // Use path hash for local sources
@@ -174,12 +172,16 @@ fn seahash_simple(s: &str) -> u64 {
 }
 
 /// Identifies the Git hosting provider for a repository URL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitProvider {
     GitHub,
     GitLab,
+    /// Gitea instance (including self-hosted)
+    Gitea { host: String },
+    /// Codeberg (runs on Gitea)
+    Codeberg,
     Bitbucket,
-    /// Unknown provider - will attempt generic Git archive URL
+    /// Unknown provider
     Unknown,
 }
 
@@ -189,23 +191,91 @@ impl GitProvider {
         let url_lower = url.to_lowercase();
         if url_lower.contains("github.com") {
             GitProvider::GitHub
-        } else if url_lower.contains("gitlab.com") || url_lower.contains("gitlab.") {
+        } else if url_lower.contains("gitlab.com") {
             GitProvider::GitLab
-        } else if url_lower.contains("bitbucket.org") || url_lower.contains("bitbucket.") {
+        } else if url_lower.contains("codeberg.org") {
+            GitProvider::Codeberg
+        } else if url_lower.contains("bitbucket.org") {
             GitProvider::Bitbucket
         } else {
-            GitProvider::Unknown
+            // For unknown hosts, assume Gitea (most self-hosted instances use Gitea/Forgejo)
+            // Extract host from URL
+            let host = url
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .split('/')
+                .next()
+                .unwrap_or("unknown")
+                .to_string();
+            GitProvider::Gitea { host }
         }
     }
 
-    /// Construct the archive download URL for this provider.
+    /// Construct the release asset download URL for this provider.
     ///
     /// # Arguments
     /// * `repo_url` - The base repository URL
-    /// * `commit` - The commit hash
+    /// * `tag` - The release tag (e.g., "v1.0.0")
+    /// * `package_name` - The package name
+    /// * `version` - The version (e.g., "1.0.0")
     ///
     /// # Returns
-    /// The URL to download the archive, or an error if unsupported.
+    /// The URL to download the release asset.
+    pub fn release_asset_url(
+        &self,
+        repo_url: &str,
+        tag: &str,
+        package_name: &str,
+        version: &str,
+    ) -> Result<String, PackageSourceError> {
+        // Normalize URL (remove trailing slashes and .git)
+        let base_url = repo_url
+            .trim_end_matches('/')
+            .trim_end_matches(".git");
+
+        // Expected asset filename
+        let asset_name = format!("{}-{}.zip", package_name, version);
+
+        match self {
+            GitProvider::GitHub => {
+                // GitHub: https://github.com/{owner}/{repo}/releases/download/{tag}/{asset}
+                Ok(format!("{}/releases/download/{}/{}", base_url, tag, asset_name))
+            }
+            GitProvider::GitLab => {
+                // GitLab: https://gitlab.com/{owner}/{repo}/-/releases/{tag}/downloads/{asset}
+                Ok(format!("{}/-/releases/{}/downloads/{}", base_url, tag, asset_name))
+            }
+            GitProvider::Gitea { .. } => {
+                // Gitea: https://{host}/{owner}/{repo}/releases/download/{tag}/{asset}
+                Ok(format!("{}/releases/download/{}/{}", base_url, tag, asset_name))
+            }
+            GitProvider::Codeberg => {
+                // Codeberg (Gitea): https://codeberg.org/{owner}/{repo}/releases/download/{tag}/{asset}
+                Ok(format!("{}/releases/download/{}/{}", base_url, tag, asset_name))
+            }
+            GitProvider::Bitbucket => {
+                // Bitbucket: https://bitbucket.org/{owner}/{repo}/downloads/{asset}
+                // Note: Bitbucket uses a general downloads section, not per-release
+                Ok(format!("{}/downloads/{}", base_url, asset_name))
+            }
+            GitProvider::Unknown => {
+                // For unknown providers, try Gitea-style URL as a fallback
+                Ok(format!("{}/releases/download/{}/{}", base_url, tag, asset_name))
+            }
+        }
+    }
+
+    /// Construct the archive download URL for this provider (for source archives).
+    ///
+    /// Note: This is kept for backwards compatibility but release_asset_url should
+    /// be preferred for downloading pre-built packages.
+    ///
+    /// # Arguments
+    /// * `repo_url` - The base repository URL
+    /// * `commit` - The commit hash or tag
+    ///
+    /// # Returns
+    /// The URL to download the source archive.
     pub fn archive_url(&self, repo_url: &str, commit: &str) -> Result<String, PackageSourceError> {
         // Normalize URL (remove trailing slashes and .git)
         let base_url = repo_url
@@ -219,12 +289,15 @@ impl GitProvider {
             }
             GitProvider::GitLab => {
                 // GitLab: https://gitlab.com/{owner}/{repo}/-/archive/{commit}/{repo}-{commit}.zip
-                // Extract repo name from URL for the filename
                 let repo_name = base_url
                     .rsplit('/')
                     .next()
                     .unwrap_or("repo");
                 Ok(format!("{}/-/archive/{}/{}-{}.zip", base_url, commit, repo_name, commit))
+            }
+            GitProvider::Gitea { .. } | GitProvider::Codeberg => {
+                // Gitea/Codeberg: https://{host}/{owner}/{repo}/archive/{commit}.zip
+                Ok(format!("{}/archive/{}.zip", base_url, commit))
             }
             GitProvider::Bitbucket => {
                 // Bitbucket: https://bitbucket.org/{owner}/{repo}/get/{commit}.zip
@@ -232,7 +305,6 @@ impl GitProvider {
             }
             GitProvider::Unknown => {
                 // For unknown providers, try GitHub-style URL as a fallback
-                // This might work for many Git hosting platforms
                 Ok(format!("{}/archive/{}.zip", base_url, commit))
             }
         }
@@ -242,9 +314,8 @@ impl GitProvider {
 impl std::fmt::Display for PackageSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PackageSource::Git { url, commit } => {
-                let short_commit = &commit[..commit.len().min(8)];
-                write!(f, "{}@{}", url, short_commit)
+            PackageSource::Git { url, version } => {
+                write!(f, "{}@{}", url, version)
             }
             PackageSource::Path { path } => {
                 write!(f, "path:{}", path.display())
@@ -261,24 +332,30 @@ mod tests {
     fn test_git_source_creation() {
         let source = PackageSource::git(
             "https://github.com/studio/geometry-tools",
-            "abc123def456789"
+            "1.0.0"
         ).unwrap();
 
         assert!(source.is_git());
         assert!(!source.is_path());
         assert_eq!(source.git_url(), Some("https://github.com/studio/geometry-tools"));
-        assert_eq!(source.git_commit(), Some("abc123def456789"));
+        assert_eq!(source.git_version(), Some("1.0.0"));
     }
 
     #[test]
     fn test_git_source_invalid_url() {
-        let result = PackageSource::git("not-a-url", "abc123");
+        let result = PackageSource::git("not-a-url", "1.0.0");
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_git_source_invalid_commit() {
-        let result = PackageSource::git("https://github.com/test/repo", "not-hex!");
+    fn test_git_source_invalid_version() {
+        let result = PackageSource::git("https://github.com/test/repo", "");
+        assert!(result.is_err());
+
+        let result = PackageSource::git("https://github.com/test/repo", ".1.0.0");
+        assert!(result.is_err());
+
+        let result = PackageSource::git("https://github.com/test/repo", "1.0.0.");
         assert!(result.is_err());
     }
 
@@ -301,55 +378,90 @@ mod tests {
             GitProvider::GitLab
         );
         assert_eq!(
+            GitProvider::from_url("https://codeberg.org/owner/repo"),
+            GitProvider::Codeberg
+        );
+        assert_eq!(
             GitProvider::from_url("https://bitbucket.org/owner/repo"),
             GitProvider::Bitbucket
         );
-        assert_eq!(
-            GitProvider::from_url("https://custom.git.example.com/repo"),
-            GitProvider::Unknown
-        );
+        // Unknown providers are assumed to be Gitea
+        match GitProvider::from_url("https://git.example.com/owner/repo") {
+            GitProvider::Gitea { host } => assert_eq!(host, "git.example.com"),
+            _ => panic!("Expected Gitea provider"),
+        }
     }
 
     #[test]
-    fn test_github_archive_url() {
-        let url = GitProvider::GitHub.archive_url(
+    fn test_github_release_asset_url() {
+        let url = GitProvider::GitHub.release_asset_url(
             "https://github.com/owner/repo",
-            "abc123"
+            "v1.0.0",
+            "my-package",
+            "1.0.0"
         ).unwrap();
-        assert_eq!(url, "https://github.com/owner/repo/archive/abc123.zip");
+        assert_eq!(url, "https://github.com/owner/repo/releases/download/v1.0.0/my-package-1.0.0.zip");
     }
 
     #[test]
-    fn test_gitlab_archive_url() {
-        let url = GitProvider::GitLab.archive_url(
+    fn test_gitlab_release_asset_url() {
+        let url = GitProvider::GitLab.release_asset_url(
             "https://gitlab.com/owner/repo",
-            "abc123"
+            "v1.0.0",
+            "my-package",
+            "1.0.0"
         ).unwrap();
-        assert_eq!(url, "https://gitlab.com/owner/repo/-/archive/abc123/repo-abc123.zip");
+        assert_eq!(url, "https://gitlab.com/owner/repo/-/releases/v1.0.0/downloads/my-package-1.0.0.zip");
     }
 
     #[test]
-    fn test_bitbucket_archive_url() {
-        let url = GitProvider::Bitbucket.archive_url(
-            "https://bitbucket.org/owner/repo",
-            "abc123"
+    fn test_codeberg_release_asset_url() {
+        let url = GitProvider::Codeberg.release_asset_url(
+            "https://codeberg.org/owner/repo",
+            "v1.0.0",
+            "my-package",
+            "1.0.0"
         ).unwrap();
-        assert_eq!(url, "https://bitbucket.org/owner/repo/get/abc123.zip");
+        assert_eq!(url, "https://codeberg.org/owner/repo/releases/download/v1.0.0/my-package-1.0.0.zip");
+    }
+
+    #[test]
+    fn test_bitbucket_release_asset_url() {
+        let url = GitProvider::Bitbucket.release_asset_url(
+            "https://bitbucket.org/owner/repo",
+            "v1.0.0",
+            "my-package",
+            "1.0.0"
+        ).unwrap();
+        // Bitbucket uses downloads section, not per-release
+        assert_eq!(url, "https://bitbucket.org/owner/repo/downloads/my-package-1.0.0.zip");
+    }
+
+    #[test]
+    fn test_gitea_release_asset_url() {
+        let provider = GitProvider::Gitea { host: "git.example.com".to_string() };
+        let url = provider.release_asset_url(
+            "https://git.example.com/owner/repo",
+            "v1.0.0",
+            "my-package",
+            "1.0.0"
+        ).unwrap();
+        assert_eq!(url, "https://git.example.com/owner/repo/releases/download/v1.0.0/my-package-1.0.0.zip");
     }
 
     #[test]
     fn test_cache_key_uniqueness() {
         let source1 = PackageSource::git(
             "https://github.com/owner/repo",
-            "abc123def456"
+            "1.0.0"
         ).unwrap();
         let source2 = PackageSource::git(
             "https://github.com/owner/repo",
-            "def789abc012"
+            "2.0.0"
         ).unwrap();
         let source3 = PackageSource::git(
             "https://github.com/other/repo",
-            "abc123def456"
+            "1.0.0"
         ).unwrap();
 
         assert_ne!(source1.cache_key(), source2.cache_key());
@@ -360,11 +472,11 @@ mod tests {
     fn test_display() {
         let git_source = PackageSource::git(
             "https://github.com/owner/repo",
-            "abc123def456789"
+            "1.0.0"
         ).unwrap();
         assert_eq!(
             format!("{}", git_source),
-            "https://github.com/owner/repo@abc123de"
+            "https://github.com/owner/repo@1.0.0"
         );
 
         let path_source = PackageSource::path("/local/path");

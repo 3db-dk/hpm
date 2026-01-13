@@ -412,12 +412,8 @@ enum Commands {
         #[arg(long)]
         git: Option<String>,
 
-        /// Git commit hash (use with --git, mutually exclusive with --tag)
-        #[arg(long, conflicts_with = "tag")]
-        commit: Option<String>,
-
-        /// Git tag to resolve to a commit (use with --git, mutually exclusive with --commit)
-        #[arg(long, conflicts_with = "commit")]
+        /// Git tag for release artifact (required with --git, e.g., "v1.0.0")
+        #[arg(long)]
         tag: Option<String>,
 
         /// Local path to package directory (only with single package)
@@ -615,7 +611,6 @@ async fn run_command(
         Commands::Add {
             packages,
             git,
-            commit,
             tag,
             path,
             manifest,
@@ -624,7 +619,6 @@ async fn run_command(
             commands::add::add_packages(
                 packages.clone(),
                 git.clone(),
-                commit.clone(),
                 tag.clone(),
                 path.clone(),
                 manifest.clone(),

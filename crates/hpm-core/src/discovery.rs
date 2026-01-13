@@ -186,7 +186,7 @@ version = "1.0.0"
 description = "A test project"
 
 [dependencies]
-utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc123def456789012345678901234567890abcd" }
+utility-nodes = { git = "https://github.com/studio/utility-nodes", version = "1.0.0" }
 "#;
         std::fs::write(project_dir.join("hpm.toml"), manifest_content).unwrap();
 
@@ -314,7 +314,7 @@ description = "Test project {}"
             "utility-nodes".to_string(),
             hpm_package::DependencySpec::Git {
                 git: "https://github.com/studio/utility-nodes".to_string(),
-                commit: "abc123def456789012345678901234567890abcd".to_string(),
+                version: "1.0.0".to_string(),
                 optional: false,
             },
         );

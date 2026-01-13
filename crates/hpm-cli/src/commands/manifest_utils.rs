@@ -296,7 +296,7 @@ min_version = "20.0"
             "test-dep".to_string(),
             DependencySpec::Git {
                 git: "https://github.com/example/test-dep".to_string(),
-                commit: "abc123def456789012345678901234567890abcd".to_string(),
+                version: "1.0.0".to_string(),
                 optional: false,
             },
         );

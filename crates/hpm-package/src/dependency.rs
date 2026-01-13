@@ -7,16 +7,16 @@ use serde::{Deserialize, Serialize};
 
 /// Dependency specification for HPM packages.
 ///
-/// HPM uses Git archive-based dependencies with explicit commit hashes for
-/// reproducibility and security. Tags are not supported because they can be
-/// redefined, which poses a security risk.
+/// HPM uses Git release-based dependencies. Package authors must create releases
+/// on their Git hosting provider (GitHub, GitLab, Gitea, Codeberg, Bitbucket)
+/// with a release artifact following the naming convention `{package-name}-{version}.zip`.
 ///
 /// # Examples
 ///
 /// ```toml
 /// [dependencies]
-/// # Git dependency with commit hash (recommended)
-/// geometry-tools = { git = "https://github.com/studio/geometry-tools", commit = "abc123def456" }
+/// # Git dependency with version (downloads from release artifact)
+/// geometry-tools = { git = "https://github.com/studio/geometry-tools", version = "1.0.0" }
 ///
 /// # Local path dependency (for development)
 /// my-local-pkg = { path = "../my-local-package" }
@@ -24,12 +24,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DependencySpec {
-    /// Git repository with explicit commit hash
+    /// Git repository with version (downloads release artifact)
     Git {
         /// The Git repository URL
         git: String,
-        /// The full commit hash (40 hex characters recommended)
-        commit: String,
+        /// The version (e.g., "1.0.0", extracted from tag like "v1.0.0")
+        version: String,
         /// Whether this dependency is optional
         #[serde(default)]
         optional: bool,
@@ -47,10 +47,10 @@ pub enum DependencySpec {
 
 impl DependencySpec {
     /// Create a new Git dependency.
-    pub fn git(url: impl Into<String>, commit: impl Into<String>) -> Self {
+    pub fn git(url: impl Into<String>, version: impl Into<String>) -> Self {
         DependencySpec::Git {
             git: url.into(),
-            commit: commit.into(),
+            version: version.into(),
             optional: false,
         }
     }
@@ -89,10 +89,10 @@ impl DependencySpec {
         }
     }
 
-    /// Get the commit hash if this is a Git dependency.
-    pub fn git_commit(&self) -> Option<&str> {
+    /// Get the version if this is a Git dependency.
+    pub fn git_version(&self) -> Option<&str> {
         match self {
-            DependencySpec::Git { commit, .. } => Some(commit),
+            DependencySpec::Git { version, .. } => Some(version),
             _ => None,
         }
     }
@@ -108,7 +108,7 @@ impl DependencySpec {
     /// Validate the dependency spec.
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            DependencySpec::Git { git, commit, .. } => {
+            DependencySpec::Git { git, version, .. } => {
                 if git.is_empty() {
                     return Err("Git URL cannot be empty".to_string());
                 }
@@ -118,11 +118,13 @@ impl DependencySpec {
                         git
                     ));
                 }
-                if commit.is_empty() {
-                    return Err("Commit hash cannot be empty".to_string());
+                if version.is_empty() {
+                    return Err("Version cannot be empty".to_string());
                 }
-                if !commit.chars().all(|c| c.is_ascii_hexdigit()) {
-                    return Err(format!("Commit hash must be hexadecimal: {}", commit));
+                // Version should be a valid semver-like string (e.g., "1.0.0", "1.2.3-alpha")
+                // We don't enforce strict semver, but ensure it's not obviously invalid
+                if version.starts_with('.') || version.ends_with('.') {
+                    return Err(format!("Version has invalid format: {}", version));
                 }
                 Ok(())
             }
@@ -144,12 +146,12 @@ mod tests {
     fn dependency_spec_git_serialization() {
         let spec = DependencySpec::Git {
             git: "https://github.com/owner/repo".to_string(),
-            commit: "abc123def456789012345678901234567890abcd".to_string(),
+            version: "1.0.0".to_string(),
             optional: false,
         };
         let json = serde_json::to_string(&spec).unwrap();
         assert!(json.contains("github.com/owner/repo"));
-        assert!(json.contains("abc123def456789012345678901234567890abcd"));
+        assert!(json.contains("1.0.0"));
     }
 
     #[test]
@@ -165,39 +167,43 @@ mod tests {
 
     #[test]
     fn git_dependency_validation() {
-        let valid = DependencySpec::git(
-            "https://github.com/test/repo",
-            "abc123def456789012345678901234567890abcd",
-        );
+        let valid = DependencySpec::git("https://github.com/test/repo", "1.0.0");
         assert!(valid.validate().is_ok());
 
         let empty_url = DependencySpec::Git {
             git: "".to_string(),
-            commit: "abc123".to_string(),
+            version: "1.0.0".to_string(),
             optional: false,
         };
         assert!(empty_url.validate().is_err());
 
         let invalid_url = DependencySpec::Git {
             git: "not-a-url".to_string(),
-            commit: "abc123".to_string(),
+            version: "1.0.0".to_string(),
             optional: false,
         };
         assert!(invalid_url.validate().is_err());
 
-        let empty_commit = DependencySpec::Git {
+        let empty_version = DependencySpec::Git {
             git: "https://github.com/test/repo".to_string(),
-            commit: "".to_string(),
+            version: "".to_string(),
             optional: false,
         };
-        assert!(empty_commit.validate().is_err());
+        assert!(empty_version.validate().is_err());
 
-        let invalid_commit = DependencySpec::Git {
+        let invalid_version_start = DependencySpec::Git {
             git: "https://github.com/test/repo".to_string(),
-            commit: "not-hex!".to_string(),
+            version: ".1.0.0".to_string(),
             optional: false,
         };
-        assert!(invalid_commit.validate().is_err());
+        assert!(invalid_version_start.validate().is_err());
+
+        let invalid_version_end = DependencySpec::Git {
+            git: "https://github.com/test/repo".to_string(),
+            version: "1.0.0.".to_string(),
+            optional: false,
+        };
+        assert!(invalid_version_end.validate().is_err());
     }
 
     #[test]
@@ -214,12 +220,12 @@ mod tests {
 
     #[test]
     fn dependency_helper_methods() {
-        let git_dep = DependencySpec::git("https://github.com/test/repo", "abc123");
+        let git_dep = DependencySpec::git("https://github.com/test/repo", "1.0.0");
         assert!(git_dep.is_git());
         assert!(!git_dep.is_path());
         assert!(!git_dep.is_optional());
         assert_eq!(git_dep.git_url(), Some("https://github.com/test/repo"));
-        assert_eq!(git_dep.git_commit(), Some("abc123"));
+        assert_eq!(git_dep.git_version(), Some("1.0.0"));
         assert_eq!(git_dep.local_path(), None);
 
         let path_dep = DependencySpec::path("../local");

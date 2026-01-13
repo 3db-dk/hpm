@@ -26,7 +26,7 @@ pub async fn search_packages(query: String, _limit: Option<u32>, _json_output: b
         style("hpm add").cyan(),
         style("--git").green(),
         style("<repository-url>").dim(),
-        style("--commit <commit-hash>").dim()
+        style("--tag <release-tag>").dim()
     );
     println!();
     println!("Example:");
@@ -34,7 +34,7 @@ pub async fn search_packages(query: String, _limit: Option<u32>, _json_output: b
         "  {} {} https://github.com/studio/geometry-tools {}",
         style("hpm add").cyan(),
         style("--git").green(),
-        style("--commit abc123").dim()
+        style("--tag v1.0.0").dim()
     );
     println!();
 

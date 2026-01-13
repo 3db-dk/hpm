@@ -380,9 +380,9 @@ impl DependencyResolver {
 
     fn extract_version_from_spec(&self, spec: &DependencySpec) -> String {
         match spec {
-            DependencySpec::Git { commit, .. } => {
-                // Use short commit hash as version identifier
-                commit[..commit.len().min(12)].to_string()
+            DependencySpec::Git { version, .. } => {
+                // Use the version directly
+                version.clone()
             }
             DependencySpec::Path { .. } => "local".to_string(),
         }

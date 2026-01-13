@@ -281,8 +281,8 @@ impl ArchiveFetcher {
         package_name: &str,
     ) -> Result<FetchResult, FetchError> {
         match source {
-            PackageSource::Git { url, commit } => {
-                self.fetch_git_archive(url, commit, package_name).await
+            PackageSource::Git { url, version } => {
+                self.fetch_git_release(url, version, package_name).await
             }
             PackageSource::Path { path } => {
                 self.fetch_from_path(path, package_name).await
@@ -290,14 +290,14 @@ impl ArchiveFetcher {
         }
     }
 
-    /// Fetch a package from a Git archive.
-    async fn fetch_git_archive(
+    /// Fetch a package from a Git release artifact.
+    async fn fetch_git_release(
         &self,
         url: &str,
-        commit: &str,
+        version: &str,
         package_name: &str,
     ) -> Result<FetchResult, FetchError> {
-        let cache_key = format!("{}-{}", package_name, &commit[..commit.len().min(12)]);
+        let cache_key = format!("{}-{}", package_name, version);
         let package_dir = self.packages_dir.join(&cache_key);
 
         // Check if already extracted
@@ -317,9 +317,11 @@ impl ArchiveFetcher {
             });
         }
 
-        // Determine archive URL based on provider
+        // Determine release asset URL based on provider
+        // Convention: tag is "v{version}" (e.g., "v1.0.0" for version "1.0.0")
+        let tag = format!("v{}", version);
         let provider = GitProvider::from_url(url);
-        let archive_url = provider.archive_url(url, commit)?;
+        let archive_url = provider.release_asset_url(url, &tag, package_name, version)?;
 
         info!("Downloading package from {}", archive_url);
 
@@ -424,8 +426,8 @@ impl ArchiveFetcher {
     /// Check if a package is already cached.
     pub fn is_cached(&self, source: &PackageSource, package_name: &str) -> bool {
         match source {
-            PackageSource::Git { commit, .. } => {
-                let cache_key = format!("{}-{}", package_name, &commit[..commit.len().min(12)]);
+            PackageSource::Git { version, .. } => {
+                let cache_key = format!("{}-{}", package_name, version);
                 self.packages_dir.join(cache_key).exists()
             }
             PackageSource::Path { path } => path.exists(),
@@ -435,8 +437,8 @@ impl ArchiveFetcher {
     /// Get the cache path for a package.
     pub fn cache_path(&self, source: &PackageSource, package_name: &str) -> Option<PathBuf> {
         match source {
-            PackageSource::Git { commit, .. } => {
-                let cache_key = format!("{}-{}", package_name, &commit[..commit.len().min(12)]);
+            PackageSource::Git { version, .. } => {
+                let cache_key = format!("{}-{}", package_name, version);
                 let path = self.packages_dir.join(cache_key);
                 if path.exists() {
                     Some(path)
@@ -542,28 +544,37 @@ mod tests {
     #[test]
     fn test_invalid_git_url() {
         // Empty URL should fail
-        let result = PackageSource::git("", "abc123def456789012345678901234567890abcd");
+        let result = PackageSource::git("", "1.0.0");
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_short_commit_hash_is_allowed() {
-        // Short commit hashes are valid (Git supports 7+ chars, but the code accepts any length)
-        let result = PackageSource::git("https://github.com/owner/repo", "abc12");
+    fn test_valid_version_formats() {
+        // Various valid version formats
+        let result = PackageSource::git("https://github.com/owner/repo", "1.0.0");
+        assert!(result.is_ok());
+
+        let result = PackageSource::git("https://github.com/owner/repo", "1.2.3-alpha");
+        assert!(result.is_ok());
+
+        let result = PackageSource::git("https://github.com/owner/repo", "0.1.0");
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_empty_commit_hash_fails() {
-        // Empty commit hash should fail
+    fn test_empty_version_fails() {
+        // Empty version should fail
         let result = PackageSource::git("https://github.com/owner/repo", "");
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_invalid_commit_hash_non_hex() {
-        // Commit hash must be hexadecimal
-        let result = PackageSource::git("https://github.com/owner/repo", "ghijklmnopqrstuvwxyz1234567890123456789");
+    fn test_invalid_version_format() {
+        // Version with invalid format should fail
+        let result = PackageSource::git("https://github.com/owner/repo", ".1.0.0");
+        assert!(result.is_err());
+
+        let result = PackageSource::git("https://github.com/owner/repo", "1.0.0.");
         assert!(result.is_err());
     }
 

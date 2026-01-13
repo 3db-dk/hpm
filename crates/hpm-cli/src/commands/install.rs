@@ -44,6 +44,38 @@ pub async fn install_dependencies(manifest_path: Option<PathBuf>) -> Result<()> 
         .await
         .context("Failed to setup .hpm directory")?;
 
+    // Load existing lock file if present for checksum verification
+    let lock_path = project_dir.join("hpm.lock");
+    let existing_lock = if lock_path.exists() {
+        match LockFile::load(&lock_path) {
+            Ok(lock) => {
+                info!("Loaded existing lock file for verification");
+                Some(lock)
+            }
+            Err(e) => {
+                warn!("Failed to load existing lock file: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Verify cached packages against lock file checksums
+    if let Some(ref lock) = existing_lock {
+        progress.set_message("Verifying cached packages");
+        let config = hpm_config::Config::load().unwrap_or_default();
+        let packages_dir = &config.storage.packages_dir;
+
+        if let Err(e) = lock.verify_checksums(packages_dir) {
+            return Err(anyhow::anyhow!(
+                "Package integrity check failed: {}. Delete the corrupted package and run 'hpm install' again.",
+                e
+            ));
+        }
+        info!("Cached packages verified successfully");
+    }
+
     // Install HPM dependencies
     let install_results = if let Some(dependencies) = &manifest.dependencies {
         if !dependencies.is_empty() {
@@ -160,12 +192,12 @@ async fn install_hpm_dependencies(
 
                 // Convert dependency spec to package source
                 let source = match &spec {
-                    hpm_package::DependencySpec::Git { git, commit, optional } => {
-                        info!("  {} - Git: {} @ {}", name, git, &commit[..commit.len().min(12)]);
+                    hpm_package::DependencySpec::Git { git, version, optional } => {
+                        info!("  {} - Git: {} @ {}", name, git, version);
                         if *optional {
                             debug!("  {} is optional", name);
                         }
-                        PackageSource::git(git, commit)
+                        PackageSource::git(git, version)
                             .context("Invalid Git URL")?
                     }
                     hpm_package::DependencySpec::Path { path, optional } => {
@@ -367,11 +399,10 @@ async fn generate_lock_file(
             let checksum = install_results.get(name).map(|r| r.checksum.clone());
 
             let locked_dep = match spec {
-                hpm_package::DependencySpec::Git { git, commit, .. } => {
+                hpm_package::DependencySpec::Git { git, version, .. } => {
                     LockedDependency::from_git(
-                        "git".to_string(),
+                        version.clone(),
                         git.clone(),
-                        commit.clone(),
                         checksum,
                     )
                 }
@@ -436,7 +467,7 @@ license = "MIT"
 min_version = "20.0"
 
 [dependencies]
-utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc123def456789012345678901234567890abcd" }
+utility-nodes = { git = "https://github.com/studio/utility-nodes", version = "1.0.0" }
 material-library = { path = "../material-library", optional = true }
 "#,
         );

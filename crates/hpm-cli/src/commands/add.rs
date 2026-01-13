@@ -6,7 +6,7 @@
 //!
 //! The add command provides comprehensive dependency management:
 //! - Adds package dependencies to hpm.toml manifest files
-//! - Supports Git archive-based dependencies with `--git` and `--commit` flags
+//! - Supports Git release artifact dependencies with `--git` and `--tag` flags
 //! - Supports local path dependencies with `--path` flag
 //! - Handles optional dependencies with `--optional` flag
 //! - Flexible manifest targeting via `--package` flag
@@ -16,20 +16,17 @@
 //! ## Usage Examples
 //!
 //! ```bash
-//! # Add a Git-based dependency using commit hash
-//! hpm add geometry-tools --git https://github.com/studio/geometry-tools --commit abc123
-//!
-//! # Add a Git-based dependency using tag (resolves to commit)
+//! # Add a Git-based dependency using tag (downloads release artifact)
 //! hpm add geometry-tools --git https://github.com/studio/geometry-tools --tag v1.0.0
 //!
 //! # Add a local path dependency (for development)
 //! hpm add local-tools --path ../local-tools
 //!
 //! # Add optional dependency
-//! hpm add material-library --git https://github.com/studio/materials --commit def456 --optional
+//! hpm add material-library --git https://github.com/studio/materials --tag v2.0.0 --optional
 //!
 //! # Target specific manifest file
-//! hpm add geometry-tools --git https://github.com/studio/geometry-tools --commit abc123 --package /path/to/project/
+//! hpm add geometry-tools --git https://github.com/studio/geometry-tools --tag v1.0.0 --package /path/to/project/
 //! ```
 //!
 //! ## Implementation Details
@@ -50,11 +47,18 @@
 
 use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifest};
 use anyhow::{bail, Context, Result};
-use hpm_core::TagResolver;
 use hpm_package::DependencySpec;
 use indexmap::IndexMap;
 use std::path::PathBuf;
 use tracing::{info, warn};
+
+/// Parse version from a git tag by stripping common prefixes.
+fn parse_version_from_tag(tag: &str) -> String {
+    tag.strip_prefix("v")
+        .or_else(|| tag.strip_prefix("V"))
+        .unwrap_or(tag)
+        .to_string()
+}
 
 /// Add package dependencies to hpm.toml manifest
 ///
@@ -62,15 +66,13 @@ use tracing::{info, warn};
 ///
 /// * `package_names` - Names of the packages to add
 /// * `git_url` - Git repository URL (recommended for dependencies)
-/// * `commit` - Git commit hash (use with git_url, mutually exclusive with tag)
-/// * `tag` - Git tag to resolve to a commit (use with git_url, mutually exclusive with commit)
+/// * `tag` - Git tag for release artifact (required with git_url, e.g., "v1.0.0")
 /// * `path` - Local path to package directory (for development dependencies, single package only)
 /// * `manifest_path` - Path to the manifest file or directory
 /// * `optional` - Whether the dependencies are optional
 pub async fn add_packages(
     package_names: Vec<String>,
     git_url: Option<String>,
-    commit: Option<String>,
     tag: Option<String>,
     path: Option<PathBuf>,
     manifest_path: Option<PathBuf>,
@@ -84,8 +86,8 @@ pub async fn add_packages(
     info!("Adding package dependencies: {:?}", package_names);
 
     // Validate arguments
-    if git_url.is_some() && commit.is_none() && tag.is_none() {
-        bail!("--commit or --tag is required when using --git. Please specify a commit hash or tag.");
+    if git_url.is_some() && tag.is_none() {
+        bail!("--tag is required when using --git. Please specify a release tag (e.g., v1.0.0).");
     }
 
     if git_url.is_some() && path.is_some() {
@@ -116,7 +118,6 @@ pub async fn add_packages(
              \n\
              For Git-based dependencies (recommended):\n\
              \n\
-             \x20 hpm add {} --git <repository-url> --commit <commit-hash>\n\
              \x20 hpm add {} --git <repository-url> --tag <tag-name>\n\
              \n\
              For local path dependencies (development):\n\
@@ -125,24 +126,13 @@ pub async fn add_packages(
              \n\
              Examples:\n\
              \n\
-             \x20 hpm add {} --git https://github.com/user/repo --commit abc123\n\
              \x20 hpm add {} --git https://github.com/user/repo --tag v1.0.0",
-            example_pkg, example_pkg, example_pkg, example_pkg, example_pkg
+            example_pkg, example_pkg, example_pkg
         );
     }
 
-    // Resolve tag to commit if using --tag
-    let resolved_commit = if let (Some(ref url), Some(ref tag_name)) = (&git_url, &tag) {
-        info!("Resolving tag '{}' to commit...", tag_name);
-        let resolver = TagResolver::new()
-            .context("Failed to create tag resolver")?;
-        let commit_hash = resolver.resolve(url, tag_name).await
-            .with_context(|| format!("Failed to resolve tag '{}' for {}", tag_name, url))?;
-        info!("Resolved tag '{}' to commit {}", tag_name, &commit_hash[..12.min(commit_hash.len())]);
-        Some(commit_hash)
-    } else {
-        commit.clone()
-    };
+    // Parse version from tag
+    let version = tag.as_ref().map(|t| parse_version_from_tag(t));
 
     // Add to dependencies
     if manifest.dependencies.is_none() {
@@ -155,10 +145,11 @@ pub async fn add_packages(
     for package_name in &package_names {
         let dependency_spec = if let Some(ref url) = git_url {
             // Git-based dependency (recommended)
-            let commit_hash = resolved_commit.clone().unwrap(); // Already validated/resolved above
+            let ver = version.clone().unwrap(); // Already validated above
+            info!("Adding {} from {} (version: {})", package_name, url, ver);
             DependencySpec::Git {
                 git: url.clone(),
-                commit: commit_hash,
+                version: ver,
                 optional,
             }
         } else if let Some(ref local_path) = path {
@@ -317,7 +308,7 @@ min_version = "20.0"
             "test-dep".to_string(),
             DependencySpec::Git {
                 git: "https://github.com/owner/repo".to_string(),
-                commit: "abc123def456789012345678901234567890abcd".to_string(),
+                version: "1.0.0".to_string(),
                 optional: false,
             },
         );
@@ -343,14 +334,14 @@ min_version = "20.0"
     fn test_dependency_spec_creation_git() {
         let spec = DependencySpec::Git {
             git: "https://github.com/owner/repo".to_string(),
-            commit: "abc123def456789012345678901234567890abcd".to_string(),
+            version: "1.0.0".to_string(),
             optional: false,
         };
 
         match spec {
-            DependencySpec::Git { git, commit, optional } => {
+            DependencySpec::Git { git, version, optional } => {
                 assert_eq!(git, "https://github.com/owner/repo");
-                assert_eq!(commit, "abc123def456789012345678901234567890abcd");
+                assert_eq!(version, "1.0.0");
                 assert!(!optional);
             }
             _ => panic!("Expected Git dependency spec"),
@@ -590,7 +581,11 @@ min_version = "20.0"
                 Just("https://gitlab.com/owner/repo".to_string()),
                 r"https://[a-z]+\.[a-z]+/[a-z]+/[a-z]+",
             ],
-            commit_hash in prop::string::string_regex("[0-9a-f]{40}").unwrap(),
+            version in prop_oneof![
+                Just("1.0.0".to_string()),
+                Just("2.3.4".to_string()),
+                r"[0-9]+\.[0-9]+\.[0-9]+",
+            ],
             path in prop_oneof![
                 Just("../local-package".to_string()),
                 Just("./sibling-package".to_string()),
@@ -601,14 +596,14 @@ min_version = "20.0"
             // Test Git dependency spec creation
             let git_spec = DependencySpec::Git {
                 git: git_url.clone(),
-                commit: commit_hash.clone(),
+                version: version.clone(),
                 optional,
             };
 
             match &git_spec {
-                DependencySpec::Git { git, commit, .. } => {
+                DependencySpec::Git { git, version: ver, .. } => {
                     prop_assert_eq!(git, &git_url, "Git URL should be preserved");
-                    prop_assert_eq!(commit, &commit_hash, "Commit hash should be preserved");
+                    prop_assert_eq!(ver, &version, "Version should be preserved");
                 }
                 _ => prop_assert!(false, "Should create Git dependency spec"),
             }

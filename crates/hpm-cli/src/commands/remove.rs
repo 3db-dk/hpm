@@ -141,7 +141,7 @@ license = "MIT"
 min_version = "20.0"
 
 [dependencies]
-utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc123def456789012345678901234567890abcd" }
+utility-nodes = { git = "https://github.com/studio/utility-nodes", version = "1.0.0" }
 material-library = { path = "../material-library", optional = true }
 "#;
 
@@ -259,7 +259,7 @@ min_version = "20.0"
             "keep-me".to_string(),
             DependencySpec::Git {
                 git: "https://github.com/example/keep-me".to_string(),
-                commit: "abc123def456789012345678901234567890abcd".to_string(),
+                version: "1.0.0".to_string(),
                 optional: false,
             },
         );

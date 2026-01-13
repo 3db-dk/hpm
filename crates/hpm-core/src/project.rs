@@ -125,9 +125,9 @@ impl ProjectManager {
             for (name, dep_spec) in dependencies {
                 // Extract version string based on dependency type
                 let version_req = match dep_spec {
-                    hpm_package::DependencySpec::Git { commit, .. } => {
-                        // For Git dependencies, use short commit as version identifier
-                        commit[..commit.len().min(12)].to_string()
+                    hpm_package::DependencySpec::Git { version, .. } => {
+                        // For Git dependencies, use the version directly
+                        version.clone()
                     }
                     hpm_package::DependencySpec::Path { .. } => {
                         // For path dependencies, use "local" as version
