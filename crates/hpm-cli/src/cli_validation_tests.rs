@@ -376,10 +376,11 @@ mod tests {
             }
 
             // Test with problematic paths (should still construct)
-            let install_cmd = Commands::Install { manifest: problematic_path.clone() };
+            let install_cmd = Commands::Install { manifest: problematic_path.clone(), frozen_lockfile: false };
             match install_cmd {
-                Commands::Install { manifest } => {
+                Commands::Install { manifest, frozen_lockfile } => {
                     prop_assert_eq!(manifest, problematic_path);
+                    prop_assert!(!frozen_lockfile);
                 }
                 _ => prop_assert!(false, "Should construct Install command even with problematic path"),
             }

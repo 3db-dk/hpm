@@ -94,6 +94,13 @@ pub async fn add_packages(
         bail!("Cannot specify both --git and --path. Choose one source type.");
     }
 
+    // Security warning for HTTP URLs
+    if let Some(ref url) = git_url {
+        if url.starts_with("http://") && !url.starts_with("https://") {
+            warn!("Security warning: Using HTTP instead of HTTPS for Git URL. Consider using HTTPS for better security.");
+        }
+    }
+
     // Disallow --path with multiple packages
     if path.is_some() && package_names.len() > 1 {
         bail!("Cannot use --path with multiple packages. Add path dependencies one at a time.");
@@ -180,7 +187,7 @@ pub async fn add_packages(
 
     // Install the newly added dependencies
     info!("Installing dependencies...");
-    super::install::install_dependencies(Some(manifest_path))
+    super::install::install_dependencies(Some(manifest_path), false)
         .await
         .context("Failed to install dependencies after adding packages")?;
 

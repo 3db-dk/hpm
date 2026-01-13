@@ -13,8 +13,17 @@ use tracing::{debug, info, warn};
 /// This function reads the hpm.toml file from the specified path (or current directory),
 /// resolves all dependencies (both HPM and Python), and ensures they are installed
 /// and configured in the .hpm directory structure.
-pub async fn install_dependencies(manifest_path: Option<PathBuf>) -> Result<()> {
+///
+/// # Arguments
+///
+/// * `manifest_path` - Optional path to hpm.toml file
+/// * `frozen_lockfile` - If true, fail if lock file is missing or would change
+pub async fn install_dependencies(manifest_path: Option<PathBuf>, frozen_lockfile: bool) -> Result<()> {
     info!("Starting dependency installation");
+
+    if frozen_lockfile {
+        info!("Using frozen lockfile mode - lock file must exist and not change");
+    }
 
     let mut progress = OperationProgress::new();
     progress.start("Installing dependencies");
@@ -46,6 +55,14 @@ pub async fn install_dependencies(manifest_path: Option<PathBuf>) -> Result<()> 
 
     // Load existing lock file if present for checksum verification
     let lock_path = project_dir.join("hpm.lock");
+
+    // Frozen lockfile mode requires lock file to exist
+    if frozen_lockfile && !lock_path.exists() {
+        return Err(anyhow::anyhow!(
+            "--frozen-lockfile requires hpm.lock to exist. Run 'hpm install' first to generate it."
+        ));
+    }
+
     let existing_lock = if lock_path.exists() {
         match LockFile::load(&lock_path) {
             Ok(lock) => {
@@ -74,6 +91,18 @@ pub async fn install_dependencies(manifest_path: Option<PathBuf>) -> Result<()> 
             ));
         }
         info!("Cached packages verified successfully");
+
+        // Check for stale lock file (>90 days old)
+        if let Some(ref metadata) = lock.metadata {
+            if let Some(days) = metadata.days_since_generated() {
+                if days > 90 {
+                    warn!(
+                        "Lock file is {} days old. Consider running 'hpm update' to check for newer versions.",
+                        days
+                    );
+                }
+            }
+        }
     }
 
     // Install HPM dependencies
@@ -111,11 +140,15 @@ pub async fn install_dependencies(manifest_path: Option<PathBuf>) -> Result<()> 
         info!("No Python dependencies specified");
     }
 
-    // Generate or update lock file
-    progress.set_message("Generating lock file");
-    generate_lock_file(&manifest, project_dir, &install_results)
-        .await
-        .context("Failed to generate lock file")?;
+    // Generate or update lock file (skip in frozen lockfile mode)
+    if frozen_lockfile {
+        info!("Skipping lock file update (--frozen-lockfile)");
+    } else {
+        progress.set_message("Generating lock file");
+        generate_lock_file(&manifest, project_dir, &install_results)
+            .await
+            .context("Failed to generate lock file")?;
+    }
 
     progress.finish_success("Dependencies installed");
     info!("Dependency installation completed successfully");
@@ -197,8 +230,15 @@ async fn install_hpm_dependencies(
                         if *optional {
                             debug!("  {} is optional", name);
                         }
-                        PackageSource::git(git, version)
-                            .context("Invalid Git URL")?
+                        let src = PackageSource::git(git, version)
+                            .context("Invalid Git URL")?;
+
+                        // Security warning for HTTP URLs
+                        if let Some(warning) = src.security_warning() {
+                            warn!("Security: {} - {}", name, warning);
+                        }
+
+                        src
                     }
                     hpm_package::DependencySpec::Path { path, optional } => {
                         info!("  {} - Path: {}", name, path);
@@ -635,7 +675,7 @@ min_version = "20.0"
         env::set_current_dir(temp_dir.path()).unwrap();
 
         // Install dependencies (no deps, so this tests directory setup and lock file creation)
-        let result = install_dependencies(None).await;
+        let result = install_dependencies(None, false).await;
 
         // Restore original directory (ignore errors - may fail on Windows with async tests)
         let _ = env::set_current_dir(original_dir);
@@ -672,7 +712,7 @@ description = "Test custom manifest path"
 "#;
         std::fs::write(&manifest_path, manifest_content).unwrap();
 
-        let result = install_dependencies(Some(manifest_path)).await;
+        let result = install_dependencies(Some(manifest_path), false).await;
 
         assert!(result.is_ok());
 
@@ -691,7 +731,7 @@ description = "Test custom manifest path"
         let nonexistent_path = temp_dir.path().join("nonexistent.toml");
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(install_dependencies(Some(nonexistent_path)));
+        let result = rt.block_on(install_dependencies(Some(nonexistent_path), false));
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();

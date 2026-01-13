@@ -95,6 +95,68 @@ pub struct LockMetadata {
     pub platform: Option<String>,
 }
 
+impl LockMetadata {
+    /// Calculate the number of days since the lock file was generated.
+    ///
+    /// Returns `None` if the timestamp is missing or cannot be parsed.
+    pub fn days_since_generated(&self) -> Option<i64> {
+        use std::time::SystemTime;
+
+        let generated = self.generated_at.as_ref()?;
+
+        // Parse ISO 8601 timestamp: YYYY-MM-DDTHH:MM:SSZ
+        // Extract date parts
+        if generated.len() < 10 {
+            return None;
+        }
+
+        let year: i64 = generated[0..4].parse().ok()?;
+        let month: i64 = generated[5..7].parse().ok()?;
+        let day: i64 = generated[8..10].parse().ok()?;
+
+        // Calculate days since epoch for the generated date
+        let gen_days = ymd_to_days(year, month, day);
+
+        // Get current days since epoch
+        let now_secs = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+        let now_days = (now_secs / 86400) as i64;
+
+        Some(now_days - gen_days)
+    }
+}
+
+/// Convert year/month/day to days since Unix epoch (Jan 1, 1970)
+fn ymd_to_days(year: i64, month: i64, day: i64) -> i64 {
+    // Simplified calculation - good enough for date comparison
+    let mut days = 0i64;
+
+    // Add days for complete years from 1970
+    for y in 1970..year {
+        days += if is_leap_year(y) { 366 } else { 365 };
+    }
+
+    // Add days for complete months
+    let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    for m in 1..month {
+        days += month_days[(m - 1) as usize] as i64;
+        if m == 2 && is_leap_year(year) {
+            days += 1;
+        }
+    }
+
+    // Add remaining days
+    days += day - 1;
+
+    days
+}
+
+fn is_leap_year(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
 /// Errors that can occur during lock file operations
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
@@ -424,10 +486,10 @@ fn chrono_now() -> String {
 fn days_to_ymd(days: u64) -> (u32, u32, u32) {
     // Simplified date calculation
     let mut remaining = days as i64;
-    let mut year = 1970;
+    let mut year: u32 = 1970;
 
     loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        let days_in_year = if is_leap_year(year as i64) { 366 } else { 365 };
         if remaining < days_in_year {
             break;
         }
@@ -435,7 +497,7 @@ fn days_to_ymd(days: u64) -> (u32, u32, u32) {
         year += 1;
     }
 
-    let leap = is_leap_year(year);
+    let leap = is_leap_year(year as i64);
     let days_in_months: [i64; 12] = if leap {
         [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     } else {
@@ -454,9 +516,7 @@ fn days_to_ymd(days: u64) -> (u32, u32, u32) {
     (year, month, (remaining + 1) as u32)
 }
 
-fn is_leap_year(year: u32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
+// is_leap_year is defined above (line 156) with i64 signature
 
 /// Get the current platform identifier
 fn current_platform() -> String {

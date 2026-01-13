@@ -485,9 +485,19 @@ enum Commands {
         /// Path to hpm.toml file (defaults to current directory)
         #[arg(short, long)]
         manifest: Option<std::path::PathBuf>,
+
+        /// Fail if lock file is missing or would change (for CI reproducibility)
+        #[arg(long)]
+        frozen_lockfile: bool,
     },
     /// Validate package configuration
     Check,
+    /// Run security audit on dependencies
+    Audit {
+        /// Path to hpm.toml file (defaults to current directory)
+        #[arg(short, long)]
+        manifest: Option<std::path::PathBuf>,
+    },
     /// Clean orphaned packages
     Clean(commands::clean::CleanArgs),
     /// Generate shell completions
@@ -733,8 +743,8 @@ async fn run_command(
                 script
             ));
         }
-        Commands::Install { manifest } => {
-            commands::install::install_dependencies(manifest.clone())
+        Commands::Install { manifest, frozen_lockfile } => {
+            commands::install::install_dependencies(manifest.clone(), *frozen_lockfile)
                 .await
                 .map_err(|e| {
                     CliError::package(
@@ -760,6 +770,16 @@ async fn run_command(
             if output_format == OutputFormat::Human {
                 console.success("Package configuration is valid");
             }
+        }
+        Commands::Audit { manifest } => {
+            commands::audit::audit_packages(manifest.clone())
+                .await
+                .map_err(|e| {
+                    CliError::package(
+                        e,
+                        Some("Use 'hpm audit --help' for usage information".to_string()),
+                    )
+                })?;
         }
         Commands::Clean(args) => {
             commands::clean::execute_clean(args).await.map_err(|e| {

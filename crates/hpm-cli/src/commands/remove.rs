@@ -97,7 +97,7 @@ pub async fn remove_package(package_name: String, manifest_path: Option<PathBuf>
 
     // Update lock file by running install (which regenerates the lock file)
     info!("Updating lock file...");
-    match super::install::install_dependencies(Some(manifest_path)).await {
+    match super::install::install_dependencies(Some(manifest_path), false).await {
         Ok(()) => {
             info!("Lock file updated successfully");
         }

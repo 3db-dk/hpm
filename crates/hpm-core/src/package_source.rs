@@ -132,6 +132,29 @@ impl PackageSource {
         }
     }
 
+    /// Returns true if the source uses secure transport (HTTPS).
+    ///
+    /// For Git sources, this checks if the URL uses HTTPS.
+    /// Path sources are always considered secure (local filesystem).
+    pub fn is_secure(&self) -> bool {
+        match self {
+            PackageSource::Git { url, .. } => url.starts_with("https://"),
+            PackageSource::Path { .. } => true,
+        }
+    }
+
+    /// Returns a security warning message if the source uses insecure transport.
+    ///
+    /// Returns `Some` with a warning message for HTTP URLs.
+    /// Returns `None` for HTTPS URLs and local paths.
+    pub fn security_warning(&self) -> Option<&'static str> {
+        if !self.is_secure() {
+            Some("Using insecure HTTP. Consider HTTPS for better security.")
+        } else {
+            None
+        }
+    }
+
     /// Generate a unique cache key for this source.
     ///
     /// For Git sources, this is based on the URL and version.
@@ -481,5 +504,33 @@ mod tests {
 
         let path_source = PackageSource::path("/local/path");
         assert_eq!(format!("{}", path_source), "path:/local/path");
+    }
+
+    #[test]
+    fn test_is_secure_https() {
+        let source = PackageSource::git(
+            "https://github.com/owner/repo",
+            "1.0.0"
+        ).unwrap();
+        assert!(source.is_secure());
+        assert!(source.security_warning().is_none());
+    }
+
+    #[test]
+    fn test_is_secure_http() {
+        let source = PackageSource::git(
+            "http://github.com/owner/repo",
+            "1.0.0"
+        ).unwrap();
+        assert!(!source.is_secure());
+        assert!(source.security_warning().is_some());
+        assert!(source.security_warning().unwrap().contains("insecure"));
+    }
+
+    #[test]
+    fn test_is_secure_path() {
+        let source = PackageSource::path("/local/path");
+        assert!(source.is_secure());
+        assert!(source.security_warning().is_none());
     }
 }

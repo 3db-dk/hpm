@@ -17,6 +17,7 @@ See the **[Python Guide](python-guide.md)** for Python dependency management.
 
 ### For Users
 - **[User Guide](user-guide.md)** - Complete user documentation covering installation, commands, and troubleshooting
+- **[Security Guide](security.md)** - Security features, best practices, and threat model
 
 ### For Developers
 - **[Developer Documentation](developer-documentation.md)** - Architecture overview, development setup, and contribution guidelines
@@ -33,6 +34,7 @@ See the **[Python Guide](python-guide.md)** for Python dependency management.
 docs/
 ├── README.md                    # This overview
 ├── user-guide.md                # Complete user documentation
+├── security.md                  # Security features and best practices
 ├── developer-documentation.md   # Developer documentation
 ├── api-reference.md             # API documentation
 ├── architecture.md              # System architecture and deep dives

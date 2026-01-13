@@ -956,6 +956,56 @@ source = "python"
 python_version = "3.9"
 ```
 
+## Security
+
+HPM includes several security features to protect your projects:
+
+### Checksum Verification
+
+Packages are verified against SHA-256 checksums stored in `hpm.lock`:
+
+```bash
+# Checksums are automatically verified during install
+hpm install
+
+# Manually verify all package checksums
+hpm audit
+```
+
+### HTTPS Warnings
+
+HPM warns when using insecure HTTP URLs:
+
+```bash
+# This will show a security warning
+hpm add --git http://github.com/user/repo --version 1.0.0
+# Warning: Using HTTP instead of HTTPS for Git URL
+```
+
+### Frozen Lockfile Mode
+
+Use `--frozen-lockfile` in CI for reproducible builds:
+
+```bash
+# Fails if lock file doesn't exist or would change
+hpm install --frozen-lockfile
+```
+
+### Security Audit
+
+Run `hpm audit` to check for security issues:
+
+```bash
+hpm audit
+```
+
+This checks:
+- HTTP URLs (should use HTTPS)
+- Lock file presence and age
+- Package checksum integrity
+
+For detailed security information, see the [Security Guide](security.md).
+
 ## Troubleshooting
 
 ### Common Issues and Solutions
