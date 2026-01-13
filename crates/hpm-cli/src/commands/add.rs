@@ -225,47 +225,7 @@ min_version = "20.0"
         Ok(())
     }
 
-    #[test]
-    fn test_determine_manifest_path_current_directory() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        create_test_manifest(temp_dir.path()).unwrap();
-
-        env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = determine_manifest_path(None);
-
-        env::set_current_dir(&original_dir).unwrap();
-
-        assert!(result.is_ok());
-        let manifest_path = result.unwrap();
-        assert!(manifest_path.ends_with("hpm.toml"));
-    }
-
-    #[test]
-    fn test_determine_manifest_path_explicit_file() {
-        let temp_dir = TempDir::new().unwrap();
-        create_test_manifest(temp_dir.path()).unwrap();
-
-        let manifest_path = temp_dir.path().join("hpm.toml");
-        let result = determine_manifest_path(Some(manifest_path.clone()));
-
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), manifest_path);
-    }
-
-    #[test]
-    fn test_determine_manifest_path_explicit_directory() {
-        let temp_dir = TempDir::new().unwrap();
-        create_test_manifest(temp_dir.path()).unwrap();
-
-        let result = determine_manifest_path(Some(temp_dir.path().to_path_buf()));
-
-        assert!(result.is_ok());
-        assert!(result.unwrap().ends_with("hpm.toml"));
-    }
-
+    // Keep only error-case tests not covered by property tests
     #[test]
     fn test_determine_manifest_path_no_manifest() {
         let temp_dir = TempDir::new().unwrap();
@@ -282,96 +242,8 @@ min_version = "20.0"
         assert!(error_msg.contains("No hpm.toml found"));
     }
 
-    #[test]
-    fn test_load_manifest_valid() {
-        let temp_dir = TempDir::new().unwrap();
-        create_test_manifest(temp_dir.path()).unwrap();
-
-        let manifest_path = temp_dir.path().join("hpm.toml");
-        let result = load_manifest(&manifest_path);
-
-        assert!(result.is_ok());
-        let manifest = result.unwrap();
-        assert_eq!(manifest.package.name, "test-package");
-        assert_eq!(manifest.package.version, "1.0.0");
-    }
-
-    #[test]
-    fn test_save_and_load_manifest_roundtrip() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create initial manifest
-        let mut manifest = PackageManifest::new(
-            "test-package".to_string(),
-            "1.0.0".to_string(),
-            Some("Test description".to_string()),
-            Some(vec!["Author <test@example.com>".to_string()]),
-            Some("MIT".to_string()),
-        );
-
-        // Add a Git dependency
-        let mut dependencies = IndexMap::new();
-        dependencies.insert(
-            "test-dep".to_string(),
-            DependencySpec::Git {
-                git: "https://github.com/owner/repo".to_string(),
-                version: "1.0.0".to_string(),
-                optional: false,
-            },
-        );
-        manifest.dependencies = Some(dependencies);
-
-        let manifest_path = temp_dir.path().join("hpm.toml");
-
-        // Save and reload
-        let save_result = save_manifest(&manifest, &manifest_path);
-        assert!(save_result.is_ok());
-
-        let loaded_manifest = load_manifest(&manifest_path).unwrap();
-
-        assert_eq!(loaded_manifest.package.name, manifest.package.name);
-        assert_eq!(loaded_manifest.package.version, manifest.package.version);
-        assert!(loaded_manifest.dependencies.is_some());
-
-        let loaded_deps = loaded_manifest.dependencies.unwrap();
-        assert!(loaded_deps.contains_key("test-dep"));
-    }
-
-    #[test]
-    fn test_dependency_spec_creation_git() {
-        let spec = DependencySpec::Git {
-            git: "https://github.com/owner/repo".to_string(),
-            version: "1.0.0".to_string(),
-            optional: false,
-        };
-
-        match spec {
-            DependencySpec::Git { git, version, optional } => {
-                assert_eq!(git, "https://github.com/owner/repo");
-                assert_eq!(version, "1.0.0");
-                assert!(!optional);
-            }
-            _ => panic!("Expected Git dependency spec"),
-        }
-    }
-
-    #[test]
-    fn test_dependency_spec_creation_path_optional() {
-        let spec = DependencySpec::Path {
-            path: "../local-package".to_string(),
-            optional: true,
-        };
-
-        match spec {
-            DependencySpec::Path { path, optional } => {
-                assert_eq!(path, "../local-package");
-                assert!(optional);
-            }
-            _ => panic!("Expected Path dependency spec"),
-        }
-    }
-
-    // Property-based testing strategies for path handling
+    // Property-based tests cover all path resolution, manifest loading, and dependency creation
+    // with random inputs for better coverage than hand-picked examples
 
     /// Strategy to generate valid file path components
     fn path_component_strategy() -> impl Strategy<Value = String> {

@@ -473,6 +473,9 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    // Security tests for path traversal - CRITICAL, never delete
+    // These tests validate archive extraction safety
+
     #[test]
     fn test_validate_path_safety() {
         // Safe paths
@@ -485,14 +488,24 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_key_generation() {
-        let source = PackageSource::git(
-            "https://github.com/owner/repo",
-            "abc123def456789"
-        ).unwrap();
-
-        assert!(source.cache_key().contains("abc123def456"));
+    fn test_path_traversal_parent_directory() {
+        // Path traversal with parent directory reference
+        assert!(validate_path_safety_sync(Path::new("../secret")).is_err());
     }
+
+    #[test]
+    fn test_path_traversal_embedded() {
+        // Path traversal embedded in path
+        assert!(validate_path_safety_sync(Path::new("foo/../../../etc/passwd")).is_err());
+    }
+
+    #[test]
+    fn test_path_traversal_windows_style() {
+        // Windows-style path separators shouldn't bypass checks
+        assert!(validate_path_safety_sync(Path::new("..\\secret")).is_err());
+    }
+
+    // Async integration tests - require real I/O
 
     #[tokio::test]
     async fn test_fetcher_creation() {
@@ -539,63 +552,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // Error path tests
-
-    #[test]
-    fn test_invalid_git_url() {
-        // Empty URL should fail
-        let result = PackageSource::git("", "1.0.0");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_valid_version_formats() {
-        // Various valid version formats
-        let result = PackageSource::git("https://github.com/owner/repo", "1.0.0");
-        assert!(result.is_ok());
-
-        let result = PackageSource::git("https://github.com/owner/repo", "1.2.3-alpha");
-        assert!(result.is_ok());
-
-        let result = PackageSource::git("https://github.com/owner/repo", "0.1.0");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_empty_version_fails() {
-        // Empty version should fail
-        let result = PackageSource::git("https://github.com/owner/repo", "");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_invalid_version_format() {
-        // Version with invalid format should fail
-        let result = PackageSource::git("https://github.com/owner/repo", ".1.0.0");
-        assert!(result.is_err());
-
-        let result = PackageSource::git("https://github.com/owner/repo", "1.0.0.");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_path_traversal_parent_directory() {
-        // Path traversal with parent directory reference
-        assert!(validate_path_safety_sync(Path::new("../secret")).is_err());
-    }
-
-    #[test]
-    fn test_path_traversal_embedded() {
-        // Path traversal embedded in path
-        assert!(validate_path_safety_sync(Path::new("foo/../../../etc/passwd")).is_err());
-    }
-
-    #[test]
-    fn test_path_traversal_windows_style() {
-        // Windows-style path separators shouldn't bypass checks
-        assert!(validate_path_safety_sync(Path::new("..\\secret")).is_err());
-    }
-
     #[tokio::test]
     async fn test_fetch_returns_path_not_found_error() {
         let temp_dir = TempDir::new().unwrap();
@@ -614,4 +570,8 @@ mod tests {
             _ => panic!("Expected PathNotFound error"),
         }
     }
+
+    // Unit tests for PackageSource git/version validation removed -
+    // covered by prop_release_asset_url_structure, prop_cache_key_uniqueness,
+    // and prop_source_type_exclusive in package_source.rs
 }

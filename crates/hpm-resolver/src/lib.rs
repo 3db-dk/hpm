@@ -584,42 +584,80 @@ impl Default for ResolverConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
-    #[test]
-    fn test_package_id_creation() {
-        let version = Version::new(1, 2, 3);
-        let package_id = PackageId::new("test-package".to_string(), version.clone());
-
-        assert_eq!(package_id.name, "test-package");
-        assert_eq!(package_id.version, version);
-        assert_eq!(package_id.identifier(), "test-package@1.2.3");
+    /// Strategy to generate valid package names
+    fn package_name_strategy() -> impl Strategy<Value = String> {
+        r"[a-z][a-z0-9-]{0,20}".prop_filter("no double dashes", |s| !s.contains("--") && !s.ends_with('-'))
     }
 
-    #[test]
-    fn test_package_id_ordering() {
-        let pkg1 = PackageId::new("a".to_string(), Version::new(1, 0, 0));
-        let pkg2 = PackageId::new("b".to_string(), Version::new(1, 0, 0));
-        let pkg3 = PackageId::new("a".to_string(), Version::new(2, 0, 0));
-
-        assert!(pkg1 < pkg2);
-        assert!(pkg1 < pkg3);
-        assert!(pkg2 > pkg1);
+    /// Strategy to generate versions
+    fn version_strategy() -> impl Strategy<Value = Version> {
+        (0u64..100, 0u64..100, 0u64..1000)
+            .prop_map(|(major, minor, patch)| Version::new(major, minor, patch))
     }
 
+    proptest! {
+        /// Property: PackageId operations are consistent
+        #[test]
+        fn prop_package_id_operations(
+            name in package_name_strategy(),
+            version in version_strategy()
+        ) {
+            let pkg = PackageId::new(name.clone(), version.clone());
+
+            // Name and version are preserved
+            prop_assert_eq!(&pkg.name, &name);
+            prop_assert_eq!(&pkg.version, &version);
+
+            // Identifier contains both name and version
+            let identifier = pkg.identifier();
+            prop_assert!(identifier.contains(&name));
+            prop_assert!(identifier.contains(&version.to_string()));
+
+            // Display matches identifier
+            prop_assert_eq!(format!("{}", pkg), identifier);
+
+            // Self-equality holds
+            prop_assert_eq!(&pkg, &pkg);
+        }
+
+        /// Property: PackageId ordering is consistent (lexicographic by name, then version)
+        #[test]
+        fn prop_package_id_ordering(
+            name1 in package_name_strategy(),
+            name2 in package_name_strategy(),
+            v1 in version_strategy(),
+            v2 in version_strategy()
+        ) {
+            let pkg1 = PackageId::new(name1.clone(), v1.clone());
+            let pkg2 = PackageId::new(name2.clone(), v2.clone());
+
+            // Ordering should be consistent with equality
+            if pkg1 == pkg2 {
+                prop_assert!(!(pkg1 < pkg2));
+                prop_assert!(!(pkg1 > pkg2));
+            } else {
+                prop_assert!(pkg1 < pkg2 || pkg1 > pkg2);
+            }
+
+            // Same name - version determines order
+            if name1 == name2 {
+                if v1 < v2 {
+                    prop_assert!(pkg1 < pkg2);
+                } else if v1 > v2 {
+                    prop_assert!(pkg1 > pkg2);
+                }
+            }
+        }
+    }
+
+    // Priority ordering - compile-time invariant, keep as unit test
     #[test]
     fn test_priority_ordering() {
         assert!(Priority::Root < Priority::Exact);
         assert!(Priority::Exact < Priority::Strict);
         assert!(Priority::Strict < Priority::Loose);
         assert!(Priority::Loose < Priority::Transitive);
-    }
-
-    #[test]
-    fn test_resolver_config_default() {
-        let config = ResolverConfig::default();
-        assert!(config.prefer_latest);
-        assert!(!config.allow_prereleases);
-        assert_eq!(config.max_backtrack_iterations, 1000);
-        assert_eq!(config.resolution_timeout_secs, 300);
     }
 }

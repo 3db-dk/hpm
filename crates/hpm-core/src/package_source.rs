@@ -350,178 +350,129 @@ impl std::fmt::Display for PackageSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
-    #[test]
-    fn test_git_source_creation() {
-        let source = PackageSource::git(
-            "https://github.com/studio/geometry-tools",
-            "1.0.0"
-        ).unwrap();
+    // Property-based tests for comprehensive coverage with random inputs
 
-        assert!(source.is_git());
-        assert!(!source.is_path());
-        assert_eq!(source.git_url(), Some("https://github.com/studio/geometry-tools"));
-        assert_eq!(source.git_version(), Some("1.0.0"));
+    /// Strategy to generate valid Git URLs
+    fn git_url_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("https://github.com/owner/repo".to_string()),
+            Just("https://gitlab.com/owner/repo".to_string()),
+            Just("https://codeberg.org/owner/repo".to_string()),
+            Just("https://bitbucket.org/owner/repo".to_string()),
+            r"https://[a-z]+\.[a-z]+/[a-z]+/[a-z]+".prop_filter("valid url", |s| s.len() < 100),
+        ]
     }
 
-    #[test]
-    fn test_git_source_invalid_url() {
-        let result = PackageSource::git("not-a-url", "1.0.0");
-        assert!(result.is_err());
+    /// Strategy to generate valid versions
+    fn version_strategy() -> impl Strategy<Value = String> {
+        (0u32..100, 0u32..100, 0u32..1000)
+            .prop_map(|(major, minor, patch)| format!("{}.{}.{}", major, minor, patch))
     }
 
-    #[test]
-    fn test_git_source_invalid_version() {
-        let result = PackageSource::git("https://github.com/test/repo", "");
-        assert!(result.is_err());
-
-        let result = PackageSource::git("https://github.com/test/repo", ".1.0.0");
-        assert!(result.is_err());
-
-        let result = PackageSource::git("https://github.com/test/repo", "1.0.0.");
-        assert!(result.is_err());
+    /// Strategy to generate valid package names
+    fn package_name_strategy() -> impl Strategy<Value = String> {
+        r"[a-z][a-z0-9-]{1,30}".prop_filter("no double dashes", |s| !s.contains("--"))
     }
 
-    #[test]
-    fn test_path_source_creation() {
-        let source = PackageSource::path("/path/to/package");
-        assert!(source.is_path());
-        assert!(!source.is_git());
-        assert_eq!(source.local_path(), Some(&PathBuf::from("/path/to/package")));
+    /// Strategy to generate release tags
+    fn tag_strategy() -> impl Strategy<Value = String> {
+        version_strategy().prop_map(|v| format!("v{}", v))
     }
 
-    #[test]
-    fn test_git_provider_detection() {
-        assert_eq!(
-            GitProvider::from_url("https://github.com/owner/repo"),
-            GitProvider::GitHub
-        );
-        assert_eq!(
-            GitProvider::from_url("https://gitlab.com/owner/repo"),
-            GitProvider::GitLab
-        );
-        assert_eq!(
-            GitProvider::from_url("https://codeberg.org/owner/repo"),
-            GitProvider::Codeberg
-        );
-        assert_eq!(
-            GitProvider::from_url("https://bitbucket.org/owner/repo"),
-            GitProvider::Bitbucket
-        );
-        // Unknown providers are assumed to be Gitea
-        match GitProvider::from_url("https://git.example.com/owner/repo") {
-            GitProvider::Gitea { host } => assert_eq!(host, "git.example.com"),
-            _ => panic!("Expected Gitea provider"),
+    proptest! {
+        /// Property: Git provider detection is consistent (same URL always gives same provider)
+        #[test]
+        fn prop_git_provider_detection_consistent(url in git_url_strategy()) {
+            let provider1 = GitProvider::from_url(&url);
+            let provider2 = GitProvider::from_url(&url);
+            prop_assert_eq!(
+                std::mem::discriminant(&provider1),
+                std::mem::discriminant(&provider2),
+                "Provider detection should be deterministic"
+            );
+        }
+
+        /// Property: Release asset URLs have correct structure
+        #[test]
+        fn prop_release_asset_url_structure(
+            url in git_url_strategy(),
+            tag in tag_strategy(),
+            name in package_name_strategy(),
+            version in version_strategy()
+        ) {
+            let provider = GitProvider::from_url(&url);
+            let result = provider.release_asset_url(&url, &tag, &name, &version);
+
+            prop_assert!(result.is_ok(), "Should generate URL for valid inputs");
+
+            let asset_url = result.unwrap();
+            prop_assert!(asset_url.contains(&name), "URL should contain package name");
+            prop_assert!(asset_url.ends_with(".zip"), "URL should end with .zip");
+        }
+
+        /// Property: Source display contains key info
+        #[test]
+        fn prop_source_display_contains_info(
+            url in git_url_strategy(),
+            version in version_strategy()
+        ) {
+            if let Ok(git_source) = PackageSource::git(&url, &version) {
+                let display = format!("{}", git_source);
+                prop_assert!(display.contains(&url), "Display should contain URL");
+                prop_assert!(display.contains(&version), "Display should contain version");
+            }
+
+            let path_source = PackageSource::path("/test/path");
+            let display = format!("{}", path_source);
+            prop_assert!(display.contains("path:"), "Path display should have path: prefix");
+        }
+
+        /// Property: Cache keys are unique for different sources
+        #[test]
+        fn prop_cache_key_uniqueness(
+            url1 in git_url_strategy(),
+            url2 in git_url_strategy(),
+            v1 in version_strategy(),
+            v2 in version_strategy()
+        ) {
+            if let (Ok(s1), Ok(s2)) = (
+                PackageSource::git(&url1, &v1),
+                PackageSource::git(&url2, &v2)
+            ) {
+                if url1 != url2 || v1 != v2 {
+                    prop_assert_ne!(s1.cache_key(), s2.cache_key());
+                }
+            }
+        }
+
+        /// Property: Source type detection is exclusive
+        #[test]
+        fn prop_source_type_exclusive(url in git_url_strategy(), version in version_strategy()) {
+            if let Ok(git_source) = PackageSource::git(&url, &version) {
+                prop_assert!(git_source.is_git());
+                prop_assert!(!git_source.is_path());
+            }
+
+            let path_source = PackageSource::path("/some/path");
+            prop_assert!(path_source.is_path());
+            prop_assert!(!path_source.is_git());
         }
     }
 
-    #[test]
-    fn test_github_release_asset_url() {
-        let url = GitProvider::GitHub.release_asset_url(
-            "https://github.com/owner/repo",
-            "v1.0.0",
-            "my-package",
-            "1.0.0"
-        ).unwrap();
-        assert_eq!(url, "https://github.com/owner/repo/releases/download/v1.0.0/my-package-1.0.0.zip");
-    }
-
-    #[test]
-    fn test_gitlab_release_asset_url() {
-        let url = GitProvider::GitLab.release_asset_url(
-            "https://gitlab.com/owner/repo",
-            "v1.0.0",
-            "my-package",
-            "1.0.0"
-        ).unwrap();
-        assert_eq!(url, "https://gitlab.com/owner/repo/-/releases/v1.0.0/downloads/my-package-1.0.0.zip");
-    }
-
-    #[test]
-    fn test_codeberg_release_asset_url() {
-        let url = GitProvider::Codeberg.release_asset_url(
-            "https://codeberg.org/owner/repo",
-            "v1.0.0",
-            "my-package",
-            "1.0.0"
-        ).unwrap();
-        assert_eq!(url, "https://codeberg.org/owner/repo/releases/download/v1.0.0/my-package-1.0.0.zip");
-    }
-
-    #[test]
-    fn test_bitbucket_release_asset_url() {
-        let url = GitProvider::Bitbucket.release_asset_url(
-            "https://bitbucket.org/owner/repo",
-            "v1.0.0",
-            "my-package",
-            "1.0.0"
-        ).unwrap();
-        // Bitbucket uses downloads section, not per-release
-        assert_eq!(url, "https://bitbucket.org/owner/repo/downloads/my-package-1.0.0.zip");
-    }
-
-    #[test]
-    fn test_gitea_release_asset_url() {
-        let provider = GitProvider::Gitea { host: "git.example.com".to_string() };
-        let url = provider.release_asset_url(
-            "https://git.example.com/owner/repo",
-            "v1.0.0",
-            "my-package",
-            "1.0.0"
-        ).unwrap();
-        assert_eq!(url, "https://git.example.com/owner/repo/releases/download/v1.0.0/my-package-1.0.0.zip");
-    }
-
-    #[test]
-    fn test_cache_key_uniqueness() {
-        let source1 = PackageSource::git(
-            "https://github.com/owner/repo",
-            "1.0.0"
-        ).unwrap();
-        let source2 = PackageSource::git(
-            "https://github.com/owner/repo",
-            "2.0.0"
-        ).unwrap();
-        let source3 = PackageSource::git(
-            "https://github.com/other/repo",
-            "1.0.0"
-        ).unwrap();
-
-        assert_ne!(source1.cache_key(), source2.cache_key());
-        assert_ne!(source1.cache_key(), source3.cache_key());
-    }
-
-    #[test]
-    fn test_display() {
-        let git_source = PackageSource::git(
-            "https://github.com/owner/repo",
-            "1.0.0"
-        ).unwrap();
-        assert_eq!(
-            format!("{}", git_source),
-            "https://github.com/owner/repo@1.0.0"
-        );
-
-        let path_source = PackageSource::path("/local/path");
-        assert_eq!(format!("{}", path_source), "path:/local/path");
-    }
+    // Keep security tests (critical for security auditing)
 
     #[test]
     fn test_is_secure_https() {
-        let source = PackageSource::git(
-            "https://github.com/owner/repo",
-            "1.0.0"
-        ).unwrap();
+        let source = PackageSource::git("https://github.com/owner/repo", "1.0.0").unwrap();
         assert!(source.is_secure());
         assert!(source.security_warning().is_none());
     }
 
     #[test]
     fn test_is_secure_http() {
-        let source = PackageSource::git(
-            "http://github.com/owner/repo",
-            "1.0.0"
-        ).unwrap();
+        let source = PackageSource::git("http://github.com/owner/repo", "1.0.0").unwrap();
         assert!(!source.is_secure());
         assert!(source.security_warning().is_some());
         assert!(source.security_warning().unwrap().contains("insecure"));

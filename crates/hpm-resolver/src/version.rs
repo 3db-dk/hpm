@@ -823,95 +823,11 @@ mod tests {
         }
     }
 
-    // Traditional unit tests for edge cases and specific scenarios
-
-    #[test]
-    fn test_version_parsing() {
-        assert_eq!(Version::from_str("1.2.3").unwrap(), Version::new(1, 2, 3));
-
-        let version_with_pre = Version::from_str("1.2.3-alpha.1").unwrap();
-        assert_eq!(version_with_pre.major, 1);
-        assert_eq!(version_with_pre.minor, 2);
-        assert_eq!(version_with_pre.patch, 3);
-        assert_eq!(
-            version_with_pre.pre,
-            vec!["alpha".to_string(), "1".to_string()]
-        );
-
-        let version_with_build = Version::from_str("1.2.3+build.1").unwrap();
-        assert_eq!(
-            version_with_build.build,
-            vec!["build".to_string(), "1".to_string()]
-        );
-    }
-
-    #[test]
-    fn test_version_comparison() {
-        let v1 = Version::new(1, 2, 3);
-        let v2 = Version::new(1, 2, 4);
-        let v3 = Version::new(1, 3, 0);
-        let v4 = Version::new(2, 0, 0);
-
-        assert!(v1 < v2);
-        assert!(v2 < v3);
-        assert!(v3 < v4);
-
-        // Prerelease comparison
-        let v_pre = Version::from_str("1.2.3-alpha").unwrap();
-        let v_normal = Version::new(1, 2, 3);
-        assert!(v_pre < v_normal);
-    }
-
-    #[test]
-    fn test_constraint_matching() {
-        let version = Version::new(1, 2, 3);
-
-        assert!(VersionConstraint::Exact(version.clone()).matches(&version));
-        assert!(VersionConstraint::GreaterThanOrEqual(Version::new(1, 2, 0)).matches(&version));
-        assert!(VersionConstraint::LessThan(Version::new(1, 2, 4)).matches(&version));
-        assert!(VersionConstraint::Compatible(Version::new(1, 2, 0)).matches(&version));
-        assert!(VersionConstraint::Tilde(Version::new(1, 2, 0)).matches(&version));
-        assert!(VersionConstraint::Any.matches(&version));
-    }
-
-    #[test]
-    fn test_constraint_parsing() {
-        assert!(matches!(
-            VersionConstraint::from_str("^1.2.3").unwrap(),
-            VersionConstraint::Compatible(_)
-        ));
-
-        assert!(matches!(
-            VersionConstraint::from_str("~1.2.3").unwrap(),
-            VersionConstraint::Tilde(_)
-        ));
-
-        assert!(matches!(
-            VersionConstraint::from_str(">=1.2.3").unwrap(),
-            VersionConstraint::GreaterThanOrEqual(_)
-        ));
-
-        assert!(matches!(
-            VersionConstraint::from_str("*").unwrap(),
-            VersionConstraint::Any
-        ));
-    }
-
-    #[test]
-    fn test_constraint_specificity() {
-        assert!(
-            VersionConstraint::Exact(Version::new(1, 0, 0)).specificity()
-                > VersionConstraint::Compatible(Version::new(1, 0, 0)).specificity()
-        );
-
-        assert!(
-            VersionConstraint::Compatible(Version::new(1, 0, 0)).specificity()
-                > VersionConstraint::Any.specificity()
-        );
-    }
+    // Keep only complex edge-case tests not covered by property tests
 
     #[test]
     fn test_constraint_intersection() {
+        // Complex edge case - intersection with specific combinations
         let exact = VersionConstraint::Exact(Version::new(1, 2, 3));
         let compatible = VersionConstraint::Compatible(Version::new(1, 2, 0));
 

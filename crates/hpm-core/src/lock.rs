@@ -532,174 +532,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[test]
-    fn test_lock_file_creation() {
-        let lock = LockFile::new("test-package".to_string(), "1.0.0".to_string());
-
-        assert_eq!(lock.version, LockFile::CURRENT_VERSION);
-        assert_eq!(lock.package.name, "test-package");
-        assert_eq!(lock.package.version, "1.0.0");
-        assert!(lock.dependencies.is_empty());
-        assert!(lock.python_dependencies.is_empty());
-        assert!(lock.metadata.is_some());
-    }
-
-    #[test]
-    fn test_add_dependency() {
-        let mut lock = LockFile::new("my-package".to_string(), "1.0.0".to_string());
-
-        lock.add_dependency(
-            "utility-nodes".to_string(),
-            LockedDependency::from_git(
-                "2.1.0".to_string(),
-                "https://github.com/studio/utility-nodes".to_string(),
-                Some("checksum123".to_string()),
-            ),
-        );
-
-        assert_eq!(lock.dependencies.len(), 1);
-        let dep = lock.get_dependency("utility-nodes").unwrap();
-        assert_eq!(dep.version, "2.1.0");
-        assert_eq!(dep.checksum, Some("checksum123".to_string()));
-        assert!(dep.is_git());
-    }
-
-    #[test]
-    fn test_add_python_dependency() {
-        let mut lock = LockFile::new("my-package".to_string(), "1.0.0".to_string());
-
-        lock.add_python_dependency(
-            "numpy".to_string(),
-            LockedPythonDependency::new("1.24.0".to_string()).with_source("https://pypi.org".to_string()),
-        );
-
-        assert_eq!(lock.python_dependencies.len(), 1);
-        let dep = lock.get_python_dependency("numpy").unwrap();
-        assert_eq!(dep.version, "1.24.0");
-        assert_eq!(dep.source, Some("https://pypi.org".to_string()));
-    }
-
-    #[test]
-    fn test_lock_file_save_and_load() {
-        let temp_dir = TempDir::new().unwrap();
-        let lock_path = temp_dir.path().join("hpm.lock");
-
-        let mut lock = LockFile::new("test-package".to_string(), "2.0.0".to_string());
-        lock.add_dependency(
-            "dep-a".to_string(),
-            LockedDependency::from_git(
-                "1.0.0".to_string(),
-                "https://github.com/studio/dep-a".to_string(),
-                None,
-            ),
-        );
-        lock.add_python_dependency("requests".to_string(), LockedPythonDependency::new("2.28.0".to_string()));
-
-        // Save
-        lock.save(&lock_path).unwrap();
-        assert!(lock_path.exists());
-
-        // Load
-        let loaded = LockFile::load(&lock_path).unwrap();
-        assert_eq!(loaded.package.name, "test-package");
-        assert_eq!(loaded.package.version, "2.0.0");
-        assert_eq!(loaded.dependencies.len(), 1);
-        assert_eq!(loaded.python_dependencies.len(), 1);
-    }
-
-    #[test]
-    fn test_has_changes() {
-        let lock1 = LockFile::new("pkg".to_string(), "1.0.0".to_string());
-        let lock2 = LockFile::new("pkg".to_string(), "1.0.0".to_string());
-
-        assert!(!lock1.has_changes(&lock2));
-
-        let mut lock3 = LockFile::new("pkg".to_string(), "1.0.0".to_string());
-        lock3.add_dependency(
-            "new-dep".to_string(),
-            LockedDependency::from_git(
-                "1.0.0".to_string(),
-                "https://github.com/studio/new-dep".to_string(),
-                None,
-            ),
-        );
-
-        assert!(lock1.has_changes(&lock3));
-    }
-
-    #[test]
-    fn test_locked_dependency_from_git() {
-        let dep = LockedDependency::from_git(
-            "1.0.0".to_string(),
-            "https://github.com/user/repo.git".to_string(),
-            Some("sha256checksum".to_string()),
-        );
-
-        assert_eq!(dep.version, "1.0.0");
-        assert_eq!(dep.checksum, Some("sha256checksum".to_string()));
-        match dep.source {
-            PackageSource::Git { url, version } => {
-                assert_eq!(url, "https://github.com/user/repo.git");
-                assert_eq!(version, "1.0.0");
-            }
-            _ => panic!("Expected Git source"),
-        }
-    }
-
-    #[test]
-    fn test_locked_dependency_from_path() {
-        let dep = LockedDependency::from_path(
-            "0.1.0".to_string(),
-            "../local-package",
-            Some("checksum123".to_string()),
-        );
-
-        assert_eq!(dep.version, "0.1.0");
-        assert_eq!(dep.checksum, Some("checksum123".to_string()));
-        match &dep.source {
-            PackageSource::Path { path } => {
-                assert_eq!(path, &std::path::PathBuf::from("../local-package"));
-            }
-            _ => panic!("Expected Path source"),
-        }
-    }
-
-    #[test]
-    fn test_to_toml() {
-        let mut lock = LockFile::new("my-package".to_string(), "1.0.0".to_string());
-        lock.add_dependency(
-            "test-dep".to_string(),
-            LockedDependency::from_git(
-                "2.0.0".to_string(),
-                "https://github.com/studio/test-dep".to_string(),
-                Some("sha256abc".to_string()),
-            ),
-        );
-
-        let toml = lock.to_toml().unwrap();
-        assert!(toml.contains("# HPM Lock File"));
-        assert!(toml.contains("my-package"));
-        assert!(toml.contains("test-dep"));
-        assert!(toml.contains("sha256abc"));
-    }
-
-    #[test]
-    fn test_is_empty() {
-        let lock = LockFile::new("pkg".to_string(), "1.0.0".to_string());
-        assert!(lock.is_empty());
-
-        let mut lock_with_deps = LockFile::new("pkg".to_string(), "1.0.0".to_string());
-        lock_with_deps.add_dependency(
-            "dep".to_string(),
-            LockedDependency::from_git(
-                "1.0.0".to_string(),
-                "https://github.com/studio/dep".to_string(),
-                None,
-            ),
-        );
-        assert!(!lock_with_deps.is_empty());
-    }
-
+    // Keep only time/platform-dependent tests that can't be property-tested
     #[test]
     fn test_chrono_now_format() {
         let timestamp = chrono_now();
@@ -717,7 +550,7 @@ mod tests {
         assert!(!platform.is_empty());
     }
 
-    // Property-based tests
+    // Property-based tests cover all other functionality with better coverage
     use proptest::prelude::*;
 
     /// Strategy to generate valid package names
@@ -745,60 +578,108 @@ mod tests {
         ]
     }
 
-    /// Strategy to generate LockedDependency
+    /// Strategy to generate LockedDependency (Git or Path)
     fn locked_dependency_strategy() -> impl Strategy<Value = LockedDependency> {
+        prop_oneof![
+            // Git dependency
+            (version_string_strategy(), git_url_strategy(), checksum_strategy())
+                .prop_map(|(version, url, checksum)| {
+                    LockedDependency::from_git(version, url, checksum)
+                }),
+            // Path dependency
+            (version_string_strategy(), "[a-z/]{1,20}", checksum_strategy())
+                .prop_map(|(version, path, checksum)| {
+                    LockedDependency::from_path(version, format!("../{}", path), checksum)
+                }),
+        ]
+    }
+
+    /// Strategy to generate LockedPythonDependency
+    fn locked_python_dependency_strategy() -> impl Strategy<Value = LockedPythonDependency> {
         (
             version_string_strategy(),
-            git_url_strategy(),
-            checksum_strategy(),
+            prop::option::of("[a-f0-9]{64}"),
+            prop::option::of(Just("https://pypi.org/simple".to_string())),
+            prop::option::of(Just("sys_platform == 'linux'".to_string())),
         )
-            .prop_map(|(version, url, checksum)| {
-                LockedDependency::from_git(version, url, checksum)
+            .prop_map(|(version, checksum, source, markers)| {
+                let mut dep = LockedPythonDependency::new(version);
+                if let Some(cs) = checksum {
+                    dep = dep.with_checksum(cs);
+                }
+                if let Some(src) = source {
+                    dep = dep.with_source(src);
+                }
+                if let Some(mrk) = markers {
+                    dep = dep.with_markers(mrk);
+                }
+                dep
             })
     }
 
-    /// Strategy to generate LockFile with dependencies
+    /// Strategy to generate LockFile with HPM and Python dependencies
     fn lock_file_strategy() -> impl Strategy<Value = LockFile> {
         (
             package_name_strategy(),
             version_string_strategy(),
             prop::collection::btree_map(package_name_strategy(), locked_dependency_strategy(), 0..5),
+            prop::collection::btree_map(package_name_strategy(), locked_python_dependency_strategy(), 0..3),
         )
-            .prop_map(|(name, version, deps)| {
+            .prop_map(|(name, version, deps, py_deps)| {
                 let mut lock = LockFile::new(name, version);
                 // Clear metadata for consistent comparison (timestamps vary)
                 lock.metadata = None;
                 for (dep_name, dep) in deps {
                     lock.add_dependency(dep_name, dep);
                 }
+                for (py_name, py_dep) in py_deps {
+                    lock.add_python_dependency(py_name, py_dep);
+                }
                 lock
             })
     }
 
     proptest! {
-        /// Test that LockFile can be serialized to TOML and deserialized back
+        /// Test LockFile TOML serialization roundtrip (covers creation, add_dependency, to_toml)
         #[test]
         fn prop_lock_file_toml_roundtrip(lock in lock_file_strategy()) {
             let toml_str = lock.to_toml().expect("Should serialize to TOML");
             let parsed: LockFile = toml::from_str(&toml_str).expect("Should parse TOML");
 
-            // Compare key fields (metadata differs due to timestamps)
-            prop_assert_eq!(lock.package.name, parsed.package.name);
-            prop_assert_eq!(lock.package.version, parsed.package.version);
-            prop_assert_eq!(lock.version, parsed.version);
-            prop_assert_eq!(lock.dependencies.len(), parsed.dependencies.len());
+            // Verify is_empty consistency (check before moving values)
+            prop_assert_eq!(lock.is_empty(), parsed.is_empty());
 
-            // Compare each dependency
+            // Verify version field preserved
+            prop_assert_eq!(lock.version, parsed.version);
+
+            // Verify package info preserved (use references to avoid moves)
+            prop_assert_eq!(&lock.package.name, &parsed.package.name);
+            prop_assert_eq!(&lock.package.version, &parsed.package.version);
+
+            // Verify HPM dependencies preserved
+            prop_assert_eq!(lock.dependencies.len(), parsed.dependencies.len());
             for (name, dep) in &lock.dependencies {
                 let parsed_dep = parsed.dependencies.get(name);
                 prop_assert!(parsed_dep.is_some(), "Missing dependency: {}", name);
                 let parsed_dep = parsed_dep.unwrap();
                 prop_assert_eq!(&dep.version, &parsed_dep.version);
                 prop_assert_eq!(&dep.checksum, &parsed_dep.checksum);
+                prop_assert_eq!(dep.is_git(), parsed_dep.is_git());
+                prop_assert_eq!(dep.is_path(), parsed_dep.is_path());
+            }
+
+            // Verify Python dependencies preserved
+            prop_assert_eq!(lock.python_dependencies.len(), parsed.python_dependencies.len());
+            for (name, dep) in &lock.python_dependencies {
+                let parsed_dep = parsed.python_dependencies.get(name);
+                prop_assert!(parsed_dep.is_some(), "Missing Python dependency: {}", name);
+                let parsed_dep = parsed_dep.unwrap();
+                prop_assert_eq!(&dep.version, &parsed_dep.version);
+                prop_assert_eq!(&dep.source, &parsed_dep.source);
             }
         }
 
-        /// Test that LockFile save/load roundtrip preserves data
+        /// Test LockFile save/load roundtrip preserves all data
         #[test]
         fn prop_lock_file_save_load_roundtrip(lock in lock_file_strategy()) {
             let temp_dir = TempDir::new().expect("Should create temp dir");
@@ -807,10 +688,14 @@ mod tests {
             lock.save(&lock_path).expect("Should save lock file");
             let loaded = LockFile::load(&lock_path).expect("Should load lock file");
 
-            // Compare key fields
-            prop_assert_eq!(lock.package.name, loaded.package.name);
-            prop_assert_eq!(lock.package.version, loaded.package.version);
+            // Verify is_empty consistency (check before moving values)
+            prop_assert_eq!(lock.is_empty(), loaded.is_empty());
+
+            // Verify all data preserved (use references)
+            prop_assert_eq!(&lock.package.name, &loaded.package.name);
+            prop_assert_eq!(&lock.package.version, &loaded.package.version);
             prop_assert_eq!(lock.dependencies.len(), loaded.dependencies.len());
+            prop_assert_eq!(lock.python_dependencies.len(), loaded.python_dependencies.len());
 
             for (name, dep) in &lock.dependencies {
                 let loaded_dep = loaded.dependencies.get(name);
@@ -821,14 +706,13 @@ mod tests {
             }
         }
 
-        /// Test that has_changes correctly detects identical lock files
+        /// Test has_changes correctly detects identical lock files (reflexive property)
         #[test]
         fn prop_has_changes_reflexive(lock in lock_file_strategy()) {
-            // A lock file should have no changes compared to itself
             prop_assert!(!lock.has_changes(&lock));
         }
 
-        /// Test that adding a dependency is detected as a change
+        /// Test has_changes detects added dependencies
         #[test]
         fn prop_has_changes_detects_additions(
             lock in lock_file_strategy(),
@@ -838,10 +722,16 @@ mod tests {
             let mut modified = lock.clone();
             modified.add_dependency(new_dep_name.clone(), new_dep);
 
-            // If the dependency didn't already exist, it should be detected as a change
             if !lock.dependencies.contains_key(&new_dep_name) {
                 prop_assert!(lock.has_changes(&modified));
             }
+        }
+
+        /// Test LockedDependency source type detection
+        #[test]
+        fn prop_locked_dependency_source_types(dep in locked_dependency_strategy()) {
+            // Exactly one of is_git or is_path should be true
+            prop_assert!(dep.is_git() != dep.is_path());
         }
     }
 }

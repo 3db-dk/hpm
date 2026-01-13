@@ -188,60 +188,16 @@ impl PackageManifest {
 mod tests {
     use super::*;
 
-    #[test]
-    fn empty_name_fails_validation() {
-        let manifest = PackageManifest {
-            package: PackageInfo {
-                name: "".to_string(),
-                version: "1.0.0".to_string(),
-                description: None,
-                authors: None,
-                license: None,
-                readme: None,
-                homepage: None,
-                repository: None,
-                documentation: None,
-                keywords: None,
-                categories: None,
-            },
-            houdini: None,
-            dependencies: None,
-            python_dependencies: None,
-            scripts: None,
-        };
-        assert!(manifest.validate().is_err());
-    }
-
-    #[test]
-    fn empty_version_fails_validation() {
-        let manifest = PackageManifest {
-            package: PackageInfo {
-                name: "test".to_string(),
-                version: "".to_string(),
-                description: None,
-                authors: None,
-                license: None,
-                readme: None,
-                homepage: None,
-                repository: None,
-                documentation: None,
-                keywords: None,
-                categories: None,
-            },
-            houdini: None,
-            dependencies: None,
-            python_dependencies: None,
-            scripts: None,
-        };
-        assert!(manifest.validate().is_err());
-    }
+    // empty_name/empty_version validation tests removed - covered by
+    // prop_malformed_package_names_rejected and prop_malformed_versions_rejected
+    // in proptest_helpers.rs which test validation with randomized inputs
 
     #[test]
     fn houdini_package_no_version_constraints() {
+        // Edge case: Houdini package generation without version constraints
         let mut manifest =
             PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
 
-        // Remove version constraints
         manifest.houdini = Some(HoudiniConfig {
             min_version: None,
             max_version: None,
