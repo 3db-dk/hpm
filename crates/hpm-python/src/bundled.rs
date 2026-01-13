@@ -112,6 +112,8 @@ pub async fn ensure_uv_binary() -> Result<PathBuf> {
     // Check if UV is already downloaded
     if uv_path.exists() {
         debug!("UV binary already exists at {:?}", uv_path);
+        // Ensure isolation config exists (may have been deleted or never created)
+        setup_uv_isolation(&hpm_dir).await?;
         setup_uv_environment();
         return Ok(uv_path);
     }
@@ -265,22 +267,13 @@ async fn setup_uv_isolation(hpm_dir: &Path) -> Result<()> {
     fs::create_dir_all(&config_dir).await?;
 
     // Create isolated UV configuration
+    // Use forward slashes for TOML compatibility (Windows backslashes cause unicode escape issues)
+    let cache_dir_str = cache_dir.to_string_lossy().replace('\\', "/");
     let uv_config = format!(
-        r#"[cache]
-dir = "{cache_dir}"
-
-[global]
-# Prevent UV from interfering with system installations
-no-cache-dir = false
-no-python-downloads = false
-system-python = false
-
-[install]
-# Ensure packages are installed in isolated environments only
-user = false
-break-system-packages = false
+        r#"# HPM UV isolation configuration
+cache-dir = "{cache_dir}"
 "#,
-        cache_dir = cache_dir.to_string_lossy()
+        cache_dir = cache_dir_str
     );
 
     fs::write(config_dir.join("uv.toml"), uv_config).await?;
@@ -329,6 +322,8 @@ pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        debug!("UV command failed with exit code: {:?}", output.status.code());
+        debug!("UV stderr: {}", stderr);
         return Err(anyhow::anyhow!("UV command failed: {}", stderr));
     }
 

@@ -122,22 +122,56 @@ pub async fn install_dependencies(manifest_path: Option<PathBuf>, frozen_lockfil
         HashMap::new()
     };
 
-    // Install Python dependencies
-    if let Some(python_deps) = &manifest.python_dependencies {
-        if !python_deps.is_empty() {
-            progress.set_message(format!(
-                "Installing {} Python dependencies",
-                python_deps.len()
-            ));
-            info!("Installing {} Python dependencies", python_deps.len());
-            install_python_dependencies(&manifest, &hpm_dir)
-                .await
-                .context("Failed to install Python dependencies")?;
-        } else {
-            info!("No Python dependencies to install");
+    // Collect manifests from installed dependencies
+    let mut all_manifests = vec![manifest.clone()];
+    debug!("Checking {} installed packages for Python dependencies", install_results.len());
+    for (name, result) in &install_results {
+        match load_package_manifest(&result.package_path) {
+            Ok(Some(dep_manifest)) => {
+                info!(
+                    "Loaded manifest from dependency '{}' with {} Python deps",
+                    name,
+                    dep_manifest
+                        .python_dependencies
+                        .as_ref()
+                        .map(|d| d.len())
+                        .unwrap_or(0)
+                );
+                all_manifests.push(dep_manifest);
+            }
+            Ok(None) => {
+                debug!("Dependency '{}' has no hpm.toml", name);
+            }
+            Err(e) => {
+                warn!("Failed to load manifest from dependency '{}': {}", name, e);
+            }
         }
+    }
+
+    // Count total Python dependencies across all manifests
+    let total_python_deps: usize = all_manifests
+        .iter()
+        .filter_map(|m| m.python_dependencies.as_ref())
+        .map(|deps| deps.len())
+        .sum();
+
+    // Install Python dependencies from all manifests (root + dependencies)
+    if total_python_deps > 0 {
+        progress.set_message(format!(
+            "Installing {} Python dependencies from {} packages",
+            total_python_deps,
+            all_manifests.len()
+        ));
+        info!(
+            "Installing {} Python dependencies from {} packages",
+            total_python_deps,
+            all_manifests.len()
+        );
+        install_python_dependencies(&all_manifests, &hpm_dir)
+            .await
+            .context("Failed to install Python dependencies")?;
     } else {
-        info!("No Python dependencies specified");
+        info!("No Python dependencies specified in any package");
     }
 
     // Generate or update lock file (skip in frozen lockfile mode)
@@ -185,6 +219,8 @@ async fn setup_hpm_directory(hpm_dir: &Path) -> Result<()> {
 struct PackageInstallResult {
     /// SHA-256 checksum of the installed package contents.
     checksum: String,
+    /// Path to the installed package directory.
+    package_path: PathBuf,
 }
 
 /// Install HPM package dependencies
@@ -316,6 +352,7 @@ async fn install_hpm_dependencies(
 
         results.insert(name.clone(), PackageInstallResult {
             checksum: fetch_result.checksum,
+            package_path: fetch_result.package_path,
         });
 
         info!("  {} installed successfully", name);
@@ -325,8 +362,34 @@ async fn install_hpm_dependencies(
     Ok(results)
 }
 
+/// Load manifest from an installed package directory
+fn load_package_manifest(package_path: &Path) -> Result<Option<PackageManifest>> {
+    let manifest_path = package_path.join("hpm.toml");
+    if !manifest_path.exists() {
+        debug!(
+            "No hpm.toml found in package: {}",
+            package_path.display()
+        );
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("Failed to read manifest: {}", manifest_path.display()))?;
+
+    let manifest: PackageManifest = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse manifest: {}", manifest_path.display()))?;
+
+    Ok(Some(manifest))
+}
+
 /// Install Python dependencies using the hpm-python crate
-async fn install_python_dependencies(manifest: &PackageManifest, _hpm_dir: &Path) -> Result<()> {
+///
+/// This function collects Python dependencies from the root manifest AND all
+/// installed HPM package dependencies, then resolves and installs them together.
+async fn install_python_dependencies(
+    manifests: &[PackageManifest],
+    _hpm_dir: &Path,
+) -> Result<()> {
     info!("Installing Python dependencies...");
 
     // Initialize Python dependency management
@@ -334,8 +397,8 @@ async fn install_python_dependencies(manifest: &PackageManifest, _hpm_dir: &Path
         .await
         .context("Failed to initialize Python dependency management")?;
 
-    // Collect Python dependencies from the manifest
-    let python_deps = hpm_python::collect_python_dependencies(std::slice::from_ref(manifest))
+    // Collect Python dependencies from all manifests (root + dependencies)
+    let python_deps = hpm_python::collect_python_dependencies(manifests)
         .await
         .context("Failed to collect Python dependencies")?;
 
@@ -365,10 +428,12 @@ async fn install_python_dependencies(manifest: &PackageManifest, _hpm_dir: &Path
 
     info!("Python virtual environment ready: {}", venv_path.display());
 
-    // Generate Houdini integration files
-    generate_houdini_integration(manifest, &venv_path)
-        .await
-        .context("Failed to generate Houdini integration")?;
+    // Generate Houdini integration files using the root manifest (first in the list)
+    if let Some(root_manifest) = manifests.first() {
+        generate_houdini_integration(root_manifest, &venv_path)
+            .await
+            .context("Failed to generate Houdini integration")?;
+    }
 
     Ok(())
 }

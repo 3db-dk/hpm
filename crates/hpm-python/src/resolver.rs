@@ -99,10 +99,17 @@ fn create_requirements_file(dependencies: &PythonDependencies) -> Result<NamedTe
 
     for (name, dep) in &dependencies.dependencies {
         if !dep.optional {
-            let line = if dep.extras.is_empty() {
-                format!("{}{}\n", name, dep.version)
+            // Handle "*" version (any version) by omitting the version specifier
+            let version_part = if dep.version.spec == "*" || dep.version.spec.is_empty() {
+                String::new()
             } else {
-                format!("{}[{}]{}\n", name, dep.extras.join(","), dep.version)
+                dep.version.spec.clone()
+            };
+
+            let line = if dep.extras.is_empty() {
+                format!("{}{}\n", name, version_part)
+            } else {
+                format!("{}[{}]{}\n", name, dep.extras.join(","), version_part)
             };
             temp_file
                 .write_all(line.as_bytes())
