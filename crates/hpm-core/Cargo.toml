@@ -29,6 +29,8 @@ sha2.workspace = true
 walkdir.workspace = true
 # For Git archive downloading
 reqwest.workspace = true
+# For URL parsing
+url = "2"
 zip = "2.2"
 futures.workspace = true
 

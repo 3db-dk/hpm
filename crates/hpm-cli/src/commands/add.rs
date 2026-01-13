@@ -16,8 +16,11 @@
 //! ## Usage Examples
 //!
 //! ```bash
-//! # Add a Git-based dependency (recommended)
+//! # Add a Git-based dependency using commit hash
 //! hpm add geometry-tools --git https://github.com/studio/geometry-tools --commit abc123
+//!
+//! # Add a Git-based dependency using tag (resolves to commit)
+//! hpm add geometry-tools --git https://github.com/studio/geometry-tools --tag v1.0.0
 //!
 //! # Add a local path dependency (for development)
 //! hpm add local-tools --path ../local-tools
@@ -47,6 +50,7 @@
 
 use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifest};
 use anyhow::{bail, Context, Result};
+use hpm_core::TagResolver;
 use hpm_package::DependencySpec;
 use indexmap::IndexMap;
 use std::path::PathBuf;
@@ -58,7 +62,8 @@ use tracing::{info, warn};
 ///
 /// * `package_names` - Names of the packages to add
 /// * `git_url` - Git repository URL (recommended for dependencies)
-/// * `commit` - Git commit hash (required when using git_url)
+/// * `commit` - Git commit hash (use with git_url, mutually exclusive with tag)
+/// * `tag` - Git tag to resolve to a commit (use with git_url, mutually exclusive with commit)
 /// * `path` - Local path to package directory (for development dependencies, single package only)
 /// * `manifest_path` - Path to the manifest file or directory
 /// * `optional` - Whether the dependencies are optional
@@ -66,6 +71,7 @@ pub async fn add_packages(
     package_names: Vec<String>,
     git_url: Option<String>,
     commit: Option<String>,
+    tag: Option<String>,
     path: Option<PathBuf>,
     manifest_path: Option<PathBuf>,
     optional: bool,
@@ -78,8 +84,8 @@ pub async fn add_packages(
     info!("Adding package dependencies: {:?}", package_names);
 
     // Validate arguments
-    if git_url.is_some() && commit.is_none() {
-        bail!("--commit is required when using --git. Please specify a commit hash.");
+    if git_url.is_some() && commit.is_none() && tag.is_none() {
+        bail!("--commit or --tag is required when using --git. Please specify a commit hash or tag.");
     }
 
     if git_url.is_some() && path.is_some() {
@@ -111,17 +117,32 @@ pub async fn add_packages(
              For Git-based dependencies (recommended):\n\
              \n\
              \x20 hpm add {} --git <repository-url> --commit <commit-hash>\n\
+             \x20 hpm add {} --git <repository-url> --tag <tag-name>\n\
              \n\
              For local path dependencies (development):\n\
              \n\
              \x20 hpm add {} --path <local-path>\n\
              \n\
-             Example:\n\
+             Examples:\n\
              \n\
-             \x20 hpm add {} --git https://github.com/user/repo --commit abc123",
-            example_pkg, example_pkg, example_pkg
+             \x20 hpm add {} --git https://github.com/user/repo --commit abc123\n\
+             \x20 hpm add {} --git https://github.com/user/repo --tag v1.0.0",
+            example_pkg, example_pkg, example_pkg, example_pkg, example_pkg
         );
     }
+
+    // Resolve tag to commit if using --tag
+    let resolved_commit = if let (Some(ref url), Some(ref tag_name)) = (&git_url, &tag) {
+        info!("Resolving tag '{}' to commit...", tag_name);
+        let resolver = TagResolver::new()
+            .context("Failed to create tag resolver")?;
+        let commit_hash = resolver.resolve(url, tag_name).await
+            .with_context(|| format!("Failed to resolve tag '{}' for {}", tag_name, url))?;
+        info!("Resolved tag '{}' to commit {}", tag_name, &commit_hash[..12.min(commit_hash.len())]);
+        Some(commit_hash)
+    } else {
+        commit.clone()
+    };
 
     // Add to dependencies
     if manifest.dependencies.is_none() {
@@ -134,7 +155,7 @@ pub async fn add_packages(
     for package_name in &package_names {
         let dependency_spec = if let Some(ref url) = git_url {
             // Git-based dependency (recommended)
-            let commit_hash = commit.clone().unwrap(); // Already validated above
+            let commit_hash = resolved_commit.clone().unwrap(); // Already validated/resolved above
             DependencySpec::Git {
                 git: url.clone(),
                 commit: commit_hash,

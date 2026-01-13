@@ -227,6 +227,7 @@ pub mod lock;
 pub mod package_source;
 pub mod project;
 pub mod storage;
+pub mod tag_resolver;
 
 #[cfg(test)]
 mod integration_test;
@@ -243,3 +244,4 @@ pub use lock::{
 pub use package_source::{GitProvider, PackageSource, PackageSourceError};
 pub use project::{ProjectDependency, ProjectError, ProjectManager};
 pub use storage::{StorageError, StorageManager};
+pub use tag_resolver::{TagResolveError, TagResolver};

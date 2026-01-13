@@ -266,13 +266,14 @@ mod tests {
                 packages: vec![package_name.clone()],
                 git: git_url.clone(),
                 commit: commit_hash.clone(),
+                tag: None,
                 path: None,
                 manifest: manifest_path.clone(),
                 optional,
             };
 
             match add_cmd {
-                Commands::Add { packages, git, commit, manifest, optional: opt, .. } => {
+                Commands::Add { packages, git, commit, tag: _, manifest, optional: opt, .. } => {
                     prop_assert_eq!(packages, vec![package_name]);
                     prop_assert_eq!(git, git_url);
                     prop_assert_eq!(commit, commit_hash);
@@ -340,6 +341,7 @@ mod tests {
                 packages: vec![problematic_name.clone()],
                 git: Some(git_url),
                 commit: Some(commit_hash),
+                tag: None,
                 path: None,
                 manifest: None,
                 optional: false,
