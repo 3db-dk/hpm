@@ -716,4 +716,132 @@ mod tests {
         assert!(platform.contains('-'));
         assert!(!platform.is_empty());
     }
+
+    // Property-based tests
+    use proptest::prelude::*;
+
+    /// Strategy to generate valid package names
+    fn package_name_strategy() -> impl Strategy<Value = String> {
+        "[a-z][a-z0-9-]{1,20}".prop_filter("no double dashes", |s| !s.contains("--"))
+    }
+
+    /// Strategy to generate valid version strings
+    fn version_string_strategy() -> impl Strategy<Value = String> {
+        (0u32..100, 0u32..100, 0u32..100).prop_map(|(major, minor, patch)| {
+            format!("{}.{}.{}", major, minor, patch)
+        })
+    }
+
+    /// Strategy to generate Git URLs
+    fn git_url_strategy() -> impl Strategy<Value = String> {
+        package_name_strategy().prop_map(|name| format!("https://github.com/studio/{}", name))
+    }
+
+    /// Strategy to generate checksums
+    fn checksum_strategy() -> impl Strategy<Value = Option<String>> {
+        prop_oneof![
+            Just(None),
+            "[a-f0-9]{64}".prop_map(|s| Some(format!("sha256:{}", s))),
+        ]
+    }
+
+    /// Strategy to generate LockedDependency
+    fn locked_dependency_strategy() -> impl Strategy<Value = LockedDependency> {
+        (
+            version_string_strategy(),
+            git_url_strategy(),
+            checksum_strategy(),
+        )
+            .prop_map(|(version, url, checksum)| {
+                LockedDependency::from_git(version, url, checksum)
+            })
+    }
+
+    /// Strategy to generate LockFile with dependencies
+    fn lock_file_strategy() -> impl Strategy<Value = LockFile> {
+        (
+            package_name_strategy(),
+            version_string_strategy(),
+            prop::collection::btree_map(package_name_strategy(), locked_dependency_strategy(), 0..5),
+        )
+            .prop_map(|(name, version, deps)| {
+                let mut lock = LockFile::new(name, version);
+                // Clear metadata for consistent comparison (timestamps vary)
+                lock.metadata = None;
+                for (dep_name, dep) in deps {
+                    lock.add_dependency(dep_name, dep);
+                }
+                lock
+            })
+    }
+
+    proptest! {
+        /// Test that LockFile can be serialized to TOML and deserialized back
+        #[test]
+        fn prop_lock_file_toml_roundtrip(lock in lock_file_strategy()) {
+            let toml_str = lock.to_toml().expect("Should serialize to TOML");
+            let parsed: LockFile = toml::from_str(&toml_str).expect("Should parse TOML");
+
+            // Compare key fields (metadata differs due to timestamps)
+            prop_assert_eq!(lock.package.name, parsed.package.name);
+            prop_assert_eq!(lock.package.version, parsed.package.version);
+            prop_assert_eq!(lock.version, parsed.version);
+            prop_assert_eq!(lock.dependencies.len(), parsed.dependencies.len());
+
+            // Compare each dependency
+            for (name, dep) in &lock.dependencies {
+                let parsed_dep = parsed.dependencies.get(name);
+                prop_assert!(parsed_dep.is_some(), "Missing dependency: {}", name);
+                let parsed_dep = parsed_dep.unwrap();
+                prop_assert_eq!(&dep.version, &parsed_dep.version);
+                prop_assert_eq!(&dep.checksum, &parsed_dep.checksum);
+            }
+        }
+
+        /// Test that LockFile save/load roundtrip preserves data
+        #[test]
+        fn prop_lock_file_save_load_roundtrip(lock in lock_file_strategy()) {
+            let temp_dir = TempDir::new().expect("Should create temp dir");
+            let lock_path = temp_dir.path().join("hpm.lock");
+
+            lock.save(&lock_path).expect("Should save lock file");
+            let loaded = LockFile::load(&lock_path).expect("Should load lock file");
+
+            // Compare key fields
+            prop_assert_eq!(lock.package.name, loaded.package.name);
+            prop_assert_eq!(lock.package.version, loaded.package.version);
+            prop_assert_eq!(lock.dependencies.len(), loaded.dependencies.len());
+
+            for (name, dep) in &lock.dependencies {
+                let loaded_dep = loaded.dependencies.get(name);
+                prop_assert!(loaded_dep.is_some(), "Missing dependency after load: {}", name);
+                let loaded_dep = loaded_dep.unwrap();
+                prop_assert_eq!(&dep.version, &loaded_dep.version);
+                prop_assert_eq!(&dep.checksum, &loaded_dep.checksum);
+            }
+        }
+
+        /// Test that has_changes correctly detects identical lock files
+        #[test]
+        fn prop_has_changes_reflexive(lock in lock_file_strategy()) {
+            // A lock file should have no changes compared to itself
+            prop_assert!(!lock.has_changes(&lock));
+        }
+
+        /// Test that adding a dependency is detected as a change
+        #[test]
+        fn prop_has_changes_detects_additions(
+            lock in lock_file_strategy(),
+            new_dep_name in package_name_strategy(),
+            new_dep in locked_dependency_strategy()
+        ) {
+            let mut modified = lock.clone();
+            modified.add_dependency(new_dep_name.clone(), new_dep);
+
+            // If the dependency didn't already exist, it should be detected as a change
+            if !lock.dependencies.contains_key(&new_dep_name) {
+                prop_assert!(lock.has_changes(&modified));
+            }
+        }
+    }
 }

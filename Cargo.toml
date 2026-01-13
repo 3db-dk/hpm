@@ -81,6 +81,10 @@ miette = { version = "7.2", features = ["fancy-no-backtrace"] }
 # Testing
 tokio-test = "0.4"
 
+# Fuzzing (requires nightly Rust)
+# Note: fuzzcheck only works with nightly, so we don't include it as a workspace dependency.
+# Each crate that uses it should add it as an optional dev-dependency with a feature flag.
+
 # Additional dependencies for Python support
 semver = "1.0"
 indexmap = { version = "2.0", features = ["serde"] }

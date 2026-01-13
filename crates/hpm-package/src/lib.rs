@@ -101,6 +101,9 @@ pub mod template;
 #[cfg(test)]
 mod proptest_helpers;
 
+#[cfg(all(test, feature = "fuzz"))]
+mod fuzz_tests;
+
 // Re-exports for convenient access
 pub use dependency::DependencySpec;
 pub use houdini::{HoudiniEnvValue, HoudiniPackage};

@@ -10,6 +10,10 @@ This comprehensive guide covers HPM's testing strategy, including property-based
   - [Why Property-Based Testing](#why-property-based-testing)
   - [Writing Property Tests](#writing-property-tests)
   - [Testing Strategies and Patterns](#testing-strategies-and-patterns)
+- [Fuzzing](#fuzzing)
+  - [Running Fuzz Tests](#running-fuzz-tests)
+  - [Fuzz Targets](#fuzz-targets)
+  - [Adding New Fuzz Tests](#adding-new-fuzz-tests)
 - [Running Tests](#running-tests)
 - [Configuration](#configuration)
 - [CI/CD Integration](#cicd-integration)
@@ -286,6 +290,81 @@ fn prop_version_req_invalid(whitespace in r"\s*") {
     prop_assert!(result.is_err());
 }
 ```
+
+## Fuzzing
+
+HPM uses fuzzcheck-rs for structure-aware fuzzing of security-sensitive parsing code. Unlike cargo-fuzz, fuzzcheck works on all platforms including Windows.
+
+### Running Fuzz Tests
+
+Fuzz tests require the Rust nightly toolchain:
+
+```bash
+# Install nightly if not already installed
+rustup install nightly
+
+# Run fuzz tests for a specific package
+cargo +nightly test fuzz_ --release -p hpm-package --ignored
+
+# Run fuzz tests for all packages
+cargo +nightly test fuzz_ --release --workspace --ignored -- --test-threads=1
+```
+
+The `--ignored` flag is required because fuzz tests are marked as ignored by default to prevent them from running during normal test runs.
+
+### Fuzz Targets
+
+| Crate | Target | Description |
+|-------|--------|-------------|
+| `hpm-package` | `fuzz_manifest_parsing` | TOML manifest parsing |
+| `hpm-package` | `fuzz_dependency_spec_json` | Dependency spec JSON parsing |
+| `hpm-package` | `fuzz_python_dependency_spec` | Python dependency parsing |
+| `hpm-resolver` | `fuzz_version_req_parsing` | Version requirement parsing |
+| `hpm-resolver` | `fuzz_version_parsing` | Version string parsing |
+| `hpm-core` | `fuzz_lock_file_parsing` | Lock file TOML parsing |
+| `hpm-core` | `fuzz_package_spec_parsing` | Package spec parsing |
+
+### Adding New Fuzz Tests
+
+Fuzz tests live in `fuzz_tests.rs` modules within each crate:
+
+```rust
+// crates/<crate>/src/fuzz_tests.rs
+
+#[cfg(test)]
+mod fuzz {
+    use fuzzcheck::fuzz_test;
+
+    #[test]
+    #[ignore]
+    fn fuzz_my_parser() {
+        let result = fuzz_test(|input: &String| {
+            // Parser should never panic on any input
+            let _ = my_parser(input);
+        })
+        .default_mutator()
+        .serde_serializer()
+        .default_sensor_and_pool()
+        .arguments_from_cargo_fuzzcheck()
+        .stop_after_first_test_failure(true)
+        .launch();
+
+        assert!(!result.found_test_failure, "Fuzzing found a failure");
+    }
+}
+```
+
+Key points:
+- Mark tests with `#[ignore]` so they don't run during normal test execution
+- Use `.stop_after_first_test_failure(true)` to stop immediately when a bug is found
+- Fuzz tests should only test that parsing doesn't panic - they shouldn't validate correctness
+
+### CI/CD Fuzzing
+
+Fuzz tests run automatically in CI via the `.github/workflows/fuzz.yml` workflow:
+- Runs on PRs that modify crate source files
+- Runs weekly for extended fuzzing
+- Uses nightly Rust with coverage instrumentation
 
 ## Running Tests
 
