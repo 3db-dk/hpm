@@ -297,7 +297,6 @@ pub struct InstallConfig {
     pub parallel_downloads: usize,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     pub home_dir: PathBuf,
@@ -377,7 +376,10 @@ impl Config {
                 debug!("Loading project config from {:?}", project_config_path);
                 let project_config = Self::load_from_path(&project_config_path)?;
                 config.merge(project_config);
-                info!("Loaded project configuration from {:?}", project_config_path);
+                info!(
+                    "Loaded project configuration from {:?}",
+                    project_config_path
+                );
             }
         }
 
@@ -397,11 +399,10 @@ impl Config {
     /// Parse configuration from a TOML string.
     fn parse_toml(content: &str, path: &Path) -> Result<Self, ConfigError> {
         // Parse into a partial config that allows missing fields
-        let partial: PartialConfig =
-            toml::from_str(content).map_err(|e| ConfigError::Parse {
-                path: path.to_path_buf(),
-                source: Box::new(e),
-            })?;
+        let partial: PartialConfig = toml::from_str(content).map_err(|e| ConfigError::Parse {
+            path: path.to_path_buf(),
+            source: Box::new(e),
+        })?;
 
         // Convert partial config to full config with defaults
         Ok(partial.into_config())
@@ -771,7 +772,10 @@ ignore_patterns = ["backup", ".cache", "temp"]
         assert_eq!(config.projects.search_roots.len(), 1);
         assert_eq!(config.projects.max_search_depth, 5);
         assert_eq!(config.projects.ignore_patterns.len(), 3);
-        assert!(config.projects.ignore_patterns.contains(&"backup".to_string()));
+        assert!(config
+            .projects
+            .ignore_patterns
+            .contains(&"backup".to_string()));
     }
 
     #[test]
@@ -854,7 +858,10 @@ ignore_patterns = ["backup", ".cache", "temp"]
         let project_config = Config::load_project_config(&project_root);
 
         // Normalize path separators for cross-platform testing
-        let packages_dir_str = project_config.packages_dir.to_string_lossy().replace('\\', "/");
+        let packages_dir_str = project_config
+            .packages_dir
+            .to_string_lossy()
+            .replace('\\', "/");
         assert!(
             packages_dir_str.ends_with(".hpm/packages"),
             "Expected packages_dir to end with '.hpm/packages', got: {}",

@@ -144,9 +144,7 @@ async fn download_uv(target_path: &Path) -> Result<()> {
     }
 
     // Download the archive
-    let client = reqwest::Client::builder()
-        .user_agent("hpm")
-        .build()?;
+    let client = reqwest::Client::builder().user_agent("hpm").build()?;
 
     let response = client
         .get(download_url)
@@ -322,7 +320,10 @@ pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        debug!("UV command failed with exit code: {:?}", output.status.code());
+        debug!(
+            "UV command failed with exit code: {:?}",
+            output.status.code()
+        );
         debug!("UV stderr: {}", stderr);
         return Err(anyhow::anyhow!("UV command failed: {}", stderr));
     }

@@ -222,11 +222,11 @@ pub async fn list_dependencies_tree(manifest_path: Option<PathBuf>) -> Result<()
     let has_hpm_deps = manifest
         .dependencies
         .as_ref()
-        .map_or(false, |d| !d.is_empty());
+        .is_some_and(|d| !d.is_empty());
     let has_py_deps = manifest
         .python_dependencies
         .as_ref()
-        .map_or(false, |d| !d.is_empty());
+        .is_some_and(|d| !d.is_empty());
 
     if !has_hpm_deps && !has_py_deps {
         println!("{}", style("  (no dependencies)").dim());
@@ -491,7 +491,6 @@ fn format_python_extras(spec: &PythonDependencySpec) -> String {
 /// - No hpm.toml found in current directory (when `provided_path` is `None`)
 /// - Provided path does not exist or is not accessible
 /// - Directory path provided but contains no hpm.toml file
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,7 +626,10 @@ matplotlib = { version = "^3.5.0", optional = true }
             optional: false,
         };
         let result = format_dependency_spec(&spec);
-        assert_eq!(result, "git: https://github.com/example/repo (version: 1.0.0)");
+        assert_eq!(
+            result,
+            "git: https://github.com/example/repo (version: 1.0.0)"
+        );
     }
 
     #[test]

@@ -34,16 +34,6 @@ impl ValidationResult {
     pub fn add_info(&mut self, message: String) {
         self.info_messages.push(message);
     }
-
-    #[allow(dead_code)]
-    pub fn merge(&mut self, other: ValidationResult) {
-        self.errors.extend(other.errors);
-        self.warnings.extend(other.warnings);
-        self.info_messages.extend(other.info_messages);
-        if !other.is_valid {
-            self.is_valid = false;
-        }
-    }
 }
 
 pub async fn check_package(directory: Option<std::path::PathBuf>) -> Result<()> {
@@ -447,11 +437,10 @@ fn display_results(result: ValidationResult) -> Result<()> {
             );
         }
     } else {
-        error!(
-            "[ERROR] Package validation failed with {} error(s)",
+        return Err(anyhow::anyhow!(
+            "Package validation failed with {} error(s)",
             result.errors.len()
-        );
-        std::process::exit(1);
+        ));
     }
 
     Ok(())

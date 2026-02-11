@@ -473,6 +473,7 @@ enum Commands {
     /// Publish a package
     Publish,
     /// Execute package scripts
+    #[command(hide = true)]
     Run {
         /// Script name to execute
         script: String,
@@ -592,7 +593,7 @@ async fn run_command(
             vcs,
         } => {
             let options = commands::init::InitOptions {
-                name: name.clone(),
+                name_or_path: name.clone(),
                 description: description.clone(),
                 author: author.clone(),
                 version: version.clone(),
@@ -604,7 +605,7 @@ async fn run_command(
                 base_dir: directory.clone(), // Use directory from CLI flag
             };
 
-            init_package(options).await.map_err(|e| {
+            let package_name = init_package(options).await.map_err(|e| {
                 CliError::package(
                     e,
                     Some("Try 'hpm init --help' for usage information".to_string()),
@@ -614,7 +615,7 @@ async fn run_command(
             if output_format == OutputFormat::Human {
                 console.success(format!(
                     "Package '{}' initialized successfully",
-                    name.as_deref().unwrap_or("new-package")
+                    package_name
                 ));
             }
         }
@@ -743,7 +744,10 @@ async fn run_command(
                 script
             ));
         }
-        Commands::Install { manifest, frozen_lockfile } => {
+        Commands::Install {
+            manifest,
+            frozen_lockfile,
+        } => {
             commands::install::install_dependencies(manifest.clone(), *frozen_lockfile)
                 .await
                 .map_err(|e| {

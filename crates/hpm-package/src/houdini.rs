@@ -100,9 +100,7 @@ impl HoudiniPackage {
 
     /// Add an hpath entry.
     pub fn add_hpath(&mut self, path: impl Into<String>) {
-        self.hpath
-            .get_or_insert_with(Vec::new)
-            .push(path.into());
+        self.hpath.get_or_insert_with(Vec::new).push(path.into());
     }
 
     /// Add an environment variable.
@@ -132,7 +130,10 @@ mod tests {
     fn houdini_package_builder() {
         let mut pkg = HoudiniPackage::new();
         pkg.add_hpath("$HPM_PACKAGE_ROOT/otls");
-        pkg.add_env("PYTHONPATH", HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"));
+        pkg.add_env(
+            "PYTHONPATH",
+            HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"),
+        );
         pkg.set_enable("houdini_version >= '19.5'");
 
         assert!(pkg.hpath.is_some());
@@ -182,7 +183,10 @@ mod tests {
     fn houdini_package_serialization() {
         let mut pkg = HoudiniPackage::new();
         pkg.add_hpath("$HPM_PACKAGE_ROOT/otls");
-        pkg.add_env("PYTHONPATH", HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"));
+        pkg.add_env(
+            "PYTHONPATH",
+            HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"),
+        );
 
         let json = serde_json::to_string_pretty(&pkg).unwrap();
         assert!(json.contains("hpath"));

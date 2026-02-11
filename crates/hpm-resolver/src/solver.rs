@@ -136,12 +136,22 @@ impl<P: PackageProvider> DependencyResolver<P> {
     }
 
     fn add_root_requirements(&mut self, requirements: Vec<Requirement>) {
+        for req in &requirements {
+            // Record a root incompatibility for each requirement: it is
+            // incompatible for the root to NOT satisfy this constraint.
+            self.incompatibilities.push(Incompatibility {
+                terms: vec![Term {
+                    package: req.name.clone(),
+                    constraint: req.constraint.clone(),
+                    positive: false,
+                }],
+                cause: IncompatibilityCause::Root,
+            });
+        }
+
         for req in requirements {
             self.solution.add_requirement(req);
         }
-
-        // TODO: Implement proper root incompatibility for complex cases
-        // For now, skip root incompatibility to avoid false conflicts
     }
 
     fn select_next_package(&self) -> Option<String> {

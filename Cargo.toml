@@ -10,7 +10,7 @@ homepage = "https://hpm.dev"
 documentation = "https://docs.hpm.dev"
 keywords = ["houdini", "package-manager", "vfx", "3d"]
 categories = ["development-tools", "multimedia::images"]
-rust-version = "1.70"
+rust-version = "1.74"
 
 # This is a documentation-only crate for the workspace
 [lib]
@@ -41,7 +41,7 @@ homepage = "https://hpm.dev"
 documentation = "https://docs.hpm.dev"
 keywords = ["houdini", "package-manager", "vfx", "3d"]
 categories = ["development-tools", "multimedia::images"]
-rust-version = "1.70"
+rust-version = "1.74"
 
 [workspace.dependencies]
 # Core dependencies
@@ -52,10 +52,10 @@ serde_json = "1.0"
 proptest = "1.5"
 toml = "0.8"
 anyhow = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 
 # Async HTTP and networking
-reqwest = { version = "0.11", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 futures = "0.3"
 
 # File system and I/O
@@ -65,7 +65,6 @@ dirs = "5.0"
 
 # Crypto and validation
 sha2 = "0.10"
-ring = "0.17"
 
 # Logging
 tracing = "0.1"
@@ -90,11 +89,13 @@ semver = "1.0"
 indexmap = { version = "2.0", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 which = "6.0"
+zip = "2.2"
 
 [profile.release]
 lto = true
 codegen-units = 1
 panic = "abort"
+strip = true
 
 [profile.dev]
 debug = 2

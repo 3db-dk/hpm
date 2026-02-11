@@ -48,11 +48,7 @@ impl PythonDependencySpec {
     }
 
     /// Create a detailed Python dependency.
-    pub fn detailed(
-        version: Option<String>,
-        extras: Option<Vec<String>>,
-        optional: bool,
-    ) -> Self {
+    pub fn detailed(version: Option<String>, extras: Option<Vec<String>>, optional: bool) -> Self {
         PythonDependencySpec::Detailed {
             version,
             extras,
@@ -106,7 +102,10 @@ mod tests {
         );
         assert_eq!(dep.version(), Some(">=1.0.0"));
         assert!(dep.is_optional());
-        assert_eq!(dep.extras(), Some(&["dev".to_string(), "test".to_string()][..]));
+        assert_eq!(
+            dep.extras(),
+            Some(&["dev".to_string(), "test".to_string()][..])
+        );
     }
 
     #[test]

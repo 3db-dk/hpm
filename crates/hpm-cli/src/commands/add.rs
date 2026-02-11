@@ -134,7 +134,9 @@ pub async fn add_packages(
              Examples:\n\
              \n\
              \x20 hpm add {} --git https://github.com/user/repo --tag v1.0.0",
-            example_pkg, example_pkg, example_pkg
+            example_pkg,
+            example_pkg,
+            example_pkg
         );
     }
 
@@ -197,7 +199,6 @@ pub async fn add_packages(
     );
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

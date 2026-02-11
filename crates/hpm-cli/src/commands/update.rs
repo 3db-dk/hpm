@@ -466,7 +466,6 @@ fn output_update_results(updated: &[String], output: &OutputFormat) {
 
 // Helper functions
 
-
 async fn get_current_installed_version(_package_name: &str) -> Option<String> {
     // Placeholder - would query storage manager for installed version
     Some("1.0.0".to_string())
@@ -491,7 +490,11 @@ mod tests {
     fn test_determine_manifest_path() {
         let temp_dir = TempDir::new().unwrap();
         let manifest_path = temp_dir.path().join("hpm.toml");
-        std::fs::write(&manifest_path, "[package]\nname = \"test\"\nversion = \"1.0.0\"\n[houdini]\nmin_version = \"20.0\"").unwrap();
+        std::fs::write(
+            &manifest_path,
+            "[package]\nname = \"test\"\nversion = \"1.0.0\"\n[houdini]\nmin_version = \"20.0\"",
+        )
+        .unwrap();
 
         // Test with file path
         let result = determine_manifest_path(Some(manifest_path.clone())).unwrap();

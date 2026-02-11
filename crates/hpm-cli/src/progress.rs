@@ -106,7 +106,7 @@ impl OperationProgress {
     pub fn finish_success(&self, message: impl Into<String>) {
         if let Some(ref pb) = self.main_bar {
             pb.set_style(ProgressStyles::finished());
-            pb.finish_with_message(format!("{} {}", style("✓").green(), message.into()));
+            pb.finish_with_message(format!("{} {}", style("[ok]").green(), message.into()));
         }
     }
 
@@ -114,7 +114,7 @@ impl OperationProgress {
     pub fn finish_warning(&self, message: impl Into<String>) {
         if let Some(ref pb) = self.main_bar {
             pb.set_style(ProgressStyles::finished());
-            pb.finish_with_message(format!("{} {}", style("⚠").yellow(), message.into()));
+            pb.finish_with_message(format!("{} {}", style("[warn]").yellow(), message.into()));
         }
     }
 
@@ -122,7 +122,7 @@ impl OperationProgress {
     pub fn finish_error(&self, message: impl Into<String>) {
         if let Some(ref pb) = self.main_bar {
             pb.set_style(ProgressStyles::finished());
-            pb.finish_with_message(format!("{} {}", style("✗").red(), message.into()));
+            pb.finish_with_message(format!("{} {}", style("[err]").red(), message.into()));
         }
     }
 
@@ -166,13 +166,13 @@ pub fn download_progress(total_bytes: u64, message: impl Into<String>) -> Progre
 /// Finish a progress bar with success styling
 pub fn finish_success(pb: &ProgressBar, message: impl Into<String>) {
     pb.set_style(ProgressStyles::finished());
-    pb.finish_with_message(format!("{} {}", style("✓").green(), message.into()));
+    pb.finish_with_message(format!("{} {}", style("[ok]").green(), message.into()));
 }
 
 /// Finish a progress bar with error styling
 pub fn finish_error(pb: &ProgressBar, message: impl Into<String>) {
     pb.set_style(ProgressStyles::finished());
-    pb.finish_with_message(format!("{} {}", style("✗").red(), message.into()));
+    pb.finish_with_message(format!("{} {}", style("[err]").red(), message.into()));
 }
 
 #[cfg(test)]

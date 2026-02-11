@@ -477,20 +477,21 @@ impl From<HpmError> for CliError {
         match err {
             HpmError::PackageNotFound { name } => Self::package(
                 anyhow::anyhow!("Package not found: {}", name),
-                Some("Check the package name is correct or search for available packages".to_string()),
+                Some(
+                    "Check the package name is correct or search for available packages"
+                        .to_string(),
+                ),
             ),
             HpmError::Config { message } => Self::config(
                 anyhow::anyhow!("{}", message),
                 Some("Check your config.toml for syntax errors".into()),
             ),
-            HpmError::Network(err) => Self::network(
-                err,
-                Some("Check your internet connection".into()),
-            ),
-            HpmError::Io(err) => Self::io(
-                err,
-                Some("Check file permissions and disk space".into()),
-            ),
+            HpmError::Network(err) => {
+                Self::network(err, Some("Check your internet connection".into()))
+            }
+            HpmError::Io(err) => {
+                Self::io(err, Some("Check file permissions and disk space".into()))
+            }
             HpmError::Resolver { message } => Self::package(
                 anyhow::anyhow!("Dependency resolution failed: {}", message),
                 Some("Try updating dependencies or resolving version conflicts".into()),

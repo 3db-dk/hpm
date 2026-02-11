@@ -18,7 +18,10 @@ use tracing::{debug, info, warn};
 ///
 /// * `manifest_path` - Optional path to hpm.toml file
 /// * `frozen_lockfile` - If true, fail if lock file is missing or would change
-pub async fn install_dependencies(manifest_path: Option<PathBuf>, frozen_lockfile: bool) -> Result<()> {
+pub async fn install_dependencies(
+    manifest_path: Option<PathBuf>,
+    frozen_lockfile: bool,
+) -> Result<()> {
     info!("Starting dependency installation");
 
     if frozen_lockfile {
@@ -108,7 +111,10 @@ pub async fn install_dependencies(manifest_path: Option<PathBuf>, frozen_lockfil
     // Install HPM dependencies
     let install_results = if let Some(dependencies) = &manifest.dependencies {
         if !dependencies.is_empty() {
-            progress.set_message(format!("Installing {} HPM dependencies", dependencies.len()));
+            progress.set_message(format!(
+                "Installing {} HPM dependencies",
+                dependencies.len()
+            ));
             info!("Installing {} HPM dependencies", dependencies.len());
             install_hpm_dependencies(dependencies, &hpm_dir)
                 .await
@@ -124,7 +130,10 @@ pub async fn install_dependencies(manifest_path: Option<PathBuf>, frozen_lockfil
 
     // Collect manifests from installed dependencies
     let mut all_manifests = vec![manifest.clone()];
-    debug!("Checking {} installed packages for Python dependencies", install_results.len());
+    debug!(
+        "Checking {} installed packages for Python dependencies",
+        install_results.len()
+    );
     for (name, result) in &install_results {
         match load_package_manifest(&result.package_path) {
             Ok(Some(dep_manifest)) => {
@@ -188,7 +197,6 @@ pub async fn install_dependencies(manifest_path: Option<PathBuf>, frozen_lockfil
     info!("Dependency installation completed successfully");
     Ok(())
 }
-
 
 /// Setup the .hpm directory structure
 async fn setup_hpm_directory(hpm_dir: &Path) -> Result<()> {
@@ -261,13 +269,16 @@ async fn install_hpm_dependencies(
 
                 // Convert dependency spec to package source
                 let source = match &spec {
-                    hpm_package::DependencySpec::Git { git, version, optional } => {
+                    hpm_package::DependencySpec::Git {
+                        git,
+                        version,
+                        optional,
+                    } => {
                         info!("  {} - Git: {} @ {}", name, git, version);
                         if *optional {
                             debug!("  {} is optional", name);
                         }
-                        let src = PackageSource::git(git, version)
-                            .context("Invalid Git URL")?;
+                        let src = PackageSource::git(git, version).context("Invalid Git URL")?;
 
                         // Security warning for HTTP URLs
                         if let Some(warning) = src.security_warning() {
@@ -286,7 +297,8 @@ async fn install_hpm_dependencies(
                 };
 
                 // Fetch the package (this is the expensive network/disk operation)
-                let fetch_result = fetcher.fetch(&source, &name)
+                let fetch_result = fetcher
+                    .fetch(&source, &name)
                     .await
                     .with_context(|| format!("Failed to fetch package: {}", name))?;
 
@@ -296,7 +308,11 @@ async fn install_hpm_dependencies(
                     info!("  {} downloaded and extracted", name);
                 }
 
-                debug!("  {} checksum: {}", name, &fetch_result.checksum[..fetch_result.checksum.len().min(16)]);
+                debug!(
+                    "  {} checksum: {}",
+                    name,
+                    &fetch_result.checksum[..fetch_result.checksum.len().min(16)]
+                );
 
                 Ok::<_, anyhow::Error>((name, fetch_result))
             }
@@ -330,30 +346,43 @@ async fn install_hpm_dependencies(
         {
             tokio::fs::symlink(&fetch_result.package_path, &project_pkg_link)
                 .await
-                .with_context(|| format!(
-                    "Failed to create symlink for {}: {:?} -> {:?}",
-                    name, project_pkg_link, fetch_result.package_path
-                ))?;
+                .with_context(|| {
+                    format!(
+                        "Failed to create symlink for {}: {:?} -> {:?}",
+                        name, project_pkg_link, fetch_result.package_path
+                    )
+                })?;
         }
 
         #[cfg(windows)]
         {
             // On Windows, use directory junction or regular symlink
             // Note: symlinks may require elevated privileges on some Windows configurations
-            if let Err(e) = tokio::fs::symlink_dir(&fetch_result.package_path, &project_pkg_link).await {
+            if let Err(e) =
+                tokio::fs::symlink_dir(&fetch_result.package_path, &project_pkg_link).await
+            {
                 // Fall back to writing a reference file
-                warn!("  Could not create symlink ({}), creating reference file", e);
+                warn!(
+                    "  Could not create symlink ({}), creating reference file",
+                    e
+                );
                 let ref_file = project_packages_dir.join(format!("{}.hpmref", &name));
-                tokio::fs::write(&ref_file, fetch_result.package_path.to_string_lossy().as_bytes())
-                    .await
-                    .with_context(|| format!("Failed to create reference file for {}", name))?;
+                tokio::fs::write(
+                    &ref_file,
+                    fetch_result.package_path.to_string_lossy().as_bytes(),
+                )
+                .await
+                .with_context(|| format!("Failed to create reference file for {}", name))?;
             }
         }
 
-        results.insert(name.clone(), PackageInstallResult {
-            checksum: fetch_result.checksum,
-            package_path: fetch_result.package_path,
-        });
+        results.insert(
+            name.clone(),
+            PackageInstallResult {
+                checksum: fetch_result.checksum,
+                package_path: fetch_result.package_path,
+            },
+        );
 
         info!("  {} installed successfully", name);
     }
@@ -366,10 +395,7 @@ async fn install_hpm_dependencies(
 fn load_package_manifest(package_path: &Path) -> Result<Option<PackageManifest>> {
     let manifest_path = package_path.join("hpm.toml");
     if !manifest_path.exists() {
-        debug!(
-            "No hpm.toml found in package: {}",
-            package_path.display()
-        );
+        debug!("No hpm.toml found in package: {}", package_path.display());
         return Ok(None);
     }
 
@@ -386,10 +412,7 @@ fn load_package_manifest(package_path: &Path) -> Result<Option<PackageManifest>>
 ///
 /// This function collects Python dependencies from the root manifest AND all
 /// installed HPM package dependencies, then resolves and installs them together.
-async fn install_python_dependencies(
-    manifests: &[PackageManifest],
-    _hpm_dir: &Path,
-) -> Result<()> {
+async fn install_python_dependencies(manifests: &[PackageManifest], _hpm_dir: &Path) -> Result<()> {
     info!("Installing Python dependencies...");
 
     // Initialize Python dependency management
@@ -505,18 +528,10 @@ async fn generate_lock_file(
 
             let locked_dep = match spec {
                 hpm_package::DependencySpec::Git { git, version, .. } => {
-                    LockedDependency::from_git(
-                        version.clone(),
-                        git.clone(),
-                        checksum,
-                    )
+                    LockedDependency::from_git(version.clone(), git.clone(), checksum)
                 }
                 hpm_package::DependencySpec::Path { path, .. } => {
-                    LockedDependency::from_path(
-                        "local".to_string(),
-                        path.clone(),
-                        checksum,
-                    )
+                    LockedDependency::from_path("local".to_string(), path.clone(), checksum)
                 }
             };
 

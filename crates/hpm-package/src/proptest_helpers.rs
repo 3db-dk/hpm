@@ -3,8 +3,6 @@
 //! This module provides proptest strategies for generating test data
 //! across the hpm-package crate.
 
-#![cfg(test)]
-
 use proptest::prelude::*;
 
 use crate::dependency::DependencySpec;
@@ -78,13 +76,13 @@ pub fn houdini_version_strategy() -> impl Strategy<Value = String> {
 pub fn dependency_spec_strategy() -> impl Strategy<Value = DependencySpec> {
     prop_oneof![
         // Git dependency with version (for release artifact download)
-        (url_strategy(), version_strategy(), any::<bool>()).prop_map(
-            |(git, version, optional)| DependencySpec::Git {
+        (url_strategy(), version_strategy(), any::<bool>()).prop_map(|(git, version, optional)| {
+            DependencySpec::Git {
                 git,
                 version,
-                optional
+                optional,
             }
-        ),
+        }),
         // Path dependency
         (
             prop::string::string_regex(r"\.?\./[a-z0-9-/]{3,30}").unwrap(),

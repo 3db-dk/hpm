@@ -17,19 +17,19 @@ build-release:
 
 # Check code without building  
 check:
-    cargo check --workspace --all-targets --all-features
+    cargo check --workspace --all-targets
 
 # === TESTING COMMANDS ===
 
 # Run all tests
 test:
-    cargo test --workspace --all-features --package hpm-cli -- --test-threads=1
-    cargo test --workspace --all-features --exclude hpm-cli
+    cargo test --workspace --package hpm-cli -- --test-threads=1
+    cargo test --workspace --exclude hpm-cli
 
 # Run tests with output
 test-verbose:
-    cargo test --workspace --all-features --package hpm-cli -- --test-threads=1 --nocapture
-    cargo test --workspace --all-features --exclude hpm-cli -- --nocapture
+    cargo test --workspace --package hpm-cli -- --test-threads=1 --nocapture
+    cargo test --workspace --exclude hpm-cli -- --nocapture
 
 # Run integration tests only
 test-integration:
@@ -47,7 +47,7 @@ fmt-check:
 
 # Run clippy lints
 clippy:
-    cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
 # Check for emoji usage in source code
 check-emojis:
@@ -55,7 +55,7 @@ check-emojis:
 
 # Fix clippy issues automatically where possible
 clippy-fix:
-    cargo clippy --workspace --all-targets --all-features --fix
+    cargo clippy --workspace --all-targets --fix
 
 # === UTILITY COMMANDS ===
 
@@ -98,11 +98,11 @@ machete:
 
 # Generate and open documentation
 doc:
-    cargo doc --workspace --all-features --no-deps --open
+    cargo doc --workspace --no-deps --open
 
 # Check documentation builds
 doc-check:
-    cargo doc --workspace --all-features --no-deps
+    cargo doc --workspace --no-deps
 
 # === RELEASE PREPARATION ===
 
@@ -123,7 +123,7 @@ watch:
 
 # Watch for changes and run quality checks
 watch-quality:
-    cargo watch -x "clippy --workspace --all-targets --all-features"
+    cargo watch -x "clippy --workspace --all-targets"
 
 # === GIT HOOKS ===
 

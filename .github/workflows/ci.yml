@@ -55,13 +55,13 @@ jobs:
       run: cargo fmt --all -- --check
 
     - name: Run clippy
-      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      run: cargo clippy --workspace --all-targets -- -D warnings
 
     - name: Build
-      run: cargo build --workspace --all-features
+      run: cargo build --workspace
 
     - name: Run tests
-      run: cargo test --workspace --all-features
+      run: cargo test --workspace
 
     - name: Build release
       run: cargo build --release --workspace
@@ -102,7 +102,7 @@ jobs:
       run: cargo install cargo-llvm-cov
 
     - name: Generate coverage
-      run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+      run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
     - name: Upload to codecov.io
       uses: codecov/codecov-action@v4

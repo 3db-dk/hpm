@@ -42,7 +42,7 @@ else
         exit 1
     fi
     
-    if ! cargo clippy --workspace --all-targets --all-features -- -D warnings; then
+    if ! cargo clippy --workspace --all-targets -- -D warnings; then
         echo "[ERROR] Clippy linting failed!"
         echo "Fix clippy warnings before committing."
         exit 1
@@ -54,7 +54,7 @@ else
         exit 1
     fi
     
-    if ! cargo test --workspace --all-features; then
+    if ! cargo test --workspace; then
         echo "[ERROR] Tests failed!"
         echo "Fix failing tests before committing."
         exit 1

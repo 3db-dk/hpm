@@ -1,4 +1,3 @@
-// Console utilities will be used in future improvements
 use anyhow::{Context, Result};
 use hpm_package::{PackageManifest, PackageTemplate};
 use owo_colors::{OwoColorize, Style};
@@ -9,7 +8,7 @@ use std::process::Command;
 use tracing::{info, warn};
 
 pub struct InitOptions {
-    pub name: Option<String>,
+    pub name_or_path: Option<String>,
     pub description: Option<String>,
     pub author: Option<String>,
     pub version: String,
@@ -22,35 +21,26 @@ pub struct InitOptions {
     pub base_dir: Option<PathBuf>,
 }
 
-pub async fn init_package(options: InitOptions) -> Result<()> {
-    // Determine base directory - use provided or current working directory
-    let base_dir = match options.base_dir {
-        Some(dir) => dir,
-        None => env::current_dir().context("Failed to get current directory")?,
-    };
+pub async fn init_package(options: InitOptions) -> Result<String> {
+    let (target_dir, package_name, should_create_dir) = determine_init_strategy(&options)?;
 
-    // Determine package name
-    let package_name = match options.name {
-        Some(name) => name,
-        None => {
-            let dir_name = base_dir
-                .file_name()
-                .context("Failed to get directory name")?
-                .to_string_lossy()
-                .to_string();
-
-            // Convert to kebab-case if needed
-            convert_to_kebab_case(&dir_name)
-        }
-    };
-
-    let target_dir = base_dir.join(&package_name);
-
-    // Check if directory already exists
-    if target_dir.exists() {
+    // Check for existing hpm.toml
+    let hpm_toml_path = target_dir.join("hpm.toml");
+    if hpm_toml_path.exists() {
         return Err(anyhow::anyhow!(
-            "Directory '{}' already exists. Choose a different name or remove the existing directory.",
-            package_name
+            "hpm.toml already exists in '{}'. Package already initialized.",
+            target_dir.display()
+        ));
+    }
+
+    // If directory exists and we're not creating it, validate Houdini package structure
+    if target_dir.exists()
+        && !should_create_dir
+        && !is_valid_houdini_package_structure(&target_dir)?
+    {
+        return Err(anyhow::anyhow!(
+            "Directory '{}' does not have a valid Houdini package structure.",
+            target_dir.display()
         ));
     }
 
@@ -93,9 +83,11 @@ pub async fn init_package(options: InitOptions) -> Result<()> {
     // Create package template
     let template = PackageTemplate::new(&package_name, &manifest, options.bare);
 
-    // Create directory
-    fs::create_dir(&target_dir)
-        .with_context(|| format!("Failed to create directory '{}'", package_name))?;
+    // Create directory only if needed
+    if should_create_dir {
+        fs::create_dir_all(&target_dir)
+            .with_context(|| format!("Failed to create directory '{}'", package_name))?;
+    }
 
     // Create package structure
     template
@@ -141,7 +133,117 @@ pub async fn init_package(options: InitOptions) -> Result<()> {
         );
     }
 
-    Ok(())
+    Ok(package_name)
+}
+
+fn determine_init_strategy(options: &InitOptions) -> Result<(PathBuf, String, bool)> {
+    let base_working_dir = match &options.base_dir {
+        Some(dir) => dir.clone(),
+        None => env::current_dir().context("Failed to get current directory")?,
+    };
+
+    match &options.name_or_path {
+        None => {
+            // Case 1: `hpm init` - initialize in current directory
+            let dir_name = base_working_dir
+                .file_name()
+                .context("Failed to get directory name")?
+                .to_string_lossy()
+                .to_string();
+            let package_name = convert_to_kebab_case(&dir_name);
+            Ok((base_working_dir, package_name, false))
+        }
+        Some(name_or_path) => {
+            let path = Path::new(name_or_path);
+
+            if path.is_absolute() || name_or_path.contains('/') || name_or_path.contains('\\') {
+                // Case 3: `hpm init <directory_path>` - absolute or relative path
+                let target_dir = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    base_working_dir.join(path)
+                };
+
+                let package_name = target_dir
+                    .file_name()
+                    .context("Failed to get directory name from path")?
+                    .to_string_lossy()
+                    .to_string();
+                let package_name = convert_to_kebab_case(&package_name);
+
+                let dir_exists = target_dir.exists();
+                Ok((target_dir, package_name, !dir_exists))
+            } else {
+                // Case 2: `hpm init <package_name>` - create directory with this name
+                let package_name = convert_to_kebab_case(name_or_path);
+                let target_dir = base_working_dir.join(&package_name);
+
+                if target_dir.exists() {
+                    return Err(anyhow::anyhow!(
+                        "Directory '{}' already exists. Choose a different name or remove the existing directory.",
+                        package_name
+                    ));
+                }
+
+                Ok((target_dir, package_name, true))
+            }
+        }
+    }
+}
+
+fn is_valid_houdini_package_structure(dir: &Path) -> Result<bool> {
+    // Check if directory is empty or contains typical Houdini package structure
+    let entries: Vec<_> = fs::read_dir(dir)
+        .context("Failed to read directory")?
+        .collect::<Result<Vec<_>, _>>()
+        .context("Failed to collect directory entries")?;
+
+    if entries.is_empty() {
+        return Ok(true); // Empty directory is valid
+    }
+
+    // Check for typical Houdini package directories/files
+    let valid_dirs = [
+        "otls",
+        "python",
+        "scripts",
+        "presets",
+        "config",
+        "tests",
+        "dso",
+        "python_panels",
+        "viewer_states",
+    ];
+    let valid_files = ["package.json", "README.md", ".gitignore", "OPlibraries"];
+
+    for entry in &entries {
+        let file_name = entry.file_name().to_string_lossy().to_string();
+
+        // Skip hidden files except for .gitignore
+        if file_name.starts_with('.') && file_name != ".gitignore" {
+            continue;
+        }
+
+        let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+        let is_valid = if is_dir {
+            valid_dirs.contains(&file_name.as_str())
+        } else {
+            valid_files.contains(&file_name.as_str())
+        };
+
+        if !is_valid {
+            // Allow any files that look like Houdini-related files
+            if file_name.ends_with(".hda")
+                || file_name.ends_with(".otl")
+                || file_name.ends_with(".hip")
+            {
+                continue;
+            }
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
 fn convert_to_kebab_case(name: &str) -> String {
@@ -291,7 +393,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         let options = InitOptions {
-            name: Some("test-bare-package".to_string()),
+            name_or_path: Some("test-bare-package".to_string()),
             description: Some("Test bare package".to_string()),
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
@@ -337,7 +439,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         let options = InitOptions {
-            name: Some("test-standard-package".to_string()),
+            name_or_path: Some("test-standard-package".to_string()),
             description: Some("A comprehensive test package".to_string()),
             author: Some("Test Author <test@example.com>".to_string()),
             version: "2.1.0".to_string(),
@@ -420,7 +522,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         let options = InitOptions {
-            name: Some("minimal-pkg".to_string()),
+            name_or_path: Some("minimal-pkg".to_string()),
             description: None, // No description
             author: None,      // No author
             version: "0.1.0".to_string(),
@@ -457,7 +559,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         let options = InitOptions {
-            name: Some("special-chars-test".to_string()),
+            name_or_path: Some("special-chars-test".to_string()),
             description: Some("Package with \"quotes\" & special chars!".to_string()),
             author: Some("Author Name <email+test@example.com>".to_string()),
             version: "1.0.0".to_string(),
@@ -490,7 +592,7 @@ mod tests {
         fs::create_dir(&package_dir).unwrap();
 
         let options = InitOptions {
-            name: Some("existing-pkg".to_string()),
+            name_or_path: Some("existing-pkg".to_string()),
             description: Some("Test package".to_string()),
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
@@ -518,7 +620,7 @@ mod tests {
         fs::create_dir(&test_dir).unwrap();
 
         let options = InitOptions {
-            name: None, // No name provided - should derive from directory name
+            name_or_path: None, // No name provided - should derive from directory name
             description: Some("Test package".to_string()),
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
@@ -534,6 +636,179 @@ mod tests {
 
         // Should derive name from directory name and succeed
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_init_current_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_dir = temp_dir.path().join("my-houdini-package");
+        fs::create_dir(&test_dir).unwrap();
+
+        let options = InitOptions {
+            name_or_path: None, // No name - should init in current directory
+            description: Some("Test current directory init".to_string()),
+            author: Some("Test Author <test@example.com>".to_string()),
+            version: "1.0.0".to_string(),
+            license: "MIT".to_string(),
+            houdini_min: None,
+            houdini_max: None,
+            bare: false,
+            vcs: "none".to_string(),
+            base_dir: Some(test_dir.clone()),
+        };
+
+        let result = init_package(options).await;
+        assert!(result.is_ok());
+        let package_name = result.unwrap();
+        assert_eq!(package_name, "my-houdini-package");
+
+        // Verify hpm.toml was created in the current directory
+        assert!(test_dir.join("hpm.toml").exists());
+        assert!(test_dir.join("README.md").exists());
+    }
+
+    #[tokio::test]
+    async fn test_init_with_absolute_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let target_path = temp_dir.path().join("absolute-path-package");
+
+        let options = InitOptions {
+            name_or_path: Some(target_path.to_string_lossy().to_string()),
+            description: Some("Test absolute path init".to_string()),
+            author: Some("Test Author <test@example.com>".to_string()),
+            version: "1.0.0".to_string(),
+            license: "MIT".to_string(),
+            houdini_min: None,
+            houdini_max: None,
+            bare: false,
+            vcs: "none".to_string(),
+            base_dir: Some(temp_dir.path().to_path_buf()),
+        };
+
+        let result = init_package(options).await;
+        assert!(result.is_ok());
+        let package_name = result.unwrap();
+        assert_eq!(package_name, "absolute-path-package");
+
+        // Verify directory was created
+        assert!(target_path.exists());
+        assert!(target_path.join("hpm.toml").exists());
+    }
+
+    #[tokio::test]
+    async fn test_init_with_relative_path() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let options = InitOptions {
+            name_or_path: Some("subfolder/relative-package".to_string()),
+            description: Some("Test relative path init".to_string()),
+            author: Some("Test Author <test@example.com>".to_string()),
+            version: "1.0.0".to_string(),
+            license: "MIT".to_string(),
+            houdini_min: None,
+            houdini_max: None,
+            bare: false,
+            vcs: "none".to_string(),
+            base_dir: Some(temp_dir.path().to_path_buf()),
+        };
+
+        let result = init_package(options).await;
+        assert!(result.is_ok());
+        let package_name = result.unwrap();
+        assert_eq!(package_name, "relative-package");
+
+        // Verify nested directory structure was created
+        let target_path = temp_dir.path().join("subfolder").join("relative-package");
+        assert!(target_path.exists());
+        assert!(target_path.join("hpm.toml").exists());
+    }
+
+    #[tokio::test]
+    async fn test_init_existing_hpm_toml_error() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create an existing hpm.toml file
+        let hpm_toml_path = temp_dir.path().join("hpm.toml");
+        fs::write(&hpm_toml_path, "# existing hpm.toml").unwrap();
+
+        let options = InitOptions {
+            name_or_path: None,
+            description: Some("Test package".to_string()),
+            author: Some("Test Author <test@example.com>".to_string()),
+            version: "1.0.0".to_string(),
+            license: "MIT".to_string(),
+            houdini_min: None,
+            houdini_max: None,
+            bare: false,
+            vcs: "none".to_string(),
+            base_dir: Some(temp_dir.path().to_path_buf()),
+        };
+
+        let result = init_package(options).await;
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("hpm.toml already exists"));
+    }
+
+    #[tokio::test]
+    async fn test_init_invalid_houdini_structure_error() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create some non-Houdini files
+        fs::write(temp_dir.path().join("invalid_file.txt"), "invalid").unwrap();
+        fs::create_dir(temp_dir.path().join("invalid_dir")).unwrap();
+
+        let options = InitOptions {
+            name_or_path: None,
+            description: Some("Test package".to_string()),
+            author: Some("Test Author <test@example.com>".to_string()),
+            version: "1.0.0".to_string(),
+            license: "MIT".to_string(),
+            houdini_min: None,
+            houdini_max: None,
+            bare: false,
+            vcs: "none".to_string(),
+            base_dir: Some(temp_dir.path().to_path_buf()),
+        };
+
+        let result = init_package(options).await;
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("does not have a valid Houdini package structure"));
+    }
+
+    #[tokio::test]
+    async fn test_init_valid_houdini_structure_success() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_dir = temp_dir.path().join("valid-houdini-package");
+        fs::create_dir(&test_dir).unwrap();
+
+        // Create valid Houdini package directories
+        fs::create_dir(test_dir.join("otls")).unwrap();
+        fs::create_dir(test_dir.join("python")).unwrap();
+        fs::write(test_dir.join("package.json"), "{}").unwrap();
+
+        let options = InitOptions {
+            name_or_path: None,
+            description: Some("Test package".to_string()),
+            author: Some("Test Author <test@example.com>".to_string()),
+            version: "1.0.0".to_string(),
+            license: "MIT".to_string(),
+            houdini_min: None,
+            houdini_max: None,
+            bare: false,
+            vcs: "none".to_string(),
+            base_dir: Some(test_dir.clone()),
+        };
+
+        let result = init_package(options).await;
+        if let Err(e) = &result {
+            eprintln!("Test error: {}", e);
+        }
+        assert!(result.is_ok());
+
+        // Verify hpm.toml was created
+        assert!(test_dir.join("hpm.toml").exists());
     }
 
     #[test]

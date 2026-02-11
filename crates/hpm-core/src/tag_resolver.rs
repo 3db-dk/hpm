@@ -56,7 +56,10 @@ impl TagResolver {
         let provider = GitProvider::from_url(url);
         let (owner, repo) = parse_owner_repo(url)?;
 
-        info!("Resolving tag '{}' for {}/{} via {:?}", tag, owner, repo, provider);
+        info!(
+            "Resolving tag '{}' for {}/{} via {:?}",
+            tag, owner, repo, provider
+        );
 
         match provider {
             GitProvider::GitHub => self.resolve_github(&owner, &repo, tag).await,
@@ -106,7 +109,9 @@ impl TagResolver {
         // For annotated tags, the object type is "tag" and we need to dereference
         if git_ref.object.object_type == "tag" {
             debug!("Annotated tag detected, dereferencing...");
-            return self.dereference_github_tag(owner, repo, &git_ref.object.sha).await;
+            return self
+                .dereference_github_tag(owner, repo, &git_ref.object.sha)
+                .await;
         }
 
         Ok(git_ref.object.sha)
@@ -254,13 +259,11 @@ impl Default for TagResolver {
 /// Parse owner and repository name from a Git URL.
 fn parse_owner_repo(url: &str) -> Result<(String, String), TagResolveError> {
     // Normalize URL: remove trailing slashes and .git suffix
-    let normalized = url
-        .trim_end_matches('/')
-        .trim_end_matches(".git");
+    let normalized = url.trim_end_matches('/').trim_end_matches(".git");
 
     // Parse as URL to extract path
-    let parsed = url::Url::parse(normalized)
-        .map_err(|e| TagResolveError::InvalidUrl(e.to_string()))?;
+    let parsed =
+        url::Url::parse(normalized).map_err(|e| TagResolveError::InvalidUrl(e.to_string()))?;
 
     let path = parsed.path().trim_start_matches('/');
     let parts: Vec<&str> = path.split('/').collect();

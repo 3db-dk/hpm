@@ -266,16 +266,23 @@ impl ProjectManager {
         }
 
         // Add or update the dependency
-        let deps_table = doc["dependencies"]
-            .as_table_mut()
-            .ok_or_else(|| ProjectError::ManifestParse("[dependencies] is not a table".to_string()))?;
+        let deps_table = doc["dependencies"].as_table_mut().ok_or_else(|| {
+            ProjectError::ManifestParse("[dependencies] is not a table".to_string())
+        })?;
 
         let version_str = spec.version_req.as_str();
 
         // Use simple string format for simple version specs, inline table for complex ones
-        if version_str == "*" || version_str.starts_with('^') || version_str.starts_with('~')
-            || version_str.starts_with('>') || version_str.starts_with('<')
-            || version_str.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        if version_str == "*"
+            || version_str.starts_with('^')
+            || version_str.starts_with('~')
+            || version_str.starts_with('>')
+            || version_str.starts_with('<')
+            || version_str
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit())
+        {
             deps_table[&spec.name] = toml_edit::value(version_str);
         } else {
             // For complex specs, use inline table
@@ -288,7 +295,10 @@ impl ProjectManager {
         std::fs::write(manifest_path, doc.to_string())
             .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
 
-        info!("Updated hpm.toml with dependency: {} = \"{}\"", spec.name, version_str);
+        info!(
+            "Updated hpm.toml with dependency: {} = \"{}\"",
+            spec.name, version_str
+        );
         Ok(())
     }
 

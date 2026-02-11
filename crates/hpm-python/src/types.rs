@@ -245,16 +245,20 @@ pub struct VenvMetadata {
     pub hash: String,
     pub dependency_set: ResolvedDependencySet,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    pub last_used: Option<chrono::DateTime<chrono::Utc>>,
     pub used_by_packages: Vec<String>,
     pub path: PathBuf,
 }
 
 impl VenvMetadata {
     pub fn new(hash: String, dependency_set: ResolvedDependencySet, path: PathBuf) -> Self {
+        let now = chrono::Utc::now();
         Self {
             hash,
             dependency_set,
-            created_at: chrono::Utc::now(),
+            created_at: now,
+            last_used: Some(now),
             used_by_packages: Vec::new(),
             path,
         }

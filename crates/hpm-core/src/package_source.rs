@@ -62,29 +62,34 @@ impl PackageSource {
     ///
     /// # Errors
     /// Returns an error if the URL or version is invalid.
-    pub fn git(url: impl Into<String>, version: impl Into<String>) -> Result<Self, PackageSourceError> {
+    pub fn git(
+        url: impl Into<String>,
+        version: impl Into<String>,
+    ) -> Result<Self, PackageSourceError> {
         let url = url.into();
         let version = version.into();
 
         // Validate URL has a reasonable format
         if !url.starts_with("https://") && !url.starts_with("http://") {
-            return Err(PackageSourceError::InvalidGitUrl(
-                format!("URL must start with https:// or http://: {}", url)
-            ));
+            return Err(PackageSourceError::InvalidGitUrl(format!(
+                "URL must start with https:// or http://: {}",
+                url
+            )));
         }
 
         // Validate version format
         if version.is_empty() {
             return Err(PackageSourceError::InvalidVersion(
-                "Version cannot be empty".to_string()
+                "Version cannot be empty".to_string(),
             ));
         }
 
         // Version should be a valid semver-like string
         if version.starts_with('.') || version.ends_with('.') {
-            return Err(PackageSourceError::InvalidVersion(
-                format!("Version has invalid format: {}", version)
-            ));
+            return Err(PackageSourceError::InvalidVersion(format!(
+                "Version has invalid format: {}",
+                version
+            )));
         }
 
         Ok(PackageSource::Git { url, version })
@@ -200,7 +205,9 @@ pub enum GitProvider {
     GitHub,
     GitLab,
     /// Gitea instance (including self-hosted)
-    Gitea { host: String },
+    Gitea {
+        host: String,
+    },
     /// Codeberg (runs on Gitea)
     Codeberg,
     Bitbucket,
@@ -252,9 +259,7 @@ impl GitProvider {
         version: &str,
     ) -> Result<String, PackageSourceError> {
         // Normalize URL (remove trailing slashes and .git)
-        let base_url = repo_url
-            .trim_end_matches('/')
-            .trim_end_matches(".git");
+        let base_url = repo_url.trim_end_matches('/').trim_end_matches(".git");
 
         // Expected asset filename
         let asset_name = format!("{}-{}.zip", package_name, version);
@@ -262,19 +267,31 @@ impl GitProvider {
         match self {
             GitProvider::GitHub => {
                 // GitHub: https://github.com/{owner}/{repo}/releases/download/{tag}/{asset}
-                Ok(format!("{}/releases/download/{}/{}", base_url, tag, asset_name))
+                Ok(format!(
+                    "{}/releases/download/{}/{}",
+                    base_url, tag, asset_name
+                ))
             }
             GitProvider::GitLab => {
                 // GitLab: https://gitlab.com/{owner}/{repo}/-/releases/{tag}/downloads/{asset}
-                Ok(format!("{}/-/releases/{}/downloads/{}", base_url, tag, asset_name))
+                Ok(format!(
+                    "{}/-/releases/{}/downloads/{}",
+                    base_url, tag, asset_name
+                ))
             }
             GitProvider::Gitea { .. } => {
                 // Gitea: https://{host}/{owner}/{repo}/releases/download/{tag}/{asset}
-                Ok(format!("{}/releases/download/{}/{}", base_url, tag, asset_name))
+                Ok(format!(
+                    "{}/releases/download/{}/{}",
+                    base_url, tag, asset_name
+                ))
             }
             GitProvider::Codeberg => {
                 // Codeberg (Gitea): https://codeberg.org/{owner}/{repo}/releases/download/{tag}/{asset}
-                Ok(format!("{}/releases/download/{}/{}", base_url, tag, asset_name))
+                Ok(format!(
+                    "{}/releases/download/{}/{}",
+                    base_url, tag, asset_name
+                ))
             }
             GitProvider::Bitbucket => {
                 // Bitbucket: https://bitbucket.org/{owner}/{repo}/downloads/{asset}
@@ -283,7 +300,10 @@ impl GitProvider {
             }
             GitProvider::Unknown => {
                 // For unknown providers, try Gitea-style URL as a fallback
-                Ok(format!("{}/releases/download/{}/{}", base_url, tag, asset_name))
+                Ok(format!(
+                    "{}/releases/download/{}/{}",
+                    base_url, tag, asset_name
+                ))
             }
         }
     }
@@ -301,9 +321,7 @@ impl GitProvider {
     /// The URL to download the source archive.
     pub fn archive_url(&self, repo_url: &str, commit: &str) -> Result<String, PackageSourceError> {
         // Normalize URL (remove trailing slashes and .git)
-        let base_url = repo_url
-            .trim_end_matches('/')
-            .trim_end_matches(".git");
+        let base_url = repo_url.trim_end_matches('/').trim_end_matches(".git");
 
         match self {
             GitProvider::GitHub => {
@@ -312,11 +330,11 @@ impl GitProvider {
             }
             GitProvider::GitLab => {
                 // GitLab: https://gitlab.com/{owner}/{repo}/-/archive/{commit}/{repo}-{commit}.zip
-                let repo_name = base_url
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or("repo");
-                Ok(format!("{}/-/archive/{}/{}-{}.zip", base_url, commit, repo_name, commit))
+                let repo_name = base_url.rsplit('/').next().unwrap_or("repo");
+                Ok(format!(
+                    "{}/-/archive/{}/{}-{}.zip",
+                    base_url, commit, repo_name, commit
+                ))
             }
             GitProvider::Gitea { .. } | GitProvider::Codeberg => {
                 // Gitea/Codeberg: https://{host}/{owner}/{repo}/archive/{commit}.zip

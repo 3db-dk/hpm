@@ -588,7 +588,9 @@ mod tests {
 
     /// Strategy to generate valid package names
     fn package_name_strategy() -> impl Strategy<Value = String> {
-        r"[a-z][a-z0-9-]{0,20}".prop_filter("no double dashes", |s| !s.contains("--") && !s.ends_with('-'))
+        r"[a-z][a-z0-9-]{0,20}".prop_filter("no double dashes", |s| {
+            !s.contains("--") && !s.ends_with('-')
+        })
     }
 
     /// Strategy to generate versions
@@ -635,10 +637,10 @@ mod tests {
 
             // Ordering should be consistent with equality
             if pkg1 == pkg2 {
-                prop_assert!(!(pkg1 < pkg2));
-                prop_assert!(!(pkg1 > pkg2));
+                prop_assert!(pkg1 >= pkg2);
+                prop_assert!(pkg1 <= pkg2);
             } else {
-                prop_assert!(pkg1 < pkg2 || pkg1 > pkg2);
+                prop_assert!(pkg1 != pkg2);
             }
 
             // Same name - version determines order

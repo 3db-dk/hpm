@@ -282,7 +282,8 @@ package-a = { git = "https://github.com/example/package-a", version = "1.0.0" }
         std::fs::write(
             project_dir.join("hpm.toml"),
             "this is not valid { toml [ syntax",
-        ).unwrap();
+        )
+        .unwrap();
 
         let discovery = ProjectDiscovery::new(projects_config);
         let result = discovery.find_projects();

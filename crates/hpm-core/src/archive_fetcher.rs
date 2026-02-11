@@ -120,9 +120,18 @@ fn find_archive_prefix_sync(
 
 /// Validate that a path doesn't contain traversal attempts.
 fn validate_path_safety_sync(path: &Path) -> Result<(), FetchError> {
+    // Check for backslash-based traversal (e.g. from Windows-style archive entries)
+    let path_str = path.to_string_lossy();
+    if path_str.contains("..\\") || path_str.contains("../") || path_str == ".." {
+        return Err(FetchError::PathTraversalDetected(
+            path.display().to_string(),
+        ));
+    }
     for component in path.components() {
         if matches!(component, std::path::Component::ParentDir) {
-            return Err(FetchError::PathTraversalDetected(path.display().to_string()));
+            return Err(FetchError::PathTraversalDetected(
+                path.display().to_string(),
+            ));
         }
     }
     Ok(())
@@ -250,10 +259,8 @@ impl ArchiveFetcher {
     /// * `packages_dir` - Directory for extracted packages
     pub fn new(cache_dir: PathBuf, packages_dir: PathBuf) -> Result<Self, FetchError> {
         // Ensure directories exist
-        std::fs::create_dir_all(&cache_dir)
-            .map_err(FetchError::CacheDirectoryError)?;
-        std::fs::create_dir_all(&packages_dir)
-            .map_err(FetchError::CacheDirectoryError)?;
+        std::fs::create_dir_all(&cache_dir).map_err(FetchError::CacheDirectoryError)?;
+        std::fs::create_dir_all(&packages_dir).map_err(FetchError::CacheDirectoryError)?;
 
         let http_client = reqwest::Client::builder()
             .user_agent("hpm/0.1.0")
@@ -284,9 +291,7 @@ impl ArchiveFetcher {
             PackageSource::Git { url, version } => {
                 self.fetch_git_release(url, version, package_name).await
             }
-            PackageSource::Path { path } => {
-                self.fetch_from_path(path, package_name).await
-            }
+            PackageSource::Path { path } => self.fetch_from_path(path, package_name).await,
         }
     }
 
@@ -305,11 +310,12 @@ impl ArchiveFetcher {
             info!("Package {} already cached at {:?}", cache_key, package_dir);
             // Use cached checksum to avoid expensive directory walk
             let dir_for_checksum = package_dir.clone();
-            let checksum = tokio::task::spawn_blocking(move || {
-                get_directory_checksum_sync(&dir_for_checksum)
-            })
-            .await
-            .map_err(|e| FetchError::ExtractionError(format!("Checksum task join error: {}", e)))??;
+            let checksum =
+                tokio::task::spawn_blocking(move || get_directory_checksum_sync(&dir_for_checksum))
+                    .await
+                    .map_err(|e| {
+                        FetchError::ExtractionError(format!("Checksum task join error: {}", e))
+                    })??;
             return Ok(FetchResult {
                 package_path: package_dir,
                 checksum,
@@ -386,11 +392,7 @@ impl ArchiveFetcher {
     }
 
     /// Download an archive from a URL.
-    async fn download_archive(
-        &self,
-        url: &str,
-        cache_key: &str,
-    ) -> Result<PathBuf, FetchError> {
+    async fn download_archive(&self, url: &str, cache_key: &str) -> Result<PathBuf, FetchError> {
         let archive_path = self.cache_dir.join(format!("{}.zip", cache_key));
 
         // Check if already downloaded
@@ -457,7 +459,11 @@ impl ArchiveFetcher {
     }
 
     /// Remove a cached package.
-    pub fn remove_cached(&self, source: &PackageSource, package_name: &str) -> Result<bool, FetchError> {
+    pub fn remove_cached(
+        &self,
+        source: &PackageSource,
+        package_name: &str,
+    ) -> Result<bool, FetchError> {
         if let Some(path) = self.cache_path(source, package_name) {
             if matches!(source, PackageSource::Git { .. }) {
                 std::fs::remove_dir_all(&path)?;
@@ -523,7 +529,8 @@ mod tests {
         let fetcher = ArchiveFetcher::new(
             temp_dir.path().join("cache"),
             temp_dir.path().join("packages"),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Create a test package directory
         let pkg_dir = temp_dir.path().join("my-package");
@@ -545,7 +552,8 @@ mod tests {
         let fetcher = ArchiveFetcher::new(
             temp_dir.path().join("cache"),
             temp_dir.path().join("packages"),
-        ).unwrap();
+        )
+        .unwrap();
 
         let source = PackageSource::path("/nonexistent/path");
         let result = fetcher.fetch(&source, "my-package").await;
@@ -558,7 +566,8 @@ mod tests {
         let fetcher = ArchiveFetcher::new(
             temp_dir.path().join("cache"),
             temp_dir.path().join("packages"),
-        ).unwrap();
+        )
+        .unwrap();
 
         let source = PackageSource::path("/definitely/does/not/exist/anywhere");
         let result = fetcher.fetch(&source, "test-pkg").await;

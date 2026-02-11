@@ -206,14 +206,22 @@ impl StorageManager {
         let name = &manifest.package.name;
         let version = &manifest.package.version;
 
-        info!("Installing {}@{} from {}", name, version, source_path.display());
+        info!(
+            "Installing {}@{} from {}",
+            name,
+            version,
+            source_path.display()
+        );
 
         // Create the target directory
         let target_dir = self.config.package_dir(name, version);
 
         // Check if already installed
         if target_dir.exists() {
-            warn!("Package {}@{} already exists, removing old version", name, version);
+            warn!(
+                "Package {}@{} already exists, removing old version",
+                name, version
+            );
             std::fs::remove_dir_all(&target_dir)
                 .map_err(|e| StorageError::DirectoryRemoval(e.to_string()))?;
         }
@@ -232,7 +240,9 @@ impl StorageManager {
             version: version.clone(),
             manifest,
             install_path: target_dir,
-            installed_at: metadata.created().unwrap_or_else(|_| std::time::SystemTime::now()),
+            installed_at: metadata
+                .created()
+                .unwrap_or_else(|_| std::time::SystemTime::now()),
         })
     }
 
@@ -265,8 +275,9 @@ impl StorageManager {
                     std::fs::create_dir_all(parent)
                         .map_err(|e| StorageError::DirectoryCreation(e.to_string()))?;
                 }
-                std::fs::copy(entry.path(), &target_path)
-                    .map_err(|e| StorageError::DirectoryRead(format!("Failed to copy file: {}", e)))?;
+                std::fs::copy(entry.path(), &target_path).map_err(|e| {
+                    StorageError::DirectoryRead(format!("Failed to copy file: {}", e))
+                })?;
             }
         }
 
@@ -281,7 +292,10 @@ impl StorageManager {
             .filter(|pkg| pkg.name == name && pkg.is_compatible_with(version_req))
             .max_by(|a, b| {
                 // Compare versions - prefer higher versions
-                match (semver::Version::parse(&a.version), semver::Version::parse(&b.version)) {
+                match (
+                    semver::Version::parse(&a.version),
+                    semver::Version::parse(&b.version),
+                ) {
                     (Ok(va), Ok(vb)) => va.cmp(&vb),
                     _ => a.version.cmp(&b.version),
                 }

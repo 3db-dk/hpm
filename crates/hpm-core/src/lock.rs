@@ -347,11 +347,7 @@ impl LockedDependency {
     /// * `checksum` - SHA256 checksum of the extracted package contents
     ///
     /// Note: The version is used both for the locked dependency and the package source.
-    pub fn from_git(
-        version: String,
-        url: String,
-        checksum: Option<String>,
-    ) -> Self {
+    pub fn from_git(version: String, url: String, checksum: Option<String>) -> Self {
         Self {
             version: version.clone(),
             checksum,
@@ -366,7 +362,11 @@ impl LockedDependency {
     /// * `version` - The resolved version (from package manifest)
     /// * `path` - Path to the package directory
     /// * `checksum` - SHA256 checksum of the package contents
-    pub fn from_path(version: String, path: impl Into<std::path::PathBuf>, checksum: Option<String>) -> Self {
+    pub fn from_path(
+        version: String,
+        path: impl Into<std::path::PathBuf>,
+        checksum: Option<String>,
+    ) -> Self {
         Self {
             version,
             checksum,
@@ -520,11 +520,7 @@ fn days_to_ymd(days: u64) -> (u32, u32, u32) {
 
 /// Get the current platform identifier
 fn current_platform() -> String {
-    format!(
-        "{}-{}",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    )
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
 #[cfg(test)]
@@ -560,9 +556,8 @@ mod tests {
 
     /// Strategy to generate valid version strings
     fn version_string_strategy() -> impl Strategy<Value = String> {
-        (0u32..100, 0u32..100, 0u32..100).prop_map(|(major, minor, patch)| {
-            format!("{}.{}.{}", major, minor, patch)
-        })
+        (0u32..100, 0u32..100, 0u32..100)
+            .prop_map(|(major, minor, patch)| format!("{}.{}.{}", major, minor, patch))
     }
 
     /// Strategy to generate Git URLs
@@ -582,12 +577,20 @@ mod tests {
     fn locked_dependency_strategy() -> impl Strategy<Value = LockedDependency> {
         prop_oneof![
             // Git dependency
-            (version_string_strategy(), git_url_strategy(), checksum_strategy())
+            (
+                version_string_strategy(),
+                git_url_strategy(),
+                checksum_strategy()
+            )
                 .prop_map(|(version, url, checksum)| {
                     LockedDependency::from_git(version, url, checksum)
                 }),
             // Path dependency
-            (version_string_strategy(), "[a-z/]{1,20}", checksum_strategy())
+            (
+                version_string_strategy(),
+                "[a-z/]{1,20}",
+                checksum_strategy()
+            )
                 .prop_map(|(version, path, checksum)| {
                     LockedDependency::from_path(version, format!("../{}", path), checksum)
                 }),
@@ -622,8 +625,16 @@ mod tests {
         (
             package_name_strategy(),
             version_string_strategy(),
-            prop::collection::btree_map(package_name_strategy(), locked_dependency_strategy(), 0..5),
-            prop::collection::btree_map(package_name_strategy(), locked_python_dependency_strategy(), 0..3),
+            prop::collection::btree_map(
+                package_name_strategy(),
+                locked_dependency_strategy(),
+                0..5,
+            ),
+            prop::collection::btree_map(
+                package_name_strategy(),
+                locked_python_dependency_strategy(),
+                0..3,
+            ),
         )
             .prop_map(|(name, version, deps, py_deps)| {
                 let mut lock = LockFile::new(name, version);

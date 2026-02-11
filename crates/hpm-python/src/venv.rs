@@ -203,7 +203,7 @@ impl VenvManager {
         let hash = resolved_deps.hash();
         let metadata_path = venv_path.join("metadata.json");
 
-        let metadata = if metadata_path.exists() {
+        let mut metadata = if metadata_path.exists() {
             // Load existing metadata
             let content = fs::read_to_string(&metadata_path)
                 .await
@@ -214,6 +214,8 @@ impl VenvManager {
             // Create new metadata
             VenvMetadata::new(hash, resolved_deps.clone(), venv_path.to_path_buf())
         };
+
+        metadata.last_used = Some(chrono::Utc::now());
 
         // Write updated metadata
         let metadata_json =
@@ -283,7 +285,7 @@ impl VenvManager {
                         path: venv_meta.path,
                         size,
                         created_at: venv_meta.created_at,
-                        last_used: None, // TODO: Track last used time
+                        last_used: venv_meta.last_used,
                     });
                 }
             }

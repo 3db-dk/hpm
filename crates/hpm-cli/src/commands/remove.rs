@@ -118,7 +118,6 @@ pub async fn remove_package(package_name: String, manifest_path: Option<PathBuf>
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

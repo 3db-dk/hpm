@@ -294,8 +294,7 @@ impl DependencyResolver {
                 continue;
             }
 
-            let (dep_id, dep_package) =
-                self.resolve_dependency(dep_name, dep_spec, installed_map);
+            let (dep_id, dep_package) = self.resolve_dependency(dep_name, dep_spec, installed_map);
 
             // Add dependency edge from parent
             graph.add_dependency(parent_id, &dep_id);
@@ -305,7 +304,7 @@ impl DependencyResolver {
                 graph,
                 dep_id.clone(),
                 dep_package.cloned(),
-                None, // no project path for transitive deps
+                None,  // no project path for transitive deps
                 false, // not a root
             );
 
