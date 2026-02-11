@@ -203,48 +203,10 @@ pub async fn add_packages(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::test_fixtures::{write_test_manifest, TestManifestOpts};
     use hpm_package::PackageManifest;
     use proptest::prelude::*;
-    use std::env;
-    use std::path::Path;
     use tempfile::TempDir;
-
-    /// Create a test hpm.toml file with basic package info
-    fn create_test_manifest(path: &Path) -> Result<()> {
-        let manifest_content = r#"[package]
-name = "test-package"
-version = "1.0.0"
-description = "A test package for HPM add"
-authors = ["Test Author <test@example.com>"]
-license = "MIT"
-
-[houdini]
-min_version = "20.0"
-"#;
-
-        std::fs::write(path.join("hpm.toml"), manifest_content)?;
-        Ok(())
-    }
-
-    // Keep only error-case tests not covered by property tests
-    #[test]
-    fn test_determine_manifest_path_no_manifest() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = determine_manifest_path(None);
-
-        env::set_current_dir(&original_dir).unwrap();
-
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("No hpm.toml found"));
-    }
-
-    // Property-based tests cover all path resolution, manifest loading, and dependency creation
-    // with random inputs for better coverage than hand-picked examples
 
     /// Strategy to generate valid file path components
     fn path_component_strategy() -> impl Strategy<Value = String> {
@@ -344,7 +306,7 @@ min_version = "20.0"
             }
 
             // Create manifest in the deepest directory
-            create_test_manifest(&current_path).unwrap();
+            write_test_manifest(&current_path, TestManifestOpts::default()).unwrap();
             let manifest_file = current_path.join("hpm.toml");
 
             // Test explicit file path resolution
@@ -437,7 +399,7 @@ min_version = "20.0"
                 test_path.push(part);
             }
             std::fs::create_dir_all(&test_path).unwrap();
-            create_test_manifest(&test_path).unwrap();
+            write_test_manifest(&test_path, TestManifestOpts::default()).unwrap();
 
             // Multiple calls should give consistent results
             let result1 = determine_manifest_path(Some(test_path.clone()));

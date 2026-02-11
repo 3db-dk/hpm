@@ -570,109 +570,22 @@ async fn generate_lock_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::test_fixtures::{write_test_manifest, TestManifestOpts};
     use std::env;
     use tempfile::TempDir;
-
-    /// Create a test hpm.toml file with basic package info and dependencies
-    fn create_test_manifest(path: &Path, include_python_deps: bool) -> Result<()> {
-        let mut manifest_content = String::from(
-            r#"[package]
-name = "test-package"
-version = "1.0.0"
-description = "A test package for HPM install"
-authors = ["Test Author <test@example.com>"]
-license = "MIT"
-
-[houdini]
-min_version = "20.0"
-
-[dependencies]
-utility-nodes = { git = "https://github.com/studio/utility-nodes", version = "1.0.0" }
-material-library = { path = "../material-library", optional = true }
-"#,
-        );
-
-        if include_python_deps {
-            manifest_content.push_str(
-                r#"
-[python_dependencies]
-numpy = ">=1.20.0"
-requests = { version = ">=2.25.0", extras = ["security"] }
-matplotlib = { version = "^3.5.0", optional = true }
-"#,
-            );
-        }
-
-        std::fs::write(path.join("hpm.toml"), manifest_content)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_determine_manifest_path_current_directory() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        // Create test manifest
-        create_test_manifest(temp_dir.path(), false).unwrap();
-
-        // Change to temp directory
-        env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = determine_manifest_path(None);
-
-        // Restore directory first
-        env::set_current_dir(original_dir).unwrap();
-
-        assert!(result.is_ok());
-        let manifest_path = result.unwrap();
-        assert!(manifest_path.ends_with("hpm.toml"));
-    }
-
-    #[test]
-    fn test_determine_manifest_path_explicit_file() {
-        let temp_dir = TempDir::new().unwrap();
-        create_test_manifest(temp_dir.path(), false).unwrap();
-
-        let manifest_path = temp_dir.path().join("hpm.toml");
-        let result = determine_manifest_path(Some(manifest_path.clone()));
-
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), manifest_path);
-    }
-
-    #[test]
-    fn test_determine_manifest_path_explicit_directory() {
-        let temp_dir = TempDir::new().unwrap();
-        create_test_manifest(temp_dir.path(), false).unwrap();
-
-        let result = determine_manifest_path(Some(temp_dir.path().to_path_buf()));
-
-        assert!(result.is_ok());
-        assert!(result.unwrap().ends_with("hpm.toml"));
-    }
-
-    #[test]
-    fn test_determine_manifest_path_no_manifest() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        // Change to temp directory without creating a manifest
-        env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = determine_manifest_path(None);
-
-        // Restore directory first
-        env::set_current_dir(original_dir).unwrap();
-
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("No hpm.toml found"));
-    }
 
     #[test]
     fn test_load_manifest_valid() {
         let temp_dir = TempDir::new().unwrap();
-        create_test_manifest(temp_dir.path(), true).unwrap();
+        write_test_manifest(
+            temp_dir.path(),
+            TestManifestOpts {
+                include_deps: true,
+                include_python_deps: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
         let result = load_manifest(&manifest_path);
@@ -692,7 +605,6 @@ matplotlib = { version = "^3.5.0", optional = true }
         let temp_dir = TempDir::new().unwrap();
         let manifest_path = temp_dir.path().join("hpm.toml");
 
-        // Create invalid TOML
         std::fs::write(&manifest_path, "invalid toml content [[[").unwrap();
 
         let result = load_manifest(&manifest_path);
@@ -706,7 +618,6 @@ matplotlib = { version = "^3.5.0", optional = true }
         let temp_dir = TempDir::new().unwrap();
         let manifest_path = temp_dir.path().join("hpm.toml");
 
-        // Create manifest with invalid package name
         let invalid_content = r#"[package]
 name = ""
 version = "1.0.0"

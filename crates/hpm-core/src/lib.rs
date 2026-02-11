@@ -241,8 +241,7 @@ pub use dependency::{
 };
 pub use discovery::{DiscoveredProject, DiscoveryError, ProjectDiscovery};
 pub use lock::{
-    DependencySource, LockError, LockFile, LockMetadata, LockPackageInfo, LockedDependency,
-    LockedPythonDependency,
+    LockError, LockFile, LockMetadata, LockPackageInfo, LockedDependency, LockedPythonDependency,
 };
 pub use package_source::{GitProvider, PackageSource, PackageSourceError};
 pub use project::{ProjectDependency, ProjectError, ProjectManager};

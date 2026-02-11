@@ -84,7 +84,7 @@ impl StorageManager {
     fn ensure_directories(&self) -> Result<(), StorageError> {
         self.config
             .ensure_directories()
-            .map_err(|e| StorageError::DirectoryCreation(e.to_string()))?;
+            .map_err(StorageError::DirectoryCreation)?;
         info!("Ensured storage directories exist");
         Ok(())
     }
@@ -134,11 +134,10 @@ impl StorageManager {
         let manifest_content = std::fs::read_to_string(&manifest_path)
             .map_err(|e| StorageError::ManifestRead(e.to_string()))?;
 
-        let manifest: PackageManifest = toml::from_str(&manifest_content)
-            .map_err(|e| StorageError::ManifestParse(e.to_string()))?;
+        let manifest: PackageManifest =
+            toml::from_str(&manifest_content).map_err(StorageError::ManifestParse)?;
 
-        let metadata = std::fs::metadata(&package_dir)
-            .map_err(|e| StorageError::MetadataRead(e.to_string()))?;
+        let metadata = std::fs::metadata(&package_dir).map_err(StorageError::MetadataRead)?;
 
         let installed_at = metadata.created().unwrap_or_else(|_| SystemTime::now());
 
@@ -200,8 +199,8 @@ impl StorageManager {
         let manifest_content = std::fs::read_to_string(&manifest_path)
             .map_err(|e| StorageError::ManifestRead(e.to_string()))?;
 
-        let manifest: PackageManifest = toml::from_str(&manifest_content)
-            .map_err(|e| StorageError::ManifestParse(e.to_string()))?;
+        let manifest: PackageManifest =
+            toml::from_str(&manifest_content).map_err(StorageError::ManifestParse)?;
 
         let name = &manifest.package.name;
         let version = &manifest.package.version;
@@ -222,8 +221,7 @@ impl StorageManager {
                 "Package {}@{} already exists, removing old version",
                 name, version
             );
-            std::fs::remove_dir_all(&target_dir)
-                .map_err(|e| StorageError::DirectoryRemoval(e.to_string()))?;
+            std::fs::remove_dir_all(&target_dir).map_err(StorageError::DirectoryRemoval)?;
         }
 
         // Copy the package directory
@@ -232,8 +230,7 @@ impl StorageManager {
         info!("Successfully installed {}@{}", name, version);
 
         // Return the installed package info
-        let metadata = std::fs::metadata(&target_dir)
-            .map_err(|e| StorageError::MetadataRead(e.to_string()))?;
+        let metadata = std::fs::metadata(&target_dir).map_err(StorageError::MetadataRead)?;
 
         Ok(InstalledPackage {
             name: name.clone(),
@@ -252,8 +249,7 @@ impl StorageManager {
         source: &std::path::Path,
         target: &std::path::Path,
     ) -> Result<(), StorageError> {
-        std::fs::create_dir_all(target)
-            .map_err(|e| StorageError::DirectoryCreation(e.to_string()))?;
+        std::fs::create_dir_all(target).map_err(StorageError::DirectoryCreation)?;
 
         for entry in walkdir::WalkDir::new(source)
             .min_depth(1)
@@ -267,13 +263,11 @@ impl StorageManager {
             let target_path = target.join(relative_path);
 
             if entry.file_type().is_dir() {
-                std::fs::create_dir_all(&target_path)
-                    .map_err(|e| StorageError::DirectoryCreation(e.to_string()))?;
+                std::fs::create_dir_all(&target_path).map_err(StorageError::DirectoryCreation)?;
             } else {
                 // Ensure parent directory exists
                 if let Some(parent) = target_path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| StorageError::DirectoryCreation(e.to_string()))?;
+                    std::fs::create_dir_all(parent).map_err(StorageError::DirectoryCreation)?;
                 }
                 std::fs::copy(entry.path(), &target_path).map_err(|e| {
                     StorageError::DirectoryRead(format!("Failed to copy file: {}", e))
@@ -313,22 +307,20 @@ impl StorageManager {
         }
 
         info!("Removing package: {}@{}", name, version);
-        std::fs::remove_dir_all(&package_dir)
-            .map_err(|e| StorageError::DirectoryRemoval(e.to_string()))?;
+        std::fs::remove_dir_all(&package_dir).map_err(StorageError::DirectoryRemoval)?;
 
         Ok(())
     }
 
-    pub async fn cleanup_unused(
+    /// Find orphaned packages that are not needed by any active project.
+    ///
+    /// Returns the list of orphaned package IDs along with all installed package identifiers.
+    async fn find_orphaned_packages(
         &self,
         projects_config: &ProjectsConfig,
-    ) -> Result<Vec<String>, StorageError> {
-        info!("Starting project-aware package cleanup");
-
+    ) -> Result<Vec<PackageId>, StorageError> {
         // 1. Get all installed packages
-        let all_installed = self
-            .list_installed()
-            .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
+        let all_installed = self.list_installed()?;
 
         if all_installed.is_empty() {
             info!("No packages installed - cleanup not needed");
@@ -394,6 +386,17 @@ impl StorageManager {
             .cloned()
             .collect();
 
+        Ok(orphaned_packages)
+    }
+
+    pub async fn cleanup_unused(
+        &self,
+        projects_config: &ProjectsConfig,
+    ) -> Result<Vec<String>, StorageError> {
+        info!("Starting project-aware package cleanup");
+
+        let orphaned_packages = self.find_orphaned_packages(projects_config).await?;
+
         if orphaned_packages.is_empty() {
             info!("No orphaned packages found - cleanup not needed");
             return Ok(vec![]);
@@ -404,7 +407,7 @@ impl StorageManager {
             orphaned_packages.len()
         );
 
-        // 7. Remove orphaned packages
+        // Remove orphaned packages
         let mut removed_packages = Vec::new();
         for package_id in orphaned_packages {
             match self
@@ -438,54 +441,7 @@ impl StorageManager {
     ) -> Result<Vec<String>, StorageError> {
         info!("Starting dry-run project-aware package cleanup");
 
-        // 1. Get all installed packages
-        let all_installed = self
-            .list_installed()
-            .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
-
-        if all_installed.is_empty() {
-            info!("No packages installed - cleanup not needed");
-            return Ok(vec![]);
-        }
-
-        info!(
-            "Found {} installed packages to analyze",
-            all_installed.len()
-        );
-
-        let project_discovery = ProjectDiscovery::new(projects_config.clone());
-        let projects = project_discovery
-            .find_projects()
-            .map_err(|e| StorageError::ProjectDiscovery(e.to_string()))?;
-
-        if projects.is_empty() {
-            info!("No HPM-managed projects found");
-            return Ok(vec![]);
-        }
-
-        let resolver = DependencyResolver::new(Arc::new(self.clone()));
-        let dependency_graph = resolver
-            .build_dependency_graph(&projects)
-            .await
-            .map_err(|e| StorageError::DependencyResolution(e.to_string()))?;
-
-        let root_packages: Vec<PackageId> = dependency_graph
-            .nodes()
-            .values()
-            .filter(|node| node.is_root)
-            .map(|node| node.id.clone())
-            .collect();
-
-        let needed_packages = dependency_graph.mark_reachable_from_roots(&root_packages);
-
-        // Find orphaned packages by comparing all installed packages to needed packages
-        let all_package_ids: HashSet<PackageId> =
-            all_installed.iter().map(PackageId::from).collect();
-
-        let orphaned_packages: Vec<PackageId> = all_package_ids
-            .difference(&needed_packages)
-            .cloned()
-            .collect();
+        let orphaned_packages = self.find_orphaned_packages(projects_config).await?;
 
         let orphaned_identifiers: Vec<String> =
             orphaned_packages.iter().map(|id| id.identifier()).collect();
@@ -650,22 +606,22 @@ impl StorageManager {
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     #[error("Directory creation failed: {0}")]
-    DirectoryCreation(String),
+    DirectoryCreation(#[source] std::io::Error),
 
     #[error("Directory read failed: {0}")]
     DirectoryRead(String),
 
     #[error("Directory removal failed: {0}")]
-    DirectoryRemoval(String),
+    DirectoryRemoval(#[source] std::io::Error),
 
     #[error("Manifest read failed: {0}")]
     ManifestRead(String),
 
     #[error("Manifest parse failed: {0}")]
-    ManifestParse(String),
+    ManifestParse(#[source] toml::de::Error),
 
     #[error("Metadata read failed: {0}")]
-    MetadataRead(String),
+    MetadataRead(#[source] std::io::Error),
 
     #[error("Package not found: {0}")]
     PackageNotFound(String),

@@ -127,92 +127,67 @@ pub async fn audit_packages(manifest_path: Option<PathBuf>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use crate::commands::test_fixtures::{write_test_manifest, TestManifestOpts};
     use tempfile::TempDir;
-
-    /// Create a test hpm.toml file with HTTPS dependencies
-    fn create_test_manifest_https(path: &Path) -> Result<()> {
-        let manifest_content = r#"[package]
-name = "test-package"
-version = "1.0.0"
-description = "A test package for HPM audit"
-authors = ["Test Author <test@example.com>"]
-license = "MIT"
-
-[houdini]
-min_version = "20.0"
-
-[dependencies]
-secure-dep = { git = "https://github.com/studio/secure-dep", version = "1.0.0" }
-"#;
-
-        std::fs::write(path.join("hpm.toml"), manifest_content)?;
-        Ok(())
-    }
-
-    /// Create a test hpm.toml file with HTTP dependencies
-    fn create_test_manifest_http(path: &Path) -> Result<()> {
-        let manifest_content = r#"[package]
-name = "test-package"
-version = "1.0.0"
-description = "A test package for HPM audit"
-authors = ["Test Author <test@example.com>"]
-license = "MIT"
-
-[houdini]
-min_version = "20.0"
-
-[dependencies]
-insecure-dep = { git = "http://github.com/studio/insecure-dep", version = "1.0.0" }
-"#;
-
-        std::fs::write(path.join("hpm.toml"), manifest_content)?;
-        Ok(())
-    }
 
     #[tokio::test]
     async fn test_audit_with_https_dependencies() {
         let temp_dir = TempDir::new().unwrap();
-        create_test_manifest_https(temp_dir.path()).unwrap();
+        write_test_manifest(
+            temp_dir.path(),
+            TestManifestOpts {
+                include_deps: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
-        // Create a lock file
         let lock = hpm_core::LockFile::new("test-package".to_string(), "1.0.0".to_string());
         lock.save(&temp_dir.path().join("hpm.lock")).unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
         let result = audit_packages(Some(manifest_path)).await;
 
-        // Should succeed without errors
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_audit_with_http_dependencies() {
         let temp_dir = TempDir::new().unwrap();
-        create_test_manifest_http(temp_dir.path()).unwrap();
+        write_test_manifest(
+            temp_dir.path(),
+            TestManifestOpts {
+                include_deps: true,
+                use_http: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
-        // Create a lock file
         let lock = hpm_core::LockFile::new("test-package".to_string(), "1.0.0".to_string());
         lock.save(&temp_dir.path().join("hpm.lock")).unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
         let result = audit_packages(Some(manifest_path)).await;
 
-        // Should still succeed (warnings are printed, not errors)
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_audit_no_lock_file() {
         let temp_dir = TempDir::new().unwrap();
-        create_test_manifest_https(temp_dir.path()).unwrap();
-
-        // Don't create a lock file
+        write_test_manifest(
+            temp_dir.path(),
+            TestManifestOpts {
+                include_deps: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
         let result = audit_packages(Some(manifest_path)).await;
 
-        // Should still succeed (missing lock file is a warning, not an error)
         assert!(result.is_ok());
     }
 }

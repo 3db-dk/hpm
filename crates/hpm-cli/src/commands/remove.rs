@@ -121,112 +121,23 @@ pub async fn remove_package(package_name: String, manifest_path: Option<PathBuf>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::test_fixtures::{write_test_manifest, TestManifestOpts};
     use hpm_package::DependencySpec;
     use indexmap::IndexMap;
     use std::env;
-    use std::path::Path;
     use tempfile::TempDir;
-
-    /// Create a test hpm.toml file with existing dependencies
-    fn create_test_manifest_with_dependencies(path: &Path) -> Result<()> {
-        let manifest_content = r#"[package]
-name = "test-package"
-version = "1.0.0"
-description = "A test package for HPM remove"
-authors = ["Test Author <test@example.com>"]
-license = "MIT"
-
-[houdini]
-min_version = "20.0"
-
-[dependencies]
-utility-nodes = { git = "https://github.com/studio/utility-nodes", version = "1.0.0" }
-material-library = { path = "../material-library", optional = true }
-"#;
-
-        std::fs::write(path.join("hpm.toml"), manifest_content)?;
-        Ok(())
-    }
-
-    /// Create a test hpm.toml file without dependencies
-    fn create_test_manifest_no_dependencies(path: &Path) -> Result<()> {
-        let manifest_content = r#"[package]
-name = "test-package"
-version = "1.0.0"
-description = "A test package for HPM remove"
-authors = ["Test Author <test@example.com>"]
-license = "MIT"
-
-[houdini]
-min_version = "20.0"
-"#;
-
-        std::fs::write(path.join("hpm.toml"), manifest_content)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_determine_manifest_path_current_directory() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        create_test_manifest_with_dependencies(temp_dir.path()).unwrap();
-
-        env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = determine_manifest_path(None);
-
-        // Restore original directory (ignore errors - may fail on Windows with parallel tests)
-        let _ = env::set_current_dir(original_dir);
-
-        assert!(result.is_ok());
-        let manifest_path = result.unwrap();
-        assert!(manifest_path.ends_with("hpm.toml"));
-    }
-
-    #[test]
-    fn test_determine_manifest_path_explicit_file() {
-        let temp_dir = TempDir::new().unwrap();
-        create_test_manifest_with_dependencies(temp_dir.path()).unwrap();
-
-        let manifest_path = temp_dir.path().join("hpm.toml");
-        let result = determine_manifest_path(Some(manifest_path.clone()));
-
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), manifest_path);
-    }
-
-    #[test]
-    fn test_determine_manifest_path_explicit_directory() {
-        let temp_dir = TempDir::new().unwrap();
-        create_test_manifest_with_dependencies(temp_dir.path()).unwrap();
-
-        let result = determine_manifest_path(Some(temp_dir.path().to_path_buf()));
-
-        assert!(result.is_ok());
-        assert!(result.unwrap().ends_with("hpm.toml"));
-    }
-
-    #[test]
-    fn test_determine_manifest_path_no_manifest() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = determine_manifest_path(None);
-
-        env::set_current_dir(original_dir).unwrap();
-
-        assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("No hpm.toml found"));
-    }
 
     #[test]
     fn test_load_manifest_valid() {
         let temp_dir = TempDir::new().unwrap();
-        create_test_manifest_with_dependencies(temp_dir.path()).unwrap();
+        write_test_manifest(
+            temp_dir.path(),
+            TestManifestOpts {
+                include_deps: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
         let result = load_manifest(&manifest_path);
@@ -296,23 +207,25 @@ min_version = "20.0"
     async fn test_remove_package_success() {
         let temp_dir = TempDir::new().unwrap();
 
-        create_test_manifest_with_dependencies(temp_dir.path()).unwrap();
+        write_test_manifest(
+            temp_dir.path(),
+            TestManifestOpts {
+                include_deps: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
-        // Use explicit manifest path instead of changing directories
         let manifest_path = temp_dir.path().join("hpm.toml");
 
-        // Test removing existing package - should succeed in removing from manifest
-        // The actual install call may fail due to lack of real package infrastructure,
-        // but the manifest modification should work
         let _result =
             remove_package("utility-nodes".to_string(), Some(manifest_path.clone())).await;
 
-        // Verify that the manifest was modified correctly by loading it
         let manifest = load_manifest(&manifest_path).unwrap();
 
         if let Some(dependencies) = &manifest.dependencies {
             assert!(!dependencies.contains_key("utility-nodes"));
-            assert!(dependencies.contains_key("material-library")); // Should still be there
+            assert!(dependencies.contains_key("material-library"));
         }
     }
 
@@ -320,11 +233,17 @@ min_version = "20.0"
     async fn test_remove_package_not_found() {
         let temp_dir = TempDir::new().unwrap();
 
-        create_test_manifest_with_dependencies(temp_dir.path()).unwrap();
+        write_test_manifest(
+            temp_dir.path(),
+            TestManifestOpts {
+                include_deps: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
 
-        // Try to remove package that doesn't exist
         let result = remove_package("non-existent-package".to_string(), Some(manifest_path)).await;
 
         assert!(result.is_err());
@@ -337,11 +256,10 @@ min_version = "20.0"
     async fn test_remove_package_no_dependencies_section() {
         let temp_dir = TempDir::new().unwrap();
 
-        create_test_manifest_no_dependencies(temp_dir.path()).unwrap();
+        write_test_manifest(temp_dir.path(), TestManifestOpts::default()).unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
 
-        // Try to remove package when there are no dependencies
         let result = remove_package("some-package".to_string(), Some(manifest_path)).await;
 
         assert!(result.is_err());
@@ -359,7 +277,6 @@ min_version = "20.0"
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(remove_package("some-package".to_string(), None));
 
-        // Restore original directory (ignore errors - may fail on Windows with parallel tests)
         let _ = env::set_current_dir(original_dir);
 
         assert!(result.is_err());

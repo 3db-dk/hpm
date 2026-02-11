@@ -484,29 +484,6 @@ async fn query_pypi_latest(_package_name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_determine_manifest_path() {
-        let temp_dir = TempDir::new().unwrap();
-        let manifest_path = temp_dir.path().join("hpm.toml");
-        std::fs::write(
-            &manifest_path,
-            "[package]\nname = \"test\"\nversion = \"1.0.0\"\n[houdini]\nmin_version = \"20.0\"",
-        )
-        .unwrap();
-
-        // Test with file path
-        let result = determine_manifest_path(Some(manifest_path.clone())).unwrap();
-        assert_eq!(result, manifest_path);
-
-        // Test with directory path
-        let result = determine_manifest_path(Some(temp_dir.path().to_path_buf())).unwrap();
-        assert_eq!(result, manifest_path);
-
-        // Test with None (would use current directory in real usage)
-        // This test would fail in practice since we're not in a project directory
-    }
 
     #[test]
     fn test_update_options_default() {

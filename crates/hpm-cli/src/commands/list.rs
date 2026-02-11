@@ -468,142 +468,26 @@ fn format_python_extras(spec: &PythonDependencySpec) -> String {
     }
 }
 
-/// Determine the path to the hpm.toml manifest file
-///
-/// Resolves the manifest file path using HPM's standard path resolution logic.
-/// This function provides consistent behavior across all HPM commands.
-///
-/// # Arguments
-///
-/// * `provided_path` - Optional path provided by user
-///   - `None`: Search for hpm.toml in current directory
-///   - `Some(file_path)`: Use the file directly if it exists
-///   - `Some(dir_path)`: Look for hpm.toml in the directory
-///
-/// # Returns
-///
-/// * `Ok(PathBuf)` - Resolved path to a valid hpm.toml file
-/// * `Err(anyhow::Error)` - Path resolution failed
-///
-/// # Errors
-///
-/// This function will return an error if:
-/// - No hpm.toml found in current directory (when `provided_path` is `None`)
-/// - Provided path does not exist or is not accessible
-/// - Directory path provided but contains no hpm.toml file
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::test_fixtures::{write_test_manifest, TestManifestOpts};
     use hpm_package::{DependencySpec, PythonDependencySpec};
     use std::env;
-    use std::path::Path;
     use tempfile::TempDir;
-
-    /// Create a test hpm.toml file with dependencies
-    ///
-    /// Helper function for creating test manifest files with configurable dependency sections.
-    /// Used across multiple test cases to ensure consistent test data.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Directory where hpm.toml should be created
-    /// * `include_dependencies` - Whether to include HPM dependencies section
-    /// * `include_python_deps` - Whether to include Python dependencies section
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` - Successfully created manifest file
-    /// * `Err(anyhow::Error)` - Failed to write manifest file
-    fn create_test_manifest(
-        path: &Path,
-        include_dependencies: bool,
-        include_python_deps: bool,
-    ) -> Result<()> {
-        let mut manifest_content = String::from(
-            r#"[package]
-name = "test-package"
-version = "1.0.0"
-description = "A test package for HPM list"
-authors = ["Test Author <test@example.com>"]
-license = "MIT"
-
-[houdini]
-min_version = "20.0"
-max_version = "20.5"
-"#,
-        );
-
-        if include_dependencies {
-            manifest_content.push_str(
-                r#"
-[dependencies]
-utility-nodes = { git = "https://github.com/studio/utility-nodes", version = "1.0.0" }
-material-library = { path = "../material-library", optional = true }
-geometry-tools = { git = "https://github.com/example/geometry-tools", version = "2.0.0" }
-"#,
-            );
-        }
-
-        if include_python_deps {
-            manifest_content.push_str(
-                r#"
-[python_dependencies]
-numpy = ">=1.20.0"
-requests = { version = ">=2.25.0", extras = ["security"] }
-matplotlib = { version = "^3.5.0", optional = true }
-"#,
-            );
-        }
-
-        std::fs::write(path.join("hpm.toml"), manifest_content)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_determine_manifest_path_current_directory() {
-        let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        create_test_manifest(temp_dir.path(), true, true).unwrap();
-
-        env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = determine_manifest_path(None);
-
-        env::set_current_dir(&original_dir).unwrap();
-
-        assert!(result.is_ok());
-        let manifest_path = result.unwrap();
-        assert!(manifest_path.ends_with("hpm.toml"));
-    }
-
-    #[test]
-    fn test_determine_manifest_path_explicit_file() {
-        let temp_dir = TempDir::new().unwrap();
-        create_test_manifest(temp_dir.path(), true, true).unwrap();
-
-        let manifest_path = temp_dir.path().join("hpm.toml");
-        let result = determine_manifest_path(Some(manifest_path.clone()));
-
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), manifest_path);
-    }
-
-    #[test]
-    fn test_determine_manifest_path_explicit_directory() {
-        let temp_dir = TempDir::new().unwrap();
-        create_test_manifest(temp_dir.path(), true, true).unwrap();
-
-        let result = determine_manifest_path(Some(temp_dir.path().to_path_buf()));
-
-        assert!(result.is_ok());
-        assert!(result.unwrap().ends_with("hpm.toml"));
-    }
 
     #[test]
     fn test_load_manifest_with_dependencies() {
         let temp_dir = TempDir::new().unwrap();
-        create_test_manifest(temp_dir.path(), true, true).unwrap();
+        write_test_manifest(
+            temp_dir.path(),
+            TestManifestOpts {
+                include_deps: true,
+                include_python_deps: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
         let result = load_manifest(&manifest_path);
@@ -614,7 +498,7 @@ matplotlib = { version = "^3.5.0", optional = true }
         assert_eq!(manifest.package.version, "1.0.0");
         assert!(manifest.dependencies.is_some());
         assert!(manifest.python_dependencies.is_some());
-        assert_eq!(manifest.dependencies.as_ref().unwrap().len(), 3);
+        assert_eq!(manifest.dependencies.as_ref().unwrap().len(), 2);
         assert_eq!(manifest.python_dependencies.as_ref().unwrap().len(), 3);
     }
 
@@ -727,16 +611,22 @@ matplotlib = { version = "^3.5.0", optional = true }
         let temp_dir = TempDir::new().unwrap();
         let original_dir = env::current_dir().unwrap();
 
-        create_test_manifest(temp_dir.path(), true, true).unwrap();
+        write_test_manifest(
+            temp_dir.path(),
+            TestManifestOpts {
+                include_deps: true,
+                include_python_deps: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         env::set_current_dir(temp_dir.path()).unwrap();
 
         let result = list_dependencies(None).await;
 
-        // Restore original directory (ignore errors - may fail on Windows with async tests)
         let _ = env::set_current_dir(&original_dir);
 
-        // Should complete successfully without errors
         assert!(result.is_ok());
     }
 
@@ -745,7 +635,7 @@ matplotlib = { version = "^3.5.0", optional = true }
         let temp_dir = TempDir::new().unwrap();
         let original_dir = env::current_dir().unwrap();
 
-        create_test_manifest(temp_dir.path(), false, false).unwrap();
+        write_test_manifest(temp_dir.path(), TestManifestOpts::default()).unwrap();
 
         env::set_current_dir(temp_dir.path()).unwrap();
 
@@ -753,7 +643,6 @@ matplotlib = { version = "^3.5.0", optional = true }
 
         env::set_current_dir(&original_dir).unwrap();
 
-        // Should complete successfully even with no dependencies
         assert!(result.is_ok());
     }
 

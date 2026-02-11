@@ -1,168 +1,22 @@
 //! HPM Error Handling
 //!
-//! This crate provides a comprehensive error handling system for HPM, implementing
-//! structured error types with rich context information and user-friendly error
-//! messages. The error system is designed to provide maximum information for
-//! debugging while maintaining clarity for end users.
+//! Structured error types for HPM with rich context and user-friendly messages.
 //!
-//! ## Error Architecture
+//! ## Error Hierarchy
 //!
-//! HPM uses a hierarchical error system where different modules define their own
-//! error types, which are then aggregated into a central [`HpmError`] enum:
+//! [`HpmError`] aggregates all HPM error categories:
 //!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────────────────────────┐
-//! │                           HPM Error Hierarchy                                   │
-//! ├─────────────────────────────────────────────────────────────────────────────────┤
-//! │                                                                                 │
-//! │  Application Layer Errors                                                      │
-//! │  ┌─────────────────────────────────────────────────────────────────────────┐   │
-//! │  │                         HpmError                                        │   │
-//! │  │  • PackageNotFound - Requested package doesn't exist                   │   │
-//! │  │  • Config - Configuration file issues                                  │   │
-//! │  │  • Resolver - Dependency resolution failures                           │   │
-//! │  │  • Install - Package installation problems                             │   │
-//! │  │  • Network - Registry connectivity issues                              │   │
-//! │  │  • Io - File system operation failures                                 │   │
-//! │  └─────────────────────────────────────────────────────────────────────────┘   │
-//! │                                    │                                           │
-//! │                                    ▼ (composed from)                          │
-//! │  Domain-Specific Errors                                                        │
-//! │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────────┐     │
-//! │  │ StorageError    │  │ RegistryError   │  │   ResolverError             │     │
-//! │  │ • DirectoryRead │  │ • PackageNotFound│  │   • NoSolution              │     │
-//! │  │ • ManifestParse │  │ • NetworkError  │  │   • VersionConflict         │     │
-//! │  │ • PackageNotFound│  │ • AuthFailed    │  │   • CircularDependency     │     │
-//! │  └─────────────────┘  └─────────────────┘  └─────────────────────────────┘     │
-//! │                                    │                                           │
-//! │                                    ▼ (built on)                               │
-//! │  System Errors                                                                 │
-//! │  ┌─────────────────────────────────────────────────────────────────────────┐   │
-//! │  │  • std::io::Error - File system operations                             │   │
-//! │  │  • reqwest::Error - HTTP requests and network operations               │   │
-//! │  │  • toml::de::Error - Configuration file parsing                        │   │
-//! │  │  • serde_json::Error - JSON serialization/deserialization            │   │
-//! │  └─────────────────────────────────────────────────────────────────────────┘   │
-//! └─────────────────────────────────────────────────────────────────────────────────┘
-//! ```
+//! - **PackageNotFound** - Package doesn't exist in registry or storage
+//! - **Config** - Configuration file issues (invalid values, malformed TOML)
+//! - **Resolver** - Dependency resolution failures (version conflicts, cycles)
+//! - **Install** - Package installation problems (extraction, validation)
+//! - **Network** - Registry connectivity issues (wraps `reqwest::Error`)
+//! - **Io** - File system operation failures (wraps `std::io::Error`)
 //!
-//! ## Core Error Types
+//! Domain-specific errors (`StorageError`, `ResolverError`, etc.) are defined
+//! in their respective crates and converted to `HpmError` at application boundaries.
 //!
-//! ### HpmError - Central Error Enum
-//! The main error type that aggregates all possible HPM errors:
-//!
-//! ```rust
-//! use hpm_error::HpmError;
-//!
-//! // Example error creation
-//! let error = HpmError::PackageNotFound {
-//!     name: "nonexistent-package".to_string()
-//! };
-//! ```
-//!
-//! ### Error Categories
-//!
-//! #### Package Errors
-//! Errors related to package operations:
-//! - **PackageNotFound**: Requested package doesn't exist in registry or storage
-//! - **Install**: Package installation failures (extraction, validation, etc.)
-//!
-//! #### Configuration Errors  
-//! Errors in configuration files or settings:
-//! - **Config**: Invalid configuration values, missing required settings, malformed TOML
-//!
-//! #### Network Errors
-//! Issues with network operations:
-//! - **Network**: Registry connectivity, timeout, authentication failures
-//!
-//! #### Dependency Resolution Errors
-//! Problems with dependency resolution:
-//! - **Resolver**: Version conflicts, circular dependencies, unsatisfiable constraints
-//!
-//! #### System Errors
-//! Low-level system operation failures:
-//! - **Io**: File system permissions, disk space, path issues
-//!
-//! ## Error Context and Debugging
-//!
-//! All HPM errors provide rich context information for debugging:
-//!
-//! ```rust
-//! use hpm_error::HpmError;
-//!
-//! fn handle_error(error: &HpmError) {
-//!     match error {
-//!         HpmError::PackageNotFound { name } => {
-//!             eprintln!("Package '{}' not found. Try 'hpm search {}' to find similar packages.", name, name);
-//!         }
-//!         HpmError::Config { message } => {
-//!             eprintln!("Configuration error: {}", message);
-//!             eprintln!("Check your ~/.hpm/config.toml file for syntax errors.");
-//!         }
-//!         HpmError::Network(err) => {
-//!             eprintln!("Network error: {}", err);
-//!             eprintln!("Check your internet connection and registry URL.");
-//!         }
-//!         HpmError::Resolver { message } => {
-//!             eprintln!("Dependency resolution failed: {}", message);
-//!             eprintln!("Try updating your dependencies or resolving version conflicts.");
-//!         }
-//!         _ => {
-//!             eprintln!("Error: {}", error);
-//!         }
-//!     }
-//! }
-//! ```
-//!
-//! ## Integration with thiserror
-//!
-//! HPM uses the [`thiserror`] crate to provide ergonomic error handling with
-//! automatic implementations of standard traits:
-//!
-//! - **Display**: Human-readable error messages
-//! - **Error**: Standard error trait implementation
-//! - **From**: Automatic conversions from underlying error types
-//! - **Source**: Error chain traversal for debugging
-//!
-//! ## Error Propagation Patterns
-//!
-//! ### Result Types
-//! All HPM operations return `Result<T, HpmError>` for consistent error handling:
-//!
-//! ```rust
-//! use hpm_error::HpmError;
-//! use std::result::Result as StdResult;
-//!
-//! type Result<T> = StdResult<T, HpmError>;
-//!
-//! fn example_operation() -> Result<()> {
-//!     // Operation that might fail
-//!     if some_condition() {
-//!         return Err(HpmError::Config {
-//!             message: "Invalid configuration detected".to_string(),
-//!         });
-//!     }
-//!     Ok(())
-//! }
-//! # fn some_condition() -> bool { false }
-//! ```
-//!
-//! ### Error Conversion
-//! Automatic conversion from underlying error types:
-//!
-//! ```rust
-//! use hpm_error::HpmError;
-//! use std::fs;
-//!
-//! fn read_config() -> Result<String, HpmError> {
-//!     // std::io::Error automatically converts to HpmError::Io
-//!     let content = fs::read_to_string("config.toml")?;
-//!     Ok(content)
-//! }
-//! ```
-//!
-//! ### Error Chaining
-//! Preserve error context through the error chain:
+//! ## Usage
 //!
 //! ```rust
 //! use hpm_error::HpmError;
@@ -170,90 +24,12 @@
 //! fn process_package(name: &str) -> Result<(), HpmError> {
 //!     download_package(name)
 //!         .map_err(|e| HpmError::Install {
-//!             message: format!("Failed to install package '{}': {}", name, e),
+//!             message: format!("Failed to install '{}': {}", name, e),
 //!         })?;
 //!     Ok(())
 //! }
 //!
-//! # fn download_package(_name: &str) -> Result<(), Box<dyn std::error::Error>> {
-//! #     Ok(())
-//! # }
-//! ```
-//!
-//! ## Best Practices
-//!
-//! ### Error Message Guidelines
-//! - **Be Specific**: Include relevant details like package names, file paths, or version numbers
-//! - **Be Actionable**: Suggest possible solutions or next steps where applicable
-//! - **Be Consistent**: Use consistent terminology and formatting across error types
-//!
-//! ### Context Preservation
-//! - **Chain Errors**: Use `map_err` to add context while preserving the original error
-//! - **Include Details**: Add relevant information like operation context or user input
-//! - **Maintain Source**: Keep the error source chain intact for debugging
-//!
-//! ### User Experience
-//! - **Progressive Detail**: Provide brief messages for users, detailed information for developers
-//! - **Helpful Suggestions**: Include suggestions for resolving common issues
-//! - **Clear Categories**: Use distinct error types for different failure scenarios
-//!
-//! ## Integration Examples
-//!
-//! ### CLI Error Handling
-//! ```rust
-//! use hpm_error::HpmError;
-//!
-//! fn main() {
-//!     if let Err(error) = run_cli() {
-//!         match error {
-//!             HpmError::PackageNotFound { name } => {
-//!                 eprintln!("Error: Package '{}' not found", name);
-//!                 std::process::exit(1);
-//!             }
-//!             HpmError::Config { message } => {
-//!                 eprintln!("Configuration error: {}", message);
-//!                 std::process::exit(1);
-//!             }
-//!             _ => {
-//!                 eprintln!("Unexpected error: {}", error);
-//!                 std::process::exit(2);
-//!             }
-//!         }
-//!     }
-//! }
-//!
-//! # fn run_cli() -> Result<(), HpmError> { Ok(()) }
-//! ```
-//!
-//! ### Library Integration
-//! ```rust
-//! use hpm_error::HpmError;
-//!
-//! pub struct PackageManager {
-//!     // ... fields
-//! }
-//!
-//! impl PackageManager {
-//!     pub fn install(&mut self, package: &str) -> Result<(), HpmError> {
-//!         // Validate package name
-//!         if package.is_empty() {
-//!             return Err(HpmError::Config {
-//!                 message: "Package name cannot be empty".to_string(),
-//!             });
-//!         }
-//!
-//!         // Attempt installation
-//!         self.download_and_install(package)
-//!             .map_err(|e| HpmError::Install {
-//!                 message: format!("Installation of '{}' failed: {}", package, e),
-//!             })
-//!     }
-//!
-//!     fn download_and_install(&mut self, package: &str) -> Result<(), Box<dyn std::error::Error>> {
-//!         // Implementation details...
-//!         Ok(())
-//!     }
-//! }
+//! # fn download_package(_: &str) -> Result<(), Box<dyn std::error::Error>> { Ok(()) }
 //! ```
 
 use thiserror::Error;

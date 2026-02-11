@@ -57,9 +57,6 @@ pub struct LockedDependency {
     pub dependencies: Vec<String>,
 }
 
-/// Re-export PackageSource as DependencySource for backward compatibility
-pub use crate::package_source::PackageSource as DependencySource;
-
 /// A locked Python dependency
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockedPythonDependency {

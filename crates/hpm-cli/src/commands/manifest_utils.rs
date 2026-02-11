@@ -173,40 +173,23 @@ pub fn save_manifest(manifest: &PackageManifest, manifest_path: &Path) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::test_fixtures::{write_test_manifest, TestManifestOpts};
     use hpm_package::DependencySpec;
     use indexmap::IndexMap;
     use std::env;
     use tempfile::TempDir;
-
-    /// Create a test hpm.toml file with basic package info
-    fn create_test_manifest(path: &Path) -> Result<()> {
-        let manifest_content = r#"[package]
-name = "test-package"
-version = "1.0.0"
-description = "A test package"
-authors = ["Test Author <test@example.com>"]
-license = "MIT"
-
-[houdini]
-min_version = "20.0"
-"#;
-
-        std::fs::write(path.join("hpm.toml"), manifest_content)?;
-        Ok(())
-    }
 
     #[test]
     fn test_determine_manifest_path_current_directory() {
         let temp_dir = TempDir::new().unwrap();
         let original_dir = env::current_dir().unwrap();
 
-        create_test_manifest(temp_dir.path()).unwrap();
+        write_test_manifest(temp_dir.path(), TestManifestOpts::default()).unwrap();
 
         env::set_current_dir(temp_dir.path()).unwrap();
 
         let result = determine_manifest_path(None);
 
-        // Restore original directory (ignore errors - may fail on Windows with parallel tests)
         let _ = env::set_current_dir(&original_dir);
 
         assert!(result.is_ok());
@@ -217,7 +200,7 @@ min_version = "20.0"
     #[test]
     fn test_determine_manifest_path_explicit_file() {
         let temp_dir = TempDir::new().unwrap();
-        create_test_manifest(temp_dir.path()).unwrap();
+        write_test_manifest(temp_dir.path(), TestManifestOpts::default()).unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
         let result = determine_manifest_path(Some(manifest_path.clone()));
@@ -229,7 +212,7 @@ min_version = "20.0"
     #[test]
     fn test_determine_manifest_path_explicit_directory() {
         let temp_dir = TempDir::new().unwrap();
-        create_test_manifest(temp_dir.path()).unwrap();
+        write_test_manifest(temp_dir.path(), TestManifestOpts::default()).unwrap();
 
         let result = determine_manifest_path(Some(temp_dir.path().to_path_buf()));
 
@@ -256,7 +239,7 @@ min_version = "20.0"
     #[test]
     fn test_load_manifest_valid() {
         let temp_dir = TempDir::new().unwrap();
-        create_test_manifest(temp_dir.path()).unwrap();
+        write_test_manifest(temp_dir.path(), TestManifestOpts::default()).unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
         let result = load_manifest(&manifest_path);
