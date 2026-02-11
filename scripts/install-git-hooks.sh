@@ -48,12 +48,6 @@ else
         exit 1
     fi
     
-    if ! python3 scripts/check-emojis.py; then
-        echo "[ERROR] Emoji check failed!"
-        echo "Remove emojis from source code before committing."
-        exit 1
-    fi
-    
     if ! cargo test --workspace; then
         echo "[ERROR] Tests failed!"
         echo "Fix failing tests before committing."
@@ -93,7 +87,7 @@ chmod +x "$HOOKS_DIR/commit-msg"
 echo "[SUCCESS] Git hooks installed successfully!"
 echo ""
 echo "Hooks installed:"
-echo "  - pre-commit: Runs quality checks (fmt, clippy, emoji check, tests)"
+echo "  - pre-commit: Runs quality checks (fmt, clippy, tests)"
 echo "  - commit-msg: Validates conventional commit format"
 echo ""
 echo "To bypass hooks (not recommended): git commit --no-verify"

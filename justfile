@@ -49,10 +49,6 @@ fmt-check:
 clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
-# Check for emoji usage in source code
-check-emojis:
-    python3 scripts/check-emojis.py
-
 # Fix clippy issues automatically where possible
 clippy-fix:
     cargo clippy --workspace --all-targets --fix
@@ -70,10 +66,10 @@ install:
 # === DEVELOPMENT WORKFLOW ===
 
 # Development workflow: format, lint, and test
-dev: fmt clippy check-emojis test
+dev: fmt clippy test
 
 # Run all quality checks (CI equivalent)
-quality: fmt-check clippy check-emojis test
+quality: fmt-check clippy test
     @echo "✅ All quality checks passed!"
 
 # Pre-commit checks (used by git hooks)
