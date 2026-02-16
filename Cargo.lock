@@ -876,6 +876,7 @@ dependencies = [
 name = "hpm-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "fuzzcheck",
  "hpm-config",
  "hpm-package",

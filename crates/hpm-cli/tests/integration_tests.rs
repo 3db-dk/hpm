@@ -116,7 +116,7 @@ fn test_init_bare_workflow() {
 /// Test that deprecated commands give helpful messages
 #[test]
 fn test_deprecated_commands() {
-    // Test search command (deprecated - uses Git archive-based dependencies)
+    // Test search command (no registries configured)
     let search_output = hpm_binary()
         .args(["search", "test"])
         .output()
@@ -125,8 +125,8 @@ fn test_deprecated_commands() {
     assert!(search_output.status.success());
     let stdout = String::from_utf8_lossy(&search_output.stdout);
     assert!(
-        stdout.contains("Git archive-based dependencies"),
-        "Expected Git archive info in search output. stdout: '{}'",
+        stdout.contains("No registries configured"),
+        "Expected no-registries message in search output. stdout: '{}'",
         stdout
     );
 

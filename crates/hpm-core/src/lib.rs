@@ -226,6 +226,7 @@ pub mod discovery;
 pub mod lock;
 pub mod package_source;
 pub mod project;
+pub mod registry;
 pub mod storage;
 pub mod tag_resolver;
 
@@ -245,5 +246,8 @@ pub use lock::{
 };
 pub use package_source::{GitProvider, PackageSource, PackageSourceError};
 pub use project::{ProjectDependency, ProjectError, ProjectManager};
+pub use registry::{
+    ApiRegistry, GitRegistry, Registry, RegistryEntry, RegistryError, RegistrySet, SearchResults,
+};
 pub use storage::{StorageError, StorageManager};
 pub use tag_resolver::{TagResolveError, TagResolver};

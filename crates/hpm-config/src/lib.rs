@@ -289,6 +289,28 @@ pub struct Config {
     pub install: InstallConfig,
     pub storage: StorageConfig,
     pub projects: ProjectsConfig,
+    #[serde(default)]
+    pub registries: Vec<RegistrySourceConfig>,
+}
+
+/// Configuration for a single package registry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistrySourceConfig {
+    /// Display name / alias for this registry
+    pub name: String,
+    /// URL: API base URL or git remote URL
+    pub url: String,
+    /// Registry type: "api" or "git"
+    #[serde(rename = "type")]
+    pub registry_type: RegistryType,
+}
+
+/// The type of registry backend.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RegistryType {
+    Api,
+    Git,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -336,6 +358,7 @@ impl Default for Config {
                 registry_cache_dir: home_dir.join("registry"),
             },
             projects: ProjectsConfig::default(),
+            registries: vec![],
         }
     }
 }
@@ -437,6 +460,33 @@ impl Config {
         if other.projects.ignore_patterns != ProjectsConfig::default().ignore_patterns {
             self.projects.ignore_patterns = other.projects.ignore_patterns;
         }
+
+        // Registries config - replace if other has any
+        if !other.registries.is_empty() {
+            self.registries = other.registries;
+        }
+    }
+
+    /// Add a registry to the configuration.
+    /// Returns false if a registry with the same name already exists.
+    pub fn add_registry(&mut self, registry: RegistrySourceConfig) -> bool {
+        if self.registries.iter().any(|r| r.name == registry.name) {
+            return false;
+        }
+        self.registries.push(registry);
+        true
+    }
+
+    /// Remove a registry by name. Returns true if found and removed.
+    pub fn remove_registry(&mut self, name: &str) -> bool {
+        let before = self.registries.len();
+        self.registries.retain(|r| r.name != name);
+        self.registries.len() < before
+    }
+
+    /// Get the cache directory for a specific git registry.
+    pub fn registry_cache_path(&self, registry_name: &str) -> PathBuf {
+        self.storage.registry_cache_dir.join(registry_name)
     }
 
     /// Save the configuration to a file.
@@ -482,6 +532,8 @@ struct PartialConfig {
     install: Option<PartialInstallConfig>,
     storage: Option<PartialStorageConfig>,
     projects: Option<PartialProjectsConfig>,
+    #[serde(default)]
+    registries: Option<Vec<RegistrySourceConfig>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -567,6 +619,7 @@ impl PartialConfig {
                     .and_then(|p| p.ignore_patterns)
                     .unwrap_or(default.projects.ignore_patterns),
             },
+            registries: self.registries.unwrap_or(default.registries),
         }
     }
 }

@@ -501,12 +501,41 @@ enum Commands {
     },
     /// Clean orphaned packages
     Clean(commands::clean::CleanArgs),
+    /// Manage package registries
+    Registry {
+        #[command(subcommand)]
+        action: RegistryAction,
+    },
     /// Generate shell completions
     Completions {
         /// Target shell (bash, zsh, fish, powershell, elvish)
         #[arg(value_enum)]
         shell: Shell,
     },
+}
+
+#[derive(Subcommand)]
+enum RegistryAction {
+    /// Add a package registry
+    Add {
+        /// Registry URL (API endpoint or Git remote)
+        url: String,
+        /// Display name / alias for this registry
+        #[arg(long)]
+        name: Option<String>,
+        /// Registry type: "api" or "git" (auto-detected if not specified)
+        #[arg(long = "type")]
+        registry_type: Option<String>,
+    },
+    /// List configured registries
+    List,
+    /// Remove a registry by name
+    Remove {
+        /// Registry name to remove
+        name: String,
+    },
+    /// Update (refresh) all registry caches
+    Update,
 }
 
 #[tokio::main]
@@ -785,6 +814,48 @@ async fn run_command(
                     )
                 })?;
         }
+        Commands::Registry { action } => match action {
+            RegistryAction::Add {
+                url,
+                name,
+                registry_type,
+            } => {
+                commands::registry::add_registry(url.clone(), name.clone(), registry_type.clone())
+                    .await
+                    .map_err(|e| {
+                        CliError::config(
+                            e,
+                            Some("Use 'hpm registry add --help' for usage information".to_string()),
+                        )
+                    })?;
+            }
+            RegistryAction::List => {
+                commands::registry::list_registries()
+                    .await
+                    .map_err(|e| CliError::config(e, None))?;
+            }
+            RegistryAction::Remove { name } => {
+                commands::registry::remove_registry(name.clone())
+                    .await
+                    .map_err(|e| {
+                        CliError::config(
+                            e,
+                            Some(
+                                "Use 'hpm registry remove --help' for usage information"
+                                    .to_string(),
+                            ),
+                        )
+                    })?;
+            }
+            RegistryAction::Update => {
+                commands::registry::update_registries().await.map_err(|e| {
+                    CliError::network(
+                        e,
+                        Some("Check your internet connection and registry URLs.".to_string()),
+                    )
+                })?;
+            }
+        },
         Commands::Clean(args) => {
             commands::clean::execute_clean(args).await.map_err(|e| {
                 CliError::package(

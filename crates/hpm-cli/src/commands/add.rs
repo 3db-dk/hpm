@@ -46,11 +46,25 @@
 //! 4. Sets up project-specific package references
 
 use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifest};
+use super::registry::build_registry_set;
 use anyhow::{bail, Context, Result};
+use hpm_config::Config;
 use hpm_package::DependencySpec;
 use indexmap::IndexMap;
 use std::path::PathBuf;
 use tracing::{info, warn};
+
+/// Parse `name@version` syntax. Returns (name, optional_version).
+fn parse_name_version(input: &str) -> (String, Option<String>) {
+    if let Some(at_pos) = input.rfind('@') {
+        let name = &input[..at_pos];
+        let version = &input[at_pos + 1..];
+        if !name.is_empty() && !version.is_empty() {
+            return (name.to_string(), Some(version.to_string()));
+        }
+    }
+    (input.to_string(), None)
+}
 
 /// Parse version from a git tag by stripping common prefixes.
 fn parse_version_from_tag(tag: &str) -> String {
@@ -114,32 +128,6 @@ pub async fn add_packages(
     let mut manifest = load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
 
-    // Prepare dependency specification template based on source type
-    let (is_git, is_path) = (git_url.is_some(), path.is_some());
-
-    if !is_git && !is_path {
-        // No source specified - show help
-        let example_pkg = package_names.first().unwrap();
-        bail!(
-            "Please specify a dependency source:\n\
-             \n\
-             For Git-based dependencies (recommended):\n\
-             \n\
-             \x20 hpm add {} --git <repository-url> --tag <tag-name>\n\
-             \n\
-             For local path dependencies (development):\n\
-             \n\
-             \x20 hpm add {} --path <local-path>\n\
-             \n\
-             Examples:\n\
-             \n\
-             \x20 hpm add {} --git https://github.com/user/repo --tag v1.0.0",
-            example_pkg,
-            example_pkg,
-            example_pkg
-        );
-    }
-
     // Parse version from tag
     let version = tag.as_ref().map(|t| parse_version_from_tag(t));
 
@@ -169,7 +157,65 @@ pub async fn add_packages(
                 optional,
             }
         } else {
-            unreachable!("Already validated source is specified");
+            // No --git or --path: resolve from registries
+            // Parse name@version syntax
+            let (pkg_name, requested_version) = parse_name_version(package_name);
+
+            let config = Config::load().unwrap_or_default();
+            let registry_set = build_registry_set(&config);
+
+            if registry_set.is_empty() {
+                let example_pkg = package_names.first().unwrap();
+                bail!(
+                    "No registries configured and no source specified.\n\
+                     \n\
+                     Either add a registry:\n\
+                     \n\
+                     \x20 hpm registry add <url> --name <alias>\n\
+                     \n\
+                     Or specify a source directly:\n\
+                     \n\
+                     \x20 hpm add {} --git <repository-url> --tag <tag-name>\n\
+                     \x20 hpm add {} --path <local-path>",
+                    example_pkg,
+                    example_pkg
+                );
+            }
+
+            // Resolve from registry
+            let entry = if let Some(ver) = &requested_version {
+                registry_set
+                    .get_version(&pkg_name, ver)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to resolve {}@{}: {}", pkg_name, ver, e))?
+            } else {
+                // Get latest non-yanked version
+                let versions = registry_set
+                    .get_versions(&pkg_name)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to resolve {}: {}", pkg_name, e))?;
+
+                versions
+                    .into_iter()
+                    .rev()
+                    .find(|e| !e.yanked)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("No non-yanked versions found for '{}'", pkg_name)
+                    })?
+            };
+
+            info!(
+                "Resolved {} -> {} (dl: {})",
+                pkg_name, entry.version, entry.dl
+            );
+
+            // Use the download URL from the registry entry as a "git" dep
+            // The dl URL points to the actual archive
+            DependencySpec::Git {
+                git: entry.dl.clone(),
+                version: entry.version.clone(),
+                optional,
+            }
         };
 
         // Check if dependency already exists

@@ -6,6 +6,7 @@ pub mod init;
 pub mod install;
 pub mod list;
 pub mod manifest_utils;
+pub mod registry;
 pub mod remove;
 pub mod search;
 #[cfg(test)]
