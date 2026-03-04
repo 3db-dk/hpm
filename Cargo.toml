@@ -60,11 +60,14 @@ futures = "0.3"
 
 # File system and I/O
 walkdir = "2.4"
+ignore = "0.4"
 tempfile = "3.8"
 dirs = "5.0"
 
 # Crypto and validation
 sha2 = "0.10"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+base64 = "0.22"
 
 # Logging
 tracing = "0.1"

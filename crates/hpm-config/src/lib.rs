@@ -291,6 +291,13 @@ pub struct Config {
     pub projects: ProjectsConfig,
     #[serde(default)]
     pub registries: Vec<RegistrySourceConfig>,
+    #[serde(default)]
+    pub signing: SigningConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SigningConfig {
+    pub key_path: Option<PathBuf>,
 }
 
 /// Configuration for a single package registry.
@@ -359,6 +366,7 @@ impl Default for Config {
             },
             projects: ProjectsConfig::default(),
             registries: vec![],
+            signing: SigningConfig::default(),
         }
     }
 }
@@ -465,6 +473,11 @@ impl Config {
         if !other.registries.is_empty() {
             self.registries = other.registries;
         }
+
+        // Signing config
+        if other.signing.key_path.is_some() {
+            self.signing.key_path = other.signing.key_path;
+        }
     }
 
     /// Add a registry to the configuration.
@@ -534,6 +547,12 @@ struct PartialConfig {
     projects: Option<PartialProjectsConfig>,
     #[serde(default)]
     registries: Option<Vec<RegistrySourceConfig>>,
+    signing: Option<PartialSigningConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PartialSigningConfig {
+    key_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -620,6 +639,9 @@ impl PartialConfig {
                     .unwrap_or(default.projects.ignore_patterns),
             },
             registries: self.registries.unwrap_or(default.registries),
+            signing: SigningConfig {
+                key_path: self.signing.and_then(|s| s.key_path),
+            },
         }
     }
 }

@@ -225,6 +225,7 @@ pub mod dependency;
 pub mod discovery;
 pub mod lock;
 pub mod package_source;
+pub mod packer;
 pub mod project;
 pub mod registry;
 pub mod storage;
@@ -245,6 +246,7 @@ pub use lock::{
     LockError, LockFile, LockMetadata, LockPackageInfo, LockedDependency, LockedPythonDependency,
 };
 pub use package_source::{GitProvider, PackageSource, PackageSourceError};
+pub use packer::{PackError, PackResult};
 pub use project::{ProjectDependency, ProjectError, ProjectManager};
 pub use registry::{
     ApiRegistry, GitRegistry, Registry, RegistryEntry, RegistryError, RegistrySet, SearchResults,
