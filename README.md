@@ -7,10 +7,12 @@ a lock file, and isolated virtual environments.
 
 ## Install
 
-Requires Rust 1.74+.
+Download a pre-built binary from the
+[latest release](https://github.com/3db-dk/hpm/releases/latest),
+or build from source (requires Rust 1.74+):
 
 ```sh
-git clone http://10.100.36.15:3000/soren-n/hpm.git
+git clone https://github.com/3db-dk/hpm.git
 cd hpm
 cargo build --release
 # binary: target/release/hpm
@@ -63,18 +65,19 @@ requests = { version = ">=2.25.0", extras = ["security"] }
 
 | Command | Description |
 |---------|-------------|
-| `hpm init [name]` | Create a new package (use `--bare` for manifest only) |
+| `hpm init [name]` | Create a new package (`--bare` for manifest only) |
 | `hpm add <pkg>` | Add a dependency (`--git`/`--tag`, `--path`, `--optional`) |
 | `hpm remove <pkg>` | Remove a dependency |
 | `hpm install` | Install all dependencies (`--frozen-lockfile` for CI) |
 | `hpm update [pkg...]` | Update dependencies (`--dry-run` to preview) |
 | `hpm list` | Show dependencies (`--tree` for tree view) |
 | `hpm check` | Validate package configuration |
+| `hpm pack` | Create a signed archive (`--key` for signing) |
 | `hpm clean` | Remove orphaned packages and venvs (`--dry-run`, `--python-only`) |
 | `hpm audit` | Security audit on dependencies |
 | `hpm completions <shell>` | Generate shell completions (bash, zsh, fish, powershell) |
 
-All commands accept `-v` for verbose output, `--output json` for machine-readable output.
+All commands accept `-v` for verbose output and `--output json` for machine-readable output.
 
 ## Python dependencies
 
@@ -114,6 +117,14 @@ cargo build                                    # build
 cargo test                                     # test
 cargo clippy --all-targets -- -D warnings      # lint
 cargo fmt --check                              # format check
+```
+
+## Documentation
+
+Full documentation is available in the [docs/](docs/) directory, or build locally with [mdBook](https://rust-lang.github.io/mdBook/):
+
+```sh
+mdbook serve
 ```
 
 ## License
