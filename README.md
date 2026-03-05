@@ -121,7 +121,9 @@ cargo fmt --check                              # format check
 
 ## Documentation
 
-Full documentation is available in the [docs/](docs/) directory, or build locally with [mdBook](https://rust-lang.github.io/mdBook/):
+Full documentation is available in the [docs/](docs/) directory, or online at [hpm.readthedocs.io](https://hpm.readthedocs.io/).
+
+To build locally with [mdBook](https://rust-lang.github.io/mdBook/):
 
 ```sh
 mdbook serve
