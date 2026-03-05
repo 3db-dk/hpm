@@ -501,6 +501,9 @@ enum Commands {
         /// Output directory for the archive (defaults to current directory)
         #[arg(long)]
         output: Option<std::path::PathBuf>,
+        /// Output result as JSON (for CI integration)
+        #[arg(long)]
+        json: bool,
     },
     /// Run security audit on dependencies
     Audit {
@@ -813,15 +816,21 @@ async fn run_command(
                 console.success("Package configuration is valid");
             }
         }
-        Commands::Pack { key, output } => {
-            commands::pack::execute(directory.clone(), key.clone(), output.clone(), console)
-                .await
-                .map_err(|e| {
-                    CliError::package(
-                        e,
-                        Some("Use 'hpm pack --help' for usage information".to_string()),
-                    )
-                })?;
+        Commands::Pack { key, output, json } => {
+            commands::pack::execute(
+                directory.clone(),
+                key.clone(),
+                output.clone(),
+                *json,
+                console,
+            )
+            .await
+            .map_err(|e| {
+                CliError::package(
+                    e,
+                    Some("Use 'hpm pack --help' for usage information".to_string()),
+                )
+            })?;
         }
         Commands::Audit { manifest } => {
             commands::audit::audit_packages(manifest.clone())

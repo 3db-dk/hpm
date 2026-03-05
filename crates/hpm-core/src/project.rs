@@ -1,3 +1,5 @@
+use crate::archive_fetcher::ArchiveFetcher;
+use crate::package_source::PackageSource;
 use crate::storage::{InstalledPackage, PackageSpec, StorageManager};
 use hpm_config::ProjectConfig;
 use hpm_package::{HoudiniPackage, PackageManifest};
@@ -10,6 +12,7 @@ use tracing::{debug, info};
 pub struct ProjectManager {
     project_config: ProjectConfig,
     storage_manager: Arc<StorageManager>,
+    fetcher: Option<ArchiveFetcher>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,9 +29,27 @@ impl ProjectManager {
     ) -> Result<Self, ProjectError> {
         let project_config = hpm_config::Config::load_project_config(&project_root);
 
+        // Create fetcher using HPM's cache and packages directories
+        let config = hpm_config::Config::load().unwrap_or_default();
+        let cache_dir = config
+            .storage
+            .packages_dir
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("cache");
+        let fetch_packages_dir = config
+            .storage
+            .packages_dir
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("fetch");
+        let fetcher = ArchiveFetcher::new(cache_dir, fetch_packages_dir)
+            .map_err(|e| ProjectError::DirectoryCreation(e.to_string()))?;
+
         let manager = Self {
             project_config,
             storage_manager,
+            fetcher: Some(fetcher),
         };
 
         manager.ensure_directories()?;
@@ -123,29 +144,97 @@ impl ProjectManager {
 
         if let Some(dependencies) = project_manifest.dependencies {
             for (name, dep_spec) in dependencies {
-                // Extract version string based on dependency type
-                let version_req = match dep_spec {
-                    hpm_package::DependencySpec::Git { version, .. } => {
-                        // For Git dependencies, use the version directly
-                        version.clone()
-                    }
-                    hpm_package::DependencySpec::Path { .. } => {
-                        // For path dependencies, use "local" as version
-                        "local".to_string()
-                    }
-                };
+                // Skip if already linked
+                if self.is_dependency_linked(&name) {
+                    continue;
+                }
 
-                let package_spec = PackageSpec::parse(&format!("{}@{}", name, version_req))
-                    .map_err(ProjectError::InvalidDependency)?;
-
-                // Ensure package is installed and linked
-                if !self.is_dependency_linked(&name) {
-                    self.add_dependency(&package_spec).await?;
+                // Build a PackageSource from the dependency spec and use fetcher for remote deps
+                match &dep_spec {
+                    hpm_package::DependencySpec::Url { url, version, .. } => {
+                        self.fetch_and_install(
+                            &name,
+                            version,
+                            PackageSource::Url {
+                                url: url.clone(),
+                                version: version.clone(),
+                            },
+                        )
+                        .await?;
+                    }
+                    hpm_package::DependencySpec::Git { git, version, .. } => {
+                        self.fetch_and_install(
+                            &name,
+                            version,
+                            PackageSource::Git {
+                                url: git.clone(),
+                                version: version.clone(),
+                            },
+                        )
+                        .await?;
+                    }
+                    hpm_package::DependencySpec::Path { path, .. } => {
+                        let source_path = std::path::Path::new(path);
+                        let installed =
+                            self.storage_manager
+                                .install_from_path(source_path)
+                                .await
+                                .map_err(|e| ProjectError::PackageInstallation(e.to_string()))?;
+                        self.generate_houdini_manifest(&installed)?;
+                    }
                 }
             }
         }
 
         info!("Successfully synced project dependencies");
+        Ok(())
+    }
+
+    /// Fetch a remote package and install it to global storage.
+    async fn fetch_and_install(
+        &self,
+        name: &str,
+        version: &str,
+        source: PackageSource,
+    ) -> Result<(), ProjectError> {
+        // Check if already in global storage
+        if self.storage_manager.package_exists(name, version) {
+            info!("Package {}@{} already installed", name, version);
+            let installed_packages = self
+                .storage_manager
+                .list_installed()
+                .map_err(|e| ProjectError::StorageRead(e.to_string()))?;
+            if let Some(pkg) = installed_packages
+                .into_iter()
+                .find(|p| p.name == name && p.version == version)
+            {
+                self.generate_houdini_manifest(&pkg)?;
+            }
+            return Ok(());
+        }
+
+        let fetcher = self
+            .fetcher
+            .as_ref()
+            .ok_or_else(|| ProjectError::PackageInstallation("No fetcher available".to_string()))?;
+
+        // Fetch (download + extract) the package
+        let fetch_result = fetcher
+            .fetch(&source, name)
+            .await
+            .map_err(|e| ProjectError::PackageInstallation(e.to_string()))?;
+
+        // Install from the extracted path into global storage
+        let installed = self
+            .storage_manager
+            .install_from_path(&fetch_result.package_path)
+            .await
+            .map_err(|e| ProjectError::PackageInstallation(e.to_string()))?;
+
+        // Generate Houdini package manifest
+        self.generate_houdini_manifest(&installed)?;
+
+        info!("Successfully fetched and installed {}@{}", name, version);
         Ok(())
     }
 

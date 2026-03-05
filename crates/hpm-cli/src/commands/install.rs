@@ -287,6 +287,24 @@ async fn install_hpm_dependencies(
 
                         src
                     }
+                    hpm_package::DependencySpec::Url {
+                        url,
+                        version,
+                        optional,
+                    } => {
+                        info!("  {} - Url: {} @ {}", name, url, version);
+                        if *optional {
+                            debug!("  {} is optional", name);
+                        }
+                        let src = PackageSource::url(url, version).context("Invalid URL")?;
+
+                        // Security warning for HTTP URLs
+                        if let Some(warning) = src.security_warning() {
+                            warn!("Security: {} - {}", name, warning);
+                        }
+
+                        src
+                    }
                     hpm_package::DependencySpec::Path { path, optional } => {
                         info!("  {} - Path: {}", name, path);
                         if *optional {
@@ -530,6 +548,15 @@ async fn generate_lock_file(
                 hpm_package::DependencySpec::Git { git, version, .. } => {
                     LockedDependency::from_git(version.clone(), git.clone(), checksum)
                 }
+                hpm_package::DependencySpec::Url { url, version, .. } => LockedDependency {
+                    version: version.clone(),
+                    checksum,
+                    source: PackageSource::Url {
+                        url: url.clone(),
+                        version: version.clone(),
+                    },
+                    dependencies: Vec::new(),
+                },
                 hpm_package::DependencySpec::Path { path, .. } => {
                     LockedDependency::from_path("local".to_string(), path.clone(), checksum)
                 }

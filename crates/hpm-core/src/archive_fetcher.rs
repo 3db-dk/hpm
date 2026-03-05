@@ -241,7 +241,7 @@ pub struct FetchResult {
 ///
 /// This struct is cheaply cloneable and can be shared across async tasks
 /// for parallel package fetching.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ArchiveFetcher {
     /// HTTP client for downloading archives (internally Arc-ed by reqwest)
     http_client: reqwest::Client,
@@ -290,6 +290,9 @@ impl ArchiveFetcher {
         match source {
             PackageSource::Git { url, version } => {
                 self.fetch_git_release(url, version, package_name).await
+            }
+            PackageSource::Url { url, version } => {
+                self.fetch_direct_url(url, version, package_name).await
             }
             PackageSource::Path { path } => self.fetch_from_path(path, package_name).await,
         }
@@ -345,6 +348,68 @@ impl ArchiveFetcher {
         .map_err(|e| FetchError::ExtractionError(format!("Task join error: {}", e)))??;
 
         // Compute checksum of extracted contents and cache it (blocking operation)
+        let package_dir_for_checksum = package_dir.clone();
+        let checksum = tokio::task::spawn_blocking(move || {
+            get_directory_checksum_sync(&package_dir_for_checksum)
+        })
+        .await
+        .map_err(|e| FetchError::ExtractionError(format!("Checksum task join error: {}", e)))??;
+
+        // Clean up the archive file
+        if let Err(e) = tokio::fs::remove_file(&archive_path).await {
+            warn!("Failed to clean up archive file: {}", e);
+        }
+
+        Ok(FetchResult {
+            package_path: package_dir,
+            checksum,
+            from_cache: false,
+        })
+    }
+
+    /// Fetch a package from a direct URL (no URL reconstruction).
+    async fn fetch_direct_url(
+        &self,
+        url: &str,
+        version: &str,
+        package_name: &str,
+    ) -> Result<FetchResult, FetchError> {
+        let cache_key = format!("{}-{}", package_name, version);
+        let package_dir = self.packages_dir.join(&cache_key);
+
+        // Check if already extracted
+        if tokio::fs::try_exists(&package_dir).await.unwrap_or(false) {
+            info!("Package {} already cached at {:?}", cache_key, package_dir);
+            let dir_for_checksum = package_dir.clone();
+            let checksum =
+                tokio::task::spawn_blocking(move || get_directory_checksum_sync(&dir_for_checksum))
+                    .await
+                    .map_err(|e| {
+                        FetchError::ExtractionError(format!("Checksum task join error: {}", e))
+                    })??;
+            return Ok(FetchResult {
+                package_path: package_dir,
+                checksum,
+                from_cache: true,
+            });
+        }
+
+        info!("Downloading package from {}", url);
+
+        // Download the archive directly from the URL
+        let archive_path = self.download_archive(url, &cache_key).await?;
+
+        // Extract the archive
+        info!("Extracting package to {:?}", package_dir);
+        let archive_path_clone = archive_path.clone();
+        let package_dir_clone = package_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            extract_archive_sync(&archive_path_clone, &package_dir_clone)
+        })
+        .await
+        .map_err(|e| FetchError::ExtractionError(format!("Task join error: {}", e)))??;
+
+        // Compute checksum
         let package_dir_for_checksum = package_dir.clone();
         let checksum = tokio::task::spawn_blocking(move || {
             get_directory_checksum_sync(&package_dir_for_checksum)
@@ -428,7 +493,7 @@ impl ArchiveFetcher {
     /// Check if a package is already cached.
     pub fn is_cached(&self, source: &PackageSource, package_name: &str) -> bool {
         match source {
-            PackageSource::Git { version, .. } => {
+            PackageSource::Git { version, .. } | PackageSource::Url { version, .. } => {
                 let cache_key = format!("{}-{}", package_name, version);
                 self.packages_dir.join(cache_key).exists()
             }
@@ -439,7 +504,7 @@ impl ArchiveFetcher {
     /// Get the cache path for a package.
     pub fn cache_path(&self, source: &PackageSource, package_name: &str) -> Option<PathBuf> {
         match source {
-            PackageSource::Git { version, .. } => {
+            PackageSource::Git { version, .. } | PackageSource::Url { version, .. } => {
                 let cache_key = format!("{}-{}", package_name, version);
                 let path = self.packages_dir.join(cache_key);
                 if path.exists() {
@@ -465,7 +530,10 @@ impl ArchiveFetcher {
         package_name: &str,
     ) -> Result<bool, FetchError> {
         if let Some(path) = self.cache_path(source, package_name) {
-            if matches!(source, PackageSource::Git { .. }) {
+            if matches!(
+                source,
+                PackageSource::Git { .. } | PackageSource::Url { .. }
+            ) {
                 std::fs::remove_dir_all(&path)?;
                 return Ok(true);
             }

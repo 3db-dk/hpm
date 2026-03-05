@@ -18,12 +18,26 @@ use serde::{Deserialize, Serialize};
 /// # Git dependency with version (downloads from release artifact)
 /// geometry-tools = { git = "https://github.com/studio/geometry-tools", version = "1.0.0" }
 ///
+/// # Direct URL dependency (downloads archive directly)
+/// my-package = { url = "https://pkg.example.com/packages/my-package/1.0.0/my-package-1.0.0.zip", version = "1.0.0" }
+///
 /// # Local path dependency (for development)
 /// my-local-pkg = { path = "../my-local-package" }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DependencySpec {
+    /// Direct URL download (for registry-hosted archives)
+    Url {
+        /// Direct download URL for the archive
+        url: String,
+        /// The version (e.g., "1.0.0")
+        version: String,
+        /// Whether this dependency is optional
+        #[serde(default)]
+        optional: bool,
+    },
+
     /// Git repository with version (downloads release artifact)
     Git {
         /// The Git repository URL
@@ -55,6 +69,15 @@ impl DependencySpec {
         }
     }
 
+    /// Create a new direct URL dependency.
+    pub fn url(url: impl Into<String>, version: impl Into<String>) -> Self {
+        DependencySpec::Url {
+            url: url.into(),
+            version: version.into(),
+            optional: false,
+        }
+    }
+
     /// Create a new path dependency.
     pub fn path(path: impl Into<String>) -> Self {
         DependencySpec::Path {
@@ -68,6 +91,11 @@ impl DependencySpec {
         matches!(self, DependencySpec::Git { .. })
     }
 
+    /// Check if this is a URL dependency.
+    pub fn is_url(&self) -> bool {
+        matches!(self, DependencySpec::Url { .. })
+    }
+
     /// Check if this is a path dependency.
     pub fn is_path(&self) -> bool {
         matches!(self, DependencySpec::Path { .. })
@@ -77,6 +105,7 @@ impl DependencySpec {
     pub fn is_optional(&self) -> bool {
         match self {
             DependencySpec::Git { optional, .. } => *optional,
+            DependencySpec::Url { optional, .. } => *optional,
             DependencySpec::Path { optional, .. } => *optional,
         }
     }
@@ -85,6 +114,15 @@ impl DependencySpec {
     pub fn git_url(&self) -> Option<&str> {
         match self {
             DependencySpec::Git { git, .. } => Some(git),
+            _ => None,
+        }
+    }
+
+    /// Get the version if this has a version (Git or URL dependency).
+    pub fn version(&self) -> Option<&str> {
+        match self {
+            DependencySpec::Git { version, .. } => Some(version),
+            DependencySpec::Url { version, .. } => Some(version),
             _ => None,
         }
     }
@@ -121,8 +159,21 @@ impl DependencySpec {
                 if version.is_empty() {
                     return Err("Version cannot be empty".to_string());
                 }
-                // Version should be a valid semver-like string (e.g., "1.0.0", "1.2.3-alpha")
-                // We don't enforce strict semver, but ensure it's not obviously invalid
+                if version.starts_with('.') || version.ends_with('.') {
+                    return Err(format!("Version has invalid format: {}", version));
+                }
+                Ok(())
+            }
+            DependencySpec::Url { url, version, .. } => {
+                if url.is_empty() {
+                    return Err("URL cannot be empty".to_string());
+                }
+                if !url.starts_with("https://") && !url.starts_with("http://") {
+                    return Err(format!("URL must start with https:// or http://: {}", url));
+                }
+                if version.is_empty() {
+                    return Err("Version cannot be empty".to_string());
+                }
                 if version.starts_with('.') || version.ends_with('.') {
                     return Err(format!("Version has invalid format: {}", version));
                 }

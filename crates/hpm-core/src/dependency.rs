@@ -379,10 +379,8 @@ impl DependencyResolver {
 
     fn extract_version_from_spec(&self, spec: &DependencySpec) -> String {
         match spec {
-            DependencySpec::Git { version, .. } => {
-                // Use the version directly
-                version.clone()
-            }
+            DependencySpec::Git { version, .. } => version.clone(),
+            DependencySpec::Url { version, .. } => version.clone(),
             DependencySpec::Path { .. } => "local".to_string(),
         }
     }

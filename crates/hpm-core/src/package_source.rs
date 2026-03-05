@@ -44,6 +44,17 @@ pub enum PackageSource {
         version: String,
     },
 
+    /// A direct URL download.
+    ///
+    /// The package archive is downloaded directly from the given URL without
+    /// any URL reconstruction. Used for registry-hosted archives.
+    Url {
+        /// The direct download URL for the archive
+        url: String,
+        /// The version (e.g., "1.0.0")
+        version: String,
+    },
+
     /// A local filesystem path.
     ///
     /// Used during development to reference packages without publishing.
@@ -95,6 +106,44 @@ impl PackageSource {
         Ok(PackageSource::Git { url, version })
     }
 
+    /// Create a new direct URL source.
+    ///
+    /// # Arguments
+    /// * `url` - The direct download URL for the archive
+    /// * `version` - The package version
+    ///
+    /// # Errors
+    /// Returns an error if the URL or version is invalid.
+    pub fn url(
+        url: impl Into<String>,
+        version: impl Into<String>,
+    ) -> Result<Self, PackageSourceError> {
+        let url = url.into();
+        let version = version.into();
+
+        if !url.starts_with("https://") && !url.starts_with("http://") {
+            return Err(PackageSourceError::InvalidGitUrl(format!(
+                "URL must start with https:// or http://: {}",
+                url
+            )));
+        }
+
+        if version.is_empty() {
+            return Err(PackageSourceError::InvalidVersion(
+                "Version cannot be empty".to_string(),
+            ));
+        }
+
+        if version.starts_with('.') || version.ends_with('.') {
+            return Err(PackageSourceError::InvalidVersion(format!(
+                "Version has invalid format: {}",
+                version
+            )));
+        }
+
+        Ok(PackageSource::Url { url, version })
+    }
+
     /// Create a new path source.
     ///
     /// # Arguments
@@ -106,6 +155,11 @@ impl PackageSource {
     /// Check if this is a Git source.
     pub fn is_git(&self) -> bool {
         matches!(self, PackageSource::Git { .. })
+    }
+
+    /// Check if this is a URL source.
+    pub fn is_url(&self) -> bool {
+        matches!(self, PackageSource::Url { .. })
     }
 
     /// Check if this is a path source.
@@ -138,20 +192,15 @@ impl PackageSource {
     }
 
     /// Returns true if the source uses secure transport (HTTPS).
-    ///
-    /// For Git sources, this checks if the URL uses HTTPS.
-    /// Path sources are always considered secure (local filesystem).
     pub fn is_secure(&self) -> bool {
         match self {
             PackageSource::Git { url, .. } => url.starts_with("https://"),
+            PackageSource::Url { url, .. } => url.starts_with("https://"),
             PackageSource::Path { .. } => true,
         }
     }
 
     /// Returns a security warning message if the source uses insecure transport.
-    ///
-    /// Returns `Some` with a warning message for HTTP URLs.
-    /// Returns `None` for HTTPS URLs and local paths.
     pub fn security_warning(&self) -> Option<&'static str> {
         if !self.is_secure() {
             Some("Using insecure HTTP. Consider HTTPS for better security.")
@@ -161,13 +210,9 @@ impl PackageSource {
     }
 
     /// Generate a unique cache key for this source.
-    ///
-    /// For Git sources, this is based on the URL and version.
-    /// For path sources, this is based on the absolute path.
     pub fn cache_key(&self) -> String {
         match self {
             PackageSource::Git { url, version } => {
-                // Extract owner/repo from URL for a readable cache key
                 let repo_part = url
                     .trim_end_matches(".git")
                     .rsplit('/')
@@ -180,8 +225,11 @@ impl PackageSource {
 
                 format!("{}-{}", repo_part, version)
             }
+            PackageSource::Url { url, version } => {
+                let url_hash = seahash_simple(url);
+                format!("url-{:x}-{}", url_hash, version)
+            }
             PackageSource::Path { path } => {
-                // Use path hash for local sources
                 let path_str = path.to_string_lossy();
                 format!("local-{:x}", seahash_simple(&path_str))
             }
@@ -357,6 +405,9 @@ impl std::fmt::Display for PackageSource {
         match self {
             PackageSource::Git { url, version } => {
                 write!(f, "{}@{}", url, version)
+            }
+            PackageSource::Url { url, version } => {
+                write!(f, "url:{}@{}", url, version)
             }
             PackageSource::Path { path } => {
                 write!(f, "path:{}", path.display())

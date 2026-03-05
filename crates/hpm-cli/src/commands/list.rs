@@ -247,6 +247,9 @@ fn format_tree_source_info(spec: &DependencySpec) -> String {
                 .trim_end_matches(".git");
             format!("({}@{})", repo_name, version)
         }
+        DependencySpec::Url { url, version, .. } => {
+            format!("(url: {}@{})", url, version)
+        }
         DependencySpec::Path { path, .. } => {
             format!("(path: {})", path)
         }
@@ -377,6 +380,9 @@ fn format_dependency_spec(spec: &DependencySpec) -> String {
         DependencySpec::Git { git, version, .. } => {
             format!("git: {} (version: {})", git, version)
         }
+        DependencySpec::Url { url, version, .. } => {
+            format!("url: {} (version: {})", url, version)
+        }
         DependencySpec::Path { path, .. } => {
             format!("path: {}", path)
         }
@@ -397,6 +403,7 @@ fn format_dependency_spec(spec: &DependencySpec) -> String {
 fn is_optional_dependency(spec: &DependencySpec) -> bool {
     match spec {
         DependencySpec::Git { optional, .. } => *optional,
+        DependencySpec::Url { optional, .. } => *optional,
         DependencySpec::Path { optional, .. } => *optional,
     }
 }
