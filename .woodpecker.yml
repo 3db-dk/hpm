@@ -3,7 +3,7 @@ when:
 
 steps:
   # ── Lint & Test ─────────────────────────────────────────────
-  check:
+  - name: check
     image: rust:1-bookworm
     commands:
       - rustup component add clippy rustfmt
@@ -14,10 +14,9 @@ steps:
       - event: [push, pull_request, tag]
 
   # ── Build release binary (Linux x86_64) ─────────────────────
-  build-linux:
+  - name: build-linux
     image: rust:1-bookworm
-    depends_on:
-      - check
+    depends_on: [check]
     commands:
       - cargo build --release --bin hpm
       - strip target/release/hpm
@@ -27,18 +26,19 @@ steps:
         ref: "refs/tags/v*"
 
   # ── Upload binary to pkg.3db.dk ─────────────────────────────
-  upload-linux:
+  - name: upload-linux
     image: minio/mc:latest
-    depends_on:
-      - build-linux
-    secrets:
-      - MINIO_PKG_ROOT_USER
-      - MINIO_PKG_ROOT_PASSWORD
+    depends_on: [build-linux]
+    environment:
+      MINIO_PKG_ROOT_USER:
+        from_secret: minio_pkg_root_user
+      MINIO_PKG_ROOT_PASSWORD:
+        from_secret: minio_pkg_root_password
     commands:
-      - mc alias set pkg https://pkg.3db.dk $MINIO_PKG_ROOT_USER $MINIO_PKG_ROOT_PASSWORD
+      - mc alias set pkg https://pkg.3db.dk $${MINIO_PKG_ROOT_USER} $${MINIO_PKG_ROOT_PASSWORD}
       - VERSION=$${CI_COMMIT_TAG#v}
-      - echo "Uploading HPM binary v$$VERSION"
-      - mc cp target/release/hpm pkg/tools/hpm/$$VERSION/hpm-linux-x86_64
+      - echo "Uploading HPM binary v$${VERSION}"
+      - mc cp target/release/hpm pkg/tools/hpm/$${VERSION}/hpm-linux-x86_64
       - mc cp target/release/hpm pkg/tools/hpm/latest/hpm-linux-x86_64
       - echo "Upload complete"
     when:
