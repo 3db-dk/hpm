@@ -25,38 +25,6 @@ steps:
       - event: tag
         ref: "refs/tags/v*"
 
-  - name: build-macos-x86_64
-    image: rust:1-bookworm
-    depends_on: [check]
-    commands:
-      - apt-get update && apt-get install -y wget xz-utils
-      - wget -q https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
-      - tar xf zig-linux-x86_64-0.13.0.tar.xz -C /usr/local
-      - export PATH="/usr/local/zig-linux-x86_64-0.13.0:$PATH"
-      - cargo install cargo-zigbuild
-      - rustup target add x86_64-apple-darwin
-      - cargo zigbuild --release --target x86_64-apple-darwin -p hpm-cli --bin hpm
-      - cp target/x86_64-apple-darwin/release/hpm hpm-macos-x86_64
-    when:
-      - event: tag
-        ref: "refs/tags/v*"
-
-  - name: build-macos-aarch64
-    image: rust:1-bookworm
-    depends_on: [check]
-    commands:
-      - apt-get update && apt-get install -y wget xz-utils
-      - wget -q https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
-      - tar xf zig-linux-x86_64-0.13.0.tar.xz -C /usr/local
-      - export PATH="/usr/local/zig-linux-x86_64-0.13.0:$PATH"
-      - cargo install cargo-zigbuild
-      - rustup target add aarch64-apple-darwin
-      - cargo zigbuild --release --target aarch64-apple-darwin -p hpm-cli --bin hpm
-      - cp target/aarch64-apple-darwin/release/hpm hpm-macos-aarch64
-    when:
-      - event: tag
-        ref: "refs/tags/v*"
-
   - name: build-windows
     image: rust:1-bookworm
     depends_on: [check]
@@ -76,7 +44,7 @@ steps:
   # ── Upload to GitHub Releases ──────────────────────────────
   - name: upload-github
     image: debian:bookworm-slim
-    depends_on: [build-linux, build-macos-x86_64, build-macos-aarch64, build-windows]
+    depends_on: [build-linux, build-windows]
     environment:
       GITHUB_TOKEN:
         from_secret: github_token
@@ -88,7 +56,7 @@ steps:
       - export GH_TOKEN=$${GITHUB_TOKEN}
       - VERSION=$${CI_COMMIT_TAG#v}
       - echo "Creating GitHub Release v$${VERSION}"
-      - gh release create "$${CI_COMMIT_TAG}" --repo 3db-dk/hpm --title "v$${VERSION}" --generate-notes hpm-linux-x86_64 hpm-macos-x86_64 hpm-macos-aarch64 hpm-windows-x86_64.exe
+      - gh release create "$${CI_COMMIT_TAG}" --repo 3db-dk/hpm --title "v$${VERSION}" --generate-notes hpm-linux-x86_64 hpm-windows-x86_64.exe
     when:
       - event: tag
         ref: "refs/tags/v*"
