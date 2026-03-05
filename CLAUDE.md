@@ -6,7 +6,7 @@ A modern package manager for SideFX Houdini, written in Rust.
 
 - **Language:** Rust (MSRV 1.74)
 - **Build system:** Cargo workspace
-- **Repository:** http://10.100.36.15:3000/soren-n/hpm
+- **Repository:** https://github.com/3db-dk/hpm
 
 ## Commands
 

@@ -7,14 +7,13 @@ This document provides a comprehensive reference for all public APIs, types, fun
 1. [Module Overview](#module-overview)
 2. [Core Package Management (hpm-core)](#core-package-management-hpm-core)
 3. [Python Integration (hpm-python)](#python-integration-hpm-python)
-4. [Registry System (hpm-registry)](#registry-system-hpm-registry)
-5. [Package Processing (hpm-package)](#package-processing-hpm-package)
-6. [Configuration Management (hpm-config)](#configuration-management-hpm-config)
-7. [Dependency Resolution (hpm-resolver)](#dependency-resolution-hpm-resolver)
-8. [CLI System (hpm-cli)](#cli-system-hpm-cli)
-9. [Error Handling (hpm-error)](#error-handling-hpm-error)
-10. [Type Reference](#type-reference)
-11. [Trait Reference](#trait-reference)
+4. [Package Processing (hpm-package)](#package-processing-hpm-package)
+5. [Configuration Management (hpm-config)](#configuration-management-hpm-config)
+6. [Dependency Resolution (hpm-resolver)](#dependency-resolution-hpm-resolver)
+7. [CLI System (hpm-cli)](#cli-system-hpm-cli)
+8. [Error Handling (hpm-error)](#error-handling-hpm-error)
+9. [Type Reference](#type-reference)
+10. [Trait Reference](#trait-reference)
 
 ## Module Overview
 
@@ -42,7 +41,6 @@ HPM is organized as a modular workspace where each crate provides specific funct
 │                                    ▼                                           │
 │  Infrastructure                                                                │
 │  ┌─────────────────────────────────────────────────────────────────────────┐   │
-│  │  hpm-registry   │ QUIC/gRPC registry client/server, authentication     │   │
 │  │  hpm-config     │ Configuration management, project discovery settings │   │
 │  │  hpm-error      │ Structured error types, error handling utilities     │   │
 │  └─────────────────────────────────────────────────────────────────────────┘   │
@@ -137,7 +135,6 @@ pub struct PackageSpec {
 
 #[derive(Debug, Clone)]
 pub enum PackageSource {
-    Registry { url: String },
     Git { url: String, reference: GitReference },
     Local { path: PathBuf },
 }
@@ -817,520 +814,6 @@ pub enum PythonError {
 }
 ```
 
-## Registry System (hpm-registry)
-
-The `hpm-registry` crate provides a high-performance QUIC/gRPC-based package registry system.
-
-### Registry Client
-
-#### RegistryClient
-
-High-performance registry client with QUIC transport.
-
-```rust
-pub struct RegistryClient {
-    // Private fields
-}
-
-impl RegistryClient {
-    /// Connect to registry server
-    pub async fn connect(config: RegistryClientConfig) -> Result<Self, RegistryError>
-    
-    /// Disconnect from registry server
-    pub async fn disconnect(self) -> Result<(), RegistryError>
-    
-    /// Set authentication token for operations requiring authorization
-    pub fn set_auth_token(&mut self, token: AuthToken)
-    
-    /// Clear authentication token
-    pub fn clear_auth_token(&mut self)
-    
-    /// Search packages by query string
-    pub async fn search_packages(
-        &mut self,
-        query: &str,
-        limit: Option<u32>,
-        offset: Option<u32>
-    ) -> Result<SearchResults, RegistryError>
-    
-    /// Get package metadata
-    pub async fn get_package_metadata(
-        &mut self,
-        name: &str,
-        version: Option<&str>
-    ) -> Result<PackageMetadata, RegistryError>
-    
-    /// Download package by name and version
-    pub async fn download_package(
-        &mut self,
-        name: &str,
-        version: &str
-    ) -> Result<DownloadResult, RegistryError>
-    
-    /// Publish package to registry (requires authentication)
-    pub async fn publish_package(
-        &mut self,
-        name: &str,
-        version: &str,
-        package_data: Vec<u8>,
-        metadata: PublishMetadata
-    ) -> Result<PublishResult, RegistryError>
-    
-    /// List versions for a package
-    pub async fn list_versions(&mut self, name: &str) -> Result<Vec<String>, RegistryError>
-    
-    /// Verify package integrity using checksum
-    pub fn verify_package_integrity(&self, data: &[u8], expected_checksum: &str) -> Result<bool, RegistryError>
-    
-    /// Get client connection statistics
-    pub fn get_connection_stats(&self) -> ConnectionStats
-}
-```
-
-#### Client Configuration and Types
-
-```rust
-#[derive(Debug, Clone)]
-pub struct RegistryClientConfig {
-    /// Registry server address (e.g., "registry.hpm.dev:8443")
-    pub server_address: String,
-    
-    /// Connection timeout
-    pub timeout: Duration,
-    
-    /// Maximum number of retry attempts
-    pub max_retries: u32,
-    
-    /// Enable response compression
-    pub compression: bool,
-    
-    /// Client certificate for mTLS (optional)
-    pub client_cert: Option<ClientCertificate>,
-    
-    /// Custom CA certificates (optional)
-    pub ca_certs: Option<Vec<Certificate>>,
-}
-
-impl Default for RegistryClientConfig {
-    fn default() -> Self
-}
-
-#[derive(Debug)]
-pub struct SearchResults {
-    pub packages: Vec<PackageSearchResult>,
-    pub total_count: u32,
-    pub limit: u32,
-    pub offset: u32,
-}
-
-#[derive(Debug, Clone)]
-pub struct PackageSearchResult {
-    pub name: String,
-    pub latest_version: String,
-    pub description: Option<String>,
-    pub keywords: Vec<String>,
-    pub download_count: u64,
-    pub last_updated: DateTime<Utc>,
-}
-
-#[derive(Debug)]
-pub struct DownloadResult {
-    pub package_data: Vec<u8>,
-    pub checksum: String,
-    pub metadata: PackageMetadata,
-    pub download_time: Duration,
-}
-
-#[derive(Debug)]
-pub struct PublishResult {
-    pub package_id: String,
-    pub checksum: String,
-    pub publish_time: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PublishMetadata {
-    pub description: Option<String>,
-    pub keywords: Vec<String>,
-    pub license: Option<String>,
-    pub homepage: Option<String>,
-    pub repository: Option<String>,
-}
-
-#[derive(Debug)]
-pub struct ConnectionStats {
-    pub bytes_sent: u64,
-    pub bytes_received: u64,
-    pub requests_sent: u32,
-    pub connection_time: Duration,
-    pub last_activity: DateTime<Utc>,
-}
-```
-
-### Registry Server
-
-#### RegistryServer
-
-Scalable registry server with pluggable storage backends.
-
-```rust
-pub struct RegistryServer {
-    // Private fields
-}
-
-impl RegistryServer {
-    /// Create registry server with storage backend
-    pub fn new(bind_address: SocketAddr, storage: Box<dyn Storage>) -> Self
-    
-    /// Configure server with custom settings
-    pub fn with_config(self, config: ServerConfig) -> Self
-    
-    /// Add authentication provider
-    pub fn with_auth_provider(self, provider: Box<dyn AuthProvider>) -> Self
-    
-    /// Start serving requests (blocks until shutdown)
-    pub async fn serve(self) -> Result<(), RegistryError>
-    
-    /// Get server statistics
-    pub fn get_server_stats(&self) -> ServerStats
-}
-```
-
-#### Server Configuration
-
-```rust
-#[derive(Debug, Clone)]
-pub struct ServerConfig {
-    /// Maximum number of concurrent connections
-    pub max_connections: u32,
-    
-    /// Request timeout
-    pub request_timeout: Duration,
-    
-    /// Enable response compression
-    pub compression: bool,
-    
-    /// Rate limiting (requests per minute per client)
-    pub rate_limit: Option<u32>,
-    
-    /// Maximum package size in bytes
-    pub max_package_size: u64,
-    
-    /// TLS configuration
-    pub tls_config: TlsConfig,
-    
-    /// Logging configuration
-    pub logging: LoggingConfig,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self
-}
-
-#[derive(Debug, Clone)]
-pub struct TlsConfig {
-    pub cert_path: PathBuf,
-    pub key_path: PathBuf,
-    pub require_client_cert: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct LoggingConfig {
-    pub level: String,
-    pub format: LogFormat,
-    pub access_log: bool,
-}
-
-#[derive(Debug, Clone)]
-pub enum LogFormat {
-    Json,
-    Text,
-}
-```
-
-### Storage Backend Abstraction
-
-#### Storage Trait
-
-Pluggable storage backend for the registry server.
-
-```rust
-#[async_trait]
-pub trait Storage: Send + Sync {
-    /// Store package data and return package ID
-    async fn store_package(&self, package: &PackageData) -> Result<String, StorageError>
-    
-    /// Retrieve package by ID
-    async fn get_package(&self, package_id: &str) -> Result<Option<PackageData>, StorageError>
-    
-    /// Get package by name and version
-    async fn get_package_by_name_version(
-        &self, 
-        name: &str, 
-        version: &str
-    ) -> Result<Option<PackageData>, StorageError>
-    
-    /// Search packages by query
-    async fn search_packages(&self, query: &SearchQuery) -> Result<Vec<PackageMetadata>, StorageError>
-    
-    /// List all versions for a package
-    async fn list_versions(&self, name: &str) -> Result<Vec<String>, StorageError>
-    
-    /// Delete package (admin operation)
-    async fn delete_package(&self, package_id: &str) -> Result<(), StorageError>
-    
-    /// Check if package exists
-    async fn package_exists(&self, name: &str, version: &str) -> Result<bool, StorageError>
-    
-    /// Get storage statistics
-    async fn get_statistics(&self) -> Result<StorageStatistics, StorageError>
-}
-```
-
-#### Storage Implementations
-
-```rust
-/// In-memory storage for development and testing
-pub struct MemoryStorage {
-    // Private fields
-}
-
-impl MemoryStorage {
-    pub fn new() -> Self
-    pub fn with_capacity(capacity: usize) -> Self
-}
-
-/// PostgreSQL storage for production deployments
-pub struct PostgreSqlStorage {
-    // Private fields  
-}
-
-impl PostgreSqlStorage {
-    pub async fn connect(database_url: &str) -> Result<Self, StorageError>
-    pub async fn connect_with_config(config: PostgreSqlConfig) -> Result<Self, StorageError>
-    pub async fn migrate(&self) -> Result<(), StorageError>
-}
-
-/// S3-compatible storage for cloud deployments
-pub struct S3Storage {
-    // Private fields
-}
-
-impl S3Storage {
-    pub async fn new(config: S3Config) -> Result<Self, StorageError>
-    pub async fn with_credentials(config: S3Config, credentials: Credentials) -> Result<Self, StorageError>
-}
-
-#[derive(Debug, Clone)]
-pub struct PostgreSqlConfig {
-    pub database_url: String,
-    pub pool_size: u32,
-    pub connection_timeout: Duration,
-    pub idle_timeout: Duration,
-}
-
-#[derive(Debug, Clone)]
-pub struct S3Config {
-    pub bucket: String,
-    pub region: String,
-    pub endpoint: Option<String>, // For S3-compatible services
-    pub prefix: Option<String>,   // Key prefix for organization
-}
-```
-
-### Authentication System
-
-#### Authentication Types
-
-```rust
-#[derive(Debug, Clone)]
-pub struct AuthToken {
-    pub token: String,
-    pub scopes: Vec<TokenScope>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub user_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TokenScope {
-    /// Read packages and metadata
-    Read,
-    /// Publish packages
-    Write,
-    /// Administrative operations
-    Admin,
-}
-
-impl AuthToken {
-    pub fn new(token: String, scopes: Vec<TokenScope>) -> Self
-    pub fn with_expiry(self, expires_at: DateTime<Utc>) -> Self
-    pub fn with_user_id(self, user_id: String) -> Self
-    pub fn is_expired(&self) -> bool
-    pub fn has_scope(&self, scope: &TokenScope) -> bool
-}
-```
-
-#### AuthProvider Trait
-
-```rust
-#[async_trait]
-pub trait AuthProvider: Send + Sync {
-    /// Validate authentication token
-    async fn validate_token(&self, token: &str) -> Result<AuthToken, AuthError>
-    
-    /// Create new token (admin operation)
-    async fn create_token(&self, user_id: &str, scopes: Vec<TokenScope>) -> Result<AuthToken, AuthError>
-    
-    /// Revoke token (admin operation)
-    async fn revoke_token(&self, token: &str) -> Result<(), AuthError>
-    
-    /// List tokens for user (admin operation)
-    async fn list_user_tokens(&self, user_id: &str) -> Result<Vec<AuthToken>, AuthError>
-}
-```
-
-### Protocol Buffer Definitions
-
-#### Generated Types
-
-```rust
-/// Package metadata for search and listing
-#[derive(Debug, Clone, prost::Message)]
-pub struct PackageInfo {
-    #[prost(string, tag = "1")]
-    pub name: String,
-    #[prost(string, tag = "2")]
-    pub version: String,
-    #[prost(string, optional, tag = "3")]
-    pub description: Option<String>,
-    #[prost(string, repeated, tag = "4")]
-    pub keywords: Vec<String>,
-    #[prost(uint64, tag = "5")]
-    pub size: u64,
-    #[prost(string, tag = "6")]
-    pub checksum: String,
-}
-
-/// Search request parameters
-#[derive(Debug, Clone, prost::Message)]
-pub struct SearchRequest {
-    #[prost(string, tag = "1")]
-    pub query: String,
-    #[prost(uint32, tag = "2")]
-    pub limit: u32,
-    #[prost(uint32, tag = "3")]
-    pub offset: u32,
-}
-
-/// Search response with results
-#[derive(Debug, Clone, prost::Message)]
-pub struct SearchResponse {
-    #[prost(message, repeated, tag = "1")]
-    pub packages: Vec<PackageInfo>,
-    #[prost(uint32, tag = "2")]
-    pub total_count: u32,
-}
-
-/// Package download request
-#[derive(Debug, Clone, prost::Message)]
-pub struct DownloadRequest {
-    #[prost(string, tag = "1")]
-    pub name: String,
-    #[prost(string, tag = "2")]
-    pub version: String,
-}
-
-/// Package download response (streamed)
-#[derive(Debug, Clone, prost::Message)]
-pub struct DownloadResponse {
-    #[prost(bytes = "vec", tag = "1")]
-    pub data: Vec<u8>,
-    #[prost(string, tag = "2")]
-    pub checksum: String,
-    #[prost(message, optional, tag = "3")]
-    pub metadata: Option<PackageInfo>,
-}
-
-/// Package publish request
-#[derive(Debug, Clone, prost::Message)]
-pub struct PublishRequest {
-    #[prost(string, tag = "1")]
-    pub name: String,
-    #[prost(string, tag = "2")]
-    pub version: String,
-    #[prost(bytes = "vec", tag = "3")]
-    pub data: Vec<u8>,
-    #[prost(string, optional, tag = "4")]
-    pub description: Option<String>,
-    #[prost(string, repeated, tag = "5")]
-    pub keywords: Vec<String>,
-}
-
-/// Package publish response
-#[derive(Debug, Clone, prost::Message)]
-pub struct PublishResponse {
-    #[prost(string, tag = "1")]
-    pub package_id: String,
-    #[prost(string, tag = "2")]  
-    pub checksum: String,
-}
-```
-
-### Error Types
-
-```rust
-#[derive(Debug, thiserror::Error)]
-pub enum RegistryError {
-    #[error("Connection failed: {reason}")]
-    ConnectionFailed { reason: String },
-    
-    #[error("Authentication failed")]
-    AuthenticationFailed,
-    
-    #[error("Package not found: {name}@{version}")]
-    PackageNotFound { name: String, version: String },
-    
-    #[error("Package already exists: {name}@{version}")]
-    PackageAlreadyExists { name: String, version: String },
-    
-    #[error("Invalid package data: {reason}")]
-    InvalidPackageData { reason: String },
-    
-    #[error("Network error: {0}")]
-    Network(#[from] Box<dyn std::error::Error + Send + Sync>),
-    
-    #[error("Storage error: {0}")]
-    Storage(#[from] StorageError),
-    
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] prost::DecodeError),
-    
-    #[error("Rate limit exceeded: {retry_after}s")]
-    RateLimitExceeded { retry_after: u32 },
-    
-    #[error("Server error: {status_code}")]
-    ServerError { status_code: u16 },
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum StorageError {
-    #[error("Package not found: {id}")]
-    NotFound { id: String },
-    
-    #[error("Storage backend error: {details}")]
-    BackendError { details: String },
-    
-    #[error("Serialization failed: {0}")]
-    Serialization(#[from] serde_json::Error),
-    
-    #[error("Database error: {0}")]
-    Database(#[from] sqlx::Error),
-    
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-}
-```
-
 ## Package Processing (hpm-package)
 
 The `hpm-package` crate handles package manifest processing, template generation, and Houdini integration.
@@ -1387,7 +870,7 @@ impl PackageManifest {
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageMetadata {
-    /// Package name (must be unique in registry)
+    /// Package name (must be unique)
     pub name: String,
     
     /// Semantic version
@@ -1683,7 +1166,6 @@ Main configuration structure with hierarchical loading.
 ```rust
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub registry: RegistryConfig,
     pub storage: StorageConfig,
     pub projects: ProjectsConfig,
     pub python: PythonConfig,
@@ -1711,42 +1193,6 @@ impl Config {
 }
 
 impl Default for Config {
-    fn default() -> Self
-}
-```
-
-#### Registry Configuration
-
-```rust
-#[derive(Debug, Clone)]
-pub struct RegistryConfig {
-    /// Default registry URL
-    pub default_url: String,
-    
-    /// Additional registry sources
-    pub sources: BTreeMap<String, RegistrySource>,
-    
-    /// Authentication token
-    pub auth_token: Option<String>,
-    
-    /// Connection timeout
-    pub timeout: Duration,
-    
-    /// Maximum retry attempts
-    pub max_retries: u32,
-    
-    /// Enable compression
-    pub compression: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct RegistrySource {
-    pub url: String,
-    pub auth_token: Option<String>,
-    pub priority: u32,
-}
-
-impl Default for RegistryConfig {
     fn default() -> Self
 }
 ```
@@ -1948,9 +1394,7 @@ pub mod env {
     pub fn set_hpm_env(key: &str, value: &str)
     
     /// Environment variable mappings
-    pub const REGISTRY_URL: &str = "HPM_REGISTRY_URL";
     pub const STORAGE_PATH: &str = "HPM_STORAGE_PATH";
-    pub const AUTH_TOKEN: &str = "HPM_AUTH_TOKEN";
     pub const LOG_LEVEL: &str = "HPM_LOG_LEVEL";
     pub const MAX_PARALLEL: &str = "HPM_MAX_PARALLEL";
 }
@@ -2077,7 +1521,6 @@ pub enum ConflictStrategy {
 
 #[derive(Debug, Clone)]
 pub enum SourceType {
-    Registry,
     Git,
     Local,
 }
@@ -2637,7 +2080,6 @@ pub enum ErrorCategory {
     Internal,
     External,
     Python,
-    Registry,
     Resolution,
 }
 
@@ -2672,7 +2114,6 @@ pub struct PackageSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PackageSource {
-    Registry { url: String },
     Git { url: String, reference: GitReference },
     Local { path: PathBuf },
 }

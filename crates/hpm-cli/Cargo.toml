@@ -39,7 +39,7 @@ hpm-core = { path = "../hpm-core" }
 hpm-config = { path = "../hpm-config" }
 hpm-python = { path = "../hpm-python" }
 hpm-error = { path = "../hpm-error" }
-# hpm-registry removed - using Git archive-based dependencies
+
 
 [dev-dependencies]
 proptest.workspace = true

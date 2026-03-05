@@ -20,10 +20,9 @@ This comprehensive guide provides everything developers need to understand, cont
 ### Prerequisites
 
 #### Required Tools
-- **Rust 1.70 or later** - The project requires modern Rust features
+- **Rust 1.74 or later** - The project requires modern Rust features
 - **SideFX Houdini 19.5+** - For testing integration features and package compatibility
 - **Git** - Version control and contribution workflow
-- **Protocol Buffers Compiler (protoc)** - For gRPC code generation in the registry module
 
 #### Optional Tools
 - **cargo-machete** - Detect unused dependencies
@@ -37,7 +36,7 @@ This comprehensive guide provides everything developers need to understand, cont
 #### 1. Clone and Build
 ```bash
 # Clone the repository
-git clone https://github.com/hpm-org/hpm.git
+git clone https://github.com/3db-dk/hpm.git
 cd hpm
 
 # Build the entire workspace
@@ -56,13 +55,6 @@ cargo install cargo-machete cargo-audit cargo-tarpaulin
 pip install pre-commit
 pre-commit install
 
-# Install Protocol Buffers compiler (for registry development)
-# macOS
-brew install protobuf
-# Ubuntu/Debian
-sudo apt install protobuf-compiler
-# Windows
-# Download from https://github.com/protocolbuffers/protobuf/releases
 ```
 
 #### 3. IDE Configuration
@@ -148,16 +140,6 @@ hpm/
 │   │   │   ├── cleanup.rs             # Python cleanup operations
 │   │   │   └── types.rs               # Python-specific types
 │   │   └── proptest-regressions/      # Property test regression files
-│   ├── hpm-registry/                  # QUIC/gRPC registry
-│   │   ├── src/
-│   │   │   ├── lib.rs                 # Public API
-│   │   │   ├── client/                # Registry client
-│   │   │   ├── server/                # Registry server
-│   │   │   ├── proto/                 # Protocol buffer definitions
-│   │   │   ├── types/                 # Authentication and error types
-│   │   │   └── utils/                 # Compression and validation
-│   │   ├── proto/                     # .proto source files
-│   │   └── examples/                  # Usage examples
 │   ├── hpm-resolver/                  # Dependency resolution engine
 │   │   └── src/
 │   │       ├── lib.rs                 # Public API
@@ -225,12 +207,6 @@ hpm/
 - Professional error reporting and help
 - Multiple output format support
 - Command orchestration and workflow management
-
-**hpm-registry**: High-performance package registry
-- QUIC transport with s2n-quic for performance
-- gRPC protocol with Protocol Buffers
-- Pluggable storage backends (Memory, PostgreSQL, S3)
-- Authentication and security features
 
 ## API Reference
 
@@ -404,98 +380,6 @@ pub struct PythonDependencySpec {
     pub extras: Option<Vec<String>>,
     pub optional: bool,
     pub source_packages: Vec<String>, // Which HPM packages require this
-}
-```
-
-#### Registry System (hpm-registry)
-
-##### RegistryClient
-High-performance QUIC-based registry client.
-
-```rust
-pub struct RegistryClient {
-    connection: QuicConnection,
-    auth_token: Option<AuthToken>,
-    config: RegistryClientConfig,
-}
-
-impl RegistryClient {
-    /// Connect to registry server
-    pub async fn connect(config: RegistryClientConfig) -> Result<Self, RegistryError>;
-    
-    /// Set authentication token
-    pub fn set_auth_token(&mut self, token: AuthToken);
-    
-    /// Search packages by query
-    pub async fn search_packages(
-        &mut self, 
-        query: &str, 
-        limit: Option<u32>, 
-        offset: Option<u32>
-    ) -> Result<SearchResults, RegistryError>;
-    
-    /// Download package by name and version
-    pub async fn download_package(&mut self, name: &str, version: &str) -> Result<DownloadResult, RegistryError>;
-    
-    /// Publish package to registry
-    pub async fn publish_package(
-        &mut self, 
-        name: &str, 
-        version: &str, 
-        package_data: Vec<u8>,
-        description: Option<String>
-    ) -> Result<PublishResult, RegistryError>;
-    
-    /// Verify package integrity
-    pub fn verify_package_integrity(&self, data: &[u8], expected_checksum: &str) -> Result<bool, RegistryError>;
-}
-
-#[derive(Debug, Clone)]
-pub struct RegistryClientConfig {
-    pub server_address: String,
-    pub timeout: Duration,
-    pub max_retries: u32,
-    pub compression: bool,
-}
-```
-
-##### RegistryServer
-Scalable registry server with pluggable storage.
-
-```rust
-pub struct RegistryServer {
-    bind_address: SocketAddr,
-    storage: Box<dyn Storage>,
-    config: ServerConfig,
-}
-
-impl RegistryServer {
-    /// Create server with storage backend
-    pub fn new(bind_address: SocketAddr, storage: Box<dyn Storage>) -> Self;
-    
-    /// Start serving requests
-    pub async fn serve(self) -> Result<(), RegistryError>;
-    
-    /// Configure server settings
-    pub fn with_config(mut self, config: ServerConfig) -> Self;
-}
-
-#[async_trait]
-pub trait Storage: Send + Sync {
-    /// Store package data
-    async fn store_package(&self, package: &PackageData) -> Result<String, StorageError>;
-    
-    /// Retrieve package by ID
-    async fn get_package(&self, package_id: &str) -> Result<Option<PackageData>, StorageError>;
-    
-    /// Search packages
-    async fn search_packages(&self, query: &SearchQuery) -> Result<Vec<PackageMetadata>, StorageError>;
-    
-    /// List package versions
-    async fn list_versions(&self, name: &str) -> Result<Vec<String>, StorageError>;
-    
-    /// Delete package (admin operation)
-    async fn delete_package(&self, package_id: &str) -> Result<(), StorageError>;
 }
 ```
 
@@ -847,7 +731,7 @@ cargo build --timings
 
 #### 1. Error Handling Patterns
 ```rust
-// ✅ Good: Domain-specific errors with context
+// Good: Domain-specific errors with context
 #[derive(Debug, thiserror::Error)]
 pub enum PackageError {
     #[error("Package not found: {name}@{version}")]
@@ -860,7 +744,7 @@ pub enum PackageError {
     Io(#[from] std::io::Error),
 }
 
-// ✅ Good: Application-level error handling
+// Good: Application-level error handling
 pub fn install_package(spec: &PackageSpec) -> Result<InstallResult> {
     let package_data = download_package(spec)
         .context("Failed to download package from registry")?;
@@ -871,7 +755,7 @@ pub fn install_package(spec: &PackageSpec) -> Result<InstallResult> {
     Ok(InstallResult { /* ... */ })
 }
 
-// ❌ Bad: Generic errors without context
+// Bad: Generic errors without context
 pub fn bad_function() -> Result<(), Box<dyn std::error::Error>> {
     // No context about what failed or why
 }
@@ -879,7 +763,7 @@ pub fn bad_function() -> Result<(), Box<dyn std::error::Error>> {
 
 #### 2. Async/Await Patterns
 ```rust
-// ✅ Good: Proper async error handling and concurrency
+// Good: Proper async error handling and concurrency
 pub async fn install_multiple_packages(specs: &[PackageSpec]) -> Result<Vec<InstallResult>> {
     let tasks: Vec<_> = specs.iter()
         .map(|spec| {
@@ -899,14 +783,14 @@ pub async fn install_multiple_packages(specs: &[PackageSpec]) -> Result<Vec<Inst
     Ok(results)
 }
 
-// ❌ Bad: Blocking operations in async context
+// Bad: Blocking operations in async context
 pub async fn bad_async_function() -> Result<String> {
     // This blocks the entire async runtime
     let content = std::fs::read_to_string("file.txt")?;
     Ok(content)
 }
 
-// ✅ Good: Non-blocking async I/O
+// Good: Non-blocking async I/O
 pub async fn good_async_function() -> Result<String> {
     let content = tokio::fs::read_to_string("file.txt").await?;
     Ok(content)
@@ -915,7 +799,7 @@ pub async fn good_async_function() -> Result<String> {
 
 #### 3. Testing Patterns
 ```rust
-// ✅ Good: Isolated, deterministic tests
+// Good: Isolated, deterministic tests
 #[tokio::test]
 async fn test_storage_manager_cleanup() {
     let temp_dir = TempDir::new().unwrap();
@@ -936,11 +820,11 @@ async fn test_storage_manager_cleanup() {
     // TempDir automatically cleans up
 }
 
-// ❌ Bad: Tests with external dependencies
+// Bad: Tests with external dependencies
 #[tokio::test]
 async fn bad_test() {
     // Don't depend on external services
-    let client = RegistryClient::connect("https://real-registry.com").await.unwrap();
+    let client = HttpClient::connect("https://external-service.com").await.unwrap();
     
     // Don't use global state
     std::env::set_current_dir("/tmp/test").unwrap();
@@ -1099,7 +983,7 @@ pub enum StorageError {
 
 #### 1. Memory Management
 ```rust
-// ✅ Good: Use references to avoid unnecessary cloning
+// Good: Use references to avoid unnecessary cloning
 pub fn process_packages(packages: &[PackageManifest]) -> Result<ProcessingResult> {
     for package in packages {
         // Process each package by reference
@@ -1108,13 +992,13 @@ pub fn process_packages(packages: &[PackageManifest]) -> Result<ProcessingResult
     Ok(ProcessingResult::default())
 }
 
-// ✅ Good: Use Arc for shared data in async contexts
+// Good: Use Arc for shared data in async contexts
 #[derive(Clone)]
 pub struct SharedStorage {
     inner: Arc<RwLock<StorageManager>>,
 }
 
-// ❌ Bad: Unnecessary cloning
+// Bad: Unnecessary cloning
 pub fn bad_process_packages(packages: Vec<PackageManifest>) -> Result<ProcessingResult> {
     for package in packages.clone() { // Unnecessary clone
         let cloned_package = package.clone(); // Another unnecessary clone
@@ -1126,7 +1010,7 @@ pub fn bad_process_packages(packages: Vec<PackageManifest>) -> Result<Processing
 
 #### 2. I/O Optimization
 ```rust
-// ✅ Good: Batch operations and use async I/O
+// Good: Batch operations and use async I/O
 pub async fn install_packages_efficiently(specs: &[PackageSpec]) -> Result<Vec<InstallResult>> {
     // Batch downloads
     let download_tasks: Vec<_> = specs.iter()
@@ -1146,7 +1030,7 @@ pub async fn install_packages_efficiently(specs: &[PackageSpec]) -> Result<Vec<I
     Ok(results)
 }
 
-// ❌ Bad: Sequential I/O operations
+// Bad: Sequential I/O operations
 pub async fn install_packages_slowly(specs: &[PackageSpec]) -> Result<Vec<InstallResult>> {
     let mut results = Vec::new();
     
@@ -1162,73 +1046,6 @@ pub async fn install_packages_slowly(specs: &[PackageSpec]) -> Result<Vec<Instal
 ```
 
 ## Extension and Plugin Development
-
-### Storage Backend Extensions
-
-Create custom storage backends by implementing the `Storage` trait:
-
-```rust
-use async_trait::async_trait;
-use hpm_registry::server::Storage;
-
-pub struct RedisStorage {
-    client: redis::aio::Connection,
-    compression: bool,
-}
-
-#[async_trait]
-impl Storage for RedisStorage {
-    async fn store_package(&self, package: &PackageData) -> Result<String, StorageError> {
-        let package_id = generate_package_id(&package.name, &package.version);
-        
-        let data = if self.compression {
-            compress_package_data(&package.data)?
-        } else {
-            package.data.clone()
-        };
-        
-        self.client.set(&package_id, data).await
-            .map_err(|e| StorageError::Backend(e.into()))?;
-            
-        // Store metadata separately for efficient queries
-        let metadata_key = format!("meta:{}", package_id);
-        let metadata = serde_json::to_vec(&package.metadata)?;
-        self.client.set(&metadata_key, metadata).await
-            .map_err(|e| StorageError::Backend(e.into()))?;
-            
-        Ok(package_id)
-    }
-    
-    async fn get_package(&self, package_id: &str) -> Result<Option<PackageData>, StorageError> {
-        let data: Option<Vec<u8>> = self.client.get(package_id).await
-            .map_err(|e| StorageError::Backend(e.into()))?;
-            
-        match data {
-            Some(raw_data) => {
-                let decompressed_data = if self.compression {
-                    decompress_package_data(&raw_data)?
-                } else {
-                    raw_data
-                };
-                
-                // Get metadata
-                let metadata_key = format!("meta:{}", package_id);
-                let metadata_raw: Vec<u8> = self.client.get(&metadata_key).await
-                    .map_err(|e| StorageError::Backend(e.into()))?;
-                let metadata: PackageMetadata = serde_json::from_slice(&metadata_raw)?;
-                
-                Ok(Some(PackageData {
-                    data: decompressed_data,
-                    metadata,
-                }))
-            }
-            None => Ok(None),
-        }
-    }
-    
-    // ... implement other required methods
-}
-```
 
 ### Command Extensions
 
@@ -1297,7 +1114,7 @@ impl CustomCommands {
         match format.unwrap_or(OutputFormat::Human) {
             OutputFormat::Human => {
                 for vulnerability in results.vulnerabilities {
-                    println!("🚨 {} - {}: {}", 
+                    println!("ALERT: {} - {}: {}",
                         vulnerability.severity,
                         vulnerability.package,
                         vulnerability.description
@@ -1518,13 +1335,12 @@ python3 scripts/check-emojis.py
 #### Intermediate Areas
 1. **Performance optimizations** - Profile and optimize hot paths
 2. **Feature enhancements** - Extend existing functionality
-3. **Registry integration** - Connect CLI with registry system  
+3. **Package sources** - Additional dependency source types
 4. **Python integration** - Improve virtual environment management
 
 #### Advanced Areas  
 1. **Dependency resolution** - Enhance PubGrub-inspired solver
-2. **Network protocols** - QUIC/gRPC performance optimizations
-3. **Storage backends** - New storage implementations
+2. **Storage backends** - New storage implementations
 4. **Plugin system** - Design and implement plugin architecture
 
 ## Troubleshooting and Debugging
@@ -1538,7 +1354,7 @@ rustup update stable
 
 # Check Rust version
 rustc --version
-# Should be 1.70 or later
+# Should be 1.74 or later
 
 # Reset toolchain if needed
 rustup default stable
@@ -1716,68 +1532,6 @@ cargo build --release --workspace
 cross build --target x86_64-unknown-linux-gnu --release
 cross build --target x86_64-pc-windows-gnu --release
 cross build --target x86_64-apple-darwin --release
-```
-
-### Deployment Architecture
-
-#### Registry Deployment
-```yaml
-# docker-compose.yml for registry deployment
-version: '3.8'
-services:
-  hpm-registry:
-    build: 
-      context: .
-      dockerfile: Dockerfile.registry
-    ports:
-      - "8443:8443"
-    environment:
-      - DATABASE_URL=postgresql://hpm:password@postgres:5432/hpm_registry
-      - REGISTRY_BIND_ADDR=0.0.0.0:8443
-      - RUST_LOG=info
-    depends_on:
-      - postgres
-    
-  postgres:
-    image: postgres:15
-    environment:
-      - POSTGRES_DB=hpm_registry
-      - POSTGRES_USER=hpm  
-      - POSTGRES_PASSWORD=password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    
-volumes:
-  postgres_data:
-```
-
-#### Production Configuration
-```toml
-# Production registry configuration
-[server]
-bind_address = "0.0.0.0:8443"
-max_connections = 1000
-request_timeout = "30s"
-compression = true
-
-[storage]
-backend = "postgresql"
-connection_url = "${DATABASE_URL}"
-pool_size = 20
-
-[auth]
-token_expiry = "30d"
-require_auth_for_publish = true
-require_auth_for_download = false
-
-[security]
-rate_limit = 100  # requests per minute
-max_package_size = "500MB"
-allowed_compression_types = ["zstd", "gzip"]
-
-[logging]
-level = "info"
-format = "json"
 ```
 
 This developer documentation provides comprehensive guidance for contributing to HPM. The modular architecture, comprehensive testing strategy, and clear development workflows ensure that contributions can be made safely and effectively while maintaining the project's high quality standards.

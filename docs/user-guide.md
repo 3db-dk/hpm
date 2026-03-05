@@ -18,17 +18,25 @@ HPM (Houdini Package Manager) is a modern, Rust-based package management system 
 
 ### Prerequisites
 
-- **Rust 1.70 or later** - Required for building HPM from source
+- **Rust 1.74 or later** - Required for building HPM from source
 - **SideFX Houdini 19.5+** - The target application for package management
 - **Git** (optional) - For version control integration during package initialization
 
+### Pre-built Binaries
+
+Pre-built binaries are available on GitHub Releases:
+
+<https://github.com/3db-dk/hpm/releases/latest>
+
+Download the appropriate binary for your platform and add it to your `PATH`.
+
 ### Build from Source
 
-Currently, HPM is available as source code and must be built locally:
+Alternatively, you can build HPM from source:
 
 ```bash
 # Clone the repository
-git clone https://github.com/hpm-org/hpm.git
+git clone https://github.com/3db-dk/hpm.git
 cd hpm
 
 # Build the release version
@@ -327,17 +335,17 @@ All HPM commands support these global options:
 
 ### Command Overview
 
-| Command | Purpose | Status |
-|---------|---------|--------|
-| [`init`](#init) | Initialize new HPM package | ✅ Fully Implemented |
-| [`add`](#add) | Add package dependencies | ✅ Fully Implemented |
-| [`remove`](#remove) | Remove package dependency | ✅ Fully Implemented |
-| [`install`](#install) | Install dependencies from hpm.toml | ✅ Fully Implemented |
-| [`update`](#update) | Update packages to latest versions | ✅ Fully Implemented |
-| [`list`](#list) | Display package information | ✅ Fully Implemented |
-| [`check`](#check) | Validate package configuration | ✅ Fully Implemented |
-| [`clean`](#clean) | Clean orphaned packages | ✅ Fully Implemented |
-| [`completions`](#completions) | Generate shell completions | ✅ Fully Implemented |
+| Command | Purpose |
+|---------|---------|
+| [`init`](#init) | Initialize new HPM package |
+| [`add`](#add) | Add package dependencies |
+| [`remove`](#remove) | Remove package dependency |
+| [`install`](#install) | Install dependencies from hpm.toml |
+| [`update`](#update) | Update packages to latest versions |
+| [`list`](#list) | Display package information |
+| [`check`](#check) | Validate package configuration |
+| [`clean`](#clean) | Clean orphaned packages |
+| [`completions`](#completions) | Generate shell completions |
 
 ### init
 
@@ -1149,9 +1157,9 @@ hpm -vv clean --dry-run  # Very verbose
 
 #### Support Channels
 
-- **Issues**: [GitHub Issues](https://github.com/hpm-org/hpm/issues) for bug reports
-- **Discussions**: [GitHub Discussions](https://github.com/hpm-org/hpm/discussions) for questions
-- **Documentation**: [CLAUDE.md](https://github.com/hpm-org/hpm/blob/main/CLAUDE.md) for development guidelines
+- **Issues**: [GitHub Issues](https://github.com/3db-dk/hpm/issues) for bug reports
+- **Discussions**: [GitHub Discussions](https://github.com/3db-dk/hpm/discussions) for questions
+- **Documentation**: [CLAUDE.md](https://github.com/3db-dk/hpm/blob/main/CLAUDE.md) for development guidelines
 
 ## Advanced Usage
 
@@ -1162,8 +1170,8 @@ HPM supports multiple output formats for different use cases:
 #### Human-Readable (Default)
 ```bash
 hpm install
-# ✓ Package 'geometry-tools' installed successfully
-# ⚠ Warning: Optional dependency 'visualization-tools' not found
+# Package 'geometry-tools' installed successfully
+# Warning: Optional dependency 'visualization-tools' not found
 ```
 
 #### JSON Output

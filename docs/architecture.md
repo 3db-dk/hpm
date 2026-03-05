@@ -66,7 +66,7 @@ HPM is a Rust-based package management system designed for SideFX Houdini. The a
 
 ### System Characteristics
 
-- **Language**: Rust (2021 edition, 1.70+ required)
+- **Language**: Rust (2021 edition, 1.74+ required)
 - **Concurrency Model**: Async/await with Tokio runtime
 - **Architecture Pattern**: Modular monolith with plugin points
 - **Configuration**: TOML-based hierarchical configuration system
