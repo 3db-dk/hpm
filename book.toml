@@ -1,0 +1,8 @@
+[book]
+title = "HPM - Houdini Package Manager"
+authors = ["HPM Contributors"]
+language = "en"
+src = "docs"
+
+[output.html]
+git-repository-url = "https://github.com/3db-dk/hpm"

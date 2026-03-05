@@ -55,7 +55,7 @@ anyhow = "1.0"
 thiserror = "2.0"
 
 # Async HTTP and networking
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 futures = "0.3"
 
 # File system and I/O

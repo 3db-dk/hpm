@@ -13,34 +13,100 @@ steps:
     when:
       - event: [push, pull_request, tag]
 
-  # ── Build release binary (Linux x86_64) ─────────────────────
+  # ── Build release binaries ─────────────────────────────────
   - name: build-linux
     image: rust:1-bookworm
     depends_on: [check]
     commands:
-      - cargo build --release --bin hpm
-      - strip target/release/hpm
-      - ls -la target/release/hpm
+      - rustup target add x86_64-unknown-linux-gnu
+      - cargo build --release --target x86_64-unknown-linux-gnu --bin hpm
+      - cp target/x86_64-unknown-linux-gnu/release/hpm hpm-linux-x86_64
     when:
       - event: tag
         ref: "refs/tags/v*"
 
-  # ── Upload binary to pkg.3db.dk ─────────────────────────────
-  - name: upload-linux
-    image: minio/mc:latest
-    depends_on: [build-linux]
-    environment:
-      MINIO_PKG_ROOT_USER:
-        from_secret: minio_pkg_root_user
-      MINIO_PKG_ROOT_PASSWORD:
-        from_secret: minio_pkg_root_password
+  - name: build-macos-x86_64
+    image: rust:1-bookworm
+    depends_on: [check]
     commands:
-      - mc alias set pkg https://pkg.3db.dk $${MINIO_PKG_ROOT_USER} $${MINIO_PKG_ROOT_PASSWORD}
-      - VERSION=$${CI_COMMIT_TAG#v}
-      - echo "Uploading HPM binary v$${VERSION}"
-      - mc cp target/release/hpm pkg/tools/hpm/$${VERSION}/hpm-linux-x86_64
-      - mc cp target/release/hpm pkg/tools/hpm/latest/hpm-linux-x86_64
-      - echo "Upload complete"
+      - apt-get update && apt-get install -y wget xz-utils
+      - wget -q https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+      - tar xf zig-linux-x86_64-0.13.0.tar.xz -C /usr/local
+      - export PATH="/usr/local/zig-linux-x86_64-0.13.0:$PATH"
+      - cargo install cargo-zigbuild
+      - rustup target add x86_64-apple-darwin
+      - cargo zigbuild --release --target x86_64-apple-darwin --bin hpm
+      - cp target/x86_64-apple-darwin/release/hpm hpm-macos-x86_64
     when:
       - event: tag
         ref: "refs/tags/v*"
+
+  - name: build-macos-aarch64
+    image: rust:1-bookworm
+    depends_on: [check]
+    commands:
+      - apt-get update && apt-get install -y wget xz-utils
+      - wget -q https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+      - tar xf zig-linux-x86_64-0.13.0.tar.xz -C /usr/local
+      - export PATH="/usr/local/zig-linux-x86_64-0.13.0:$PATH"
+      - cargo install cargo-zigbuild
+      - rustup target add aarch64-apple-darwin
+      - cargo zigbuild --release --target aarch64-apple-darwin --bin hpm
+      - cp target/aarch64-apple-darwin/release/hpm hpm-macos-aarch64
+    when:
+      - event: tag
+        ref: "refs/tags/v*"
+
+  - name: build-windows
+    image: rust:1-bookworm
+    depends_on: [check]
+    commands:
+      - apt-get update && apt-get install -y wget xz-utils
+      - wget -q https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+      - tar xf zig-linux-x86_64-0.13.0.tar.xz -C /usr/local
+      - export PATH="/usr/local/zig-linux-x86_64-0.13.0:$PATH"
+      - cargo install cargo-zigbuild
+      - rustup target add x86_64-pc-windows-gnu
+      - cargo zigbuild --release --target x86_64-pc-windows-gnu --bin hpm
+      - cp target/x86_64-pc-windows-gnu/release/hpm.exe hpm-windows-x86_64.exe
+    when:
+      - event: tag
+        ref: "refs/tags/v*"
+
+  # ── Upload to GitHub Releases ──────────────────────────────
+  - name: upload-github
+    image: debian:bookworm-slim
+    depends_on: [build-linux, build-macos-x86_64, build-macos-aarch64, build-windows]
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - apt-get update && apt-get install -y curl
+      - curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg
+      - echo "deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+      - apt-get update && apt-get install -y gh
+      - export GH_TOKEN=$${GITHUB_TOKEN}
+      - VERSION=$${CI_COMMIT_TAG#v}
+      - echo "Creating GitHub Release v$${VERSION}"
+      - gh release create "$${CI_COMMIT_TAG}" --repo 3db-dk/hpm --title "v$${VERSION}" --generate-notes hpm-linux-x86_64 hpm-macos-x86_64 hpm-macos-aarch64 hpm-windows-x86_64.exe
+    when:
+      - event: tag
+        ref: "refs/tags/v*"
+
+  # ── Mirror to GitHub (excluding .woodpecker.yml) ───────────
+  - name: mirror-github
+    image: alpine/git:latest
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - git clone $${CI_REPO_CLONE_URL} /tmp/mirror
+      - cd /tmp/mirror
+      - git rm --cached .woodpecker.yml
+      - git commit -m "Remove CI config for public mirror"
+      - git remote add github https://x-access-token:$${GITHUB_TOKEN}@github.com/3db-dk/hpm.git
+      - git push github HEAD:main --force
+      - git push github --tags
+    when:
+      - event: push
+        branch: main
