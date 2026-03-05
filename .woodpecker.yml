@@ -102,6 +102,8 @@ steps:
     commands:
       - git clone $${CI_REPO_CLONE_URL} /tmp/mirror
       - cd /tmp/mirror
+      - git config user.email "ci@3db.dk"
+      - git config user.name "Woodpecker CI"
       - git rm --cached .woodpecker.yml
       - git commit -m "Remove CI config for public mirror"
       - git remote add github https://x-access-token:$${GITHUB_TOKEN}@github.com/3db-dk/hpm.git
