@@ -1,0 +1,12 @@
+# Read the Docs configuration file
+# See https://docs.readthedocs.io/en/stable/config-file/v2.html
+
+version: 2
+
+build:
+  os: ubuntu-24.04
+  tools:
+    rust: latest
+  commands:
+    - cargo install mdbook
+    - mdbook build --dest-dir $READTHEDOCS_OUTPUT/html
