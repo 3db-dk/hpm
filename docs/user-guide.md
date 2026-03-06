@@ -104,8 +104,8 @@ The typical HPM workflow follows these steps:
 hpm init advanced-geometry-tools
 
 # 2. Add dependencies
-hpm add utility-nodes --git https://github.com/studio/utility-nodes --commit abc1234
-hpm add material-library --git https://github.com/studio/materials --commit def5678 --optional
+hpm add utility-nodes@1.0.0
+hpm add material-library@2.0.0 --optional
 
 # 3. Install all dependencies
 hpm install
@@ -157,23 +157,23 @@ hpm init advanced-tools \
 
 ### Adding Dependencies
 
-HPM uses Git-based dependencies with commit pinning for security (commit hashes cannot be changed, unlike tags):
+HPM resolves dependencies from configured registries:
 
 ```bash
-# Add from Git repository (primary method)
-hpm add utility-nodes --git https://github.com/studio/utility-nodes --commit abc1234
+# Add a package (resolved from configured registries)
+hpm add utility-nodes@1.0.0
 
-# Add multiple packages at once (from same repo)
-hpm add pkg1 pkg2 --git https://github.com/studio/tools --commit def5678
+# Add multiple packages at once
+hpm add pkg1@1.0.0 pkg2@2.0.0
 
 # Add local path dependency
 hpm add local-tools --path ../my-local-tools
 
 # Add optional dependencies
-hpm add visualization-tools --git https://github.com/studio/viz --commit 789xyz --optional
+hpm add visualization-tools@1.0.0 --optional
 
 # Add to specific project
-hpm add node-library --git https://github.com/studio/nodes --commit abc123 --package /path/to/project/
+hpm add node-library@1.0.0 --package /path/to/project/
 ```
 
 ### Removing Dependencies
@@ -397,31 +397,29 @@ hpm add [OPTIONS] <PACKAGE>...
 - `PACKAGE...` - One or more package names to add
 
 **Options:**
-- `--git <URL>` - Git repository URL (required for Git dependencies)
-- `--commit <HASH>` - Git commit hash (required for Git dependencies)
 - `--path <PATH>` - Local path to package (for path dependencies)
 - `-p, --package <PATH>` - Path to directory containing hpm.toml or direct path to hpm.toml file
 - `--optional` - Mark dependency as optional
 
 **Examples:**
 ```bash
-# Add from Git repository
-hpm add utility-nodes --git https://github.com/studio/utility-nodes --commit abc1234
+# Add a registry-resolved dependency
+hpm add utility-nodes@1.0.0
 
 # Add multiple packages at once
-hpm add pkg1 pkg2 --git https://github.com/studio/tools --commit def5678
+hpm add pkg1@1.0.0 pkg2@2.0.0
 
 # Add local path dependency
 hpm add local-tools --path ../my-local-tools
 
 # Add optional dependency
-hpm add material-library --git https://github.com/studio/materials --commit 789xyz --optional
+hpm add material-library@1.0.0 --optional
 
 # Add to specific project
-hpm add mesh-utils --git https://github.com/studio/mesh --commit abc123 --package /path/to/project/
+hpm add mesh-utils@1.0.0 --package /path/to/project/
 ```
 
-**Note:** HPM uses Git-based dependencies with commit pinning for security. Commit hashes cannot be changed (unlike tags), ensuring reproducible builds.
+**Note:** Packages are resolved from registries configured in `[[registries]]` in your `hpm.toml` or global `~/.hpm/config.toml`.
 
 ### remove
 
@@ -626,10 +624,10 @@ keywords = ["houdini", "geometry", "tools"]
 min_version = "19.5"
 max_version = "21.0"
 
-# HPM package dependencies (Git-based with commit pinning)
+# HPM package dependencies (resolved from configured registries)
 [dependencies]
-utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc1234" }
-material-library = { git = "https://github.com/studio/materials", commit = "def5678", optional = true }
+utility-nodes = "1.0.0"
+material-library = { version = "2.0.0", optional = true }
 local-tools = { path = "../local-tools" }
 
 # Python dependencies with Houdini integration
@@ -670,16 +668,19 @@ The `[houdini]` section specifies Houdini compatibility:
 
 #### Dependencies
 
-HPM uses Git-based dependencies with commit pinning for security and reproducibility:
+HPM resolves dependencies from configured registries:
 
-##### Git Dependencies
+##### Registry Dependencies
 ```toml
 [dependencies]
-# Basic Git dependency with commit hash
-utility-nodes = { git = "https://github.com/studio/utility-nodes", commit = "abc1234def5678" }
+# Simple version string (resolved from all configured registries)
+utility-nodes = "1.0.0"
 
-# Optional Git dependency
-material-library = { git = "https://github.com/studio/materials", commit = "def5678", optional = true }
+# With options
+material-library = { version = "2.0.0", optional = true }
+
+# Target a specific registry
+studio-tools = { version = "1.0.0", registry = "studio-internal" }
 ```
 
 ##### Path Dependencies
@@ -690,7 +691,7 @@ local-tools = { path = "../my-local-tools" }
 dev-utilities = { path = "./packages/dev-utils", optional = true }
 ```
 
-**Note:** HPM requires commit hashes (not tags or branches) for Git dependencies. This ensures reproducible builds since commit hashes are immutable.
+**Note:** Registry dependencies are resolved by version. The lock file (`hpm.lock`) pins exact versions and checksums for reproducible builds.
 
 ### Global Configuration (~/.hpm/config.toml)
 

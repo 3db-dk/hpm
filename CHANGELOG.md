@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Package Management
 - `hpm init` - Package initialization with standard and bare templates
-- `hpm add` - Add dependencies (git, path, URL sources) with version specifications
+- `hpm add` - Add dependencies (registry, path sources) with version specifications
 - `hpm remove` - Remove dependencies from manifest
 - `hpm install` - Install all dependencies with lock file support (`--frozen-lockfile` for CI)
 - `hpm update` - Update dependencies to latest compatible versions
@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Dependency Resolution
 - PubGrub-based resolver with conflict learning and backtracking
 - Lock file (`hpm.lock`) with pinned versions and checksums
-- Git, path, and URL dependency sources
+- Registry, path, and URL dependency sources
 
 ### Python Integration
 - Virtual environment isolation with content-addressable sharing

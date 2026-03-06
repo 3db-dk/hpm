@@ -9,13 +9,13 @@
 //! - **Package Manifest Processing**: Complete `hpm.toml` parsing, validation, and serialization
 //! - **Houdini Integration**: Automated generation of `package.json` files from HPM manifests
 //! - **Package Templates**: Standardized package structure generation
-//! - **Dependency Management**: Support for Git and path dependencies, plus Python dependencies
+//! - **Dependency Management**: Support for registry, URL, and path dependencies, plus Python dependencies
 //! - **Version Constraint Handling**: Full semantic versioning support
 //!
 //! ## Key Types
 //!
 //! - [`PackageManifest`] - Primary type representing a complete `hpm.toml` file
-//! - [`DependencySpec`] - HPM dependency specifications (Git or Path)
+//! - [`DependencySpec`] - HPM dependency specifications (Registry, URL, or Path)
 //! - [`PythonDependencySpec`] - Python dependency specifications with extras
 //! - [`HoudiniPackage`] - Generated `package.json` structure for Houdini
 //! - [`PackageTemplate`] - Template system for generating package directories

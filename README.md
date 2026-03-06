@@ -24,8 +24,8 @@ cargo build --release
 # Create a new package
 hpm init my-tools
 
-# Add a dependency from a Git release
-hpm add geometry-tools --git https://github.com/studio/geometry-tools --tag v1.0.0
+# Add a dependency from a registry
+hpm add geometry-tools@1.0.0
 
 # Add a local path dependency
 hpm add local-tools --path ../local-tools
@@ -53,7 +53,7 @@ license = "MIT"
 min_version = "20.0"
 
 [dependencies]
-utility-nodes = { git = "https://github.com/studio/utility-nodes", version = "1.0.0" }
+utility-nodes = "1.0.0"
 material-lib  = { path = "../material-lib", optional = true }
 
 [python_dependencies]
@@ -66,7 +66,7 @@ requests = { version = ">=2.25.0", extras = ["security"] }
 | Command | Description |
 |---------|-------------|
 | `hpm init [name]` | Create a new package (`--bare` for manifest only) |
-| `hpm add <pkg>` | Add a dependency (`--git`/`--tag`, `--path`, `--optional`) |
+| `hpm add <pkg>` | Add a dependency (`name@version`, `--path`, `--optional`) |
 | `hpm remove <pkg>` | Remove a dependency |
 | `hpm install` | Install all dependencies (`--frozen-lockfile` for CI) |
 | `hpm update [pkg...]` | Update dependencies (`--dry-run` to preview) |

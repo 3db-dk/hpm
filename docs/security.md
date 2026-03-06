@@ -22,15 +22,9 @@ checksum = "sha256:a3f2b8c9..."
 
 ### Transport Security
 
-- **HTTPS recommended**: HPM warns when HTTP URLs are used for Git dependencies
+- **HTTPS recommended**: HPM warns when HTTP URLs are used for registry or dependency URLs
 - **TLS encryption**: All network connections use TLS for secure transport
 - **Warning system**: Clear warnings are displayed when insecure URLs are detected
-
-```bash
-# This will show a security warning:
-hpm add --git http://github.com/user/repo --version 1.0.0
-# Warning: Using HTTP instead of HTTPS for Git URL
-```
 
 ### Reproducible Builds
 
@@ -59,7 +53,7 @@ hpm audit
 
 | Check | Description |
 |-------|-------------|
-| HTTP URLs | Warns about dependencies using insecure HTTP URLs |
+| HTTP URLs | Warns about registries or dependencies using insecure HTTP URLs |
 | Lock file presence | Verifies `hpm.lock` exists for reproducible builds |
 | Lock file staleness | Warns if lock file is older than 90 days |
 | Checksum verification | Validates all package checksums against stored values |
@@ -70,7 +64,7 @@ hpm audit
 HPM Security Audit
 ========================================
 
-  PASS All Git URLs use HTTPS
+  PASS All dependency URLs use HTTPS
   PASS Lock file exists (hpm.lock)
   PASS Lock file is recent
   PASS Package checksums verified
@@ -97,15 +91,20 @@ Use this in CI pipelines to catch dependency drift before deployment.
 
 ### 1. Use HTTPS URLs
 
-Always use HTTPS for Git dependencies to prevent man-in-the-middle attacks:
+Always use HTTPS for registry and dependency URLs to prevent man-in-the-middle attacks:
 
 ```toml
 # Good - uses HTTPS
-[dependencies]
-my-package = { git = "https://github.com/studio/my-package", version = "1.0.0" }
+[[registries]]
+name = "studio"
+url = "https://packages.studio.com/v1/registry"
+type = "api"
 
 # Bad - uses HTTP (will trigger warnings)
-my-package = { git = "http://github.com/studio/my-package", version = "1.0.0" }
+[[registries]]
+name = "studio"
+url = "http://packages.studio.com/v1/registry"
+type = "api"
 ```
 
 ### 2. Commit hpm.lock
@@ -215,8 +214,8 @@ version = "1.2.0"
 checksum = "sha256:a3f2b8c9d4e5f6..."
 
 [dependencies.utility-nodes.source]
-type = "git"
-url = "https://github.com/studio/utility-nodes"
+type = "registry"
+url = "https://packages.studio.com/v1/registry"
 version = "1.2.0"
 ```
 
