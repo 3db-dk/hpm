@@ -185,72 +185,84 @@ async fn download_uv(target_path: &Path) -> Result<()> {
 
 /// Extract UV from a .zip archive (Windows)
 async fn extract_zip(archive_data: &[u8], target_path: &Path) -> Result<()> {
-    use std::io::{Cursor, Read};
-
-    let cursor = Cursor::new(archive_data);
-    let mut archive = zip::ZipArchive::new(cursor)?;
-
     let uv_binary_name = get_uv_binary_name();
-    let target_dir = target_path.parent().unwrap();
+    let target_dir = target_path.parent().unwrap().to_path_buf();
+    let target_path = target_path.to_path_buf();
+    let archive_data = archive_data.to_vec();
 
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i)?;
-        let name = file.name().to_string();
+    // ZipFile contains `dyn Read` which is !Send, so extract in a blocking task
+    let contents = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+        use std::io::{Cursor, Read};
 
-        // Look for the uv binary
-        if name.ends_with(uv_binary_name) || name == uv_binary_name {
-            let mut contents = Vec::new();
-            file.read_to_end(&mut contents)?;
+        let cursor = Cursor::new(archive_data);
+        let mut archive = zip::ZipArchive::new(cursor)?;
 
-            fs::create_dir_all(target_dir).await?;
-            fs::write(target_path, &contents).await?;
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i)?;
+            let name = file.name().to_string();
 
-            info!("Extracted {} to {:?}", name, target_path);
-            return Ok(());
+            if name.ends_with(uv_binary_name) || name == uv_binary_name {
+                let mut contents = Vec::new();
+                file.read_to_end(&mut contents)?;
+                return Ok(contents);
+            }
         }
-    }
 
-    Err(anyhow::anyhow!("UV binary not found in archive"))
+        Err(anyhow::anyhow!("UV binary not found in archive"))
+    })
+    .await??;
+
+    fs::create_dir_all(&target_dir).await?;
+    fs::write(&target_path, &contents).await?;
+
+    info!("Extracted UV to {:?}", target_path);
+    Ok(())
 }
 
 /// Extract UV from a .tar.gz archive (macOS/Linux)
 async fn extract_tar_gz(archive_data: &[u8], target_path: &Path) -> Result<()> {
-    use flate2::read::GzDecoder;
-    use std::io::Cursor;
-    use tar::Archive;
-
-    let cursor = Cursor::new(archive_data);
-    let gz = GzDecoder::new(cursor);
-    let mut archive = Archive::new(gz);
-
     let uv_binary_name = get_uv_binary_name();
-    let target_dir = target_path.parent().unwrap();
+    let target_dir = target_path.parent().unwrap().to_path_buf();
+    let target_path = target_path.to_path_buf();
+    let archive_data = archive_data.to_vec();
 
-    fs::create_dir_all(target_dir).await?;
+    fs::create_dir_all(&target_dir).await?;
 
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let path_str = entry.path()?.to_string_lossy().to_string();
+    // tar/flate2 do synchronous I/O, so extract in a blocking task
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        use flate2::read::GzDecoder;
+        use std::io::Cursor;
+        use tar::Archive;
 
-        // Look for the uv binary (might be in a subdirectory like uv-x86_64-unknown-linux-gnu/uv)
-        if path_str.ends_with(uv_binary_name) {
-            entry.unpack(target_path)?;
+        let cursor = Cursor::new(archive_data);
+        let gz = GzDecoder::new(cursor);
+        let mut archive = Archive::new(gz);
 
-            // Set executable permissions on Unix
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = std::fs::metadata(target_path)?.permissions();
-                perms.set_mode(0o755);
-                std::fs::set_permissions(target_path, perms)?;
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            let path_str = entry.path()?.to_string_lossy().to_string();
+
+            if path_str.ends_with(uv_binary_name) {
+                entry.unpack(&target_path)?;
+
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mut perms = std::fs::metadata(&target_path)?.permissions();
+                    perms.set_mode(0o755);
+                    std::fs::set_permissions(&target_path, perms)?;
+                }
+
+                info!("Extracted {} to {:?}", path_str, target_path);
+                return Ok(());
             }
-
-            info!("Extracted {} to {:?}", path_str, target_path);
-            return Ok(());
         }
-    }
 
-    Err(anyhow::anyhow!("UV binary not found in archive"))
+        Err(anyhow::anyhow!("UV binary not found in archive"))
+    })
+    .await??;
+
+    Ok(())
 }
 
 /// Setup UV isolation directories and configuration

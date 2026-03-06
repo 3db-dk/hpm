@@ -3,8 +3,9 @@ use crate::package_source::PackageSource;
 use crate::storage::{InstalledPackage, PackageSpec, StorageManager};
 use hpm_config::ProjectConfig;
 use hpm_package::{HoudiniPackage, PackageManifest};
+use hpm_python::{collect_python_dependencies, resolve_dependencies, VenvManager};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, info};
 
@@ -142,6 +143,8 @@ impl ProjectManager {
             }
         };
 
+        let mut installed_packages: Vec<InstalledPackage> = Vec::new();
+
         let manifest_registries = project_manifest.registries;
         if let Some(dependencies) = project_manifest.dependencies {
             // Build registry set once (lazily) for any registry-resolved deps
@@ -177,43 +180,27 @@ impl ProjectManager {
                 }
             };
 
-            for (name, dep_spec) in dependencies {
-                // Skip if already linked
-                if self.is_dependency_linked(&name) {
-                    continue;
-                }
+            // Fetch list of globally installed packages once for lookups
+            let all_installed = self
+                .storage_manager
+                .list_installed()
+                .map_err(|e| ProjectError::StorageRead(e.to_string()))?;
 
+            for (name, dep_spec) in dependencies {
                 // Build a PackageSource from the dependency spec and use fetcher for remote deps
                 match &dep_spec {
                     hpm_package::DependencySpec::Simple(version)
                     | hpm_package::DependencySpec::Registry { version, .. } => {
-                        let rs = registry_set.as_ref().expect("registry set built above");
-                        let entry = rs.get_version(&name, version).await.map_err(|e| {
-                            ProjectError::InvalidDependency(format!(
-                                "Failed to resolve {}@{} from registry: {}",
-                                name, version, e
-                            ))
-                        })?;
-                        self.fetch_and_install(
-                            &name,
-                            version,
-                            PackageSource::Url {
-                                url: entry.dl,
-                                version: version.clone(),
-                            },
-                        )
-                        .await?;
+                        let pkg = self
+                            .ensure_installed(&name, version, &registry_set, &all_installed)
+                            .await?;
+                        installed_packages.push(pkg);
                     }
                     hpm_package::DependencySpec::Url { url, version, .. } => {
-                        self.fetch_and_install(
-                            &name,
-                            version,
-                            PackageSource::Url {
-                                url: url.clone(),
-                                version: version.clone(),
-                            },
-                        )
-                        .await?;
+                        let pkg = self
+                            .ensure_installed_from_url(&name, version, url, &all_installed)
+                            .await?;
+                        installed_packages.push(pkg);
                     }
                     hpm_package::DependencySpec::Path { path, .. } => {
                         let source_path = std::path::Path::new(path);
@@ -222,39 +209,93 @@ impl ProjectManager {
                                 .install_from_path(source_path)
                                 .await
                                 .map_err(|e| ProjectError::PackageInstallation(e.to_string()))?;
-                        self.generate_houdini_manifest(&installed)?;
+                        installed_packages.push(installed);
                     }
                 }
             }
+        }
+
+        // Resolve Python pip dependencies and get venv site-packages path (if any)
+        let venv_site_packages = self.resolve_python_deps(&installed_packages).await?;
+
+        // Generate Houdini JSON manifests for all packages
+        for pkg in &installed_packages {
+            self.generate_houdini_manifest_with_python(pkg, venv_site_packages.as_deref())?;
         }
 
         info!("Successfully synced project dependencies");
         Ok(())
     }
 
-    /// Fetch a remote package and install it to global storage.
-    async fn fetch_and_install(
+    /// Ensure a registry/simple dependency is installed, returning the InstalledPackage.
+    async fn ensure_installed(
+        &self,
+        name: &str,
+        version: &str,
+        registry_set: &Option<crate::registry::RegistrySet>,
+        all_installed: &[InstalledPackage],
+    ) -> Result<InstalledPackage, ProjectError> {
+        // Check if already in global storage
+        if let Some(pkg) = all_installed
+            .iter()
+            .find(|p| p.name == name && p.version == version)
+        {
+            info!("Package {}@{} already installed", name, version);
+            return Ok(pkg.clone());
+        }
+
+        let rs = registry_set.as_ref().expect("registry set built above");
+        let entry = rs.get_version(name, version).await.map_err(|e| {
+            ProjectError::InvalidDependency(format!(
+                "Failed to resolve {}@{} from registry: {}",
+                name, version, e
+            ))
+        })?;
+        self.fetch_and_install_pkg(
+            name,
+            version,
+            PackageSource::Url {
+                url: entry.dl,
+                version: version.to_string(),
+            },
+        )
+        .await
+    }
+
+    /// Ensure a URL dependency is installed, returning the InstalledPackage.
+    async fn ensure_installed_from_url(
+        &self,
+        name: &str,
+        version: &str,
+        url: &str,
+        all_installed: &[InstalledPackage],
+    ) -> Result<InstalledPackage, ProjectError> {
+        if let Some(pkg) = all_installed
+            .iter()
+            .find(|p| p.name == name && p.version == version)
+        {
+            info!("Package {}@{} already installed", name, version);
+            return Ok(pkg.clone());
+        }
+
+        self.fetch_and_install_pkg(
+            name,
+            version,
+            PackageSource::Url {
+                url: url.to_string(),
+                version: version.to_string(),
+            },
+        )
+        .await
+    }
+
+    /// Fetch a remote package and install it to global storage, returning the InstalledPackage.
+    async fn fetch_and_install_pkg(
         &self,
         name: &str,
         version: &str,
         source: PackageSource,
-    ) -> Result<(), ProjectError> {
-        // Check if already in global storage
-        if self.storage_manager.package_exists(name, version) {
-            info!("Package {}@{} already installed", name, version);
-            let installed_packages = self
-                .storage_manager
-                .list_installed()
-                .map_err(|e| ProjectError::StorageRead(e.to_string()))?;
-            if let Some(pkg) = installed_packages
-                .into_iter()
-                .find(|p| p.name == name && p.version == version)
-            {
-                self.generate_houdini_manifest(&pkg)?;
-            }
-            return Ok(());
-        }
-
+    ) -> Result<InstalledPackage, ProjectError> {
         let fetcher = self
             .fetcher
             .as_ref()
@@ -273,18 +314,24 @@ impl ProjectManager {
             .await
             .map_err(|e| ProjectError::PackageInstallation(e.to_string()))?;
 
-        // Generate Houdini package manifest
-        self.generate_houdini_manifest(&installed)?;
-
         info!("Successfully fetched and installed {}@{}", name, version);
-        Ok(())
+        Ok(installed)
     }
 
     fn generate_houdini_manifest(
         &self,
         installed_package: &InstalledPackage,
     ) -> Result<(), ProjectError> {
-        let houdini_package = self.create_houdini_package(installed_package)?;
+        self.generate_houdini_manifest_with_python(installed_package, None)
+    }
+
+    fn generate_houdini_manifest_with_python(
+        &self,
+        installed_package: &InstalledPackage,
+        venv_site_packages: Option<&Path>,
+    ) -> Result<(), ProjectError> {
+        let houdini_package =
+            self.create_houdini_package_with_python(installed_package, venv_site_packages)?;
         let manifest_path = self
             .project_config
             .package_manifest_path(&installed_package.name);
@@ -301,9 +348,79 @@ impl ProjectManager {
         Ok(())
     }
 
+    /// Collect and resolve Python pip dependencies from installed packages.
+    /// Returns the venv site-packages path if any Python deps exist, None otherwise.
+    async fn resolve_python_deps(
+        &self,
+        installed_packages: &[InstalledPackage],
+    ) -> Result<Option<PathBuf>, ProjectError> {
+        let has_python_deps = installed_packages
+            .iter()
+            .any(|p| p.manifest.python_dependencies.is_some());
+        if !has_python_deps {
+            return Ok(None);
+        }
+
+        info!("Resolving Python pip dependencies");
+
+        // Initialize UV binary (downloads on first use)
+        hpm_python::initialize()
+            .await
+            .map_err(|e| ProjectError::PythonResolution(e.to_string()))?;
+
+        // Collect python dependencies from all package manifests
+        let manifests: Vec<PackageManifest> = installed_packages
+            .iter()
+            .map(|p| p.manifest.clone())
+            .collect();
+        let collected = collect_python_dependencies(&manifests)
+            .await
+            .map_err(|e| ProjectError::PythonResolution(e.to_string()))?;
+
+        if collected.dependencies.is_empty() {
+            return Ok(None);
+        }
+
+        info!(
+            "Collected {} Python dependencies, resolving...",
+            collected.dependencies.len()
+        );
+
+        // Resolve to exact versions via UV pip compile
+        let resolved = resolve_dependencies(&collected)
+            .await
+            .map_err(|e| ProjectError::PythonResolution(e.to_string()))?;
+
+        info!(
+            "Resolved {} Python packages (hash: {})",
+            resolved.packages.len(),
+            resolved.hash()
+        );
+
+        // Ensure venv exists (content-addressable, shared across identical dep sets)
+        let venv_manager = VenvManager::new();
+        let venv_path = venv_manager
+            .ensure_virtual_environment(&resolved)
+            .await
+            .map_err(|e| ProjectError::PythonResolution(e.to_string()))?;
+
+        let site_packages = venv_manager.get_python_site_packages_path(&venv_path);
+        info!("Python venv site-packages: {}", site_packages.display());
+        Ok(Some(site_packages))
+    }
+
+    #[cfg(test)]
     fn create_houdini_package(
         &self,
         installed_package: &InstalledPackage,
+    ) -> Result<HoudiniPackage, ProjectError> {
+        self.create_houdini_package_with_python(installed_package, None)
+    }
+
+    fn create_houdini_package_with_python(
+        &self,
+        installed_package: &InstalledPackage,
+        venv_site_packages: Option<&Path>,
     ) -> Result<HoudiniPackage, ProjectError> {
         let package_path = &installed_package.install_path;
 
@@ -316,7 +433,22 @@ impl ProjectManager {
         // Build environment variables
         let mut env = vec![];
 
-        // Python path
+        // Inject venv site-packages for packages that declare python_dependencies
+        if let Some(site_packages) = venv_site_packages {
+            if installed_package.manifest.python_dependencies.is_some() {
+                let mut python_env = HashMap::new();
+                python_env.insert(
+                    "PYTHONPATH".to_string(),
+                    hpm_package::HoudiniEnvValue::Detailed {
+                        method: "prepend".to_string(),
+                        value: site_packages.to_string_lossy().to_string(),
+                    },
+                );
+                env.push(python_env);
+            }
+        }
+
+        // Package's own python/ directory
         if package_path.join("python").exists() {
             let mut python_env = HashMap::new();
             python_env.insert(
@@ -475,11 +607,6 @@ impl ProjectManager {
         Ok(())
     }
 
-    fn is_dependency_linked(&self, name: &str) -> bool {
-        let manifest_path = self.project_config.package_manifest_path(name);
-        manifest_path.exists()
-    }
-
     pub fn list_dependencies(&self) -> Result<Vec<ProjectDependency>, ProjectError> {
         let mut dependencies = vec![];
 
@@ -575,6 +702,9 @@ pub enum ProjectError {
 
     #[error("Invalid dependency specification: {0}")]
     InvalidDependency(String),
+
+    #[error("Python dependency resolution failed: {0}")]
+    PythonResolution(String),
 }
 
 #[cfg(test)]
