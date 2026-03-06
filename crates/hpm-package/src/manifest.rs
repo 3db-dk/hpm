@@ -11,6 +11,23 @@ use crate::dependency::DependencySpec;
 use crate::houdini::{HoudiniEnvValue, HoudiniPackage};
 use crate::python::PythonDependencySpec;
 
+/// The type of registry backend.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RegistryType {
+    Api,
+    Git,
+}
+
+/// A registry declared in hpm.toml's `[[registries]]` array.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistryConfig {
+    pub name: String,
+    pub url: String,
+    #[serde(rename = "type")]
+    pub registry_type: RegistryType,
+}
+
 /// HPM package manifest (hpm.toml)
 ///
 /// Uses `IndexMap` for dependencies and python_dependencies to preserve
@@ -19,6 +36,8 @@ use crate::python::PythonDependencySpec;
 pub struct PackageManifest {
     pub package: PackageInfo,
     pub houdini: Option<HoudiniConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registries: Option<Vec<RegistryConfig>>,
     pub dependencies: Option<IndexMap<String, DependencySpec>>,
     pub python_dependencies: Option<IndexMap<String, PythonDependencySpec>>,
     pub scripts: Option<HashMap<String, String>>,
@@ -74,6 +93,7 @@ impl PackageManifest {
                 min_version: Some("19.5".to_string()),
                 max_version: None,
             }),
+            registries: None,
             dependencies: None,
             python_dependencies: None,
             scripts: None,
@@ -205,5 +225,45 @@ mod tests {
 
         let houdini_pkg = manifest.generate_houdini_package();
         assert!(houdini_pkg.enable.is_none());
+    }
+
+    #[test]
+    fn registries_deserialize_from_toml() {
+        let toml_str = r#"
+[package]
+name = "my-context"
+version = "0.1.0"
+
+[[registries]]
+name = "houdinihub"
+url = "https://api.3db.dk/v1/registry"
+type = "api"
+
+[[registries]]
+name = "studio-internal"
+url = "https://packages.studio.com/v1/registry"
+type = "git"
+
+[dependencies]
+test = "0.2.0"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let registries = manifest.registries.unwrap();
+        assert_eq!(registries.len(), 2);
+        assert_eq!(registries[0].name, "houdinihub");
+        assert_eq!(registries[0].registry_type, RegistryType::Api);
+        assert_eq!(registries[1].name, "studio-internal");
+        assert_eq!(registries[1].registry_type, RegistryType::Git);
+    }
+
+    #[test]
+    fn registries_none_when_absent() {
+        let toml_str = r#"
+[package]
+name = "my-context"
+version = "0.1.0"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        assert!(manifest.registries.is_none());
     }
 }

@@ -142,14 +142,34 @@ impl ProjectManager {
             }
         };
 
+        let manifest_registries = project_manifest.registries;
         if let Some(dependencies) = project_manifest.dependencies {
             // Build registry set once (lazily) for any registry-resolved deps
             let registry_set = {
                 let has_registry_deps = dependencies.values().any(|spec| spec.is_registry());
                 if has_registry_deps {
                     let config = hpm_config::Config::load().unwrap_or_default();
+                    let registry_configs: Vec<hpm_config::RegistrySourceConfig> =
+                        if let Some(ref regs) = manifest_registries {
+                            regs.iter()
+                                .map(|r| hpm_config::RegistrySourceConfig {
+                                    name: r.name.clone(),
+                                    url: r.url.clone(),
+                                    registry_type: match r.registry_type {
+                                        hpm_package::RegistryType::Api => {
+                                            hpm_config::RegistryType::Api
+                                        }
+                                        hpm_package::RegistryType::Git => {
+                                            hpm_config::RegistryType::Git
+                                        }
+                                    },
+                                })
+                                .collect()
+                        } else {
+                            config.registries.clone()
+                        };
                     Some(crate::registry::RegistrySet::from_configs(
-                        &config.registries,
+                        &registry_configs,
                         &config.storage.registry_cache_dir,
                     ))
                 } else {

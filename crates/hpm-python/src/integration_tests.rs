@@ -46,6 +46,7 @@ async fn test_end_to_end_python_workflow() {
             min_version: Some("20.0".to_string()),
             max_version: None,
         }),
+        registries: None,
         dependencies: None,
         python_dependencies: Some(python_deps_a),
         scripts: None,
@@ -83,6 +84,7 @@ async fn test_end_to_end_python_workflow() {
             min_version: Some("20.0".to_string()), // Same as package A
             max_version: None,
         }),
+        registries: None,
         dependencies: None,
         python_dependencies: Some(python_deps_b),
         scripts: None,
@@ -273,6 +275,7 @@ async fn test_houdini_python_version_mapping_edge_cases() {
             min_version: Some("invalid".to_string()),
             max_version: None,
         }),
+        registries: None,
         dependencies: None,
         python_dependencies: Some(IndexMap::new()),
         scripts: None,

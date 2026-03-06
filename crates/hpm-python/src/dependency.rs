@@ -185,6 +185,7 @@ mod tests {
                 min_version: Some("20.0".to_string()),
                 max_version: None,
             }),
+            registries: None,
             dependencies: None,
             python_dependencies: Some(python_deps),
             scripts: None,
