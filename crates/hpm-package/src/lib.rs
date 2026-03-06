@@ -57,9 +57,9 @@
 //! let mut deps = IndexMap::new();
 //! deps.insert(
 //!     "utility-nodes".to_string(),
-//!     DependencySpec::git(
-//!         "https://github.com/studio/utility-nodes",
-//!         "abc123def456789012345678901234567890abcd"
+//!     DependencySpec::url(
+//!         "https://example.com/packages/utility-nodes/1.0.0/utility-nodes-1.0.0.zip",
+//!         "1.0.0"
 //!     )
 //! );
 //! manifest.dependencies = Some(deps);

@@ -73,7 +73,7 @@ version = "1.0.0"
 description = "Test project"
 
 [dependencies]
-package-a = { git = "https://github.com/example/package-a", version = "1.0.0" }
+package-a = { url = "https://example.com/packages/package-a/1.0.0/package-a-1.0.0.zip", version = "1.0.0" }
 "#,
         )
         .unwrap();
@@ -161,7 +161,7 @@ version = "1.0.0"
 description = "Package A"
 
 [dependencies]
-package-c = { git = "https://github.com/example/package-c", version = "1.0.0" }
+package-c = { url = "https://example.com/packages/package-c/1.0.0/package-c-1.0.0.zip", version = "1.0.0" }
 "#,
         )
         .unwrap();
@@ -206,7 +206,7 @@ version = "1.0.0"
 description = "Test project"
 
 [dependencies]
-package-a = { git = "https://github.com/example/package-a", version = "1.0.0" }
+package-a = { url = "https://example.com/packages/package-a/1.0.0/package-a-1.0.0.zip", version = "1.0.0" }
 "#,
         )
         .unwrap();

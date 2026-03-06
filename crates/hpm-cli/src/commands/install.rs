@@ -269,24 +269,6 @@ async fn install_hpm_dependencies(
 
                 // Convert dependency spec to package source
                 let source = match &spec {
-                    hpm_package::DependencySpec::Git {
-                        git,
-                        version,
-                        optional,
-                    } => {
-                        info!("  {} - Git: {} @ {}", name, git, version);
-                        if *optional {
-                            debug!("  {} is optional", name);
-                        }
-                        let src = PackageSource::git(git, version).context("Invalid Git URL")?;
-
-                        // Security warning for HTTP URLs
-                        if let Some(warning) = src.security_warning() {
-                            warn!("Security: {} - {}", name, warning);
-                        }
-
-                        src
-                    }
                     hpm_package::DependencySpec::Url {
                         url,
                         version,
@@ -545,9 +527,6 @@ async fn generate_lock_file(
             let checksum = install_results.get(name).map(|r| r.checksum.clone());
 
             let locked_dep = match spec {
-                hpm_package::DependencySpec::Git { git, version, .. } => {
-                    LockedDependency::from_git(version.clone(), git.clone(), checksum)
-                }
                 hpm_package::DependencySpec::Url { url, version, .. } => LockedDependency {
                     version: version.clone(),
                     checksum,

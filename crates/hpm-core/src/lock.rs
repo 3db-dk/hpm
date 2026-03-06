@@ -336,19 +336,17 @@ impl LockFile {
 }
 
 impl LockedDependency {
-    /// Create a new locked dependency from a Git repository.
+    /// Create a new locked dependency from a URL source.
     ///
     /// # Arguments
     /// * `version` - The resolved version (from package manifest)
-    /// * `url` - The Git repository URL
+    /// * `url` - The download URL
     /// * `checksum` - SHA256 checksum of the extracted package contents
-    ///
-    /// Note: The version is used both for the locked dependency and the package source.
-    pub fn from_git(version: String, url: String, checksum: Option<String>) -> Self {
+    pub fn from_url(version: String, url: String, checksum: Option<String>) -> Self {
         Self {
             version: version.clone(),
             checksum,
-            source: PackageSource::Git { url, version },
+            source: PackageSource::Url { url, version },
             dependencies: Vec::new(),
         }
     }
@@ -379,9 +377,9 @@ impl LockedDependency {
         }
     }
 
-    /// Check if this is a Git dependency.
-    pub fn is_git(&self) -> bool {
-        self.source.is_git()
+    /// Check if this is a URL dependency.
+    pub fn is_url(&self) -> bool {
+        self.source.is_url()
     }
 
     /// Check if this is a path dependency.
@@ -570,17 +568,17 @@ mod tests {
         ]
     }
 
-    /// Strategy to generate LockedDependency (Git or Path)
+    /// Strategy to generate LockedDependency (Url or Path)
     fn locked_dependency_strategy() -> impl Strategy<Value = LockedDependency> {
         prop_oneof![
-            // Git dependency
+            // URL dependency
             (
                 version_string_strategy(),
                 git_url_strategy(),
                 checksum_strategy()
             )
                 .prop_map(|(version, url, checksum)| {
-                    LockedDependency::from_git(version, url, checksum)
+                    LockedDependency::from_url(version, url, checksum)
                 }),
             // Path dependency
             (
@@ -672,7 +670,7 @@ mod tests {
                 let parsed_dep = parsed_dep.unwrap();
                 prop_assert_eq!(&dep.version, &parsed_dep.version);
                 prop_assert_eq!(&dep.checksum, &parsed_dep.checksum);
-                prop_assert_eq!(dep.is_git(), parsed_dep.is_git());
+                prop_assert_eq!(dep.is_url(), parsed_dep.is_url());
                 prop_assert_eq!(dep.is_path(), parsed_dep.is_path());
             }
 
@@ -738,8 +736,8 @@ mod tests {
         /// Test LockedDependency source type detection
         #[test]
         fn prop_locked_dependency_source_types(dep in locked_dependency_strategy()) {
-            // Exactly one of is_git or is_path should be true
-            prop_assert!(dep.is_git() != dep.is_path());
+            // Exactly one of is_url or is_path should be true
+            prop_assert!(dep.is_url() != dep.is_path());
         }
     }
 }

@@ -75,10 +75,10 @@ pub fn houdini_version_strategy() -> impl Strategy<Value = String> {
 /// Strategy to generate dependency specifications
 pub fn dependency_spec_strategy() -> impl Strategy<Value = DependencySpec> {
     prop_oneof![
-        // Git dependency with version (for release artifact download)
-        (url_strategy(), version_strategy(), any::<bool>()).prop_map(|(git, version, optional)| {
-            DependencySpec::Git {
-                git,
+        // URL dependency (registry-resolved)
+        (url_strategy(), version_strategy(), any::<bool>()).prop_map(|(url, version, optional)| {
+            DependencySpec::Url {
+                url,
                 version,
                 optional,
             }
@@ -463,14 +463,14 @@ proptest! {
         ],
         path in prop::string::string_regex(r"\.?\./[a-z0-9-/]{3,30}").unwrap()
     ) {
-        // Test Git dependency spec
-        let git_spec = DependencySpec::Git {
-            git: git_url.clone(),
+        // Test URL dependency spec
+        let url_spec = DependencySpec::Url {
+            url: git_url.clone(),
             version: "1.0.0".to_string(),
             optional: true,
         };
-        let git_json = serde_json::to_string(&git_spec);
-        prop_assert!(git_json.is_ok(), "Git spec serialization should always work");
+        let url_json = serde_json::to_string(&url_spec);
+        prop_assert!(url_json.is_ok(), "URL spec serialization should always work");
 
         // Test Path dependency spec
         let path_spec = DependencySpec::Path {

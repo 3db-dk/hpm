@@ -88,6 +88,38 @@ impl RegistrySet {
         }
     }
 
+    /// Build a `RegistrySet` from registry configurations.
+    ///
+    /// This is the primary way for library consumers to construct a `RegistrySet`
+    /// without going through the CLI.
+    ///
+    /// # Arguments
+    /// * `registries` - Registry configurations to add
+    /// * `registry_cache_dir` - Directory for caching git registry indices
+    pub fn from_configs(
+        registries: &[hpm_config::RegistrySourceConfig],
+        registry_cache_dir: &std::path::Path,
+    ) -> Self {
+        let mut set = Self::new();
+
+        for reg in registries {
+            match reg.registry_type {
+                hpm_config::RegistryType::Api => {
+                    if let Ok(api_reg) = ApiRegistry::new(&reg.name, &reg.url) {
+                        set.add(Box::new(api_reg));
+                    }
+                }
+                hpm_config::RegistryType::Git => {
+                    let cache_dir = registry_cache_dir.join(&reg.name);
+                    let git_reg = GitRegistry::new(&reg.name, &reg.url, &cache_dir);
+                    set.add(Box::new(git_reg));
+                }
+            }
+        }
+
+        set
+    }
+
     pub fn add(&mut self, registry: Box<dyn Registry>) {
         self.registries.push(registry);
     }

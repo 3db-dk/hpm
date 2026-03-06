@@ -179,22 +179,8 @@ pub async fn update_registries() -> Result<()> {
 
 /// Build a RegistrySet from the current configuration.
 pub fn build_registry_set(config: &Config) -> hpm_core::registry::RegistrySet {
-    let mut set = hpm_core::registry::RegistrySet::new();
-
-    for reg in &config.registries {
-        match reg.registry_type {
-            RegistryType::Api => {
-                if let Ok(api_reg) = hpm_core::registry::ApiRegistry::new(&reg.name, &reg.url) {
-                    set.add(Box::new(api_reg));
-                }
-            }
-            RegistryType::Git => {
-                let cache_dir = config.registry_cache_path(&reg.name);
-                let git_reg = hpm_core::registry::GitRegistry::new(&reg.name, &reg.url, &cache_dir);
-                set.add(Box::new(git_reg));
-            }
-        }
-    }
-
-    set
+    hpm_core::registry::RegistrySet::from_configs(
+        &config.registries,
+        &config.storage.registry_cache_dir,
+    )
 }

@@ -238,17 +238,8 @@ pub async fn list_dependencies_tree(manifest_path: Option<PathBuf>) -> Result<()
 /// Format source info for tree display (compact format)
 fn format_tree_source_info(spec: &DependencySpec) -> String {
     match spec {
-        DependencySpec::Git { git, version, .. } => {
-            // Extract repo name from URL for compact display
-            let repo_name = git
-                .rsplit('/')
-                .next()
-                .unwrap_or(git)
-                .trim_end_matches(".git");
-            format!("({}@{})", repo_name, version)
-        }
         DependencySpec::Url { url, version, .. } => {
-            format!("(url: {}@{})", url, version)
+            format!("({}@{})", url, version)
         }
         DependencySpec::Path { path, .. } => {
             format!("(path: {})", path)
@@ -377,9 +368,6 @@ fn display_python_dependencies(manifest: &PackageManifest) {
 /// * Path: `{path: "../local"}` → `"path: ../local"`
 fn format_dependency_spec(spec: &DependencySpec) -> String {
     match spec {
-        DependencySpec::Git { git, version, .. } => {
-            format!("git: {} (version: {})", git, version)
-        }
         DependencySpec::Url { url, version, .. } => {
             format!("url: {} (version: {})", url, version)
         }
@@ -402,7 +390,6 @@ fn format_dependency_spec(spec: &DependencySpec) -> String {
 /// `true` if the dependency is marked as optional, `false` otherwise
 fn is_optional_dependency(spec: &DependencySpec) -> bool {
     match spec {
-        DependencySpec::Git { optional, .. } => *optional,
         DependencySpec::Url { optional, .. } => *optional,
         DependencySpec::Path { optional, .. } => *optional,
     }
@@ -510,16 +497,16 @@ mod tests {
     }
 
     #[test]
-    fn test_format_dependency_spec_git() {
-        let spec = DependencySpec::Git {
-            git: "https://github.com/example/repo".to_string(),
+    fn test_format_dependency_spec_url() {
+        let spec = DependencySpec::Url {
+            url: "https://example.com/packages/repo/1.0.0/repo-1.0.0.zip".to_string(),
             version: "1.0.0".to_string(),
             optional: false,
         };
         let result = format_dependency_spec(&spec);
         assert_eq!(
             result,
-            "git: https://github.com/example/repo (version: 1.0.0)"
+            "url: https://example.com/packages/repo/1.0.0/repo-1.0.0.zip (version: 1.0.0)"
         );
     }
 
@@ -535,19 +522,19 @@ mod tests {
 
     #[test]
     fn test_is_optional_dependency() {
-        let git_optional = DependencySpec::Git {
-            git: "https://github.com/example/repo".to_string(),
+        let url_optional = DependencySpec::Url {
+            url: "https://example.com/pkg.zip".to_string(),
             version: "1.0.0".to_string(),
             optional: true,
         };
-        assert!(is_optional_dependency(&git_optional));
+        assert!(is_optional_dependency(&url_optional));
 
-        let git_not_optional = DependencySpec::Git {
-            git: "https://github.com/example/repo".to_string(),
+        let url_not_optional = DependencySpec::Url {
+            url: "https://example.com/pkg.zip".to_string(),
             version: "1.0.0".to_string(),
             optional: false,
         };
-        assert!(!is_optional_dependency(&git_not_optional));
+        assert!(!is_optional_dependency(&url_not_optional));
 
         let path_optional = DependencySpec::Path {
             path: "../local".to_string(),
@@ -664,7 +651,7 @@ version = "2.0.0"
 description = "Test custom manifest path"
 
 [dependencies]
-test-dep = { git = "https://github.com/example/test-dep", version = "1.0.0" }
+test-dep = { url = "https://example.com/packages/test-dep/1.0.0/test-dep-1.0.0.zip", version = "1.0.0" }
 "#;
         std::fs::write(&manifest_path, manifest_content).unwrap();
 

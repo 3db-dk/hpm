@@ -162,17 +162,6 @@ impl ProjectManager {
                         )
                         .await?;
                     }
-                    hpm_package::DependencySpec::Git { git, version, .. } => {
-                        self.fetch_and_install(
-                            &name,
-                            version,
-                            PackageSource::Git {
-                                url: git.clone(),
-                                version: version.clone(),
-                            },
-                        )
-                        .await?;
-                    }
                     hpm_package::DependencySpec::Path { path, .. } => {
                         let source_path = std::path::Path::new(path);
                         let installed =

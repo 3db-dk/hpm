@@ -6,7 +6,7 @@
 //!
 //! The add command provides comprehensive dependency management:
 //! - Adds package dependencies to hpm.toml manifest files
-//! - Supports Git release artifact dependencies with `--git` and `--tag` flags
+//! - Resolves packages through configured registries
 //! - Supports local path dependencies with `--path` flag
 //! - Handles optional dependencies with `--optional` flag
 //! - Flexible manifest targeting via `--package` flag
@@ -16,34 +16,21 @@
 //! ## Usage Examples
 //!
 //! ```bash
-//! # Add a Git-based dependency using tag (downloads release artifact)
-//! hpm add geometry-tools --git https://github.com/studio/geometry-tools --tag v1.0.0
+//! # Add a package from the registry (latest version)
+//! hpm add geometry-tools
+//!
+//! # Add a specific version
+//! hpm add geometry-tools@1.0.0
 //!
 //! # Add a local path dependency (for development)
 //! hpm add local-tools --path ../local-tools
 //!
 //! # Add optional dependency
-//! hpm add material-library --git https://github.com/studio/materials --tag v2.0.0 --optional
+//! hpm add material-library --optional
 //!
 //! # Target specific manifest file
-//! hpm add geometry-tools --git https://github.com/studio/geometry-tools --tag v1.0.0 --package /path/to/project/
+//! hpm add geometry-tools --package /path/to/project/
 //! ```
-//!
-//! ## Implementation Details
-//!
-//! The add command follows HPM's established patterns:
-//! - Uses the same manifest path resolution as `hpm install`
-//! - Integrates with the existing package installation system
-//! - Maintains consistency with TOML serialization standards
-//! - Provides comprehensive error handling and user feedback
-//!
-//! ## Integration
-//!
-//! After adding a dependency to the manifest, the command automatically:
-//! 1. Resolves transitive dependencies
-//! 2. Downloads and installs packages to global storage
-//! 3. Updates the project's hpm.lock file
-//! 4. Sets up project-specific package references
 
 use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifest};
 use super::registry::build_registry_set;
@@ -66,28 +53,16 @@ fn parse_name_version(input: &str) -> (String, Option<String>) {
     (input.to_string(), None)
 }
 
-/// Parse version from a git tag by stripping common prefixes.
-fn parse_version_from_tag(tag: &str) -> String {
-    tag.strip_prefix("v")
-        .or_else(|| tag.strip_prefix("V"))
-        .unwrap_or(tag)
-        .to_string()
-}
-
 /// Add package dependencies to hpm.toml manifest
 ///
 /// # Arguments
 ///
 /// * `package_names` - Names of the packages to add
-/// * `git_url` - Git repository URL (recommended for dependencies)
-/// * `tag` - Git tag for release artifact (required with git_url, e.g., "v1.0.0")
 /// * `path` - Local path to package directory (for development dependencies, single package only)
 /// * `manifest_path` - Path to the manifest file or directory
 /// * `optional` - Whether the dependencies are optional
 pub async fn add_packages(
     package_names: Vec<String>,
-    git_url: Option<String>,
-    tag: Option<String>,
     path: Option<PathBuf>,
     manifest_path: Option<PathBuf>,
     optional: bool,
@@ -98,22 +73,6 @@ pub async fn add_packages(
     }
 
     info!("Adding package dependencies: {:?}", package_names);
-
-    // Validate arguments
-    if git_url.is_some() && tag.is_none() {
-        bail!("--tag is required when using --git. Please specify a release tag (e.g., v1.0.0).");
-    }
-
-    if git_url.is_some() && path.is_some() {
-        bail!("Cannot specify both --git and --path. Choose one source type.");
-    }
-
-    // Security warning for HTTP URLs
-    if let Some(ref url) = git_url {
-        if url.starts_with("http://") && !url.starts_with("https://") {
-            warn!("Security warning: Using HTTP instead of HTTPS for Git URL. Consider using HTTPS for better security.");
-        }
-    }
 
     // Disallow --path with multiple packages
     if path.is_some() && package_names.len() > 1 {
@@ -128,9 +87,6 @@ pub async fn add_packages(
     let mut manifest = load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
 
-    // Parse version from tag
-    let version = tag.as_ref().map(|t| parse_version_from_tag(t));
-
     // Add to dependencies
     if manifest.dependencies.is_none() {
         manifest.dependencies = Some(IndexMap::new());
@@ -140,16 +96,7 @@ pub async fn add_packages(
 
     // Add each package
     for package_name in &package_names {
-        let dependency_spec = if let Some(ref url) = git_url {
-            // Git-based dependency (recommended)
-            let ver = version.clone().unwrap(); // Already validated above
-            info!("Adding {} from {} (version: {})", package_name, url, ver);
-            DependencySpec::Git {
-                git: url.clone(),
-                version: ver,
-                optional,
-            }
-        } else if let Some(ref local_path) = path {
+        let dependency_spec = if let Some(ref local_path) = path {
             // Path-based dependency (for development)
             let path_str = local_path.to_string_lossy().to_string();
             DependencySpec::Path {
@@ -157,7 +104,7 @@ pub async fn add_packages(
                 optional,
             }
         } else {
-            // No --git or --path: resolve from registries
+            // Resolve from registries
             // Parse name@version syntax
             let (pkg_name, requested_version) = parse_name_version(package_name);
 
@@ -169,15 +116,13 @@ pub async fn add_packages(
                 bail!(
                     "No registries configured and no source specified.\n\
                      \n\
-                     Either add a registry:\n\
+                     Add a registry first:\n\
                      \n\
                      \x20 hpm registry add <url> --name <alias>\n\
                      \n\
-                     Or specify a source directly:\n\
+                     Or use a local path:\n\
                      \n\
-                     \x20 hpm add {} --git <repository-url> --tag <tag-name>\n\
                      \x20 hpm add {} --path <local-path>",
-                    example_pkg,
                     example_pkg
                 );
             }
@@ -209,10 +154,8 @@ pub async fn add_packages(
                 pkg_name, entry.version, entry.dl
             );
 
-            // Use the download URL from the registry entry as a "git" dep
-            // The dl URL points to the actual archive
-            DependencySpec::Git {
-                git: entry.dl.clone(),
+            DependencySpec::Url {
+                url: entry.dl.clone(),
                 version: entry.version.clone(),
                 optional,
             }
@@ -464,9 +407,9 @@ mod tests {
         /// Test dependency spec creation with various inputs
         #[test]
         fn prop_dependency_spec_creation_robustness(
-            git_url in prop_oneof![
-                Just("https://github.com/owner/repo".to_string()),
-                Just("https://gitlab.com/owner/repo".to_string()),
+            url in prop_oneof![
+                Just("https://example.com/packages/test/1.0.0/test-1.0.0.zip".to_string()),
+                Just("https://api.3db.dk/v1/registry/packages/test/1.0.0/download".to_string()),
                 r"https://[a-z]+\.[a-z]+/[a-z]+/[a-z]+",
             ],
             version in prop_oneof![
@@ -481,19 +424,19 @@ mod tests {
             ],
             optional in any::<bool>()
         ) {
-            // Test Git dependency spec creation
-            let git_spec = DependencySpec::Git {
-                git: git_url.clone(),
+            // Test URL dependency spec creation
+            let url_spec = DependencySpec::Url {
+                url: url.clone(),
                 version: version.clone(),
                 optional,
             };
 
-            match &git_spec {
-                DependencySpec::Git { git, version: ver, .. } => {
-                    prop_assert_eq!(git, &git_url, "Git URL should be preserved");
+            match &url_spec {
+                DependencySpec::Url { url: u, version: ver, .. } => {
+                    prop_assert_eq!(u, &url, "URL should be preserved");
                     prop_assert_eq!(ver, &version, "Version should be preserved");
                 }
-                _ => prop_assert!(false, "Should create Git dependency spec"),
+                _ => prop_assert!(false, "Should create URL dependency spec"),
             }
 
             // Test Path dependency spec creation
@@ -510,8 +453,8 @@ mod tests {
             }
 
             // Test JSON serialization (should always work)
-            let git_json = serde_json::to_string(&git_spec);
-            prop_assert!(git_json.is_ok(), "Git dependency spec should always serialize");
+            let url_json = serde_json::to_string(&url_spec);
+            prop_assert!(url_json.is_ok(), "URL dependency spec should always serialize");
 
             let path_json = serde_json::to_string(&path_spec);
             prop_assert!(path_json.is_ok(), "Path dependency spec should always serialize");

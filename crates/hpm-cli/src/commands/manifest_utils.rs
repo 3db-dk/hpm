@@ -277,8 +277,8 @@ mod tests {
         let mut dependencies = IndexMap::new();
         dependencies.insert(
             "test-dep".to_string(),
-            DependencySpec::Git {
-                git: "https://github.com/example/test-dep".to_string(),
+            DependencySpec::Url {
+                url: "https://example.com/packages/test-dep/1.0.0/test-dep-1.0.0.zip".to_string(),
                 version: "1.0.0".to_string(),
                 optional: false,
             },

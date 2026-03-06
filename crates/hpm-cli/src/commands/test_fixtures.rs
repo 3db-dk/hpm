@@ -34,7 +34,7 @@ min_version = "20.0"
         content.push_str(&format!(
             r#"
 [dependencies]
-utility-nodes = {{ git = "{scheme}://github.com/studio/utility-nodes", version = "1.0.0" }}
+utility-nodes = {{ url = "{scheme}://example.com/packages/utility-nodes/1.0.0/utility-nodes-1.0.0.zip", version = "1.0.0" }}
 material-library = {{ path = "../material-library", optional = true }}
 "#
         ));

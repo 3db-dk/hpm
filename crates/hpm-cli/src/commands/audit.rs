@@ -47,8 +47,8 @@ pub async fn audit_packages(manifest_path: Option<PathBuf>) -> Result<()> {
         let http_deps: Vec<_> = deps
             .iter()
             .filter_map(|(name, spec)| {
-                if let hpm_package::DependencySpec::Git { git, .. } = spec {
-                    if git.starts_with("http://") && !git.starts_with("https://") {
+                if let hpm_package::DependencySpec::Url { url, .. } = spec {
+                    if url.starts_with("http://") && !url.starts_with("https://") {
                         return Some(name.clone());
                     }
                 }
@@ -57,7 +57,7 @@ pub async fn audit_packages(manifest_path: Option<PathBuf>) -> Result<()> {
             .collect();
 
         if http_deps.is_empty() {
-            passed.push("All Git URLs use HTTPS");
+            passed.push("All URLs use HTTPS");
         } else {
             for name in http_deps {
                 warnings.push(format!("{}: Uses insecure HTTP URL", name));

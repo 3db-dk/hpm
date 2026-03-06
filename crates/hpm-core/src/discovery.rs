@@ -186,7 +186,7 @@ version = "1.0.0"
 description = "A test project"
 
 [dependencies]
-utility-nodes = { git = "https://github.com/studio/utility-nodes", version = "1.0.0" }
+utility-nodes = { url = "https://example.com/packages/utility-nodes/1.0.0/utility-nodes-1.0.0.zip", version = "1.0.0" }
 "#;
         std::fs::write(project_dir.join("hpm.toml"), manifest_content).unwrap();
 
@@ -312,8 +312,9 @@ description = "Test project {}"
         let mut deps = indexmap::IndexMap::new();
         deps.insert(
             "utility-nodes".to_string(),
-            hpm_package::DependencySpec::Git {
-                git: "https://github.com/studio/utility-nodes".to_string(),
+            hpm_package::DependencySpec::Url {
+                url: "https://example.com/packages/utility-nodes/1.0.0/utility-nodes-1.0.0.zip"
+                    .to_string(),
                 version: "1.0.0".to_string(),
                 optional: false,
             },

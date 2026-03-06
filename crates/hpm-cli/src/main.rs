@@ -404,17 +404,9 @@ enum Commands {
     },
     /// Add package dependencies
     Add {
-        /// Package name(s) to add
+        /// Package name(s) to add (use name@version for specific versions)
         #[arg(value_name = "PACKAGE", required = true)]
         packages: Vec<String>,
-
-        /// Git repository URL (e.g., "https://github.com/user/repo")
-        #[arg(long)]
-        git: Option<String>,
-
-        /// Git tag for release artifact (required with --git, e.g., "v1.0.0")
-        #[arg(long)]
-        tag: Option<String>,
 
         /// Local path to package directory (only with single package)
         #[arg(long)]
@@ -662,16 +654,12 @@ async fn run_command(
         }
         Commands::Add {
             packages,
-            git,
-            tag,
             path,
             manifest,
             optional,
         } => {
             commands::add::add_packages(
                 packages.clone(),
-                git.clone(),
-                tag.clone(),
                 path.clone(),
                 manifest.clone(),
                 *optional,

@@ -45,27 +45,6 @@ mod tests {
         ]
     }
 
-    /// Strategy to generate git URLs
-    fn git_url_strategy() -> impl Strategy<Value = String> {
-        prop_oneof![
-            Just("https://github.com/example/package".to_string()),
-            Just("https://github.com/studio/utility-nodes".to_string()),
-            Just("https://github.com/artist/material-library".to_string()),
-            Just("https://gitlab.com/team/houdini-tools".to_string()),
-            r"https://github\.com/[a-z]+/[a-z-]+",
-        ]
-    }
-
-    /// Strategy to generate release tags
-    fn tag_strategy() -> impl Strategy<Value = String> {
-        prop_oneof![
-            Just("v1.0.0".to_string()),
-            Just("v2.3.4".to_string()),
-            Just("1.0.0".to_string()),
-            r"v[0-9]+\.[0-9]+\.[0-9]+",
-        ]
-    }
-
     /// Strategy to generate package versions (semver-like)
     fn package_version_strategy() -> impl Strategy<Value = String> {
         prop_oneof![
@@ -262,25 +241,19 @@ mod tests {
         #[test]
         fn prop_add_command_validation(
             package_name in package_name_strategy(),
-            git_url in prop::option::of(git_url_strategy()),
-            tag_name in prop::option::of(tag_strategy()),
             manifest_path in prop::option::of(file_path_strategy()),
             optional in any::<bool>()
         ) {
             let add_cmd = Commands::Add {
                 packages: vec![package_name.clone()],
-                git: git_url.clone(),
-                tag: tag_name.clone(),
                 path: None,
                 manifest: manifest_path.clone(),
                 optional,
             };
 
             match add_cmd {
-                Commands::Add { packages, git, tag, manifest, optional: opt, .. } => {
+                Commands::Add { packages, manifest, optional: opt, .. } => {
                     prop_assert_eq!(packages, vec![package_name]);
-                    prop_assert_eq!(git, git_url);
-                    prop_assert_eq!(tag, tag_name);
                     prop_assert_eq!(manifest, manifest_path);
                     prop_assert_eq!(opt, optional);
                 }
@@ -337,14 +310,10 @@ mod tests {
         /// Test that problematic package names are handled gracefully in validation
         #[test]
         fn prop_problematic_package_names(
-            problematic_name in problematic_package_name_strategy(),
-            git_url in git_url_strategy(),
-            tag_name in tag_strategy()
+            problematic_name in problematic_package_name_strategy()
         ) {
             let add_cmd = Commands::Add {
                 packages: vec![problematic_name.clone()],
-                git: Some(git_url),
-                tag: Some(tag_name),
                 path: None,
                 manifest: None,
                 optional: false,

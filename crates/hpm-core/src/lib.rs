@@ -229,7 +229,6 @@ pub mod packer;
 pub mod project;
 pub mod registry;
 pub mod storage;
-pub mod tag_resolver;
 
 #[cfg(test)]
 mod integration_test;
@@ -245,11 +244,13 @@ pub use discovery::{DiscoveredProject, DiscoveryError, ProjectDiscovery};
 pub use lock::{
     LockError, LockFile, LockMetadata, LockPackageInfo, LockedDependency, LockedPythonDependency,
 };
-pub use package_source::{GitProvider, PackageSource, PackageSourceError};
+pub use package_source::{PackageSource, PackageSourceError};
 pub use packer::{PackError, PackResult};
 pub use project::{ProjectDependency, ProjectError, ProjectManager};
 pub use registry::{
     ApiRegistry, GitRegistry, Registry, RegistryEntry, RegistryError, RegistrySet, SearchResults,
 };
 pub use storage::{StorageError, StorageManager};
-pub use tag_resolver::{TagResolveError, TagResolver};
+
+// Re-export config types so library consumers don't need to depend on hpm-config directly
+pub use hpm_config::{RegistrySourceConfig, RegistryType};
