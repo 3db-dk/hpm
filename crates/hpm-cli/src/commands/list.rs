@@ -238,6 +238,19 @@ pub async fn list_dependencies_tree(manifest_path: Option<PathBuf>) -> Result<()
 /// Format source info for tree display (compact format)
 fn format_tree_source_info(spec: &DependencySpec) -> String {
     match spec {
+        DependencySpec::Simple(version) => {
+            format!("(registry@{})", version)
+        }
+        DependencySpec::Registry {
+            version,
+            registry: Some(r),
+            ..
+        } => {
+            format!("({}@{})", r, version)
+        }
+        DependencySpec::Registry { version, .. } => {
+            format!("(registry@{})", version)
+        }
         DependencySpec::Url { url, version, .. } => {
             format!("({}@{})", url, version)
         }
@@ -368,6 +381,19 @@ fn display_python_dependencies(manifest: &PackageManifest) {
 /// * Path: `{path: "../local"}` → `"path: ../local"`
 fn format_dependency_spec(spec: &DependencySpec) -> String {
     match spec {
+        DependencySpec::Simple(version) => {
+            format!("registry (version: {})", version)
+        }
+        DependencySpec::Registry {
+            version,
+            registry: Some(r),
+            ..
+        } => {
+            format!("registry: {} (version: {})", r, version)
+        }
+        DependencySpec::Registry { version, .. } => {
+            format!("registry (version: {})", version)
+        }
         DependencySpec::Url { url, version, .. } => {
             format!("url: {} (version: {})", url, version)
         }
@@ -389,10 +415,7 @@ fn format_dependency_spec(spec: &DependencySpec) -> String {
 ///
 /// `true` if the dependency is marked as optional, `false` otherwise
 fn is_optional_dependency(spec: &DependencySpec) -> bool {
-    match spec {
-        DependencySpec::Url { optional, .. } => *optional,
-        DependencySpec::Path { optional, .. } => *optional,
-    }
+    spec.is_optional()
 }
 
 /// Format Python dependency specification for display

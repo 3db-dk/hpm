@@ -143,6 +143,20 @@ impl ProjectManager {
         };
 
         if let Some(dependencies) = project_manifest.dependencies {
+            // Build registry set once (lazily) for any registry-resolved deps
+            let registry_set = {
+                let has_registry_deps = dependencies.values().any(|spec| spec.is_registry());
+                if has_registry_deps {
+                    let config = hpm_config::Config::load().unwrap_or_default();
+                    Some(crate::registry::RegistrySet::from_configs(
+                        &config.registries,
+                        &config.storage.registry_cache_dir,
+                    ))
+                } else {
+                    None
+                }
+            };
+
             for (name, dep_spec) in dependencies {
                 // Skip if already linked
                 if self.is_dependency_linked(&name) {
@@ -151,6 +165,25 @@ impl ProjectManager {
 
                 // Build a PackageSource from the dependency spec and use fetcher for remote deps
                 match &dep_spec {
+                    hpm_package::DependencySpec::Simple(version)
+                    | hpm_package::DependencySpec::Registry { version, .. } => {
+                        let rs = registry_set.as_ref().expect("registry set built above");
+                        let entry = rs.get_version(&name, version).await.map_err(|e| {
+                            ProjectError::InvalidDependency(format!(
+                                "Failed to resolve {}@{} from registry: {}",
+                                name, version, e
+                            ))
+                        })?;
+                        self.fetch_and_install(
+                            &name,
+                            version,
+                            PackageSource::Url {
+                                url: entry.dl,
+                                version: version.clone(),
+                            },
+                        )
+                        .await?;
+                    }
                     hpm_package::DependencySpec::Url { url, version, .. } => {
                         self.fetch_and_install(
                             &name,

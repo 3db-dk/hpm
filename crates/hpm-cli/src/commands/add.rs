@@ -149,15 +149,16 @@ pub async fn add_packages(
                     })?
             };
 
-            info!(
-                "Resolved {} -> {} (dl: {})",
-                pkg_name, entry.version, entry.dl
-            );
+            info!("Resolved {} -> {}", pkg_name, entry.version);
 
-            DependencySpec::Url {
-                url: entry.dl.clone(),
-                version: entry.version.clone(),
-                optional,
+            if optional {
+                DependencySpec::Registry {
+                    version: entry.version.clone(),
+                    registry: None,
+                    optional: true,
+                }
+            } else {
+                DependencySpec::Simple(entry.version.clone())
             }
         };
 

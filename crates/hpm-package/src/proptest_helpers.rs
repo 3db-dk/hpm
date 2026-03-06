@@ -75,7 +75,9 @@ pub fn houdini_version_strategy() -> impl Strategy<Value = String> {
 /// Strategy to generate dependency specifications
 pub fn dependency_spec_strategy() -> impl Strategy<Value = DependencySpec> {
     prop_oneof![
-        // URL dependency (registry-resolved)
+        // Simple bare version
+        version_strategy().prop_map(DependencySpec::Simple),
+        // URL dependency
         (url_strategy(), version_strategy(), any::<bool>()).prop_map(|(url, version, optional)| {
             DependencySpec::Url {
                 url,
@@ -89,6 +91,17 @@ pub fn dependency_spec_strategy() -> impl Strategy<Value = DependencySpec> {
             any::<bool>()
         )
             .prop_map(|(path, optional)| DependencySpec::Path { path, optional }),
+        // Registry dependency with options
+        (
+            version_strategy(),
+            prop::option::of(Just("custom-registry".to_string())),
+            any::<bool>()
+        )
+            .prop_map(|(version, registry, optional)| DependencySpec::Registry {
+                version,
+                registry,
+                optional,
+            }),
     ]
 }
 

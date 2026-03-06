@@ -229,6 +229,8 @@ struct PackageInstallResult {
     checksum: String,
     /// Path to the installed package directory.
     package_path: PathBuf,
+    /// The resolved package source (URL or path) used for the lock file.
+    resolved_source: PackageSource,
 }
 
 /// Install HPM package dependencies
@@ -250,6 +252,18 @@ async fn install_hpm_dependencies(
     let fetcher = ArchiveFetcher::new(cache_dir, packages_dir.clone())
         .context("Failed to initialize archive fetcher")?;
 
+    // Build registry set for any registry-resolved deps (shared across tasks)
+    let registry_set = {
+        let has_registry_deps = dependencies.values().any(|spec| spec.is_registry());
+        if has_registry_deps {
+            Some(std::sync::Arc::new(super::registry::build_registry_set(
+                &config,
+            )))
+        } else {
+            None
+        }
+    };
+
     // Project packages directory (for symlinks/references)
     let project_packages_dir = hpm_dir.join("packages");
     tokio::fs::create_dir_all(&project_packages_dir)
@@ -263,12 +277,48 @@ async fn install_hpm_dependencies(
             let fetcher = fetcher.clone();
             let name = name.clone();
             let spec = spec.clone();
+            let registry_set = registry_set.clone();
 
             async move {
                 info!("Processing dependency: {}", name);
 
                 // Convert dependency spec to package source
                 let source = match &spec {
+                    hpm_package::DependencySpec::Simple(version) => {
+                        info!("  {} - Registry @ {}", name, version);
+                        let rs = registry_set
+                            .as_ref()
+                            .expect("registry set built for registry deps");
+                        let entry = rs.get_version(&name, version).await.with_context(|| {
+                            format!("Failed to resolve {}@{} from registry", name, version)
+                        })?;
+                        let src = PackageSource::url(&entry.dl, version)
+                            .context("Invalid URL from registry")?;
+                        if let Some(warning) = src.security_warning() {
+                            warn!("Security: {} - {}", name, warning);
+                        }
+                        src
+                    }
+                    hpm_package::DependencySpec::Registry {
+                        version, optional, ..
+                    } => {
+                        info!("  {} - Registry @ {}", name, version);
+                        if *optional {
+                            debug!("  {} is optional", name);
+                        }
+                        let rs = registry_set
+                            .as_ref()
+                            .expect("registry set built for registry deps");
+                        let entry = rs.get_version(&name, version).await.with_context(|| {
+                            format!("Failed to resolve {}@{} from registry", name, version)
+                        })?;
+                        let src = PackageSource::url(&entry.dl, version)
+                            .context("Invalid URL from registry")?;
+                        if let Some(warning) = src.security_warning() {
+                            warn!("Security: {} - {}", name, warning);
+                        }
+                        src
+                    }
                     hpm_package::DependencySpec::Url {
                         url,
                         version,
@@ -314,7 +364,7 @@ async fn install_hpm_dependencies(
                     &fetch_result.checksum[..fetch_result.checksum.len().min(16)]
                 );
 
-                Ok::<_, anyhow::Error>((name, fetch_result))
+                Ok::<_, anyhow::Error>((name, fetch_result, source))
             }
         })
         .collect();
@@ -327,7 +377,7 @@ async fn install_hpm_dependencies(
     let mut results = HashMap::new();
 
     for result in fetch_results {
-        let (name, fetch_result) = result?;
+        let (name, fetch_result, resolved_source) = result?;
 
         // Create reference in project packages directory
         let project_pkg_link = project_packages_dir.join(&name);
@@ -381,6 +431,7 @@ async fn install_hpm_dependencies(
             PackageInstallResult {
                 checksum: fetch_result.checksum,
                 package_path: fetch_result.package_path,
+                resolved_source,
             },
         );
 
@@ -527,6 +578,23 @@ async fn generate_lock_file(
             let checksum = install_results.get(name).map(|r| r.checksum.clone());
 
             let locked_dep = match spec {
+                hpm_package::DependencySpec::Simple(_)
+                | hpm_package::DependencySpec::Registry { .. } => {
+                    let version = spec.version().unwrap_or("unknown").to_string();
+                    let source = install_results
+                        .get(name)
+                        .map(|r| r.resolved_source.clone())
+                        .unwrap_or_else(|| PackageSource::Url {
+                            url: "unresolved".to_string(),
+                            version: version.clone(),
+                        });
+                    LockedDependency {
+                        version,
+                        checksum,
+                        source,
+                        dependencies: Vec::new(),
+                    }
+                }
                 hpm_package::DependencySpec::Url { url, version, .. } => LockedDependency {
                     version: version.clone(),
                     checksum,
