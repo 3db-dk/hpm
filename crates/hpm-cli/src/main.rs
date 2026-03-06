@@ -755,16 +755,14 @@ async fn run_command(
                 })?;
         }
         Commands::Publish => {
-            console.info("HPM uses Git archive-based dependencies.");
-            console.info("Publishing is done by pushing to a Git repository.");
+            console.info("HPM uses registry-based package distribution.");
             println!();
             println!("To publish your package:");
-            println!("  1. Commit your changes: git commit -m \"Release v1.0.0\"");
-            println!("  2. Push to remote: git push origin main");
-            println!("  3. Share the repository URL and commit hash with users");
+            println!("  1. Configure a registry in your hpm.toml or ~/.hpm/config.toml");
+            println!("  2. Run: hpm publish");
             println!();
             println!("Users can then add your package with:");
-            println!("  hpm add --git <your-repo-url> --commit <commit-hash>");
+            println!("  hpm add <package>@<version>");
         }
         Commands::Run { script, args: _ } => {
             console.warn("Run command not yet implemented");

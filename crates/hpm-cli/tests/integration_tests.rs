@@ -130,7 +130,7 @@ fn test_deprecated_commands() {
         stdout
     );
 
-    // Test publish command (deprecated - uses Git push)
+    // Test publish command (registry-based)
     let publish_output = hpm_binary()
         .args(["publish"])
         .output()
@@ -139,8 +139,8 @@ fn test_deprecated_commands() {
     assert!(publish_output.status.success());
     let stdout = String::from_utf8_lossy(&publish_output.stdout);
     assert!(
-        stdout.contains("Publishing is done by pushing to a Git repository"),
-        "Expected Git push info in publish output. stdout: '{}'",
+        stdout.contains("registry-based package distribution"),
+        "Expected registry info in publish output. stdout: '{}'",
         stdout
     );
 }

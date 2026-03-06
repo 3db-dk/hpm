@@ -28,15 +28,6 @@ pub async fn search_packages(query: String, _limit: Option<u32>, json_output: bo
             style("--name").green(),
             style("<alias>").dim()
         );
-        println!();
-        println!("Or add packages directly from Git:");
-        println!(
-            "  {} {} {} {}",
-            style("hpm add").cyan(),
-            style("--git").green(),
-            style("<repository-url>").dim(),
-            style("--tag <release-tag>").dim()
-        );
         return Ok(());
     }
 
