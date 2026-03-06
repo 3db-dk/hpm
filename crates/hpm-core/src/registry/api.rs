@@ -13,7 +13,7 @@ use tracing::{debug, info};
 /// Expects endpoints:
 /// - `GET {base_url}/config` -> RegistryConfig
 /// - `GET {base_url}/packages?q={query}` -> SearchResults
-/// - `GET {base_url}/packages/{name}` -> Vec<RegistryEntry>
+/// - `GET {base_url}/packages/{name}` -> VersionsResponse
 /// - `GET {base_url}/packages/{name}/{version}` -> RegistryEntry
 pub struct ApiRegistry {
     /// Display name for this registry
@@ -66,6 +66,11 @@ impl ApiRegistry {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct VersionsResponse {
+    versions: Vec<RegistryEntry>,
+}
+
 #[async_trait]
 impl Registry for ApiRegistry {
     async fn search(&self, query: &str) -> Result<SearchResults, RegistryError> {
@@ -108,12 +113,12 @@ impl Registry for ApiRegistry {
         }
 
         let response = response.error_for_status()?;
-        let entries: Vec<RegistryEntry> = response
+        let wrapper: VersionsResponse = response
             .json()
             .await
             .map_err(|e| RegistryError::ParseError(e.to_string()))?;
 
-        Ok(entries)
+        Ok(wrapper.versions)
     }
 
     async fn get_version(&self, name: &str, version: &str) -> Result<RegistryEntry, RegistryError> {
