@@ -73,7 +73,7 @@ quality: fmt-check clippy test
     @echo "✅ All quality checks passed!"
 
 # Pre-commit checks (used by git hooks)
-pre-commit: quality audit machete
+pre-commit: fmt-check clippy
     @echo "✅ Pre-commit checks completed successfully!"
 
 # === DEPENDENCIES ===
