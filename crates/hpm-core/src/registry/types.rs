@@ -33,6 +33,9 @@ pub struct RegistryEntry {
     /// Houdini version compatibility range (e.g., ">=20.0,<22.0")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub houdini_compat: Option<String>,
+    /// Target platform for this archive variant (None = universal)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
     /// Whether this version has been yanked
     #[serde(default)]
     pub yanked: bool,

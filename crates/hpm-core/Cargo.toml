@@ -36,6 +36,7 @@ zip.workspace = true
 ed25519-dalek.workspace = true
 ignore.workspace = true
 base64.workspace = true
+glob = "0.3"
 
 [dev-dependencies]
 tempfile.workspace = true

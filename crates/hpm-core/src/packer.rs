@@ -5,6 +5,9 @@
 
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use glob::Pattern;
+use hpm_package::manifest::NativeConfig;
+use hpm_package::platform::Platform;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -25,6 +28,33 @@ pub struct PackResult {
     pub signature: Option<String>,
     /// Hex-encoded first 8 bytes of the public key (if signing key provided).
     pub key_id: Option<String>,
+    /// Platform tag if this is a platform-specific archive.
+    pub platform: Option<String>,
+}
+
+/// Filter that excludes files belonging to other platforms.
+pub struct PlatformFilter {
+    /// Glob patterns for files belonging to OTHER platforms (to exclude).
+    pub exclude: Vec<Pattern>,
+}
+
+impl PlatformFilter {
+    /// Build a filter from native config, excluding files for all platforms
+    /// other than the target.
+    pub fn new(native_config: &NativeConfig, target: &Platform) -> Result<Self, PackError> {
+        let target_str = target.as_str();
+        let mut exclude = Vec::new();
+        for (platform_str, platform_files) in &native_config.platform_files {
+            if platform_str != target_str {
+                for pattern in &platform_files.files {
+                    exclude.push(
+                        Pattern::new(pattern).map_err(|e| PackError::GlobPattern(e.to_string()))?,
+                    );
+                }
+            }
+        }
+        Ok(Self { exclude })
+    }
 }
 
 /// Errors from packing operations.
@@ -41,6 +71,9 @@ pub enum PackError {
 
     #[error("Ignore pattern error: {0}")]
     IgnorePattern(#[from] ignore::Error),
+
+    #[error("Invalid glob pattern: {0}")]
+    GlobPattern(String),
 }
 
 /// Build gitignore-style rules for filtering archive contents.
@@ -78,8 +111,13 @@ pub fn create_archive(
     version: &str,
     output_dir: &Path,
     ignore: &Gitignore,
+    platform: Option<&Platform>,
+    platform_filter: Option<&PlatformFilter>,
 ) -> Result<PathBuf, PackError> {
-    let archive_name = format!("{}-{}.zip", name, version);
+    let archive_name = match platform {
+        Some(p) => format!("{}-{}-{}.zip", name, version, p),
+        None => format!("{}-{}.zip", name, version),
+    };
     let archive_path = output_dir.join(&archive_name);
 
     // Collect files, sorted for determinism
@@ -102,6 +140,14 @@ pub fn create_archive(
             .is_ignore()
         {
             continue;
+        }
+
+        // Filter out files belonging to other platforms
+        if let Some(filter) = platform_filter {
+            let rel_str = relative.to_string_lossy();
+            if filter.exclude.iter().any(|p| p.matches(&rel_str)) {
+                continue;
+            }
         }
 
         if entry.file_type().is_file() {
@@ -187,9 +233,25 @@ pub fn pack(
     version: &str,
     output_dir: &Path,
     signing_key: Option<&SigningKey>,
+    platform: Option<&Platform>,
+    native_config: Option<&NativeConfig>,
 ) -> Result<PackResult, PackError> {
     let ignore = build_ignore_rules(package_dir)?;
-    let archive_path = create_archive(package_dir, name, version, output_dir, &ignore)?;
+
+    let platform_filter = match (platform, native_config) {
+        (Some(p), Some(nc)) => Some(PlatformFilter::new(nc, p)?),
+        _ => None,
+    };
+
+    let archive_path = create_archive(
+        package_dir,
+        name,
+        version,
+        output_dir,
+        &ignore,
+        platform,
+        platform_filter.as_ref(),
+    )?;
     let checksum = compute_archive_checksum(&archive_path)?;
 
     let (signature, key_id) = match signing_key {
@@ -205,6 +267,7 @@ pub fn pack(
         checksum,
         signature,
         key_id,
+        platform: platform.map(|p| p.to_string()),
     })
 }
 
@@ -277,8 +340,16 @@ version = "1.0.0"
 
         let output_dir = TempDir::new().unwrap();
         let ignore = build_ignore_rules(dir.path()).unwrap();
-        let archive_path =
-            create_archive(dir.path(), "test-pkg", "1.0.0", output_dir.path(), &ignore).unwrap();
+        let archive_path = create_archive(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            output_dir.path(),
+            &ignore,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert!(archive_path.exists());
         assert_eq!(archive_path.file_name().unwrap(), "test-pkg-1.0.0.zip");
@@ -306,8 +377,26 @@ version = "1.0.0"
         let out2 = TempDir::new().unwrap();
         let ignore = build_ignore_rules(dir.path()).unwrap();
 
-        let path1 = create_archive(dir.path(), "test-pkg", "1.0.0", out1.path(), &ignore).unwrap();
-        let path2 = create_archive(dir.path(), "test-pkg", "1.0.0", out2.path(), &ignore).unwrap();
+        let path1 = create_archive(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            out1.path(),
+            &ignore,
+            None,
+            None,
+        )
+        .unwrap();
+        let path2 = create_archive(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            out2.path(),
+            &ignore,
+            None,
+            None,
+        )
+        .unwrap();
 
         let cksum1 = compute_archive_checksum(&path1).unwrap();
         let cksum2 = compute_archive_checksum(&path2).unwrap();
@@ -323,8 +412,16 @@ version = "1.0.0"
 
         let output_dir = TempDir::new().unwrap();
         let ignore = build_ignore_rules(dir.path()).unwrap();
-        let archive_path =
-            create_archive(dir.path(), "test-pkg", "1.0.0", output_dir.path(), &ignore).unwrap();
+        let archive_path = create_archive(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            output_dir.path(),
+            &ignore,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Generate a keypair for testing
         let secret = [42u8; 32];
@@ -373,7 +470,16 @@ version = "1.0.0"
         create_test_package(dir.path());
 
         let output_dir = TempDir::new().unwrap();
-        let result = pack(dir.path(), "test-pkg", "1.0.0", output_dir.path(), None).unwrap();
+        let result = pack(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            output_dir.path(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert!(result.archive_path.exists());
         assert!(!result.checksum.is_empty());
@@ -396,6 +502,8 @@ version = "1.0.0"
             "1.0.0",
             output_dir.path(),
             Some(&signing_key),
+            None,
+            None,
         )
         .unwrap();
 
@@ -403,5 +511,136 @@ version = "1.0.0"
         assert!(!result.checksum.is_empty());
         assert!(result.signature.is_some());
         assert!(result.key_id.is_some());
+    }
+
+    fn create_native_test_package(dir: &Path) {
+        create_test_package(dir);
+        fs::create_dir_all(dir.join("lib/linux-x86_64")).unwrap();
+        fs::write(dir.join("lib/linux-x86_64/libfoo.so"), b"elf-binary").unwrap();
+        fs::create_dir_all(dir.join("lib/macos-universal")).unwrap();
+        fs::write(
+            dir.join("lib/macos-universal/libfoo.dylib"),
+            b"macho-binary",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("lib/windows-x86_64")).unwrap();
+        fs::write(dir.join("lib/windows-x86_64/foo.dll"), b"pe-binary").unwrap();
+    }
+
+    fn test_native_config() -> hpm_package::manifest::NativeConfig {
+        let mut platform_files = indexmap::IndexMap::new();
+        platform_files.insert(
+            "linux-x86_64".to_string(),
+            hpm_package::manifest::NativePlatformFiles {
+                files: vec!["lib/linux-x86_64/*".to_string()],
+            },
+        );
+        platform_files.insert(
+            "macos-universal".to_string(),
+            hpm_package::manifest::NativePlatformFiles {
+                files: vec!["lib/macos-universal/*".to_string()],
+            },
+        );
+        platform_files.insert(
+            "windows-x86_64".to_string(),
+            hpm_package::manifest::NativePlatformFiles {
+                files: vec!["lib/windows-x86_64/*".to_string()],
+            },
+        );
+        hpm_package::manifest::NativeConfig {
+            platforms: vec![
+                "linux-x86_64".to_string(),
+                "macos-universal".to_string(),
+                "windows-x86_64".to_string(),
+            ],
+            platform_files,
+        }
+    }
+
+    #[test]
+    fn platform_archive_name_includes_platform() {
+        let dir = TempDir::new().unwrap();
+        create_native_test_package(dir.path());
+
+        let output_dir = TempDir::new().unwrap();
+        let native_config = test_native_config();
+        let platform = hpm_package::platform::Platform::LinuxX86_64;
+
+        let result = pack(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            output_dir.path(),
+            None,
+            Some(&platform),
+            Some(&native_config),
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.archive_path.file_name().unwrap(),
+            "test-pkg-1.0.0-linux-x86_64.zip"
+        );
+        assert_eq!(result.platform.as_deref(), Some("linux-x86_64"));
+    }
+
+    #[test]
+    fn platform_archive_excludes_other_platforms() {
+        let dir = TempDir::new().unwrap();
+        create_native_test_package(dir.path());
+
+        let output_dir = TempDir::new().unwrap();
+        let native_config = test_native_config();
+        let platform = hpm_package::platform::Platform::LinuxX86_64;
+
+        let result = pack(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            output_dir.path(),
+            None,
+            Some(&platform),
+            Some(&native_config),
+        )
+        .unwrap();
+
+        let file = fs::File::open(&result.archive_path).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let names: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .collect();
+
+        // Should contain linux files
+        assert!(names.contains(&"lib/linux-x86_64/libfoo.so".to_string()));
+        // Should NOT contain other platforms
+        assert!(!names.iter().any(|n| n.contains("macos-universal")));
+        assert!(!names.iter().any(|n| n.contains("windows-x86_64")));
+        // Should still contain shared files
+        assert!(names.contains(&"hpm.toml".to_string()));
+        assert!(names.contains(&"README.md".to_string()));
+    }
+
+    #[test]
+    fn pack_without_platform_has_no_platform_tag() {
+        let dir = TempDir::new().unwrap();
+        create_native_test_package(dir.path());
+
+        let output_dir = TempDir::new().unwrap();
+        let result = pack(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            output_dir.path(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.archive_path.file_name().unwrap(),
+            "test-pkg-1.0.0.zip"
+        );
+        assert!(result.platform.is_none());
     }
 }

@@ -496,6 +496,9 @@ enum Commands {
         /// Output result as JSON (for CI integration)
         #[arg(long)]
         json: bool,
+        /// Target platform (defaults to host platform when [native] is declared)
+        #[arg(long)]
+        platform: Option<String>,
     },
     /// Run security audit on dependencies
     Audit {
@@ -802,12 +805,18 @@ async fn run_command(
                 console.success("Package configuration is valid");
             }
         }
-        Commands::Pack { key, output, json } => {
+        Commands::Pack {
+            key,
+            output,
+            json,
+            platform,
+        } => {
             commands::pack::execute(
                 directory.clone(),
                 key.clone(),
                 output.clone(),
                 *json,
+                platform.clone(),
                 console,
             )
             .await
