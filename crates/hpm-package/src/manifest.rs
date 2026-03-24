@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use crate::dependency::DependencySpec;
 use crate::houdini::{HoudiniEnvValue, HoudiniPackage};
+use crate::platform::Platform;
 use crate::python::PythonDependencySpec;
 
 /// The type of registry backend.
@@ -35,6 +36,26 @@ pub struct ManifestEnvEntry {
     pub value: String,
 }
 
+/// Native platform configuration for multi-architecture packaging.
+///
+/// Declares which files belong to which platform, enabling per-platform archives.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeConfig {
+    /// Declared platforms this package supports.
+    pub platforms: Vec<String>,
+    /// Per-platform file glob patterns, keyed by platform string.
+    /// Deserialized from `[native.linux-x86_64]` etc.
+    #[serde(flatten)]
+    pub platform_files: IndexMap<String, NativePlatformFiles>,
+}
+
+/// Files for a single platform.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativePlatformFiles {
+    /// Glob patterns matching files belonging to this platform.
+    pub files: Vec<String>,
+}
+
 /// A registry declared in hpm.toml's `[[registries]]` array.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryConfig {
@@ -52,6 +73,8 @@ pub struct RegistryConfig {
 pub struct PackageManifest {
     pub package: PackageInfo,
     pub houdini: Option<HoudiniConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<NativeConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registries: Option<Vec<RegistryConfig>>,
     pub dependencies: Option<IndexMap<String, DependencySpec>>,
@@ -126,6 +149,7 @@ impl PackageManifest {
                 min_version: Some("19.5".to_string()),
                 max_version: None,
             }),
+            native: None,
             registries: None,
             dependencies: None,
             python_dependencies: None,
@@ -152,6 +176,39 @@ impl PackageManifest {
         // Validate package name (kebab-case recommended)
         if !self.is_valid_package_name(&self.package.name) {
             return Err("Package name should be kebab-case (lowercase with hyphens)".to_string());
+        }
+
+        // Validate [native] section
+        if let Some(native) = &self.native {
+            for platform_str in &native.platforms {
+                platform_str
+                    .parse::<Platform>()
+                    .map_err(|e| e.to_string())?;
+            }
+            for key in native.platform_files.keys() {
+                if !native.platforms.contains(key) {
+                    return Err(format!(
+                        "[native.{}] declared but '{}' not listed in native.platforms",
+                        key, key
+                    ));
+                }
+            }
+            for platform_str in &native.platforms {
+                if !native.platform_files.contains_key(platform_str) {
+                    return Err(format!(
+                        "Platform '{}' listed in native.platforms but has no [native.{}] section",
+                        platform_str, platform_str
+                    ));
+                }
+            }
+            for (platform_str, files) in &native.platform_files {
+                if files.files.is_empty() {
+                    return Err(format!(
+                        "[native.{}] files array must not be empty",
+                        platform_str
+                    ));
+                }
+            }
         }
 
         Ok(())
@@ -371,6 +428,102 @@ version = "0.1.0"
             }
             _ => panic!("Expected Detailed variant"),
         }
+    }
+
+    #[test]
+    fn native_deserialize_from_toml() {
+        let toml_str = r#"
+[package]
+name = "my-native-pkg"
+version = "1.0.0"
+
+[native]
+platforms = ["linux-x86_64", "macos-universal"]
+
+[native.linux-x86_64]
+files = ["lib/linux-x86_64/*"]
+
+[native.macos-universal]
+files = ["lib/macos-universal/*"]
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let native = manifest.native.unwrap();
+        assert_eq!(native.platforms.len(), 2);
+        assert_eq!(native.platform_files.len(), 2);
+        assert_eq!(
+            native.platform_files["linux-x86_64"].files,
+            vec!["lib/linux-x86_64/*"]
+        );
+    }
+
+    #[test]
+    fn native_none_when_absent() {
+        let toml_str = r#"
+[package]
+name = "my-package"
+version = "0.1.0"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        assert!(manifest.native.is_none());
+    }
+
+    #[test]
+    fn native_validation_unknown_platform() {
+        let mut manifest =
+            PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
+        manifest.native = Some(NativeConfig {
+            platforms: vec!["linux-arm64".to_string()],
+            platform_files: IndexMap::new(),
+        });
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn native_validation_missing_files_section() {
+        let mut manifest =
+            PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
+        manifest.native = Some(NativeConfig {
+            platforms: vec!["linux-x86_64".to_string()],
+            platform_files: IndexMap::new(),
+        });
+        let err = manifest.validate().unwrap_err();
+        assert!(err.contains("has no [native.linux-x86_64] section"));
+    }
+
+    #[test]
+    fn native_validation_empty_files() {
+        let mut manifest =
+            PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
+        let mut platform_files = IndexMap::new();
+        platform_files.insert(
+            "linux-x86_64".to_string(),
+            NativePlatformFiles { files: vec![] },
+        );
+        manifest.native = Some(NativeConfig {
+            platforms: vec!["linux-x86_64".to_string()],
+            platform_files,
+        });
+        let err = manifest.validate().unwrap_err();
+        assert!(err.contains("files array must not be empty"));
+    }
+
+    #[test]
+    fn native_validation_extra_platform_files() {
+        let mut manifest =
+            PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
+        let mut platform_files = IndexMap::new();
+        platform_files.insert(
+            "windows-x86_64".to_string(),
+            NativePlatformFiles {
+                files: vec!["lib/*".to_string()],
+            },
+        );
+        manifest.native = Some(NativeConfig {
+            platforms: vec!["linux-x86_64".to_string()],
+            platform_files,
+        });
+        let err = manifest.validate().unwrap_err();
+        assert!(err.contains("not listed in native.platforms"));
     }
 
     #[test]

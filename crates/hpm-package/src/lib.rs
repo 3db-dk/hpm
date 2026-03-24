@@ -10,6 +10,7 @@
 //! - **Houdini Integration**: Automated generation of `package.json` files from HPM manifests
 //! - **Package Templates**: Standardized package structure generation
 //! - **Dependency Management**: Support for registry, URL, and path dependencies, plus Python dependencies
+//! - **Platform-Aware Packaging**: Native platform declarations for multi-architecture archives
 //! - **Version Constraint Handling**: Full semantic versioning support
 //!
 //! ## Key Types
@@ -18,6 +19,8 @@
 //! - [`DependencySpec`] - HPM dependency specifications (Registry, URL, or Path)
 //! - [`PythonDependencySpec`] - Python dependency specifications with extras
 //! - [`HoudiniPackage`] - Generated `package.json` structure for Houdini
+//! - [`Platform`] - Canonical platform identifiers for native packaging
+//! - [`NativeConfig`] - Platform-specific file declarations
 //! - [`PackageTemplate`] - Template system for generating package directories
 //!
 //! ## Quick Start
@@ -95,6 +98,7 @@
 pub mod dependency;
 pub mod houdini;
 pub mod manifest;
+pub mod platform;
 pub mod python;
 pub mod template;
 
@@ -105,8 +109,9 @@ mod proptest_helpers;
 pub use dependency::DependencySpec;
 pub use houdini::{HoudiniEnvValue, HoudiniPackage};
 pub use manifest::{
-    EnvMethod, HoudiniConfig, ManifestEnvEntry, PackageInfo, PackageManifest, RegistryConfig,
-    RegistryType,
+    EnvMethod, HoudiniConfig, ManifestEnvEntry, NativeConfig, NativePlatformFiles, PackageInfo,
+    PackageManifest, RegistryConfig, RegistryType,
 };
+pub use platform::Platform;
 pub use python::PythonDependencySpec;
 pub use template::PackageTemplate;
