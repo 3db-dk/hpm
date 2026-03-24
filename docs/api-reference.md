@@ -832,6 +832,7 @@ pub struct PackageManifest {
     pub dependencies: BTreeMap<String, DependencySpec>,
     pub dev_dependencies: Option<BTreeMap<String, DependencySpec>>,
     pub python_dependencies: Option<BTreeMap<String, PythonDependencySpec>>,
+    pub env: Option<IndexMap<String, ManifestEnvEntry>>,
     pub scripts: Option<BTreeMap<String, String>>,
 }
 

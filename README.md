@@ -59,6 +59,10 @@ material-lib  = { path = "../material-lib", optional = true }
 [python_dependencies]
 numpy = ">=1.20.0"
 requests = { version = ">=2.25.0", extras = ["security"] }
+
+[env]
+MY_TOOLS_CONFIG = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
+HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
 ```
 
 ## Commands

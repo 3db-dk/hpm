@@ -636,6 +636,11 @@ numpy = ">=1.20.0"
 requests = { version = ">=2.25.0", extras = ["security", "socks"] }
 matplotlib = { version = "^3.5.0", optional = true }
 
+# Environment variables for Houdini
+[env]
+MY_TOOL_CONFIG = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
+HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
+
 # Package scripts for automation
 [scripts]
 build = "python scripts/build.py"
@@ -692,6 +697,24 @@ dev-utilities = { path = "./packages/dev-utils", optional = true }
 ```
 
 **Note:** Registry dependencies are resolved by version. The lock file (`hpm.lock`) pins exact versions and checksums for reproducible builds.
+
+#### Environment Variables
+
+The `[env]` section declares environment variables that are set when Houdini loads the package. Each entry specifies a method and a value:
+
+| Method | Description |
+|--------|-------------|
+| `set` | Set the variable to the given value |
+| `prepend` | Prepend the value to the existing variable |
+| `append` | Append the value to the existing variable |
+
+```toml
+[env]
+MY_PLUGIN_ROOT = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
+HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
+```
+
+Use `$HPM_PACKAGE_ROOT` to reference the package installation directory. These variables are merged with HPM's built-in environment variables (PYTHONPATH, HOUDINI_SCRIPT_PATH) when generating Houdini's `package.json`.
 
 ### Global Configuration (~/.hpm/config.toml)
 
