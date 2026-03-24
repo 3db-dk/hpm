@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "home",
  "serde",
@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -981,7 +981,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-error"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "reqwest",
  "thiserror 2.0.18",
@@ -989,7 +989,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-package"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fuzzcheck",
  "indexmap",
@@ -1002,7 +1002,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-python"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1028,7 +1028,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-resolver"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-workspace"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "http"

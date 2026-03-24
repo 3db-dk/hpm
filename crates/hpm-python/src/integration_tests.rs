@@ -49,6 +49,7 @@ async fn test_end_to_end_python_workflow() {
         registries: None,
         dependencies: None,
         python_dependencies: Some(python_deps_a),
+        env: None,
         scripts: None,
     };
 
@@ -87,6 +88,7 @@ async fn test_end_to_end_python_workflow() {
         registries: None,
         dependencies: None,
         python_dependencies: Some(python_deps_b),
+        env: None,
         scripts: None,
     };
 
@@ -278,6 +280,7 @@ async fn test_houdini_python_version_mapping_edge_cases() {
         registries: None,
         dependencies: None,
         python_dependencies: Some(IndexMap::new()),
+        env: None,
         scripts: None,
     };
 

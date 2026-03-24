@@ -107,6 +107,9 @@ mod fuzz_tests;
 // Re-exports for convenient access
 pub use dependency::DependencySpec;
 pub use houdini::{HoudiniEnvValue, HoudiniPackage};
-pub use manifest::{HoudiniConfig, PackageInfo, PackageManifest, RegistryConfig, RegistryType};
+pub use manifest::{
+    EnvMethod, HoudiniConfig, ManifestEnvEntry, PackageInfo, PackageManifest, RegistryConfig,
+    RegistryType,
+};
 pub use python::PythonDependencySpec;
 pub use template::PackageTemplate;

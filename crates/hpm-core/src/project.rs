@@ -474,6 +474,29 @@ impl ProjectManager {
             env.push(scripts_env);
         }
 
+        // Append user-defined env vars from [env] section
+        if let Some(user_env) = &installed_package.manifest.env {
+            for (key, entry) in user_env {
+                let mut env_map = HashMap::new();
+                let resolved_value = entry
+                    .value
+                    .replace("$HPM_PACKAGE_ROOT", &package_path.to_string_lossy());
+                env_map.insert(
+                    key.clone(),
+                    hpm_package::HoudiniEnvValue::Detailed {
+                        method: match entry.method {
+                            hpm_package::EnvMethod::Set => "set",
+                            hpm_package::EnvMethod::Prepend => "prepend",
+                            hpm_package::EnvMethod::Append => "append",
+                        }
+                        .to_string(),
+                        value: resolved_value,
+                    },
+                );
+                env.push(env_map);
+            }
+        }
+
         // Generate enable condition from Houdini config
         let enable = if let Some(houdini_config) = &installed_package.manifest.houdini {
             let mut conditions = vec![];

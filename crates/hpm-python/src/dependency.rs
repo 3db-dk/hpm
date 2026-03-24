@@ -188,6 +188,7 @@ mod tests {
             registries: None,
             dependencies: None,
             python_dependencies: Some(python_deps),
+            env: None,
             scripts: None,
         };
 

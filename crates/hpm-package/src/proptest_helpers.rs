@@ -158,6 +158,7 @@ pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
                     registries: None,
                     dependencies: None,
                     python_dependencies: None,
+                    env: None,
                     scripts: None,
                 }
             },
@@ -524,6 +525,7 @@ proptest! {
             registries: None,
             dependencies: None,
             python_dependencies: None,
+            env: None,
             scripts: None,
         };
 

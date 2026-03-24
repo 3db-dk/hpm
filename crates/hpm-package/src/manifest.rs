@@ -19,6 +19,22 @@ pub enum RegistryType {
     Git,
 }
 
+/// Method for applying an environment variable value.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EnvMethod {
+    Set,
+    Prepend,
+    Append,
+}
+
+/// An environment variable entry declared in `[env]`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestEnvEntry {
+    pub method: EnvMethod,
+    pub value: String,
+}
+
 /// A registry declared in hpm.toml's `[[registries]]` array.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryConfig {
@@ -40,6 +56,8 @@ pub struct PackageManifest {
     pub registries: Option<Vec<RegistryConfig>>,
     pub dependencies: Option<IndexMap<String, DependencySpec>>,
     pub python_dependencies: Option<IndexMap<String, PythonDependencySpec>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, ManifestEnvEntry>>,
     pub scripts: Option<HashMap<String, String>>,
 }
 
@@ -64,6 +82,21 @@ pub struct PackageInfo {
 pub struct HoudiniConfig {
     pub min_version: Option<String>,
     pub max_version: Option<String>,
+}
+
+impl ManifestEnvEntry {
+    /// Convert to a Houdini environment variable value.
+    pub fn to_houdini_env_value(&self) -> HoudiniEnvValue {
+        let method = match self.method {
+            EnvMethod::Set => "set",
+            EnvMethod::Prepend => "prepend",
+            EnvMethod::Append => "append",
+        };
+        HoudiniEnvValue::Detailed {
+            method: method.to_string(),
+            value: self.value.clone(),
+        }
+    }
 }
 
 impl PackageManifest {
@@ -96,6 +129,7 @@ impl PackageManifest {
             registries: None,
             dependencies: None,
             python_dependencies: None,
+            env: None,
             scripts: None,
         }
     }
@@ -152,6 +186,15 @@ impl PackageManifest {
             },
         );
         env.push(scripts_env);
+
+        // Append user-defined env vars from [env] section
+        if let Some(user_env) = &self.env {
+            for (key, entry) in user_env {
+                let mut env_map = HashMap::new();
+                env_map.insert(key.clone(), entry.to_houdini_env_value());
+                env.push(env_map);
+            }
+        }
 
         // Generate version constraint
         let enable = if let Some(houdini_config) = &self.houdini {
@@ -254,6 +297,80 @@ test = "0.2.0"
         assert_eq!(registries[0].registry_type, RegistryType::Api);
         assert_eq!(registries[1].name, "studio-internal");
         assert_eq!(registries[1].registry_type, RegistryType::Git);
+    }
+
+    #[test]
+    fn env_deserialize_from_toml() {
+        let toml_str = r#"
+[package]
+name = "my-package"
+version = "0.1.0"
+
+[env]
+MY_PLUGIN_ROOT = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
+HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let env = manifest.env.unwrap();
+        assert_eq!(env.len(), 2);
+        assert_eq!(env["MY_PLUGIN_ROOT"].method, EnvMethod::Set);
+        assert_eq!(env["MY_PLUGIN_ROOT"].value, "$HPM_PACKAGE_ROOT/config");
+        assert_eq!(env["HOUDINI_TOOLBAR_PATH"].method, EnvMethod::Prepend);
+    }
+
+    #[test]
+    fn env_invalid_method_rejected() {
+        let toml_str = r#"
+[package]
+name = "my-package"
+version = "0.1.0"
+
+[env]
+MY_VAR = { method = "invalid", value = "foo" }
+"#;
+        let result: Result<PackageManifest, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn env_none_when_absent() {
+        let toml_str = r#"
+[package]
+name = "my-package"
+version = "0.1.0"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        assert!(manifest.env.is_none());
+    }
+
+    #[test]
+    fn generate_houdini_package_includes_user_env() {
+        let mut manifest =
+            PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
+
+        let mut env = IndexMap::new();
+        env.insert(
+            "MY_VAR".to_string(),
+            ManifestEnvEntry {
+                method: EnvMethod::Set,
+                value: "$HPM_PACKAGE_ROOT/data".to_string(),
+            },
+        );
+        manifest.env = Some(env);
+
+        let houdini_pkg = manifest.generate_houdini_package();
+        let env_list = houdini_pkg.env.unwrap();
+        // 2 hardcoded (PYTHONPATH, HOUDINI_SCRIPT_PATH) + 1 user-defined
+        assert_eq!(env_list.len(), 3);
+        let last = &env_list[2];
+        let val = last.get("MY_VAR").unwrap();
+        match val {
+            HoudiniEnvValue::Detailed { method, value } => {
+                assert_eq!(method, "set");
+                assert_eq!(value, "$HPM_PACKAGE_ROOT/data");
+            }
+            _ => panic!("Expected Detailed variant"),
+        }
     }
 
     #[test]
