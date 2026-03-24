@@ -180,10 +180,12 @@ hpm/
 - Global package storage management
 - Project discovery and validation
 - Dependency graph analysis and cleanup
+- Platform-filtered archive generation (`hpm pack --platform`)
 - High-level package operations
 
 **hpm-package**: Package manifest processing
 - HPM manifest (`hpm.toml`) parsing and validation
+- Platform type definitions and native packaging declarations
 - Package template generation
 - Houdini integration file generation
 - Package metadata management
@@ -1528,10 +1530,12 @@ cargo doc --workspace --all-features --no-deps
 # Optimized release build
 cargo build --release --workspace
 
-# Cross-platform builds (future)
+# Cross-platform builds
 cross build --target x86_64-unknown-linux-gnu --release
 cross build --target x86_64-pc-windows-gnu --release
 cross build --target x86_64-apple-darwin --release
 ```
+
+**Platform-aware packaging:** Packages with native libraries use the `[native]` section in `hpm.toml` to declare platform-specific files. `hpm pack --platform` produces slim per-platform archives. See the user guide for configuration details.
 
 This developer documentation provides comprehensive guidance for contributing to HPM. The modular architecture, comprehensive testing strategy, and clear development workflows ensure that contributions can be made safely and effectively while maintaining the project's high quality standards.

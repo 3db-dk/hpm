@@ -829,6 +829,7 @@ Core package manifest structure representing `hpm.toml` files.
 pub struct PackageManifest {
     pub package: PackageMetadata,
     pub houdini: Option<HoudiniCompatibility>,
+    pub native: Option<NativeConfig>,
     pub dependencies: BTreeMap<String, DependencySpec>,
     pub dev_dependencies: Option<BTreeMap<String, DependencySpec>>,
     pub python_dependencies: Option<BTreeMap<String, PythonDependencySpec>>,
@@ -1151,6 +1152,100 @@ pub enum ValidationError {
     
     #[error("Field validation failed: {field} - {reason}")]
     FieldValidation { field: String, reason: String },
+}
+```
+
+### Platform Support
+
+Types for multi-architecture packaging, enabling packages with native libraries to produce per-platform archives.
+
+#### Platform
+
+```rust
+/// Canonical platform identifiers recognized by HPM.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Platform {
+    LinuxX86_64,      // "linux-x86_64"
+    MacosUniversal,   // "macos-universal"
+    WindowsX86_64,    // "windows-x86_64"
+}
+
+impl Platform {
+    /// Detect the current host platform.
+    pub fn current() -> Option<Self>
+
+    /// Get the canonical kebab-case string.
+    pub fn as_str(&self) -> &'static str
+}
+
+impl FromStr for Platform {
+    type Err = String;
+}
+```
+
+#### NativeConfig
+
+Declared in the `[native]` section of `hpm.toml`. When present, `hpm pack` requires a target platform.
+
+```rust
+/// Top-level [native] configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeConfig {
+    /// Declared platforms this package supports.
+    pub platforms: Vec<String>,
+    /// Per-platform file glob patterns, keyed by platform string.
+    #[serde(flatten)]
+    pub platform_files: IndexMap<String, NativePlatformFiles>,
+}
+
+/// Files for a single platform.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativePlatformFiles {
+    /// Glob patterns matching files belonging to this platform.
+    pub files: Vec<String>,
+}
+```
+
+#### PlatformFilter (hpm-core)
+
+Used by the packer to exclude files belonging to other platforms when creating slim archives.
+
+```rust
+pub struct PlatformFilter {
+    /// Glob patterns for files belonging to OTHER platforms (to exclude).
+    pub exclude: Vec<glob::Pattern>,
+}
+
+impl PlatformFilter {
+    /// Build a filter from native config, excluding files for all platforms
+    /// other than the target.
+    pub fn new(native_config: &NativeConfig, target: &Platform) -> Result<Self, PackError>
+}
+```
+
+#### PackResult
+
+The `PackResult` struct includes a `platform` field when packing native packages:
+
+```rust
+pub struct PackResult {
+    pub archive_path: PathBuf,
+    pub checksum: String,
+    pub signature: Option<String>,
+    pub key_id: Option<String>,
+    pub platform: Option<String>,  // e.g., "linux-x86_64"
+}
+```
+
+#### RegistryEntry
+
+Registry entries include an optional `platform` field to distinguish per-platform archive variants:
+
+```rust
+pub struct RegistryEntry {
+    // ... existing fields ...
+    /// Target platform for this archive variant (None = universal)
+    pub platform: Option<String>,
 }
 ```
 

@@ -61,8 +61,8 @@ HPM employs a multi-tiered testing strategy:
 
 | Crate | Property Tests | Focus Area |
 |-------|---------------|------------|
-| `hpm-core` | 7 tests | Storage types, package specs, version compatibility |
-| `hpm-package` | 7 tests | Manifest validation, serialization, Houdini integration |
+| `hpm-core` | 7 tests | Storage types, package specs, version compatibility, platform-filtered packing |
+| `hpm-package` | 7 tests | Manifest validation, serialization, Houdini integration, platform enum, native config |
 | `hpm-python` | 9 tests | Python versions, dependencies, virtual environments |
 
 ### Test Organization Structure
