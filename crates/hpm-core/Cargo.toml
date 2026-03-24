@@ -37,13 +37,6 @@ ed25519-dalek.workspace = true
 ignore.workspace = true
 base64.workspace = true
 
-[dependencies.fuzzcheck]
-version = "0.12"
-optional = true
-
 [dev-dependencies]
 tempfile.workspace = true
 proptest.workspace = true
-
-[features]
-fuzz = ["fuzzcheck"]

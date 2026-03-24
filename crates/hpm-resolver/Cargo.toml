@@ -20,13 +20,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
-[dependencies.fuzzcheck]
-version = "0.12"
-optional = true
-
 [dev-dependencies]
 proptest.workspace = true
 tokio-test.workspace = true
-
-[features]
-fuzz = ["fuzzcheck"]

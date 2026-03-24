@@ -233,9 +233,6 @@ pub mod storage;
 #[cfg(test)]
 mod integration_test;
 
-#[cfg(all(test, feature = "fuzz"))]
-mod fuzz_tests;
-
 pub use archive_fetcher::{ArchiveFetcher, FetchError, FetchResult};
 pub use dependency::{
     DependencyError, DependencyGraph, DependencyResolver, PackageId, PackageNode,

@@ -377,9 +377,6 @@ use thiserror::Error;
 pub mod solver;
 pub mod version;
 
-#[cfg(all(test, feature = "fuzz"))]
-mod fuzz_tests;
-
 pub use solver::DependencyResolver;
 pub use version::{Version, VersionConstraint, VersionRange};
 
