@@ -63,6 +63,19 @@ requests = { version = ">=2.25.0", extras = ["security"] }
 [env]
 MY_TOOLS_CONFIG = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
 HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
+
+# Native library packaging (optional)
+[native]
+platforms = ["linux-x86_64", "macos-universal", "windows-x86_64"]
+
+[native.linux-x86_64]
+files = ["lib/linux-x86_64/*"]
+
+[native.macos-universal]
+files = ["lib/macos-universal/*"]
+
+[native.windows-x86_64]
+files = ["lib/windows-x86_64/*"]
 ```
 
 ## Commands
@@ -76,7 +89,7 @@ HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar"
 | `hpm update [pkg...]` | Update dependencies (`--dry-run` to preview) |
 | `hpm list` | Show dependencies (`--tree` for tree view) |
 | `hpm check` | Validate package configuration |
-| `hpm pack` | Create a signed archive (`--key` for signing) |
+| `hpm pack` | Create a signed archive (`--key` for signing, `--platform` for native packages) |
 | `hpm clean` | Remove orphaned packages and venvs (`--dry-run`, `--python-only`) |
 | `hpm audit` | Security audit on dependencies |
 | `hpm completions <shell>` | Generate shell completions (bash, zsh, fish, powershell) |

@@ -641,6 +641,19 @@ matplotlib = { version = "^3.5.0", optional = true }
 MY_TOOL_CONFIG = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
 HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
 
+# Native library packaging (for packages with compiled binaries)
+[native]
+platforms = ["linux-x86_64", "macos-universal", "windows-x86_64"]
+
+[native.linux-x86_64]
+files = ["lib/linux-x86_64/*"]
+
+[native.macos-universal]
+files = ["lib/macos-universal/*"]
+
+[native.windows-x86_64]
+files = ["lib/windows-x86_64/*"]
+
 # Package scripts for automation
 [scripts]
 build = "python scripts/build.py"
@@ -715,6 +728,33 @@ HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar"
 ```
 
 Use `$HPM_PACKAGE_ROOT` to reference the package installation directory. These variables are merged with HPM's built-in environment variables (PYTHONPATH, HOUDINI_SCRIPT_PATH) when generating Houdini's `package.json`.
+
+#### Native Section
+
+The `[native]` section declares platform-specific files for packages that ship compiled binaries (shared libraries, HDK plugins). When present, `hpm pack` produces per-platform archives instead of a single fat archive.
+
+| Field | Description |
+|-------|-------------|
+| `platforms` | List of supported platform identifiers |
+| `[native.<platform>]` | Sub-table with `files` glob patterns for each platform |
+
+Supported platforms: `linux-x86_64`, `macos-universal`, `windows-x86_64`.
+
+```toml
+[native]
+platforms = ["linux-x86_64", "macos-universal", "windows-x86_64"]
+
+[native.linux-x86_64]
+files = ["lib/linux-x86_64/*"]
+
+[native.macos-universal]
+files = ["lib/macos-universal/*"]
+
+[native.windows-x86_64]
+files = ["lib/windows-x86_64/*"]
+```
+
+When `[native]` is declared, `hpm pack` auto-detects the host platform and produces a slim archive (e.g., `my-tool-1.0.0-linux-x86_64.zip`) containing only shared files plus the target platform's native files. Use `--platform` to explicitly target a different platform.
 
 ### Global Configuration (~/.hpm/config.toml)
 

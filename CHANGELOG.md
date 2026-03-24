@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `[native]` section in `hpm.toml` for declaring platform-specific files
+- `hpm pack --platform` flag for producing per-platform archives
+- `Platform` type with support for `linux-x86_64`, `macos-universal`, `windows-x86_64`
+- Auto-detection of host platform when packing native packages
+- `platform` field on registry entries for future install-time platform selection
+
 ## [0.1.0] - Initial Release
 
 ### Package Management
