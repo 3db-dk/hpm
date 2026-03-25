@@ -695,17 +695,39 @@ PROPTEST_CASES=1000 cargo tarpaulin --workspace --all-features \
   --run-types tests --engine llvm --out html -- prop_
 ```
 
+## Troubleshooting Development Environment
+
+### Rust Toolchain Issues
+```bash
+rustup update stable
+rustc --version            # Should be 1.74 or later
+rustup default stable
+rustup component add rustfmt clippy
+```
+
+### Build Issues
+```bash
+cargo clean                # Clear build cache
+cargo update               # Update dependencies
+cargo machete              # Check for unused dependencies
+cargo build --verbose      # Verbose build to identify issues
+```
+
+### Runtime Debugging
+```bash
+export RUST_LOG=debug                              # Full debug logging
+export RUST_LOG=hpm_core=debug,hpm_python=trace    # Module-specific
+RUST_LOG=debug cargo run -- install --verbose      # Debug specific operation
+```
+
+### Performance Debugging
+```bash
+cargo build --timings      # Analyze build times
+time cargo test -p hpm-core
+hyperfine 'PROPTEST_CASES=100 cargo test prop_version_parsing'
+```
+
 ## Resources
 
 - [Proptest Documentation](https://docs.rs/proptest/)
 - [Property-Based Testing Concepts](https://hypothesis.works/articles/what-is-property-based-testing/)
-
-## Conclusion
-
-HPM's comprehensive testing strategy combines property-based testing with traditional unit and integration tests to ensure high code quality and reliability. Property-based testing has already proven its value by discovering real bugs and providing comprehensive test coverage.
-
-The investment in property-based testing pays dividends through:
-- **Early bug detection** before code reaches production
-- **Increased confidence** in refactoring and changes
-- **Better documentation** of business logic through executable specifications
-- **Comprehensive edge case coverage** that traditional tests might miss

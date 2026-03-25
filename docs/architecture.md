@@ -583,14 +583,22 @@ pub async fn install_multiple_packages(packages: Vec<PackageSpec>) -> Result<Vec
 
 ## Extension Points
 
-### Custom Commands
+### Command Extensions
+
+Add custom CLI commands by extending the command system with clap:
 
 ```rust
+use clap::Subcommand;
+
 #[derive(Subcommand)]
-enum CustomCommands {
-    /// Custom package validation
-    Validate {
-        package: String,
+pub enum CustomCommands {
+    /// Analyze package dependencies for security vulnerabilities
+    SecurityScan {
+        #[arg(short, long)]
+        package: Option<String>,
+
+        #[arg(long, default_value = "medium")]
+        severity: String,
     },
 }
 ```
@@ -602,6 +610,20 @@ enum CustomCommands {
 enable = true
 strict_mode = false
 rules = ["rule1", "rule2"]
+```
+
+### Plugin System (Future)
+
+A formal plugin system is planned, based on an async trait interface:
+
+```rust
+#[async_trait]
+pub trait HpmPlugin: Send + Sync {
+    fn metadata(&self) -> PluginMetadata;
+    async fn initialize(&mut self, context: &PluginContext) -> Result<(), PluginError>;
+    async fn execute(&self, command: &str, args: &[String]) -> Result<PluginResult, PluginError>;
+    async fn cleanup(&mut self) -> Result<(), PluginError>;
+}
 ```
 
 ---
