@@ -39,4 +39,4 @@ steps:
         curl -sf -X POST "https://uploads.github.com/repos/3db-dk/hpm/releases/$RELEASE_ID/assets?name=$ARTIFACT"
         -H "Authorization: token $GITHUB_TOKEN"
         -H "Content-Type: application/octet-stream"
-        --data-binary @artifacts/$ARTIFACT
+        --data-binary @artifacts/$ARTIFACT || true

@@ -43,7 +43,7 @@ steps:
         $release = Invoke-RestMethod -Uri "https://api.github.com/repos/3db-dk/hpm/releases/tags/$($env:CI_COMMIT_TAG)"
         -Headers $headers;
         $uploadUrl = "https://uploads.github.com/repos/3db-dk/hpm/releases/$($release.id)/assets?name=$ARTIFACT";
-        curl.exe -sf -X POST $uploadUrl
+        try { curl.exe -sf -X POST $uploadUrl
         -H "Authorization: token $($env:GITHUB_TOKEN)"
         -H "Content-Type: application/octet-stream"
-        --data-binary "@artifacts\$ARTIFACT"
+        --data-binary "@artifacts\$ARTIFACT" } catch {}

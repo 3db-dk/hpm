@@ -71,7 +71,10 @@ pub async fn remove_package(package_name: String, manifest_path: Option<PathBuf>
         );
     }
 
-    let dependencies = manifest.dependencies.as_mut().unwrap();
+    let dependencies = manifest
+        .dependencies
+        .as_mut()
+        .expect("dependencies existence checked above");
 
     // Check if the dependency exists
     if !dependencies.contains_key(&package_name) {
