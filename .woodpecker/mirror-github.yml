@@ -14,6 +14,7 @@ steps:
       GITHUB_TOKEN:
         from_secret: github_token
     commands:
+      - echo "Token length:${#GITHUB_TOKEN}"
       - rm -rf /tmp/mirror
       - git clone ${CI_REPO_CLONE_URL} /tmp/mirror
       - cd /tmp/mirror
