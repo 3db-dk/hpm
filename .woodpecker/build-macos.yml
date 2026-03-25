@@ -32,10 +32,12 @@ steps:
         lipo -create -output artifacts/$ARTIFACT
         target/x86_64-apple-darwin/release/hpm
         target/aarch64-apple-darwin/release/hpm &&
+        RELEASE_JSON=$(sed -n "/^## \[${VERSION}\]/,/^## \[/{/^## \[/d;p;}" CHANGELOG.md |
+        python3 -c "import sys,json; body=sys.stdin.read().strip(); print(json.dumps({'tag_name':'${CI_COMMIT_TAG}','name':'${CI_COMMIT_TAG}','body':body}) if body else json.dumps({'tag_name':'${CI_COMMIT_TAG}','name':'${CI_COMMIT_TAG}','generate_release_notes':True}))") &&
         curl -sf -X POST "https://api.github.com/repos/3db-dk/hpm/releases"
         -H "Authorization: token $GITHUB_TOKEN"
         -H "Content-Type: application/json"
-        -d "{\"tag_name\":\"${CI_COMMIT_TAG}\",\"name\":\"${CI_COMMIT_TAG}\"}" || true &&
+        -d "$RELEASE_JSON" || true &&
         RELEASE_ID=$(curl -sf "https://api.github.com/repos/3db-dk/hpm/releases/tags/${CI_COMMIT_TAG}"
         -H "Authorization: token $GITHUB_TOKEN" | grep -m1 '"id"' | sed 's/[^0-9]//g') &&
         curl -sf -X POST "https://uploads.github.com/repos/3db-dk/hpm/releases/$RELEASE_ID/assets?name=$ARTIFACT"
