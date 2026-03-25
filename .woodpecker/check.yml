@@ -1,0 +1,20 @@
+when:
+  - event: [push, pull_request, tag]
+
+labels:
+  platform: linux/amd64
+
+skip_clone: true
+
+steps:
+  - name: check
+    image: bash
+    commands:
+      - git init
+      - git remote add origin ${CI_REPO_CLONE_URL}
+      - git fetch --no-tags --depth=1 origin ${CI_COMMIT_SHA}
+      - git reset --hard ${CI_COMMIT_SHA}
+      - rustup default stable
+      - cargo fmt --check
+      - cargo clippy --workspace --all-targets -- -D warnings
+      - cargo test --workspace

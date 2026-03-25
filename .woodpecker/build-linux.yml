@@ -1,0 +1,33 @@
+when:
+  - event: tag
+    ref: "refs/tags/v*"
+
+depends_on:
+  - check
+
+labels:
+  platform: linux/amd64
+
+skip_clone: true
+
+steps:
+  - name: build
+    image: bash
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - git init
+      - git remote add origin ${CI_REPO_CLONE_URL}
+      - git fetch --no-tags --depth=1 origin ${CI_COMMIT_SHA}
+      - git reset --hard ${CI_COMMIT_SHA}
+      - rustup default stable
+      - cargo build --release -p hpm-cli --bin hpm
+      - >-
+        VERSION=${CI_COMMIT_TAG#v} &&
+        ARTIFACT="hpm-v$VERSION-linux-x86_64" &&
+        mkdir -p artifacts &&
+        cp target/release/hpm artifacts/$ARTIFACT &&
+        export GH_TOKEN=$GITHUB_TOKEN &&
+        gh release create "$CI_COMMIT_TAG" --repo 3db-dk/hpm --title "v$VERSION" --generate-notes || true &&
+        gh release upload "$CI_COMMIT_TAG" --repo 3db-dk/hpm "artifacts/$ARTIFACT" --clobber

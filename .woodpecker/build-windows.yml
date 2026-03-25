@@ -1,0 +1,34 @@
+when:
+  - event: tag
+    ref: "refs/tags/v*"
+
+depends_on:
+  - check
+
+labels:
+  platform: windows/amd64
+
+skip_clone: true
+
+steps:
+  - name: build
+    image: powershell
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - git init
+      - git remote add origin $env:CI_REPO_CLONE_URL
+      - git fetch --no-tags --depth=1 origin $env:CI_COMMIT_SHA
+      - git reset --hard $env:CI_COMMIT_SHA
+      - $env:PATH = "$env:USERPROFILE\.cargo\bin;C:\Users\Administrator\.cargo\bin;$env:PATH"
+      - rustup default stable
+      - cargo build --release -p hpm-cli --bin hpm
+      - >-
+        $VERSION = $env:CI_COMMIT_TAG -replace '^v','';
+        $ARTIFACT = "hpm-v$VERSION-windows-x86_64.exe";
+        New-Item -ItemType Directory -Force -Path artifacts;
+        Copy-Item target\release\hpm.exe "artifacts\$ARTIFACT";
+        $env:GH_TOKEN = $env:GITHUB_TOKEN;
+        gh release create $env:CI_COMMIT_TAG --repo 3db-dk/hpm --title "v$VERSION" --generate-notes 2>$null;
+        gh release upload $env:CI_COMMIT_TAG --repo 3db-dk/hpm "artifacts\$ARTIFACT" --clobber
