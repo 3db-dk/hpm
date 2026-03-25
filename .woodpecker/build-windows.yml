@@ -25,6 +25,13 @@ steps:
       - rustup default stable
       - cargo build --release -p hpm-cli --bin hpm
       - >-
+        if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+          $GH_VERSION = '2.65.0';
+          $GH_ZIP = "gh_${GH_VERSION}_windows_amd64.zip";
+          Invoke-WebRequest -Uri "https://github.com/cli/cli/releases/download/v${GH_VERSION}/$GH_ZIP" -OutFile $GH_ZIP;
+          Expand-Archive $GH_ZIP -DestinationPath gh_install;
+          $env:PATH = "$PWD\gh_install\gh_${GH_VERSION}_windows_amd64\bin;$env:PATH";
+        }
         $VERSION = $env:CI_COMMIT_TAG -replace '^v','';
         $ARTIFACT = "hpm-v$VERSION-windows-x86_64.exe";
         New-Item -ItemType Directory -Force -Path artifacts;
