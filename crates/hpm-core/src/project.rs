@@ -2,8 +2,9 @@ use crate::archive_fetcher::ArchiveFetcher;
 use crate::package_source::PackageSource;
 use crate::storage::{InstalledPackage, PackageSpec, StorageManager};
 use hpm_config::ProjectConfig;
-use hpm_package::{HoudiniPackage, PackageManifest};
+use hpm_package::{HoudiniPackage, ManifestEnvEntry, PackageManifest};
 use hpm_python::{collect_python_dependencies, resolve_dependencies, VenvManager};
+use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -145,6 +146,7 @@ impl ProjectManager {
 
         let mut installed_packages: Vec<InstalledPackage> = Vec::new();
 
+        let project_env_overrides = project_manifest.env;
         let manifest_registries = project_manifest.registries;
         if let Some(dependencies) = project_manifest.dependencies {
             // Build registry set once (lazily) for any registry-resolved deps
@@ -220,7 +222,11 @@ impl ProjectManager {
 
         // Generate Houdini JSON manifests for all packages
         for pkg in &installed_packages {
-            self.generate_houdini_manifest_with_python(pkg, venv_site_packages.as_deref())?;
+            self.generate_houdini_manifest_with_python(
+                pkg,
+                venv_site_packages.as_deref(),
+                &project_env_overrides,
+            )?;
         }
 
         info!("Successfully synced project dependencies");
@@ -322,16 +328,20 @@ impl ProjectManager {
         &self,
         installed_package: &InstalledPackage,
     ) -> Result<(), ProjectError> {
-        self.generate_houdini_manifest_with_python(installed_package, None)
+        self.generate_houdini_manifest_with_python(installed_package, None, &None)
     }
 
     fn generate_houdini_manifest_with_python(
         &self,
         installed_package: &InstalledPackage,
         venv_site_packages: Option<&Path>,
+        project_env_overrides: &Option<IndexMap<String, ManifestEnvEntry>>,
     ) -> Result<(), ProjectError> {
-        let houdini_package =
-            self.create_houdini_package_with_python(installed_package, venv_site_packages)?;
+        let houdini_package = self.create_houdini_package_with_python(
+            installed_package,
+            venv_site_packages,
+            project_env_overrides,
+        )?;
         let manifest_path = self
             .project_config
             .package_manifest_path(&installed_package.name);
@@ -414,13 +424,14 @@ impl ProjectManager {
         &self,
         installed_package: &InstalledPackage,
     ) -> Result<HoudiniPackage, ProjectError> {
-        self.create_houdini_package_with_python(installed_package, None)
+        self.create_houdini_package_with_python(installed_package, None, &None)
     }
 
     fn create_houdini_package_with_python(
         &self,
         installed_package: &InstalledPackage,
         venv_site_packages: Option<&Path>,
+        project_env_overrides: &Option<IndexMap<String, ManifestEnvEntry>>,
     ) -> Result<HoudiniPackage, ProjectError> {
         let package_path = &installed_package.install_path;
 
@@ -474,17 +485,24 @@ impl ProjectManager {
             env.push(scripts_env);
         }
 
-        // Append user-defined env vars from [env] section
+        // Append user-defined env vars from [env] section, applying project-level overrides
         if let Some(user_env) = &installed_package.manifest.env {
             for (key, entry) in user_env {
+                // Check if project has an override for this env var
+                let effective_entry = if let Some(overrides) = project_env_overrides {
+                    overrides.get(key).unwrap_or(entry)
+                } else {
+                    entry
+                };
+
                 let mut env_map = HashMap::new();
-                let resolved_value = entry
+                let resolved_value = effective_entry
                     .value
                     .replace("$HPM_PACKAGE_ROOT", &package_path.to_string_lossy());
                 env_map.insert(
                     key.clone(),
                     hpm_package::HoudiniEnvValue::Detailed {
-                        method: match entry.method {
+                        method: match effective_entry.method {
                             hpm_package::EnvMethod::Set => "set",
                             hpm_package::EnvMethod::Prepend => "prepend",
                             hpm_package::EnvMethod::Append => "append",
@@ -813,5 +831,93 @@ mod tests {
             .unwrap();
         assert!(houdini_package.hpath.is_some());
         assert!(houdini_package.env.is_some());
+    }
+
+    #[test]
+    fn create_houdini_package_with_project_env_overrides() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = hpm_config::StorageConfig {
+            home_dir: temp_dir.path().join(".hpm"),
+            cache_dir: temp_dir.path().join(".hpm").join("cache"),
+            packages_dir: temp_dir.path().join(".hpm").join("packages"),
+            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
+        };
+
+        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+
+        let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
+
+        // Create a manifest with an env var
+        let mut manifest = hpm_package::PackageManifest::new(
+            "test-package".to_string(),
+            "1.0.0".to_string(),
+            Some("A test package".to_string()),
+            None,
+            None,
+        );
+        let mut pkg_env = IndexMap::new();
+        pkg_env.insert(
+            "MY_CONFIG".to_string(),
+            ManifestEnvEntry {
+                method: hpm_package::EnvMethod::Set,
+                value: "$HPM_PACKAGE_ROOT/default-config".to_string(),
+            },
+        );
+        manifest.env = Some(pkg_env);
+
+        let package_path = temp_dir.path().join("test-package@1.0.0");
+        std::fs::create_dir_all(&package_path).unwrap();
+
+        let installed_package = InstalledPackage {
+            name: "test-package".to_string(),
+            version: "1.0.0".to_string(),
+            manifest,
+            install_path: package_path.clone(),
+            installed_at: std::time::SystemTime::now(),
+        };
+
+        // Without override: should use package default
+        let houdini_package = project_manager
+            .create_houdini_package(&installed_package)
+            .unwrap();
+        let env_entries = houdini_package.env.as_ref().unwrap();
+        let my_config_entry = env_entries
+            .iter()
+            .find(|m| m.contains_key("MY_CONFIG"))
+            .unwrap();
+        match my_config_entry.get("MY_CONFIG").unwrap() {
+            hpm_package::HoudiniEnvValue::Detailed { value, .. } => {
+                assert!(value.ends_with("/default-config"));
+            }
+            _ => panic!("Expected Detailed env value"),
+        }
+
+        // With project override: should use override value
+        let mut project_overrides = IndexMap::new();
+        project_overrides.insert(
+            "MY_CONFIG".to_string(),
+            ManifestEnvEntry {
+                method: hpm_package::EnvMethod::Set,
+                value: "/custom/config/path".to_string(),
+            },
+        );
+
+        let houdini_package = project_manager
+            .create_houdini_package_with_python(&installed_package, None, &Some(project_overrides))
+            .unwrap();
+        let env_entries = houdini_package.env.as_ref().unwrap();
+        let my_config_entry = env_entries
+            .iter()
+            .find(|m| m.contains_key("MY_CONFIG"))
+            .unwrap();
+        match my_config_entry.get("MY_CONFIG").unwrap() {
+            hpm_package::HoudiniEnvValue::Detailed { method, value } => {
+                assert_eq!(value, "/custom/config/path");
+                assert_eq!(method, "set");
+            }
+            _ => panic!("Expected Detailed env value"),
+        }
     }
 }
