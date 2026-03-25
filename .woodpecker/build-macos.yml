@@ -6,7 +6,7 @@ depends_on:
   - check
 
 labels:
-  platform: linux/amd64
+  platform: darwin/amd64
 
 skip_clone: true
 
@@ -22,12 +22,16 @@ steps:
       - git fetch --no-tags --depth=1 origin ${CI_COMMIT_SHA}
       - git reset --hard ${CI_COMMIT_SHA}
       - rustup default stable
-      - cargo build --release -p hpm-cli --bin hpm
+      - rustup target add aarch64-apple-darwin
+      - cargo build --release -p hpm-cli --bin hpm --target x86_64-apple-darwin
+      - cargo build --release -p hpm-cli --bin hpm --target aarch64-apple-darwin
       - >-
         VERSION=${CI_COMMIT_TAG#v} &&
-        ARTIFACT="hpm-v$VERSION-linux-x86_64" &&
+        ARTIFACT="hpm-v$VERSION-darwin-universal" &&
         mkdir -p artifacts &&
-        cp target/release/hpm artifacts/$ARTIFACT &&
+        lipo -create -output artifacts/$ARTIFACT
+        target/x86_64-apple-darwin/release/hpm
+        target/aarch64-apple-darwin/release/hpm &&
         curl -sf -X POST "${CI_FORGE_URL}/api/v1/repos/${CI_REPO}/releases"
         -H "Authorization: token $GITEA_TOKEN"
         -H "Content-Type: application/json"
