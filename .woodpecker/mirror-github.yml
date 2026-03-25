@@ -14,6 +14,7 @@ steps:
       GITHUB_TOKEN:
         from_secret: github_token
     commands:
+      - rm -rf /tmp/mirror
       - git clone ${CI_REPO_CLONE_URL} /tmp/mirror
       - cd /tmp/mirror
       - git config user.email "ci@3db.dk"
