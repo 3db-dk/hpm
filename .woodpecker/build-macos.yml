@@ -37,7 +37,7 @@ steps:
         -H "Content-Type: application/json"
         -d "{\"tag_name\":\"${CI_COMMIT_TAG}\",\"name\":\"${CI_COMMIT_TAG}\"}" || true &&
         RELEASE_ID=$(curl -sf "https://api.github.com/repos/3db-dk/hpm/releases/tags/${CI_COMMIT_TAG}"
-        -H "Authorization: token $GITHUB_TOKEN" | sed 's/.*"id":\([0-9]*\).*/\1/') &&
+        -H "Authorization: token $GITHUB_TOKEN" | sed 's/{"id":\([0-9]*\).*/\1/') &&
         curl -sf -X POST "https://uploads.github.com/repos/3db-dk/hpm/releases/$RELEASE_ID/assets?name=$ARTIFACT"
         -H "Authorization: token $GITHUB_TOKEN"
         -H "Content-Type: application/octet-stream"
