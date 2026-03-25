@@ -2,46 +2,18 @@
 
 Welcome to the documentation for HPM (Houdini Package Manager) - a Rust-based package management system for SideFX Houdini.
 
-## Quick Navigation
+## User Documentation (published on ReadTheDocs)
 
-### New to HPM?
-Start with the **[User Guide](user-guide.md)** for installation and basic usage.
-
-### Want to Contribute?
-Read the **[Developer Documentation](developer-documentation.md)** and **[Testing Guide](testing.md)**.
-
-### Working with Python?
-See the **[Python Guide](python-guide.md)** for Python dependency management.
-
-## Documentation Overview
-
-### For Users
-- **[User Guide](user-guide.md)** - Complete user documentation covering installation, commands, and troubleshooting
+- **[User Guide](user-guide.md)** - Installation, commands, configuration, and troubleshooting
+- **[Python Guide](python-guide.md)** - Managing Python dependencies in Houdini packages
 - **[Security Guide](security.md)** - Security features, best practices, and threat model
 
-### For Developers
-- **[Developer Documentation](developer-documentation.md)** - Architecture overview, development setup, and contribution guidelines
-- **[API Reference](api-reference.md)** - Complete API documentation for all public interfaces
-- **[Testing Guide](testing.md)** - Comprehensive testing guide including property-based testing
+## Developer Documentation (in-repo)
+
+These docs are for contributors and are not published to ReadTheDocs:
+
 - **[Architecture](architecture.md)** - System design, algorithms, and implementation details
+- **[API Overview](api-overview.md)** - Crate structure and key types (full API via `cargo doc`)
+- **[Testing Guide](testing.md)** - Testing strategy including property-based testing
 
-### Python Integration
-- **[Python Guide](python-guide.md)** - Managing Python dependencies in Houdini packages
-
-## Documentation Structure
-
-```
-docs/
-├── README.md                    # This overview
-├── user-guide.md                # Complete user documentation
-├── security.md                  # Security features and best practices
-├── developer-documentation.md   # Developer documentation
-├── api-reference.md             # API documentation
-├── architecture.md              # System architecture and deep dives
-├── python-guide.md              # Python dependency management
-└── testing.md                   # Testing guide
-```
-
-## Contributing to Documentation
-
-Documentation improvements are welcome! See the **[Developer Documentation](developer-documentation.md)** for contribution guidelines.
+See also: **[CONTRIBUTING.md](../CONTRIBUTING.md)** for development setup and contribution guidelines.
