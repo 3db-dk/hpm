@@ -24,6 +24,11 @@ steps:
       - rustup default stable
       - cargo build --release -p hpm-cli --bin hpm
       - >-
+        if ! command -v gh &>/dev/null; then
+          GH_VERSION=2.65.0 &&
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar xz &&
+          export PATH="$PWD/gh_${GH_VERSION}_linux_amd64/bin:$PATH";
+        fi &&
         VERSION=${CI_COMMIT_TAG#v} &&
         ARTIFACT="hpm-v$VERSION-linux-x86_64" &&
         mkdir -p artifacts &&
