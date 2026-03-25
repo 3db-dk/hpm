@@ -53,7 +53,7 @@ Verify your installation:
 
 ```bash
 hpm --version
-# Output: hpm 0.1.0
+# Output: hpm 0.3.1
 ```
 
 ## Getting Started
@@ -345,6 +345,10 @@ All HPM commands support these global options:
 | [`list`](#list) | Display package information |
 | [`check`](#check) | Validate package configuration |
 | [`clean`](#clean) | Clean orphaned packages |
+| [`search`](#search) | Search registries for packages |
+| [`pack`](#pack) | Create distributable package archive |
+| [`audit`](#audit) | Run security checks on packages |
+| [`registry`](#registry) | Manage package registries |
 | [`completions`](#completions) | Generate shell completions |
 
 ### init
@@ -577,6 +581,152 @@ hpm clean --comprehensive --yes
 # Clean only Python environments
 hpm clean --python-only --dry-run
 ```
+
+### search
+
+Search configured registries for packages.
+
+```bash
+hpm search <QUERY>
+```
+
+**Arguments:**
+- `QUERY` - Search query string
+
+**Examples:**
+```bash
+# Search for geometry-related packages
+hpm search geometry
+
+# JSON output for scripting
+hpm search terrain --output json
+```
+
+If no registries are configured, HPM will display a message guiding you to add one with `hpm registry add`.
+
+---
+
+### pack
+
+Create a distributable package archive from the current package.
+
+```bash
+hpm pack [OPTIONS]
+```
+
+**Options:**
+- `--key <PATH>` - Path to Ed25519 signing key (32-byte raw seed). Also reads from `HPM_SIGNING_KEY` env var
+- `--output <PATH>` - Output directory for the archive (default: current directory)
+- `--json` - Output result as JSON (useful for CI)
+- `--platform <PLATFORM>` - Target platform for native packages (auto-detected when `[native]` is declared)
+
+**Examples:**
+```bash
+# Basic pack
+hpm pack
+
+# Pack with signing
+hpm pack --key ~/.hpm/signing-key.bin
+
+# Pack for a specific platform
+hpm pack --platform linux-x86_64
+
+# CI-friendly output
+hpm pack --json --output dist/
+```
+
+When a `[native]` section is declared in `hpm.toml`, `--platform` defaults to the host platform and produces a platform-filtered archive containing only the files relevant to that target.
+
+---
+
+### audit
+
+Run security checks on the current package and its dependencies.
+
+```bash
+hpm audit [OPTIONS]
+```
+
+**Options:**
+- `-m, --manifest <PATH>` - Path to hpm.toml (default: current directory)
+
+**Checks performed:**
+- **HTTP URLs** - Warns about insecure HTTP Git URLs (should use HTTPS)
+- **Lock file presence** - Verifies `hpm.lock` exists for reproducible builds
+- **Lock file staleness** - Warns if the lock file is older than 90 days
+- **Checksum verification** - Validates package checksums against the lock file
+
+**Examples:**
+```bash
+# Audit current package
+hpm audit
+
+# Audit a specific project
+hpm audit -m /path/to/project/hpm.toml
+```
+
+---
+
+### registry
+
+Manage package registries.
+
+```bash
+hpm registry <SUBCOMMAND>
+```
+
+#### registry add
+
+Add a new registry.
+
+```bash
+hpm registry add <URL> [OPTIONS]
+```
+
+**Arguments:**
+- `URL` - Registry URL (API endpoint or Git remote)
+
+**Options:**
+- `--name <NAME>` - Display name / alias for this registry
+- `--type <TYPE>` - Registry type: `api` or `git` (auto-detected if omitted)
+
+**Examples:**
+```bash
+# Add an API registry
+hpm registry add https://packages.studio.com/v1 --name studio
+
+# Add a Git registry
+hpm registry add https://github.com/studio/hpm-packages.git --type git
+```
+
+#### registry list
+
+List all configured registries.
+
+```bash
+hpm registry list
+```
+
+#### registry remove
+
+Remove a configured registry.
+
+```bash
+hpm registry remove <NAME>
+```
+
+**Arguments:**
+- `NAME` - Registry name to remove
+
+#### registry update
+
+Refresh all registry caches.
+
+```bash
+hpm registry update
+```
+
+---
 
 ### completions
 

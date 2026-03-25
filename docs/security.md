@@ -206,7 +206,7 @@ version = "1.0.0"
 
 [metadata]
 generated_at = "2025-01-13T10:30:00Z"
-hpm_version = "0.1.0"
+hpm_version = "0.3.1"
 platform = "windows-x86_64"
 
 [dependencies.utility-nodes]
@@ -263,6 +263,8 @@ If you discover a security vulnerability in HPM:
 
 | Version | Security Change |
 |---------|----------------|
+| 0.3.0 | Native platform support with platform-filtered archives |
+| - | Project-level environment variable overrides |
 | 0.1.0 | Initial security features |
 | - | SHA-256 checksum verification |
 | - | HTTPS URL warnings |

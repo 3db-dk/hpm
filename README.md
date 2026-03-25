@@ -89,9 +89,11 @@ files = ["lib/windows-x86_64/*"]
 | `hpm update [pkg...]` | Update dependencies (`--dry-run` to preview) |
 | `hpm list` | Show dependencies (`--tree` for tree view) |
 | `hpm check` | Validate package configuration |
+| `hpm search <query>` | Search registries for packages |
 | `hpm pack` | Create a signed archive (`--key` for signing, `--platform` for native packages) |
 | `hpm clean` | Remove orphaned packages and venvs (`--dry-run`, `--python-only`) |
 | `hpm audit` | Security audit on dependencies |
+| `hpm registry <sub>` | Manage registries (`add`, `list`, `remove`, `update`) |
 | `hpm completions <shell>` | Generate shell completions (bash, zsh, fish, powershell) |
 
 All commands accept `-v` for verbose output and `--output json` for machine-readable output.
