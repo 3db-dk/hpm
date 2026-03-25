@@ -14,8 +14,8 @@ steps:
   - name: build
     image: bash
     environment:
-      GITEA_TOKEN:
-        from_secret: gitea_token
+      GITHUB_TOKEN:
+        from_secret: github_token
     commands:
       - git init
       - git remote add origin ${CI_REPO_CLONE_URL}
@@ -28,12 +28,13 @@ steps:
         ARTIFACT="hpm-v$VERSION-linux-x86_64" &&
         mkdir -p artifacts &&
         cp target/release/hpm artifacts/$ARTIFACT &&
-        curl -sf -X POST "${CI_FORGE_URL}/api/v1/repos/${CI_REPO}/releases"
-        -H "Authorization: token $GITEA_TOKEN"
+        curl -sf -X POST "https://api.github.com/repos/3db-dk/hpm/releases"
+        -H "Authorization: token $GITHUB_TOKEN"
         -H "Content-Type: application/json"
         -d "{\"tag_name\":\"${CI_COMMIT_TAG}\",\"name\":\"${CI_COMMIT_TAG}\"}" || true &&
-        RELEASE_ID=$(curl -sf "${CI_FORGE_URL}/api/v1/repos/${CI_REPO}/releases/tags/${CI_COMMIT_TAG}"
-        -H "Authorization: token $GITEA_TOKEN" | sed 's/{"id":\([0-9]*\).*/\1/') &&
-        curl -sf -X POST "${CI_FORGE_URL}/api/v1/repos/${CI_REPO}/releases/$RELEASE_ID/assets?name=$ARTIFACT"
-        -H "Authorization: token $GITEA_TOKEN"
-        -F "attachment=@artifacts/$ARTIFACT"
+        RELEASE_ID=$(curl -sf "https://api.github.com/repos/3db-dk/hpm/releases/tags/${CI_COMMIT_TAG}"
+        -H "Authorization: token $GITHUB_TOKEN" | sed 's/.*"id":\([0-9]*\).*/\1/') &&
+        curl -sf -X POST "https://uploads.github.com/repos/3db-dk/hpm/releases/$RELEASE_ID/assets?name=$ARTIFACT"
+        -H "Authorization: token $GITHUB_TOKEN"
+        -H "Content-Type: application/octet-stream"
+        --data-binary @artifacts/$ARTIFACT

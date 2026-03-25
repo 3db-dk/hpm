@@ -14,8 +14,8 @@ steps:
   - name: build
     image: powershell
     environment:
-      GITEA_TOKEN:
-        from_secret: gitea_token
+      GITHUB_TOKEN:
+        from_secret: github_token
     commands:
       - git init
       - git remote add origin $env:CI_REPO_CLONE_URL
@@ -29,12 +29,14 @@ steps:
         $ARTIFACT = "hpm-v$VERSION-windows-x86_64.exe";
         New-Item -ItemType Directory -Force -Path artifacts;
         Copy-Item target\release\hpm.exe "artifacts\$ARTIFACT";
-        $headers = @{ Authorization = "token $($env:GITEA_TOKEN)"; "Content-Type" = "application/json" };
-        try { Invoke-RestMethod -Method Post -Uri "$($env:CI_FORGE_URL)/api/v1/repos/$($env:CI_REPO)/releases"
-        -Headers $headers -Body "{`"tag_name`":`"$($env:CI_COMMIT_TAG)`",`"name`":`"$($env:CI_COMMIT_TAG)`"}" } catch {};
-        $release = Invoke-RestMethod -Uri "$($env:CI_FORGE_URL)/api/v1/repos/$($env:CI_REPO)/releases/tags/$($env:CI_COMMIT_TAG)"
-        -Headers @{ Authorization = "token $($env:GITEA_TOKEN)" };
-        $uploadUrl = "$($env:CI_FORGE_URL)/api/v1/repos/$($env:CI_REPO)/releases/$($release.id)/assets?name=$ARTIFACT";
+        $headers = @{ Authorization = "token $($env:GITHUB_TOKEN)" };
+        try { Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/3db-dk/hpm/releases"
+        -Headers ($headers + @{ "Content-Type" = "application/json" })
+        -Body "{`"tag_name`":`"$($env:CI_COMMIT_TAG)`",`"name`":`"$($env:CI_COMMIT_TAG)`"}" } catch {};
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/3db-dk/hpm/releases/tags/$($env:CI_COMMIT_TAG)"
+        -Headers $headers;
+        $uploadUrl = "https://uploads.github.com/repos/3db-dk/hpm/releases/$($release.id)/assets?name=$ARTIFACT";
         curl.exe -sf -X POST $uploadUrl
-        -H "Authorization: token $($env:GITEA_TOKEN)"
-        -F "attachment=@artifacts\$ARTIFACT"
+        -H "Authorization: token $($env:GITHUB_TOKEN)"
+        -H "Content-Type: application/octet-stream"
+        --data-binary "@artifacts\$ARTIFACT"
