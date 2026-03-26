@@ -71,6 +71,11 @@ struct VersionsResponse {
     versions: Vec<RegistryEntry>,
 }
 
+#[derive(serde::Deserialize)]
+struct BuildsResponse {
+    builds: Vec<RegistryEntry>,
+}
+
 #[async_trait]
 impl Registry for ApiRegistry {
     async fn search(&self, query: &str) -> Result<SearchResults, RegistryError> {
@@ -140,10 +145,30 @@ impl Registry for ApiRegistry {
         }
 
         let response = response.error_for_status()?;
-        let entry: RegistryEntry = response
+        let wrapper: BuildsResponse = response
             .json()
             .await
             .map_err(|e| RegistryError::ParseError(e.to_string()))?;
+
+        // Pick the best build: prefer current platform, fall back to universal, then first available
+        let current_platform = hpm_package::Platform::current().map(|p| p.as_str().to_string());
+        let entry = wrapper
+            .builds
+            .iter()
+            .find(|b| {
+                if let (Some(bp), Some(cp)) = (&b.platform, &current_platform) {
+                    bp == cp
+                } else {
+                    false
+                }
+            })
+            .or_else(|| wrapper.builds.iter().find(|b| b.platform.is_none()))
+            .or(wrapper.builds.first())
+            .cloned()
+            .ok_or_else(|| RegistryError::VersionNotFound {
+                name: name.to_string(),
+                version: version.to_string(),
+            })?;
 
         Ok(entry)
     }
