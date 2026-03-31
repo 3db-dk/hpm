@@ -50,22 +50,22 @@ clap = { version = "4.4", features = ["derive", "env"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 proptest = "1.5"
-toml = "0.8"
+toml = "1.0"
 anyhow = "1.0"
 thiserror = "2.0"
 
 # Async HTTP and networking
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 futures = "0.3"
 
 # File system and I/O
 walkdir = "2.4"
 ignore = "0.4"
 tempfile = "3.8"
-dirs = "5.0"
+dirs = "6.0"
 
 # Crypto and validation
-sha2 = "0.10"
+sha2 = "0.11"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 base64 = "0.22"
 
@@ -74,7 +74,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Console output and styling
-anstream = "0.6"
+anstream = "1.0"
 console = { version = "0.16", features = ["std"] }
 owo-colors = "4.1"
 indicatif = "0.18"
@@ -88,8 +88,8 @@ tokio-test = "0.4"
 semver = "1.0"
 indexmap = { version = "2.0", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-which = "6.0"
-zip = "2.2"
+which = "8.0"
+zip = "8.4"
 
 [profile.release]
 lto = true
