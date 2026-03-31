@@ -271,9 +271,7 @@ fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut Valid
             }
         }
 
-        if let (Some(ref min), Some(ref max)) =
-            (&houdini_config.min_version, &houdini_config.max_version)
-        {
+        if let (Some(min), Some(max)) = (&houdini_config.min_version, &houdini_config.max_version) {
             if compare_versions(min, max).unwrap_or(0) > 0 {
                 result.add_error(
                     "Minimum Houdini version is greater than maximum version".to_string(),

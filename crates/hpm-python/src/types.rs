@@ -617,10 +617,12 @@ mod tests {
 
         let result = deps1.merge(&deps2);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Conflicting versions"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Conflicting versions")
+        );
     }
 
     #[test]
@@ -633,10 +635,12 @@ mod tests {
 
         let result = deps1.merge(&deps2);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Conflicting Python versions"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Conflicting Python versions")
+        );
     }
 
     #[test]

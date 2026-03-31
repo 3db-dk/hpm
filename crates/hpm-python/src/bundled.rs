@@ -95,10 +95,14 @@ fn get_uv_binary_name() -> &'static str {
 pub fn setup_uv_environment() {
     let hpm_dir = get_hpm_dir();
 
-    env::set_var("UV_CACHE_DIR", hpm_dir.join("uv-cache"));
-    env::set_var("UV_CONFIG_FILE", hpm_dir.join("uv-config/uv.toml"));
-    env::set_var("UV_NO_SYNC", "1");
-    env::set_var("UV_SYSTEM_PYTHON", "0");
+    // SAFETY: This is called early in program startup before any threads are spawned,
+    // so modifying environment variables is safe.
+    unsafe {
+        env::set_var("UV_CACHE_DIR", hpm_dir.join("uv-cache"));
+        env::set_var("UV_CONFIG_FILE", hpm_dir.join("uv-config/uv.toml"));
+        env::set_var("UV_NO_SYNC", "1");
+        env::set_var("UV_SYSTEM_PYTHON", "0");
+    }
 
     debug!("UV environment configured for isolation");
 }

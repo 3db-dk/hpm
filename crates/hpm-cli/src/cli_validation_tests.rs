@@ -141,8 +141,8 @@ mod tests {
     }
 
     /// Strategy to generate CLI flag combinations
-    fn cli_flags_strategy(
-    ) -> impl Strategy<Value = (bool, Option<ColorChoiceArg>, Option<OutputFormatArg>)> {
+    fn cli_flags_strategy()
+    -> impl Strategy<Value = (bool, Option<ColorChoiceArg>, Option<OutputFormatArg>)> {
         (
             any::<bool>(), // quiet flag
             prop::option::of(prop_oneof![

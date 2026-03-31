@@ -281,7 +281,7 @@
 //! - **HPM Package**: Manifest processing and Houdini integration
 
 use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::{generate, Shell};
+use clap_complete::{Shell, generate};
 use std::process::ExitCode;
 use std::time::Instant;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

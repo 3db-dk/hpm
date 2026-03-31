@@ -644,7 +644,7 @@ async fn generate_lock_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_fixtures::{write_test_manifest, TestManifestOpts};
+    use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
     use std::env;
     use tempfile::TempDir;
 

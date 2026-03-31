@@ -2,7 +2,7 @@
 
 use crate::venv::VenvManager;
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 /// Generate Houdini package.json with Python environment integration

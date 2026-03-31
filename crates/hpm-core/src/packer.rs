@@ -14,8 +14,8 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
-use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
 
 /// Result of a successful pack operation.
 #[derive(Debug)]
@@ -301,15 +301,21 @@ version = "1.0.0"
 
         let rules = build_ignore_rules(dir.path()).unwrap();
 
-        assert!(rules
-            .matched_path_or_any_parents(Path::new(".git/config"), false)
-            .is_ignore());
-        assert!(rules
-            .matched_path_or_any_parents(Path::new(".hpm/config.toml"), false)
-            .is_ignore());
-        assert!(!rules
-            .matched_path_or_any_parents(Path::new("hpm.toml"), false)
-            .is_ignore());
+        assert!(
+            rules
+                .matched_path_or_any_parents(Path::new(".git/config"), false)
+                .is_ignore()
+        );
+        assert!(
+            rules
+                .matched_path_or_any_parents(Path::new(".hpm/config.toml"), false)
+                .is_ignore()
+        );
+        assert!(
+            !rules
+                .matched_path_or_any_parents(Path::new("hpm.toml"), false)
+                .is_ignore()
+        );
     }
 
     #[test]
@@ -320,15 +326,21 @@ version = "1.0.0"
 
         let rules = build_ignore_rules(dir.path()).unwrap();
 
-        assert!(rules
-            .matched_path_or_any_parents(Path::new("debug.log"), false)
-            .is_ignore());
-        assert!(rules
-            .matched_path_or_any_parents(Path::new("build/out.o"), false)
-            .is_ignore());
-        assert!(!rules
-            .matched_path_or_any_parents(Path::new("src/main.rs"), false)
-            .is_ignore());
+        assert!(
+            rules
+                .matched_path_or_any_parents(Path::new("debug.log"), false)
+                .is_ignore()
+        );
+        assert!(
+            rules
+                .matched_path_or_any_parents(Path::new("build/out.o"), false)
+                .is_ignore()
+        );
+        assert!(
+            !rules
+                .matched_path_or_any_parents(Path::new("src/main.rs"), false)
+                .is_ignore()
+        );
     }
 
     #[test]

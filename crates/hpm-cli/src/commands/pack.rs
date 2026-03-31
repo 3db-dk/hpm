@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use hpm_config::Config;
 use hpm_core::packer;
 use hpm_package::{PackageManifest, Platform};
@@ -46,7 +46,7 @@ pub async fn execute(
     };
 
     // Validate platform is in native.platforms
-    if let (Some(ref p), Some(ref native)) = (&platform, &manifest.native) {
+    if let (Some(p), Some(native)) = (&platform, &manifest.native) {
         if !native.platforms.contains(&p.to_string()) {
             bail!(
                 "Platform '{}' is not declared in [native] platforms: {:?}",

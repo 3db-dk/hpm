@@ -132,13 +132,17 @@ async fn test_end_to_end_python_workflow() {
     // Verify Python site packages path generation
     let site_packages_path = venv_manager.get_python_site_packages_path(&venv_path);
     #[cfg(target_os = "windows")]
-    assert!(site_packages_path
-        .to_string_lossy()
-        .contains("Lib\\site-packages"));
+    assert!(
+        site_packages_path
+            .to_string_lossy()
+            .contains("Lib\\site-packages")
+    );
     #[cfg(not(target_os = "windows"))]
-    assert!(site_packages_path
-        .to_string_lossy()
-        .contains("lib/python/site-packages"));
+    assert!(
+        site_packages_path
+            .to_string_lossy()
+            .contains("lib/python/site-packages")
+    );
 
     // Step 5: Test Houdini package.json generation
     let package_json_with_python =
@@ -225,10 +229,12 @@ async fn test_python_dependency_conflict_detection() {
     // Merge should detect conflict
     let result = deps_a.merge(&deps_b);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Conflicting versions"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Conflicting versions")
+    );
 }
 
 #[tokio::test]

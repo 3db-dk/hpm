@@ -173,7 +173,7 @@ pub fn save_manifest(manifest: &PackageManifest, manifest_path: &Path) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_fixtures::{write_test_manifest, TestManifestOpts};
+    use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
     use hpm_package::DependencySpec;
     use indexmap::IndexMap;
     use std::env;

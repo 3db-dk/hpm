@@ -202,7 +202,7 @@ impl GitRegistry {
             .filter_map(|e| e.ok())
         {
             let path = entry.path();
-            if path.extension().map_or(true, |ext| ext != "json") {
+            if path.extension().is_none_or(|ext| ext != "json") {
                 continue;
             }
             // Skip config.json
@@ -226,7 +226,7 @@ impl GitRegistry {
                                 .is_some_and(|d| d.to_lowercase().contains(&query_lower))
                         {
                             // Keep latest version
-                            if latest.as_ref().map_or(true, |l| entry.version > l.version) {
+                            if latest.as_ref().is_none_or(|l| entry.version > l.version) {
                                 latest = Some(entry);
                             }
                         }

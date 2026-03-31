@@ -30,7 +30,7 @@
 //! - **Terminal Agnostic**: Works across Windows, macOS, and Linux terminals
 //! - **Performance**: Minimal overhead for quiet/silent modes
 
-use anstream::{stderr, stdout, AutoStream};
+use anstream::{AutoStream, stderr, stdout};
 use owo_colors::{OwoColorize, Style};
 use std::fmt::Display;
 use std::io::Write;

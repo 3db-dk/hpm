@@ -309,11 +309,7 @@ impl<P: PackageProvider> DependencyResolver<P> {
         incompatibility.terms.iter().all(|term| {
             if let Some(assignment) = self.solution.decided.get(&term.package) {
                 let matches = term.constraint.matches(&assignment.package_id.version);
-                if term.positive {
-                    matches
-                } else {
-                    !matches
-                }
+                if term.positive { matches } else { !matches }
             } else {
                 // Package not yet decided, so term is not satisfied
                 false

@@ -488,7 +488,7 @@ fn format_python_extras(spec: &PythonDependencySpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_fixtures::{write_test_manifest, TestManifestOpts};
+    use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
     use hpm_package::{DependencySpec, PythonDependencySpec};
     use std::env;
     use tempfile::TempDir;

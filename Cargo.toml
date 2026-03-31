@@ -2,15 +2,15 @@
 name = "hpm-workspace"
 version = "0.4.1"
 authors = ["HPM Contributors"]
-edition = "2021"
+edition = "2024"
 license = "MIT"
 description = "Houdini Package Manager - A modern package management system for SideFX Houdini"
 repository = "https://github.com/3db-dk/hpm"
 homepage = "https://hpm.dev"
-documentation = "https://docs.hpm.dev"
+documentation = "https://hpm.readthedocs.io"
 keywords = ["houdini", "package-manager", "vfx", "3d"]
 categories = ["development-tools", "multimedia::images"]
-rust-version = "1.74"
+rust-version = "1.85"
 
 # This is a documentation-only crate for the workspace
 [lib]
@@ -34,14 +34,14 @@ resolver = "2"
 [workspace.package]
 version = "0.4.1"
 authors = ["HPM Contributors"]
-edition = "2021"
+edition = "2024"
 license = "MIT"
 repository = "https://github.com/3db-dk/hpm"
 homepage = "https://hpm.dev"
-documentation = "https://docs.hpm.dev"
+documentation = "https://hpm.readthedocs.io"
 keywords = ["houdini", "package-manager", "vfx", "3d"]
 categories = ["development-tools", "multimedia::images"]
-rust-version = "1.74"
+rust-version = "1.85"
 
 [workspace.dependencies]
 # Core dependencies

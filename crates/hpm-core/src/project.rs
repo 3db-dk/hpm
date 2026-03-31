@@ -3,7 +3,7 @@ use crate::package_source::PackageSource;
 use crate::storage::{InstalledPackage, PackageSpec, StorageManager};
 use hpm_config::ProjectConfig;
 use hpm_package::{HoudiniPackage, ManifestEnvEntry, PackageManifest};
-use hpm_python::{collect_python_dependencies, resolve_dependencies, VenvManager};
+use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

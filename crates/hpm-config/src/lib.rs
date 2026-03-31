@@ -933,10 +933,12 @@ ignore_patterns = ["backup", ".cache", "temp"]
         assert_eq!(config.projects.search_roots.len(), 1);
         assert_eq!(config.projects.max_search_depth, 5);
         assert_eq!(config.projects.ignore_patterns.len(), 3);
-        assert!(config
-            .projects
-            .ignore_patterns
-            .contains(&"backup".to_string()));
+        assert!(
+            config
+                .projects
+                .ignore_patterns
+                .contains(&"backup".to_string())
+        );
     }
 
     #[test]
@@ -1028,14 +1030,18 @@ ignore_patterns = ["backup", ".cache", "temp"]
             "Expected packages_dir to end with '.hpm/packages', got: {}",
             packages_dir_str
         );
-        assert!(project_config
-            .lock_file
-            .to_string_lossy()
-            .ends_with("hpm.lock"));
-        assert!(project_config
-            .manifest_file
-            .to_string_lossy()
-            .ends_with("hpm.toml"));
+        assert!(
+            project_config
+                .lock_file
+                .to_string_lossy()
+                .ends_with("hpm.lock")
+        );
+        assert!(
+            project_config
+                .manifest_file
+                .to_string_lossy()
+                .ends_with("hpm.toml")
+        );
     }
 
     // Error path tests

@@ -10,7 +10,7 @@
 //! hpm registry update
 //! ```
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use console::style;
 use hpm_config::{Config, RegistrySourceConfig, RegistryType};
 use hpm_core::registry::Registry;

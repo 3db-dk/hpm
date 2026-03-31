@@ -439,11 +439,7 @@ impl ArchiveFetcher {
             PackageSource::Url { version, .. } => {
                 let cache_key = format!("{}-{}", safe_name, version);
                 let path = self.packages_dir.join(cache_key);
-                if path.exists() {
-                    Some(path)
-                } else {
-                    None
-                }
+                if path.exists() { Some(path) } else { None }
             }
             PackageSource::Path { path } => {
                 if path.exists() {

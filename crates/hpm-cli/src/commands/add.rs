@@ -34,7 +34,7 @@
 
 use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifest};
 use super::registry::build_registry_set;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use hpm_config::Config;
 use hpm_package::DependencySpec;
 use indexmap::IndexMap;
@@ -193,7 +193,7 @@ pub async fn add_packages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_fixtures::{write_test_manifest, TestManifestOpts};
+    use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
     use hpm_package::PackageManifest;
     use proptest::prelude::*;
     use tempfile::TempDir;

@@ -127,7 +127,7 @@ pub async fn audit_packages(manifest_path: Option<PathBuf>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_fixtures::{write_test_manifest, TestManifestOpts};
+    use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
     use tempfile::TempDir;
 
     #[tokio::test]
