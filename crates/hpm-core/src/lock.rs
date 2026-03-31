@@ -449,7 +449,11 @@ fn compute_directory_checksum(dir: &Path) -> Result<String, LockError> {
         hasher.update(&contents);
     }
 
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect())
 }
 
 /// Get current timestamp in ISO 8601 format

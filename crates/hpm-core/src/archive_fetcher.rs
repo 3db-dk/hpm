@@ -189,7 +189,7 @@ fn compute_directory_checksum_sync(dir: &Path) -> Result<String, FetchError> {
     }
 
     let result = hasher.finalize();
-    Ok(format!("{:x}", result))
+    Ok(result.iter().map(|b| format!("{:02x}", b)).collect())
 }
 
 /// Errors that can occur during archive fetching.

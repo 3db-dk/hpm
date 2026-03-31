@@ -235,7 +235,12 @@ impl ResolvedDependencySet {
         for (name, version) in &self.packages {
             hasher.update(format!("{}:{}", name, version));
         }
-        format!("{:x}", hasher.finalize())[..16].to_string()
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>()[..16]
+            .to_string()
     }
 }
 
