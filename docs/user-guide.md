@@ -18,7 +18,7 @@ HPM (Houdini Package Manager) is a modern, Rust-based package management system 
 
 ### Prerequisites
 
-- **Rust 1.74 or later** - Required for building HPM from source
+- **Rust 1.85 or later** - Required for building HPM from source
 - **SideFX Houdini 19.5+** - The target application for package management
 - **Git** (optional) - For version control integration during package initialization
 

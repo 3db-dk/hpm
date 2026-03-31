@@ -700,7 +700,7 @@ PROPTEST_CASES=1000 cargo tarpaulin --workspace --all-features \
 ### Rust Toolchain Issues
 ```bash
 rustup update stable
-rustc --version            # Should be 1.74 or later
+rustc --version            # Should be 1.85 or later
 rustup default stable
 rustup component add rustfmt clippy
 ```

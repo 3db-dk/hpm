@@ -9,7 +9,7 @@ a lock file, and isolated virtual environments.
 
 Download a pre-built binary from the
 [latest release](https://github.com/3db-dk/hpm/releases/latest),
-or build from source (requires Rust 1.74+):
+or build from source (requires Rust 1.85+):
 
 ```sh
 git clone https://github.com/3db-dk/hpm.git
