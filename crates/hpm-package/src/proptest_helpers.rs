@@ -10,13 +10,25 @@ use crate::houdini::HoudiniEnvValue;
 use crate::manifest::{HoudiniConfig, PackageInfo, PackageManifest};
 use crate::python::PythonDependencySpec;
 
-/// Strategy to generate valid package names
-pub fn package_name_strategy() -> impl Strategy<Value = String> {
-    prop::string::string_regex("[a-z][a-z0-9-]{1,50}")
+/// Strategy to generate valid slug segments (kebab-case)
+pub fn slug_strategy() -> impl Strategy<Value = String> {
+    prop::string::string_regex("[a-z][a-z0-9-]{1,25}")
         .unwrap()
-        .prop_filter("Package name must not end with hyphen", |name| {
-            !name.ends_with('-') && name.len() >= 2 && name.len() <= 50
+        .prop_filter("Slug must not end with hyphen", |name| {
+            !name.ends_with('-') && name.len() >= 2 && name.len() <= 25
         })
+}
+
+/// Strategy to generate valid package paths (creator/slug)
+pub fn package_path_strategy() -> impl Strategy<Value = String> {
+    (slug_strategy(), slug_strategy()).prop_map(|(creator, slug)| format!("{}/{}", creator, slug))
+}
+
+/// Strategy to generate freeform display names
+pub fn package_name_strategy() -> impl Strategy<Value = String> {
+    prop::string::string_regex("[A-Z][A-Za-z0-9 ]{1,30}")
+        .unwrap()
+        .prop_filter("Name must not be empty", |name| !name.trim().is_empty())
 }
 
 /// Strategy to generate semantic version strings
@@ -127,6 +139,7 @@ pub fn python_dependency_spec_strategy() -> impl Strategy<Value = PythonDependen
 /// Strategy to generate package manifests
 pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
     (
+        package_path_strategy(),
         package_name_strategy(),
         version_strategy(),
         prop::option::of("[A-Za-z0-9 ]{10,100}"),
@@ -136,9 +149,10 @@ pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
         prop::option::of(houdini_version_strategy()),
     )
         .prop_map(
-            |(name, version, description, authors, license, min_houdini, max_houdini)| {
+            |(path, name, version, description, authors, license, min_houdini, max_houdini)| {
                 PackageManifest {
                     package: PackageInfo {
+                        path,
                         name,
                         version,
                         description,
@@ -166,23 +180,21 @@ pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
         )
 }
 
-/// Strategy to generate malformed package names
-pub fn malformed_package_name_strategy() -> impl Strategy<Value = String> {
+/// Strategy to generate malformed package paths
+pub fn malformed_package_path_strategy() -> impl Strategy<Value = String> {
     prop_oneof![
-        Just("".to_string()),      // Empty name
-        Just("-".to_string()),     // Just hyphen
-        Just("-test".to_string()), // Starts with hyphen
-        Just("test-".to_string()), // Ends with hyphen
-        r"[A-Z]{5,20}",            // All uppercase
-        r"test[_]{1,5}package",    // Contains underscores
-        r"test[\s]{1,3}package",   // Contains spaces
-        r"test[!@#$%^&*()]{1,3}",  // Special characters
-        r"[0-9]{1,10}",            // All numeric
-        r"[a-z]{100,200}",         // Too long
-        Just("PACKAGE".to_string()),
-        Just("Test-Package".to_string()),
-        Just("test__package".to_string()),
-        Just("test@package".to_string()),
+        Just("".to_string()),                   // Empty
+        Just("flat-name".to_string()),          // No slash
+        Just("/slug".to_string()),              // Missing creator
+        Just("creator/".to_string()),           // Missing slug
+        Just("a/b/c".to_string()),              // Too many segments
+        Just("-bad/slug".to_string()),          // Creator starts with hyphen
+        Just("creator/-bad".to_string()),       // Slug starts with hyphen
+        Just("Upper/case".to_string()),         // Uppercase
+        Just("creator/UPPER".to_string()),      // Uppercase slug
+        Just("test_under/slug".to_string()),    // Underscore in creator
+        Just("creator/test_under".to_string()), // Underscore in slug
+        Just("creator/test@pkg".to_string()),   // @ in slug
     ]
 }
 
@@ -280,6 +292,7 @@ proptest! {
         let toml_str = toml::to_string(&manifest).unwrap();
         let deserialized: PackageManifest = toml::from_str(&toml_str).unwrap();
 
+        prop_assert_eq!(manifest.package.path, deserialized.package.path);
         prop_assert_eq!(manifest.package.name, deserialized.package.name);
         prop_assert_eq!(manifest.package.version, deserialized.package.version);
         prop_assert_eq!(manifest.package.description, deserialized.package.description);
@@ -336,15 +349,16 @@ proptest! {
         prop_assert!(has_script_path);
     }
 
-    /// Test that package name validation works correctly
+    /// Test that package path validation works correctly
     #[test]
-    fn prop_package_name_validation(
-        valid_name in package_name_strategy(),
-        invalid_chars in r"[A-Z_]{1,5}"
+    fn prop_package_path_validation(
+        valid_path in package_path_strategy(),
+        malformed_path in malformed_package_path_strategy()
     ) {
-        // Valid names should pass validation
+        // Valid paths should pass validation
         let valid_manifest = PackageManifest::new(
-            valid_name,
+            valid_path,
+            "Test Package".to_string(),
             "1.0.0".to_string(),
             None,
             None,
@@ -352,15 +366,17 @@ proptest! {
         );
         prop_assert!(valid_manifest.validate().is_ok());
 
-        // Names with invalid characters should fail validation
+        // Malformed paths should fail validation
         let invalid_manifest = PackageManifest::new(
-            format!("test{}", invalid_chars),
+            malformed_path.clone(),
+            "Test Package".to_string(),
             "1.0.0".to_string(),
             None,
             None,
             None,
         );
-        prop_assert!(invalid_manifest.validate().is_err());
+        prop_assert!(invalid_manifest.validate().is_err(),
+            "Malformed path '{}' should fail validation", malformed_path);
     }
 
     /// Test that semver validation works correctly
@@ -371,7 +387,8 @@ proptest! {
     ) {
         // Valid semver should pass validation
         let valid_manifest = PackageManifest::new(
-            "test-package".to_string(),
+            "studio/test-package".to_string(),
+            "Test Package".to_string(),
             valid_version,
             None,
             None,
@@ -381,7 +398,8 @@ proptest! {
 
         // Invalid versions should fail (unless they accidentally match semver)
         let invalid_manifest = PackageManifest::new(
-            "test-package".to_string(),
+            "studio/test-package".to_string(),
+            "Test Package".to_string(),
             invalid_version.clone(),
             None,
             None,
@@ -395,11 +413,12 @@ proptest! {
         }
     }
 
-    /// Test that malformed package names are rejected consistently
+    /// Test that malformed package paths are rejected consistently
     #[test]
-    fn prop_malformed_package_names_rejected(malformed_name in malformed_package_name_strategy()) {
+    fn prop_malformed_package_paths_rejected(malformed_path in malformed_package_path_strategy()) {
         let manifest = PackageManifest::new(
-            malformed_name.clone(),
+            malformed_path.clone(),
+            "Test".to_string(),
             "1.0.0".to_string(),
             None,
             None,
@@ -407,25 +426,16 @@ proptest! {
         );
 
         let result = manifest.validate();
-
-        // Most malformed names should fail validation
-        if malformed_name.is_empty() ||
-           malformed_name.starts_with('-') ||
-           malformed_name.ends_with('-') ||
-           malformed_name.contains(' ') ||
-           malformed_name.contains('_') ||
-           malformed_name.chars().any(|c| c.is_uppercase()) ||
-           malformed_name.chars().any(|c| !c.is_alphanumeric() && c != '-') {
-            prop_assert!(result.is_err(),
-                "Malformed package name '{}' should fail validation", malformed_name);
-        }
+        prop_assert!(result.is_err(),
+            "Malformed package path '{}' should fail validation", malformed_path);
     }
 
     /// Test that malformed versions are rejected consistently
     #[test]
     fn prop_malformed_versions_rejected(malformed_version in malformed_version_strategy()) {
         let manifest = PackageManifest::new(
-            "test-package".to_string(),
+            "studio/test-package".to_string(),
+            "Test Package".to_string(),
             malformed_version.clone(),
             None,
             None,
@@ -500,13 +510,15 @@ proptest! {
     /// Test that Houdini package generation handles missing/invalid data
     #[test]
     fn prop_houdini_package_generation_robustness(
-        name in prop_oneof![package_name_strategy(), malformed_package_name_strategy()],
+        path in prop_oneof![package_path_strategy(), malformed_package_path_strategy()],
+        name in package_name_strategy(),
         version in prop_oneof![version_strategy(), malformed_version_strategy()],
         min_version in prop::option::of(houdini_version_strategy()),
         max_version in prop::option::of(houdini_version_strategy())
     ) {
         let manifest = PackageManifest {
             package: PackageInfo {
+                path,
                 name,
                 version,
                 description: None,
@@ -591,7 +603,8 @@ proptest! {
         };
 
         let manifest = PackageManifest::new(
-            "test-package".to_string(),
+            "studio/test-package".to_string(),
+            "Test Package".to_string(),
             "1.0.0".to_string(),
             None,
             Some(vec![author_string.clone()]),

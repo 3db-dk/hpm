@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 /// these are stored as one JSON object per line in the package index file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryEntry {
-    /// Package name
+    /// Scoped package path (e.g. `creator/slug`), used as the unique identifier.
     pub name: String,
     /// Version string (semver)
     #[serde(rename = "vers")]
@@ -53,7 +53,7 @@ pub struct RegistryEntry {
 /// A dependency listed in a registry entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryDependency {
-    /// Dependency package name
+    /// Scoped package path of the dependency (e.g. `creator/slug`).
     pub name: String,
     /// Version requirement (e.g., ">=2.0", "^1.5")
     pub req: String,
@@ -89,6 +89,13 @@ pub struct SearchResults {
 }
 
 impl RegistryEntry {
+    /// Returns the scoped package path (e.g. `creator/slug`).
+    ///
+    /// This is an alias for the `name` field, which contains the full scoped path.
+    pub fn identifier(&self) -> &str {
+        &self.name
+    }
+
     /// Returns the SHA-256 checksum without the "sha256:" prefix, if present.
     pub fn checksum_hex(&self) -> Option<&str> {
         self.cksum

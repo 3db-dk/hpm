@@ -169,7 +169,8 @@ mod tests {
 
         let manifest = PackageManifest {
             package: PackageInfo {
-                name: "test-package".to_string(),
+                path: "studio/test-package".to_string(),
+                name: "Test Package".to_string(),
                 version: "1.0.0".to_string(),
                 description: None,
                 authors: None,

@@ -181,7 +181,8 @@ mod tests {
 
         let manifest_content = r#"
 [package]
-name = "test-project"
+path = "studio/test-project"
+name = "Test Project"
 version = "1.0.0"
 description = "A test project"
 
@@ -197,7 +198,7 @@ utility-nodes = { url = "https://example.com/packages/utility-nodes/1.0.0/utilit
         let projects = discovery.find_projects().unwrap();
 
         assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0].manifest.package.name, "test-project");
+        assert_eq!(projects[0].manifest.package.path, "studio/test-project");
         assert_eq!(projects[0].path, project_dir);
     }
 
@@ -215,11 +216,12 @@ utility-nodes = { url = "https://example.com/packages/utility-nodes/1.0.0/utilit
             let manifest_content = format!(
                 r#"
 [package]
-name = "project-{}"
+path = "studio/project-{}"
+name = "Project {}"
 version = "1.0.0"
 description = "Test project {}"
 "#,
-                i, i
+                i, i, i
             );
             std::fs::write(project_dir.join("hpm.toml"), manifest_content).unwrap();
         }
@@ -229,7 +231,7 @@ description = "Test project {}"
         std::fs::create_dir_all(&ignored_dir).unwrap();
         std::fs::write(
             ignored_dir.join("hpm.toml"),
-            "[package]\nname=\"ignored\"\nversion=\"1.0.0\"",
+            "[package]\npath=\"studio/ignored\"\nname=\"Ignored\"\nversion=\"1.0.0\"",
         )
         .unwrap();
 
@@ -241,13 +243,13 @@ description = "Test project {}"
 
         assert_eq!(projects.len(), 3);
 
-        let project_names: Vec<_> = projects
+        let project_paths: Vec<_> = projects
             .iter()
-            .map(|p| p.manifest.package.name.clone())
+            .map(|p| p.manifest.package.path.clone())
             .collect();
-        assert!(project_names.contains(&"project-1".to_string()));
-        assert!(project_names.contains(&"project-2".to_string()));
-        assert!(project_names.contains(&"project-3".to_string()));
+        assert!(project_paths.contains(&"studio/project-1".to_string()));
+        assert!(project_paths.contains(&"studio/project-2".to_string()));
+        assert!(project_paths.contains(&"studio/project-3".to_string()));
     }
 
     #[test]
@@ -264,7 +266,7 @@ description = "Test project {}"
         std::fs::create_dir_all(&deep_project).unwrap();
         std::fs::write(
             deep_project.join("hpm.toml"),
-            "[package]\nname=\"deep\"\nversion=\"1.0.0\"",
+            "[package]\npath=\"studio/deep\"\nname=\"Deep\"\nversion=\"1.0.0\"",
         )
         .unwrap();
 
@@ -273,7 +275,7 @@ description = "Test project {}"
         std::fs::create_dir_all(&shallow_project).unwrap();
         std::fs::write(
             shallow_project.join("hpm.toml"),
-            "[package]\nname=\"shallow\"\nversion=\"1.0.0\"",
+            "[package]\npath=\"studio/shallow\"\nname=\"Shallow\"\nversion=\"1.0.0\"",
         )
         .unwrap();
 
@@ -285,7 +287,7 @@ description = "Test project {}"
         let projects = discovery.find_projects().unwrap();
 
         assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0].manifest.package.name, "shallow");
+        assert_eq!(projects[0].manifest.package.path, "studio/shallow");
     }
 
     #[test]
@@ -293,7 +295,8 @@ description = "Test project {}"
         let temp_dir = TempDir::new().unwrap();
 
         let manifest1 = hpm_package::PackageManifest::new(
-            "project-1".to_string(),
+            "studio/project-1".to_string(),
+            "Project 1".to_string(),
             "1.0.0".to_string(),
             None,
             None,
@@ -301,7 +304,8 @@ description = "Test project {}"
         );
 
         let mut manifest2 = hpm_package::PackageManifest::new(
-            "project-2".to_string(),
+            "studio/project-2".to_string(),
+            "Project 2".to_string(),
             "1.0.0".to_string(),
             None,
             None,

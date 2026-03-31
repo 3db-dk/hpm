@@ -516,6 +516,7 @@ mod tests {
 
         let manifest_content = r#"
 [package]
+path = "studio/test-package"
 name = "test-package"
 version = "1.0.0"
 description = "A test package"

@@ -87,6 +87,9 @@ pub struct PackageManifest {
 /// Package metadata information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageInfo {
+    /// Scoped package path: `creator-slug/package-slug` (e.g. `tumblehead/tumble-rig`)
+    pub path: String,
+    /// Freeform display name (e.g. `TumbleRig`)
     pub name: String,
     pub version: String,
     pub description: Option<String>,
@@ -98,6 +101,23 @@ pub struct PackageInfo {
     pub documentation: Option<String>,
     pub keywords: Option<Vec<String>>,
     pub categories: Option<Vec<String>>,
+}
+
+impl PackageInfo {
+    /// Returns the scoped path (the canonical identifier)
+    pub fn identifier(&self) -> &str {
+        &self.path
+    }
+
+    /// Returns the creator slug from the path (e.g. `tumblehead` from `tumblehead/tumble-rig`)
+    pub fn creator(&self) -> Option<&str> {
+        self.path.split_once('/').map(|(creator, _)| creator)
+    }
+
+    /// Returns the package slug from the path (e.g. `tumble-rig` from `tumblehead/tumble-rig`)
+    pub fn slug(&self) -> Option<&str> {
+        self.path.split_once('/').map(|(_, slug)| slug)
+    }
 }
 
 /// Houdini version compatibility configuration
@@ -125,6 +145,7 @@ impl ManifestEnvEntry {
 impl PackageManifest {
     /// Create a new package manifest with default values
     pub fn new(
+        path: String,
         name: String,
         version: String,
         description: Option<String>,
@@ -133,6 +154,7 @@ impl PackageManifest {
     ) -> Self {
         Self {
             package: PackageInfo {
+                path,
                 name,
                 version,
                 description,
@@ -160,6 +182,10 @@ impl PackageManifest {
 
     /// Validate the package manifest for common errors
     pub fn validate(&self) -> Result<(), String> {
+        if self.package.path.is_empty() {
+            return Err("Package path cannot be empty".to_string());
+        }
+
         if self.package.name.is_empty() {
             return Err("Package name cannot be empty".to_string());
         }
@@ -173,9 +199,9 @@ impl PackageManifest {
             return Err("Package version must be valid semantic version".to_string());
         }
 
-        // Validate package name (kebab-case recommended)
-        if !self.is_valid_package_name(&self.package.name) {
-            return Err("Package name should be kebab-case (lowercase with hyphens)".to_string());
+        // Validate package path (creator-slug/package-slug)
+        if !Self::is_valid_package_path(&self.package.path) {
+            return Err("Package path must be creator/slug format (lowercase kebab-case segments separated by /)".to_string());
         }
 
         // Validate [native] section
@@ -293,14 +319,23 @@ impl PackageManifest {
         parts.iter().all(|part| part.parse::<u32>().is_ok())
     }
 
-    fn is_valid_package_name(&self, name: &str) -> bool {
-        // Basic validation for package name
-        !name.is_empty()
-            && name
+    /// Validate a package path in `creator/slug` format.
+    /// Both segments must be kebab-case (lowercase alphanumeric + hyphens).
+    pub fn is_valid_package_path(path: &str) -> bool {
+        match path.split_once('/') {
+            Some((creator, slug)) => Self::is_valid_slug(creator) && Self::is_valid_slug(slug),
+            None => false,
+        }
+    }
+
+    /// Validate a single slug segment (kebab-case).
+    pub fn is_valid_slug(slug: &str) -> bool {
+        !slug.is_empty()
+            && slug
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c == '-' || c.is_ascii_digit())
-            && !name.starts_with('-')
-            && !name.ends_with('-')
+            && !slug.starts_with('-')
+            && !slug.ends_with('-')
     }
 }
 
@@ -315,8 +350,14 @@ mod tests {
     #[test]
     fn houdini_package_no_version_constraints() {
         // Edge case: Houdini package generation without version constraints
-        let mut manifest =
-            PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
+        let mut manifest = PackageManifest::new(
+            "studio/test".to_string(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
 
         manifest.houdini = Some(HoudiniConfig {
             min_version: None,
@@ -331,7 +372,8 @@ mod tests {
     fn registries_deserialize_from_toml() {
         let toml_str = r#"
 [package]
-name = "my-context"
+path = "studio/my-context"
+name = "My Context"
 version = "0.1.0"
 
 [[registries]]
@@ -345,7 +387,7 @@ url = "https://packages.studio.com/v1/registry"
 type = "git"
 
 [dependencies]
-test = "0.2.0"
+"studio/test" = "0.2.0"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         let registries = manifest.registries.unwrap();
@@ -360,7 +402,8 @@ test = "0.2.0"
     fn env_deserialize_from_toml() {
         let toml_str = r#"
 [package]
-name = "my-package"
+path = "studio/my-package"
+name = "My Package"
 version = "0.1.0"
 
 [env]
@@ -379,7 +422,8 @@ HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar"
     fn env_invalid_method_rejected() {
         let toml_str = r#"
 [package]
-name = "my-package"
+path = "studio/my-package"
+name = "My Package"
 version = "0.1.0"
 
 [env]
@@ -393,7 +437,8 @@ MY_VAR = { method = "invalid", value = "foo" }
     fn env_none_when_absent() {
         let toml_str = r#"
 [package]
-name = "my-package"
+path = "studio/my-package"
+name = "My Package"
 version = "0.1.0"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
@@ -402,8 +447,14 @@ version = "0.1.0"
 
     #[test]
     fn generate_houdini_package_includes_user_env() {
-        let mut manifest =
-            PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
+        let mut manifest = PackageManifest::new(
+            "studio/test".to_string(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
 
         let mut env = IndexMap::new();
         env.insert(
@@ -434,7 +485,8 @@ version = "0.1.0"
     fn native_deserialize_from_toml() {
         let toml_str = r#"
 [package]
-name = "my-native-pkg"
+path = "studio/my-native-pkg"
+name = "My Native Pkg"
 version = "1.0.0"
 
 [native]
@@ -460,7 +512,8 @@ files = ["lib/macos-universal/*"]
     fn native_none_when_absent() {
         let toml_str = r#"
 [package]
-name = "my-package"
+path = "studio/my-package"
+name = "My Package"
 version = "0.1.0"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
@@ -469,8 +522,14 @@ version = "0.1.0"
 
     #[test]
     fn native_validation_unknown_platform() {
-        let mut manifest =
-            PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
+        let mut manifest = PackageManifest::new(
+            "studio/test".to_string(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
         manifest.native = Some(NativeConfig {
             platforms: vec!["linux-arm64".to_string()],
             platform_files: IndexMap::new(),
@@ -480,8 +539,14 @@ version = "0.1.0"
 
     #[test]
     fn native_validation_missing_files_section() {
-        let mut manifest =
-            PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
+        let mut manifest = PackageManifest::new(
+            "studio/test".to_string(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
         manifest.native = Some(NativeConfig {
             platforms: vec!["linux-x86_64".to_string()],
             platform_files: IndexMap::new(),
@@ -492,8 +557,14 @@ version = "0.1.0"
 
     #[test]
     fn native_validation_empty_files() {
-        let mut manifest =
-            PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
+        let mut manifest = PackageManifest::new(
+            "studio/test".to_string(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
         let mut platform_files = IndexMap::new();
         platform_files.insert(
             "linux-x86_64".to_string(),
@@ -509,8 +580,14 @@ version = "0.1.0"
 
     #[test]
     fn native_validation_extra_platform_files() {
-        let mut manifest =
-            PackageManifest::new("test".to_string(), "1.0.0".to_string(), None, None, None);
+        let mut manifest = PackageManifest::new(
+            "studio/test".to_string(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
         let mut platform_files = IndexMap::new();
         platform_files.insert(
             "windows-x86_64".to_string(),
@@ -527,10 +604,73 @@ version = "0.1.0"
     }
 
     #[test]
+    fn valid_package_path() {
+        assert!(PackageManifest::is_valid_package_path(
+            "tumblehead/tumble-rig"
+        ));
+        assert!(PackageManifest::is_valid_package_path("studio/fire-fx"));
+        assert!(PackageManifest::is_valid_package_path("a/b"));
+        assert!(PackageManifest::is_valid_package_path("creator123/pkg456"));
+    }
+
+    #[test]
+    fn invalid_package_path() {
+        assert!(!PackageManifest::is_valid_package_path("flat-name"));
+        assert!(!PackageManifest::is_valid_package_path(""));
+        assert!(!PackageManifest::is_valid_package_path("a/b/c"));
+        assert!(!PackageManifest::is_valid_package_path("Upper/case"));
+        assert!(!PackageManifest::is_valid_package_path("creator/"));
+        assert!(!PackageManifest::is_valid_package_path("/slug"));
+        assert!(!PackageManifest::is_valid_package_path("-bad/slug"));
+        assert!(!PackageManifest::is_valid_package_path("creator/-bad"));
+    }
+
+    #[test]
+    fn package_info_helpers() {
+        let info = PackageInfo {
+            path: "tumblehead/tumble-rig".to_string(),
+            name: "TumbleRig".to_string(),
+            version: "1.0.0".to_string(),
+            description: None,
+            authors: None,
+            license: None,
+            readme: None,
+            homepage: None,
+            repository: None,
+            documentation: None,
+            keywords: None,
+            categories: None,
+        };
+        assert_eq!(info.identifier(), "tumblehead/tumble-rig");
+        assert_eq!(info.creator(), Some("tumblehead"));
+        assert_eq!(info.slug(), Some("tumble-rig"));
+    }
+
+    #[test]
+    fn manifest_toml_roundtrip_with_path() {
+        let manifest = PackageManifest::new(
+            "tumblehead/tumble-rig".to_string(),
+            "TumbleRig".to_string(),
+            "1.0.0".to_string(),
+            Some("A rig tool".to_string()),
+            None,
+            Some("MIT".to_string()),
+        );
+        let toml_str = toml::to_string(&manifest).unwrap();
+        assert!(toml_str.contains("path = \"tumblehead/tumble-rig\""));
+        assert!(toml_str.contains("name = \"TumbleRig\""));
+
+        let deserialized: PackageManifest = toml::from_str(&toml_str).unwrap();
+        assert_eq!(deserialized.package.path, "tumblehead/tumble-rig");
+        assert_eq!(deserialized.package.name, "TumbleRig");
+    }
+
+    #[test]
     fn registries_none_when_absent() {
         let toml_str = r#"
 [package]
-name = "my-context"
+path = "studio/my-context"
+name = "My Context"
 version = "0.1.0"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();

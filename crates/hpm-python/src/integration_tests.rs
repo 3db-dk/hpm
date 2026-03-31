@@ -30,7 +30,8 @@ async fn test_end_to_end_python_workflow() {
 
     let manifest_a = PackageManifest {
         package: PackageInfo {
-            name: "package-a".to_string(),
+            path: "studio/package-a".to_string(),
+            name: "Package A".to_string(),
             version: "1.0.0".to_string(),
             description: Some("Package A with Python deps".to_string()),
             authors: None,
@@ -70,7 +71,8 @@ async fn test_end_to_end_python_workflow() {
 
     let manifest_b = PackageManifest {
         package: PackageInfo {
-            name: "package-b".to_string(),
+            path: "studio/package-b".to_string(),
+            name: "Package B".to_string(),
             version: "2.0.0".to_string(),
             description: Some("Package B with Python deps".to_string()),
             authors: None,
@@ -263,7 +265,8 @@ async fn test_houdini_python_version_mapping_edge_cases() {
     // Test with invalid Houdini version - should fall back to default Python version
     let manifest = PackageManifest {
         package: PackageInfo {
-            name: "test-package".to_string(),
+            path: "studio/test-package".to_string(),
+            name: "Test Package".to_string(),
             version: "1.0.0".to_string(),
             description: None,
             authors: None,

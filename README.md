@@ -43,7 +43,8 @@ Packages are defined in `hpm.toml`:
 
 ```toml
 [package]
-name = "my-tools"
+path = "my-studio/my-tools"
+name = "My Tools"
 version = "1.0.0"
 description = "Custom Houdini tools"
 authors = ["Name <name@example.com>"]
@@ -53,8 +54,8 @@ license = "MIT"
 min_version = "20.0"
 
 [dependencies]
-utility-nodes = "1.0.0"
-material-lib  = { path = "../material-lib", optional = true }
+"my-studio/utility-nodes" = "1.0.0"
+material-lib = { path = "../material-lib", optional = true }
 
 [python_dependencies]
 numpy = ">=1.20.0"

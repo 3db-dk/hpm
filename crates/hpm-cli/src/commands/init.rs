@@ -57,7 +57,9 @@ pub async fn init_package(options: InitOptions) -> Result<String> {
     };
 
     // Create package manifest
+    let package_path = format!("local/{}", package_name);
     let mut manifest = PackageManifest::new(
+        package_path,
         package_name.clone(),
         options.version,
         options.description,
@@ -81,7 +83,7 @@ pub async fn init_package(options: InitOptions) -> Result<String> {
         .map_err(|e| anyhow::anyhow!("Package manifest validation failed: {}", e))?;
 
     // Create package template
-    let template = PackageTemplate::new(&package_name, &manifest, options.bare);
+    let template = PackageTemplate::new(&manifest, options.bare);
 
     // Create directory only if needed
     if should_create_dir {
@@ -501,7 +503,7 @@ mod tests {
         let readme_content = fs::read_to_string(package_path.join("README.md")).unwrap();
         assert!(readme_content.contains("# test-standard-package"));
         assert!(readme_content.contains("A comprehensive test package"));
-        assert!(readme_content.contains("hpm add test-standard-package"));
+        assert!(readme_content.contains("hpm add local/test-standard-package"));
         assert!(readme_content.contains("Apache-2.0"));
 
         // Validate .gitignore content

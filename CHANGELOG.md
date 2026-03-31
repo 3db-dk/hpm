@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-31
+
+### Breaking Changes
+- Package identity is now a scoped path (`creator/slug`) instead of a flat name
+- `PackageInfo` has a new required `path` field and `name` is now a freeform display name
+- `PackageManifest::new()` requires a `path` parameter
+- `PackageTemplate::new()` no longer takes a `name` parameter
+- Existing `hpm.toml` files without a `path` field will fail validation
+
+### Added
+- Scoped package paths: packages are identified by `creator/slug` (e.g. `tumblehead/tumble-rig`)
+- Version-qualified paths use `@`: `creator/slug@1.0.0`
+- `PackageInfo::identifier()`, `creator()`, `slug()` helper methods
+- `PackageManifest::is_valid_package_path()` and `is_valid_slug()` validation
+- Git registry index supports scoped paths (`creator/slug.json` layout)
+- API registry encodes scoped path segments individually in URLs
+- Storage supports nested `creator/slug@version/` directory layout
+
+### Changed
+- Dependencies in `hpm.toml` use scoped paths as keys: `"creator/slug" = "1.0.0"`
+- Archive and cache filenames replace `/` with `-` for flat naming
+- `hpm init` generates both `path` and `name` fields in `hpm.toml`
+
 ## [0.3.2] - 2026-03-26
 
 ### Fixed

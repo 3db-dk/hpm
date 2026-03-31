@@ -669,6 +669,7 @@ mod tests {
         let manifest_path = temp_dir.path().join("custom-manifest.toml");
 
         let manifest_content = r#"[package]
+path = "studio/custom-path-package"
 name = "custom-path-package"
 version = "2.0.0"
 description = "Test custom manifest path"

@@ -19,6 +19,7 @@ pub(crate) fn write_test_manifest(dir: &Path, opts: TestManifestOpts) -> Result<
     let scheme = if opts.use_http { "http" } else { "https" };
 
     let mut content = r#"[package]
+path = "studio/test-package"
 name = "test-package"
 version = "1.0.0"
 description = "A test package"

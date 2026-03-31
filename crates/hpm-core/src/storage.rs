@@ -105,17 +105,49 @@ impl StorageManager {
             return Ok(packages);
         }
 
-        let entries = std::fs::read_dir(&self.config.packages_dir)
-            .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
-
-        for entry in entries.flatten() {
-            if let Some(installed_package) = self.parse_installed_package(entry.path())? {
-                packages.push(installed_package);
-            }
-        }
+        self.collect_installed_packages(&self.config.packages_dir, &mut packages)?;
 
         debug!("Found {} installed packages", packages.len());
         Ok(packages)
+    }
+
+    /// Recursively collect installed packages from a directory.
+    ///
+    /// With scoped package paths (e.g. `creator/slug`), packages live at
+    /// `~/.hpm/packages/creator/slug@version/`. Directories without `@` in
+    /// their name are treated as scope directories and are walked one level
+    /// deeper. Directories with `@` are treated as package directories.
+    fn collect_installed_packages(
+        &self,
+        dir: &std::path::Path,
+        packages: &mut Vec<InstalledPackage>,
+    ) -> Result<(), StorageError> {
+        let entries =
+            std::fs::read_dir(dir).map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name.to_string(),
+                None => continue,
+            };
+
+            if dir_name.contains('@') {
+                // This is a package directory (e.g. `slug@1.0.0` or `fire-fx@2.0.0`)
+                if let Some(installed_package) = self.parse_installed_package(path)? {
+                    packages.push(installed_package);
+                }
+            } else {
+                // This is a scope directory (e.g. `creator`), walk into it
+                self.collect_installed_packages(&entry.path(), packages)?;
+            }
+        }
+
+        Ok(())
     }
 
     fn parse_installed_package(
@@ -142,7 +174,11 @@ impl StorageManager {
         let installed_at = metadata.created().unwrap_or_else(|_| SystemTime::now());
 
         Ok(Some(InstalledPackage {
-            name: manifest.package.name.clone(),
+            name: manifest
+                .package
+                .slug()
+                .unwrap_or(&manifest.package.path)
+                .to_string(),
             version: manifest.package.version.clone(),
             manifest,
             install_path: package_dir,
@@ -202,7 +238,12 @@ impl StorageManager {
         let manifest: PackageManifest =
             toml::from_str(&manifest_content).map_err(StorageError::ManifestParse)?;
 
-        let name = &manifest.package.name;
+        let name = manifest
+            .package
+            .slug()
+            .unwrap_or(&manifest.package.path)
+            .to_string();
+        let name = &name;
         let version = &manifest.package.version;
 
         info!(
@@ -679,7 +720,7 @@ mod tests {
         std::fs::create_dir_all(&package_dir).unwrap();
         std::fs::write(
             package_dir.join("hpm.toml"),
-            "[package]\nname = \"test-package\"\nversion = \"1.0.0\"",
+            "[package]\npath = \"studio/test-package\"\nname = \"Test Package\"\nversion = \"1.0.0\"",
         )
         .unwrap();
 
@@ -708,7 +749,8 @@ mod tests {
 
         let manifest_content = r#"
 [package]
-name = "test-package"
+path = "studio/test-package"
+name = "Test Package"
 version = "1.0.0"
 description = "A test package"
 
@@ -758,7 +800,7 @@ min_version = "19.5"
         let storage_manager = StorageManager::new(storage_config).unwrap();
 
         // Create a package directory with a corrupted manifest
-        let package_dir = temp_dir.path().join("packages").join("corrupted-pkg-1.0.0");
+        let package_dir = temp_dir.path().join("packages").join("corrupted-pkg@1.0.0");
         std::fs::create_dir_all(&package_dir).unwrap();
         std::fs::write(
             package_dir.join("hpm.toml"),
@@ -810,13 +852,66 @@ min_version = "19.5"
         let storage_manager = StorageManager::new(storage_config).unwrap();
 
         // Create a package directory without hpm.toml
-        let package_dir = temp_dir.path().join("packages").join("empty-pkg-1.0.0");
+        let package_dir = temp_dir.path().join("packages").join("empty-pkg@1.0.0");
         std::fs::create_dir_all(&package_dir).unwrap();
         std::fs::write(package_dir.join("README.md"), "no manifest here").unwrap();
 
         // Should not error, just skip directories without manifest
         let packages = storage_manager.list_installed().unwrap();
         assert!(packages.is_empty());
+    }
+
+    #[test]
+    fn list_installed_scoped_packages() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            cache_dir: temp_dir.path().join("cache"),
+            packages_dir: temp_dir.path().join("packages"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        // Create a scoped package at packages/tumblehead/fire-fx@1.0.0/
+        let package_dir = temp_dir
+            .path()
+            .join("packages")
+            .join("tumblehead")
+            .join("fire-fx@1.0.0");
+        std::fs::create_dir_all(&package_dir).unwrap();
+
+        let manifest_content = r#"
+[package]
+path = "tumblehead/fire-fx"
+name = "Fire FX"
+version = "1.0.0"
+description = "A fire effects package"
+
+[houdini]
+min_version = "19.5"
+"#;
+        std::fs::write(package_dir.join("hpm.toml"), manifest_content).unwrap();
+
+        // Also create a non-scoped package at packages/old-pkg@2.0.0/
+        let old_pkg_dir = temp_dir.path().join("packages").join("old-pkg@2.0.0");
+        std::fs::create_dir_all(&old_pkg_dir).unwrap();
+        std::fs::write(
+            old_pkg_dir.join("hpm.toml"),
+            "[package]\npath = \"studio/old-pkg\"\nname = \"Old Package\"\nversion = \"2.0.0\"",
+        )
+        .unwrap();
+
+        let packages = storage_manager.list_installed().unwrap();
+        assert_eq!(packages.len(), 2);
+
+        // Find the scoped package
+        let fire_fx = packages.iter().find(|p| p.name == "fire-fx").unwrap();
+        assert_eq!(fire_fx.version, "1.0.0");
+
+        // Find the non-scoped package
+        let old_pkg = packages.iter().find(|p| p.name == "old-pkg").unwrap();
+        assert_eq!(old_pkg.version, "2.0.0");
     }
 
     #[tokio::test]

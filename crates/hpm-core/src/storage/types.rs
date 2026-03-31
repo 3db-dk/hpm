@@ -102,22 +102,25 @@ impl PackageSpec {
     }
 
     pub fn parse(spec: &str) -> Result<Self, String> {
-        let parts: Vec<&str> = spec.split('@').collect();
-
-        match parts.len() {
-            1 => {
-                // Just package name, default to latest
-                let name = parts[0].to_string();
+        // Use rfind('@') so scoped paths like `creator/slug@1.0.0` are handled
+        // correctly: everything before the last `@` is the package identifier,
+        // everything after is the version.
+        match spec.rfind('@') {
+            Some(pos) => {
+                let name = spec[..pos].to_string();
+                let version_str = &spec[pos + 1..];
+                if name.is_empty() {
+                    return Err(format!("Invalid package specification: {}", spec));
+                }
+                let version_req = VersionReq::new(version_str)?;
+                Ok(Self::new(name, version_req))
+            }
+            None => {
+                // Just package name/path, default to latest
+                let name = spec.to_string();
                 let version_req = VersionReq::new("*")?;
                 Ok(Self::new(name, version_req))
             }
-            2 => {
-                // Package name and version
-                let name = parts[0].to_string();
-                let version_req = VersionReq::new(parts[1])?;
-                Ok(Self::new(name, version_req))
-            }
-            _ => Err(format!("Invalid package specification: {}", spec)),
         }
     }
 }
@@ -247,7 +250,8 @@ mod tests {
             path in file_path_strategy()
         ) {
             let manifest = hpm_package::PackageManifest::new(
-                name.clone(),
+                format!("studio/{}", name),
+                "Test Package".to_string(),
                 version.clone(),
                 None,
                 None,
@@ -275,7 +279,8 @@ mod tests {
             path in file_path_strategy()
         ) {
             let manifest = hpm_package::PackageManifest::new(
-                name.clone(),
+                format!("studio/{}", name),
+                "Test Package".to_string(),
                 package_version.clone(),
                 None,
                 None,
@@ -335,15 +340,39 @@ mod tests {
     }
 
     #[test]
-    fn package_spec_multiple_at_signs_fails() {
+    fn package_spec_multiple_at_signs_uses_last() {
+        // With rfind('@'), "package@1.0.0@extra" splits into name="package@1.0.0" and version="extra"
         let result = PackageSpec::parse("package@1.0.0@extra");
-        assert!(result.is_err());
+        // "extra" is not a valid semver but VersionReq falls back to exact match, so it parses
+        assert!(result.is_ok());
+        let spec = result.unwrap();
+        assert_eq!(spec.name, "package@1.0.0");
+        assert_eq!(spec.version_req.as_str(), "extra");
+    }
+
+    #[test]
+    fn package_spec_scoped_path_with_version() {
+        let result = PackageSpec::parse("tumblehead/fire-fx@1.0.0");
+        assert!(result.is_ok());
+        let spec = result.unwrap();
+        assert_eq!(spec.name, "tumblehead/fire-fx");
+        assert_eq!(spec.version_req.as_str(), "1.0.0");
+    }
+
+    #[test]
+    fn package_spec_scoped_path_without_version() {
+        let result = PackageSpec::parse("tumblehead/fire-fx");
+        assert!(result.is_ok());
+        let spec = result.unwrap();
+        assert_eq!(spec.name, "tumblehead/fire-fx");
+        assert_eq!(spec.version_req.as_str(), "*");
     }
 
     #[test]
     fn version_compatibility_edge_cases() {
         let manifest = hpm_package::PackageManifest::new(
-            "test".to_string(),
+            "studio/test".to_string(),
+            "Test Package".to_string(),
             "1.0.0".to_string(),
             None,
             None,

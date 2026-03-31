@@ -35,6 +35,7 @@ pub struct LockFile {
 /// Information about the root package
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockPackageInfo {
+    /// Full scoped package path, e.g. `creator/slug`
     pub name: String,
     pub version: String,
 }

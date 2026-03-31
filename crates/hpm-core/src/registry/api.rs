@@ -13,8 +13,8 @@ use tracing::{debug, info};
 /// Expects endpoints:
 /// - `GET {base_url}/config` -> RegistryConfig
 /// - `GET {base_url}/packages?q={query}` -> SearchResults
-/// - `GET {base_url}/packages/{name}` -> VersionsResponse
-/// - `GET {base_url}/packages/{name}/{version}` -> RegistryEntry
+/// - `GET {base_url}/packages/{creator}/{slug}` -> VersionsResponse
+/// - `GET {base_url}/packages/{creator}/{slug}/{version}` -> RegistryEntry
 pub struct ApiRegistry {
     /// Display name for this registry
     display_name: String,
@@ -106,7 +106,7 @@ impl Registry for ApiRegistry {
     }
 
     async fn get_versions(&self, name: &str) -> Result<Vec<RegistryEntry>, RegistryError> {
-        let url = format!("{}/packages/{}", self.base_url, urlencoded(name));
+        let url = format!("{}/packages/{}", self.base_url, encode_package_path(name));
         debug!("API registry get_versions: {}", url);
 
         let response = self.client.get(&url).send().await?;
@@ -130,7 +130,7 @@ impl Registry for ApiRegistry {
         let url = format!(
             "{}/packages/{}/{}",
             self.base_url,
-            urlencoded(name),
+            encode_package_path(name),
             urlencoded(version)
         );
         debug!("API registry get_version: {}", url);
@@ -203,6 +203,19 @@ fn urlencoded(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 
+/// Encode a package name for use in URL paths.
+///
+/// For scoped paths (`creator/slug`), each segment is encoded individually
+/// so the `/` separator is preserved in the URL. For flat names, the entire
+/// name is encoded as a single segment.
+fn encode_package_path(name: &str) -> String {
+    if let Some((creator, slug)) = name.split_once('/') {
+        format!("{}/{}", urlencoded(creator), urlencoded(slug))
+    } else {
+        urlencoded(name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +225,19 @@ mod tests {
         assert_eq!(urlencoded("simple-name"), "simple-name");
         assert_eq!(urlencoded("name with spaces"), "name+with+spaces");
         assert_eq!(urlencoded("name@1.0"), "name%401.0");
+    }
+
+    #[test]
+    fn test_encode_package_path_scoped() {
+        assert_eq!(
+            encode_package_path("tumblehead/tumble-rig"),
+            "tumblehead/tumble-rig"
+        );
+    }
+
+    #[test]
+    fn test_encode_package_path_flat() {
+        assert_eq!(encode_package_path("simple-name"), "simple-name");
     }
 
     #[test]

@@ -762,7 +762,8 @@ The `hpm.toml` file is the heart of every HPM package, containing all metadata a
 
 ```toml
 [package]
-name = "my-houdini-tool"
+path = "my-studio/my-houdini-tool"
+name = "My Houdini Tool"
 version = "1.0.0"
 description = "Custom Houdini digital assets and tools"
 authors = ["Your Name <email@example.com>"]
@@ -776,8 +777,8 @@ max_version = "21.0"
 
 # HPM package dependencies (resolved from configured registries)
 [dependencies]
-utility-nodes = "1.0.0"
-material-library = { version = "2.0.0", optional = true }
+"my-studio/utility-nodes" = "1.0.0"
+"other-creator/material-library" = { version = "2.0.0", optional = true }
 local-tools = { path = "../local-tools" }
 
 # Python dependencies with Houdini integration
@@ -817,7 +818,8 @@ The `[package]` section contains core package metadata:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | Yes | Package name (must be unique) |
+| `path` | Yes | Scoped package path: `creator/slug` (e.g. `my-studio/my-tool`) |
+| `name` | Yes | Freeform display name (e.g. "My Tool") |
 | `version` | Yes | Package version (semantic versioning) |
 | `description` | No | Brief package description |
 | `authors` | No | List of package authors |

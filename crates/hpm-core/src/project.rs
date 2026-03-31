@@ -807,7 +807,8 @@ mod tests {
         let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
 
         let manifest = hpm_package::PackageManifest::new(
-            "test-package".to_string(),
+            "studio/test-package".to_string(),
+            "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("A test package".to_string()),
             None,
@@ -851,7 +852,8 @@ mod tests {
 
         // Create a manifest with an env var
         let mut manifest = hpm_package::PackageManifest::new(
-            "test-package".to_string(),
+            "studio/test-package".to_string(),
+            "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("A test package".to_string()),
             None,

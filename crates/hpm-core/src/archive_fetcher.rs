@@ -302,7 +302,9 @@ impl ArchiveFetcher {
         version: &str,
         package_name: &str,
     ) -> Result<FetchResult, FetchError> {
-        let cache_key = format!("{}-{}", package_name, version);
+        // Replace `/` with `-` in package name for flat cache key filenames
+        let safe_name = package_name.replace('/', "-");
+        let cache_key = format!("{}-{}", safe_name, version);
         let package_dir = self.packages_dir.join(&cache_key);
 
         // Check if already extracted
@@ -420,9 +422,10 @@ impl ArchiveFetcher {
 
     /// Check if a package is already cached.
     pub fn is_cached(&self, source: &PackageSource, package_name: &str) -> bool {
+        let safe_name = package_name.replace('/', "-");
         match source {
             PackageSource::Url { version, .. } => {
-                let cache_key = format!("{}-{}", package_name, version);
+                let cache_key = format!("{}-{}", safe_name, version);
                 self.packages_dir.join(cache_key).exists()
             }
             PackageSource::Path { path } => path.exists(),
@@ -431,9 +434,10 @@ impl ArchiveFetcher {
 
     /// Get the cache path for a package.
     pub fn cache_path(&self, source: &PackageSource, package_name: &str) -> Option<PathBuf> {
+        let safe_name = package_name.replace('/', "-");
         match source {
             PackageSource::Url { version, .. } => {
-                let cache_key = format!("{}-{}", package_name, version);
+                let cache_key = format!("{}-{}", safe_name, version);
                 let path = self.packages_dir.join(cache_key);
                 if path.exists() {
                     Some(path)
@@ -528,7 +532,11 @@ mod tests {
         // Create a test package directory
         let pkg_dir = temp_dir.path().join("my-package");
         std::fs::create_dir_all(&pkg_dir).unwrap();
-        std::fs::write(pkg_dir.join("hpm.toml"), "[package]\nname = \"test\"").unwrap();
+        std::fs::write(
+            pkg_dir.join("hpm.toml"),
+            "[package]\npath = \"studio/test\"\nname = \"Test\"\nversion = \"1.0.0\"",
+        )
+        .unwrap();
 
         let source = PackageSource::path(&pkg_dir);
         let result = fetcher.fetch(&source, "my-package").await;

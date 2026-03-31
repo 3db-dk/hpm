@@ -12,7 +12,7 @@ pub struct PackageTemplate {
 
 impl PackageTemplate {
     /// Create a new Houdini package template
-    pub fn new(name: &str, manifest: &PackageManifest, bare: bool) -> Self {
+    pub fn new(manifest: &PackageManifest, bare: bool) -> Self {
         let mut template = Self {
             directories: Vec::new(),
             files: HashMap::new(),
@@ -20,9 +20,9 @@ impl PackageTemplate {
         };
 
         if bare {
-            template.setup_bare_template(name, manifest);
+            template.setup_bare_template(manifest);
         } else {
-            template.setup_standard_template(name, manifest);
+            template.setup_standard_template(manifest);
         }
 
         template
@@ -53,7 +53,7 @@ impl PackageTemplate {
         Ok(())
     }
 
-    fn setup_standard_template(&mut self, name: &str, manifest: &PackageManifest) {
+    fn setup_standard_template(&mut self, manifest: &PackageManifest) {
         // Standard Houdini package directories
         self.directories.extend([
             "otls".to_string(),
@@ -73,10 +73,8 @@ impl PackageTemplate {
             "package.json".to_string(),
             self.generate_houdini_package_json(manifest),
         );
-        self.files.insert(
-            "README.md".to_string(),
-            self.generate_readme(name, manifest),
-        );
+        self.files
+            .insert("README.md".to_string(), self.generate_readme(manifest));
         self.files
             .insert(".gitignore".to_string(), self.generate_gitignore());
         self.files.insert(
@@ -95,7 +93,7 @@ impl PackageTemplate {
             .insert("tests/.gitkeep".to_string(), String::new());
     }
 
-    fn setup_bare_template(&mut self, _name: &str, manifest: &PackageManifest) {
+    fn setup_bare_template(&mut self, manifest: &PackageManifest) {
         // Only create the essential files
         self.files.insert(
             "hpm.toml".to_string(),
@@ -108,6 +106,7 @@ impl PackageTemplate {
             // Fallback if serialization fails
             format!(
                 r#"[package]
+path = "{}"
 name = "{}"
 version = "{}"
 description = "{}"
@@ -119,6 +118,7 @@ keywords = ["houdini"]
 [houdini]
 min_version = "19.5"
 "#,
+                manifest.package.path,
                 manifest.package.name,
                 manifest.package.version,
                 manifest
@@ -151,7 +151,7 @@ min_version = "19.5"
         })
     }
 
-    fn generate_readme(&self, name: &str, manifest: &PackageManifest) -> String {
+    fn generate_readme(&self, manifest: &PackageManifest) -> String {
         let default_description = "A Houdini package".to_string();
         let description = manifest
             .package
@@ -194,9 +194,9 @@ hpm run test
 
 {}
 "#,
-            name,
+            manifest.package.name,
             description,
-            name,
+            manifest.package.path,
             manifest
                 .package
                 .license
@@ -273,14 +273,15 @@ mod tests {
     #[test]
     fn test_standard_template() {
         let manifest = PackageManifest::new(
-            "test-package".to_string(),
+            "studio/test-package".to_string(),
+            "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("Test package".to_string()),
             None,
             Some("MIT".to_string()),
         );
 
-        let template = PackageTemplate::new("test-package", &manifest, false);
+        let template = PackageTemplate::new(&manifest, false);
 
         assert!(!template.bare);
         assert!(template.directories.contains(&"otls".to_string()));
@@ -294,14 +295,15 @@ mod tests {
     #[test]
     fn test_bare_template() {
         let manifest = PackageManifest::new(
-            "test-bare".to_string(),
+            "studio/test-bare".to_string(),
+            "Test Bare".to_string(),
             "1.0.0".to_string(),
             Some("Test bare package".to_string()),
             None,
             Some("MIT".to_string()),
         );
 
-        let template = PackageTemplate::new("test-bare", &manifest, true);
+        let template = PackageTemplate::new(&manifest, true);
 
         assert!(template.bare);
         assert!(template.directories.is_empty());
@@ -312,14 +314,15 @@ mod tests {
     #[test]
     fn test_bare_template_filesystem_creation() {
         let manifest = PackageManifest::new(
-            "test-bare-pkg".to_string(),
+            "studio/test-bare-pkg".to_string(),
+            "Test Bare Pkg".to_string(),
             "1.0.0".to_string(),
             Some("A test bare package".to_string()),
             Some(vec!["Test Author <test@example.com>".to_string()]),
             Some("MIT".to_string()),
         );
 
-        let template = PackageTemplate::new("test-bare-pkg", &manifest, true);
+        let template = PackageTemplate::new(&manifest, true);
         let temp_dir = TempDir::new().unwrap();
 
         let result = template.create_structure(&temp_dir);
@@ -337,7 +340,8 @@ mod tests {
 
         // Validate hpm.toml content
         let toml_content = std::fs::read_to_string(hpm_toml_path).unwrap();
-        assert!(toml_content.contains("name = \"test-bare-pkg\""));
+        assert!(toml_content.contains("path = \"studio/test-bare-pkg\""));
+        assert!(toml_content.contains("name = \"Test Bare Pkg\""));
         assert!(toml_content.contains("version = \"1.0.0\""));
         assert!(toml_content.contains("description = \"A test bare package\""));
         assert!(toml_content.contains("Test Author <test@example.com>"));
@@ -347,14 +351,15 @@ mod tests {
     #[test]
     fn test_standard_template_filesystem_creation() {
         let manifest = PackageManifest::new(
-            "test-standard-pkg".to_string(),
+            "studio/test-standard-pkg".to_string(),
+            "Test Standard Pkg".to_string(),
             "2.0.0".to_string(),
             Some("A comprehensive test package".to_string()),
             Some(vec!["Test Author <test@example.com>".to_string()]),
             Some("Apache-2.0".to_string()),
         );
 
-        let template = PackageTemplate::new("test-standard-pkg", &manifest, false);
+        let template = PackageTemplate::new(&manifest, false);
         let temp_dir = TempDir::new().unwrap();
 
         let result = template.create_structure(&temp_dir);
@@ -391,6 +396,7 @@ mod tests {
     ) {
         // Validate hpm.toml content
         let toml_content = std::fs::read_to_string(package_path.join("hpm.toml")).unwrap();
+        assert!(toml_content.contains(&format!("path = \"{}\"", manifest.package.path)));
         assert!(toml_content.contains(&format!("name = \"{}\"", manifest.package.name)));
         assert!(toml_content.contains(&format!("version = \"{}\"", manifest.package.version)));
         if let Some(ref description) = manifest.package.description {
@@ -403,7 +409,7 @@ mod tests {
         // Validate README.md content
         let readme_content = std::fs::read_to_string(package_path.join("README.md")).unwrap();
         assert!(readme_content.contains(&format!("# {}", manifest.package.name)));
-        assert!(readme_content.contains(&format!("hpm add {}", manifest.package.name)));
+        assert!(readme_content.contains(&format!("hpm add {}", manifest.package.path)));
         if let Some(ref description) = manifest.package.description {
             assert!(readme_content.contains(description));
         }

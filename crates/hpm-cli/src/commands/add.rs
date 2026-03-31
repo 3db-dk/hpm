@@ -356,6 +356,7 @@ mod tests {
 
             // Create a valid manifest
             let manifest = PackageManifest::new(
+                format!("studio/{}", package_name),
                 package_name.clone(),
                 "1.0.0".to_string(),
                 Some("Test package".to_string()),
@@ -471,6 +472,7 @@ mod tests {
             let manifest_path = temp_dir.path().join("hpm.toml");
 
             let manifest = PackageManifest::new(
+                format!("studio/{}", package_name),
                 package_name.clone(),
                 version.clone(),
                 Some("Test package".to_string()),

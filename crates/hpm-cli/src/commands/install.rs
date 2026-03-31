@@ -693,6 +693,7 @@ mod tests {
         let manifest_path = temp_dir.path().join("hpm.toml");
 
         let invalid_content = r#"[package]
+path = "studio/empty-name"
 name = ""
 version = "1.0.0"
 "#;
@@ -726,6 +727,7 @@ version = "1.0.0"
         // Create test manifest without dependencies to test directory and lock file setup
         // (testing actual package installation requires network access and is not unit-testable)
         let manifest_content = r#"[package]
+path = "studio/test-install-package"
 name = "test-install-package"
 version = "1.0.0"
 description = "Test package for install command"
@@ -771,6 +773,7 @@ min_version = "20.0"
         // Create test manifest without dependencies to test directory setup only
         // (testing actual package installation requires network access)
         let manifest_content = r#"[package]
+path = "studio/custom-path-package"
 name = "custom-path-package"
 version = "2.0.0"
 description = "Test custom manifest path"

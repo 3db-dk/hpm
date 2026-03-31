@@ -114,9 +114,11 @@ pub fn create_archive(
     platform: Option<&Platform>,
     platform_filter: Option<&PlatformFilter>,
 ) -> Result<PathBuf, PackError> {
+    // Replace `/` with `-` in package name for flat archive filenames
+    let safe_name = name.replace('/', "-");
     let archive_name = match platform {
-        Some(p) => format!("{}-{}-{}.zip", name, version, p),
-        None => format!("{}-{}.zip", name, version),
+        Some(p) => format!("{}-{}-{}.zip", safe_name, version, p),
+        None => format!("{}-{}.zip", safe_name, version),
     };
     let archive_path = output_dir.join(&archive_name);
 
@@ -280,7 +282,8 @@ mod tests {
         fs::write(
             dir.join("hpm.toml"),
             r#"[package]
-name = "test-pkg"
+path = "studio/test-pkg"
+name = "Test Package"
 version = "1.0.0"
 "#,
         )

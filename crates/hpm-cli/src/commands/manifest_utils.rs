@@ -266,7 +266,8 @@ mod tests {
 
         // Create initial manifest
         let mut manifest = PackageManifest::new(
-            "test-package".to_string(),
+            "studio/test-package".to_string(),
+            "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("Test description".to_string()),
             Some(vec!["Author <test@example.com>".to_string()]),

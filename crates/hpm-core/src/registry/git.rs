@@ -59,13 +59,22 @@ impl GitRegistry {
 
     /// Compute the index file path for a package name.
     ///
-    /// Follows Cargo's convention:
+    /// For scoped paths (`creator/slug`): `<creator>/<slug>.json`
+    /// For legacy flat names, follows the old Cargo-style convention:
     /// - 1 char: `1/<name>.json`
     /// - 2 chars: `2/<name>.json`
     /// - 3 chars: `3/<first-char>/<name>.json`
     /// - 4+ chars: `<first-2>/<next-2>/<name>.json`
     fn index_path(&self, name: &str) -> PathBuf {
         let lower = name.to_lowercase();
+
+        // Scoped path: creator/slug -> creator/slug.json
+        if let Some((creator, slug)) = lower.split_once('/') {
+            let relative = PathBuf::from(creator).join(format!("{}.json", slug));
+            return self.cache_dir.join(relative);
+        }
+
+        // Legacy flat names
         let relative = match lower.len() {
             0 => unreachable!("package name cannot be empty"),
             1 => PathBuf::from("1").join(format!("{}.json", lower)),
@@ -338,6 +347,23 @@ mod tests {
     }
 
     #[test]
+    fn test_index_path_scoped() {
+        let tmp = TempDir::new().unwrap();
+        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
+        let path = reg.index_path("tumblehead/tumble-rig");
+        assert!(path.ends_with("tumblehead/tumble-rig.json"));
+    }
+
+    #[test]
+    fn test_index_path_scoped_case_insensitive() {
+        let tmp = TempDir::new().unwrap();
+        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
+        let path1 = reg.index_path("TumbleHead/Tumble-Rig");
+        let path2 = reg.index_path("tumblehead/tumble-rig");
+        assert_eq!(path1, path2);
+    }
+
+    #[test]
     fn test_read_entries_not_found() {
         let tmp = TempDir::new().unwrap();
         let reg = GitRegistry::new("test", "https://example.com", tmp.path());
@@ -350,14 +376,14 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let reg = GitRegistry::new("test", "https://example.com", tmp.path());
 
-        // Create index file
-        let path = reg.index_path("mops");
+        // Create index file for a scoped package
+        let path = reg.index_path("acme/mops");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let line1 = r#"{"name":"mops","vers":"1.0.0","deps":[],"dl":"https://example.com/mops-1.0.0.tar.gz","yanked":false}"#;
-        let line2 = r#"{"name":"mops","vers":"2.0.0","deps":[],"dl":"https://example.com/mops-2.0.0.tar.gz","yanked":false}"#;
+        let line1 = r#"{"name":"acme/mops","vers":"1.0.0","deps":[],"dl":"https://example.com/mops-1.0.0.tar.gz","yanked":false}"#;
+        let line2 = r#"{"name":"acme/mops","vers":"2.0.0","deps":[],"dl":"https://example.com/mops-2.0.0.tar.gz","yanked":false}"#;
         std::fs::write(&path, format!("{}\n{}\n", line1, line2)).unwrap();
 
-        let entries = reg.read_entries("mops").unwrap();
+        let entries = reg.read_entries("acme/mops").unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].version, "1.0.0");
         assert_eq!(entries[1].version, "2.0.0");

@@ -40,7 +40,8 @@ mod integration_tests {
             package_a_dir.join("hpm.toml"),
             r#"
 [package]
-name = "package-a"
+path = "studio/package-a"
+name = "Package A"
 version = "1.0.0"
 description = "Package A"
 "#,
@@ -54,7 +55,8 @@ description = "Package A"
             package_b_dir.join("hpm.toml"),
             r#"
 [package]
-name = "package-b"
+path = "studio/package-b"
+name = "Package B"
 version = "1.0.0"
 description = "Package B"
 "#,
@@ -68,7 +70,8 @@ description = "Package B"
             project_dir.join("hpm.toml"),
             r#"
 [package]
-name = "test-project"
+path = "studio/test-project"
+name = "Test Project"
 version = "1.0.0"
 description = "Test project"
 
@@ -83,7 +86,7 @@ package-a = { url = "https://example.com/packages/package-a/1.0.0/package-a-1.0.
         let projects = project_discovery.find_projects().unwrap();
 
         assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0].manifest.package.name, "test-project");
+        assert_eq!(projects[0].manifest.package.path, "studio/test-project");
 
         // Test dependency resolution
         let resolver = DependencyResolver::new(Arc::new(storage_manager.clone()));
@@ -156,7 +159,8 @@ package-a = { url = "https://example.com/packages/package-a/1.0.0/package-a-1.0.
             package_a_dir.join("hpm.toml"),
             r#"
 [package]
-name = "package-a"
+path = "studio/package-a"
+name = "Package A"
 version = "1.0.0"
 description = "Package A"
 
@@ -173,7 +177,8 @@ package-c = { url = "https://example.com/packages/package-c/1.0.0/package-c-1.0.
             package_b_dir.join("hpm.toml"),
             r#"
 [package]
-name = "package-b"  
+path = "studio/package-b"
+name = "Package B"
 version = "1.0.0"
 description = "Package B"
 "#,
@@ -187,7 +192,8 @@ description = "Package B"
             package_c_dir.join("hpm.toml"),
             r#"
 [package]
-name = "package-c"
+path = "studio/package-c"
+name = "Package C"
 version = "1.0.0"
 description = "Package C"
 "#,
@@ -201,7 +207,8 @@ description = "Package C"
             project_dir.join("hpm.toml"),
             r#"
 [package]
-name = "test-project"
+path = "studio/test-project"
+name = "Test Project"
 version = "1.0.0"
 description = "Test project"
 

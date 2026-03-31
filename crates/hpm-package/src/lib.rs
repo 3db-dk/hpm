@@ -30,7 +30,8 @@
 //!
 //! // Create a new package manifest
 //! let manifest = PackageManifest::new(
-//!     "geometry-tools".to_string(),
+//!     "studio/geometry-tools".to_string(),
+//!     "Geometry Tools".to_string(),
 //!     "2.1.0".to_string(),
 //!     Some("Advanced geometry tools for Houdini".to_string()),
 //!     Some(vec!["Studio Artist <artist@studio.com>".to_string()]),
@@ -51,7 +52,8 @@
 //! use indexmap::IndexMap;
 //!
 //! let mut manifest = PackageManifest::new(
-//!     "my-package".to_string(),
+//!     "studio/my-package".to_string(),
+//!     "My Package".to_string(),
 //!     "1.0.0".to_string(),
 //!     None, None, None,
 //! );
@@ -82,7 +84,8 @@
 //! use hpm_package::PackageManifest;
 //!
 //! let manifest = PackageManifest::new(
-//!     "my-package".to_string(),
+//!     "studio/my-package".to_string(),
+//!     "My Package".to_string(),
 //!     "1.0.0".to_string(),
 //!     None, None, None,
 //! );
