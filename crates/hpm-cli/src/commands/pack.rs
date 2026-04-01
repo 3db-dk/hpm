@@ -70,6 +70,21 @@ pub async fn execute(
 
     let output_dir = output.unwrap_or_else(|| package_dir.clone());
 
+    // Generate Houdini-native package.json if not already present
+    let inject_files: Vec<(String, Vec<u8>)> = match manifest.generate_houdini_native_package() {
+        Ok((filename, native_pkg)) => {
+            if package_dir.join(&filename).exists() {
+                // User has a hand-written file; don't overwrite
+                vec![]
+            } else {
+                let json_bytes = serde_json::to_vec_pretty(&native_pkg)
+                    .context("Failed to serialize Houdini native package JSON")?;
+                vec![(filename, json_bytes)]
+            }
+        }
+        Err(_) => vec![],
+    };
+
     // Run pack on blocking thread (zip I/O)
     let native_config = manifest.native.clone();
     let result = tokio::task::spawn_blocking({
@@ -86,6 +101,7 @@ pub async fn execute(
                 signing_key.as_ref(),
                 platform.as_ref(),
                 native_config.as_ref(),
+                &inject_files,
             )
         }
     })

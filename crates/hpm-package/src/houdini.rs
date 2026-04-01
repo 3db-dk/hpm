@@ -86,6 +86,40 @@ impl HoudiniEnvValue {
     }
 }
 
+/// Houdini-native package.json for direct use by Houdini's package system.
+///
+/// Unlike `HoudiniPackage` (which uses `$HPM_PACKAGE_ROOT` for HPM runtime),
+/// this uses `$HOUDINI_PACKAGE_PATH/{slug}` so the archive works directly
+/// with Houdini's built-in package loading.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HoudiniNativePackage {
+    /// Package slug name
+    pub name: String,
+    /// Houdini package path
+    pub hpath: String,
+    /// Load this package only once
+    pub load_package_once: bool,
+    /// Show in Houdini's package browser
+    pub show: bool,
+    /// Conditional enable expression
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable: Option<String>,
+    /// Environment variable definitions
+    pub env: Vec<HashMap<String, HoudiniEnvValue>>,
+    /// Required packages
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires: Option<Vec<String>>,
+    /// Package metadata
+    pub hpackage: HpackageMetadata,
+}
+
+/// Metadata block within a Houdini native package.json.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HpackageMetadata {
+    /// Package version string
+    pub version: String,
+}
+
 impl HoudiniPackage {
     /// Create an empty Houdini package.
     pub fn new() -> Self {
@@ -192,5 +226,56 @@ mod tests {
         assert!(json.contains("hpath"));
         assert!(json.contains("PYTHONPATH"));
         assert!(json.contains("prepend"));
+    }
+
+    #[test]
+    fn houdini_native_package_serialization() {
+        let pkg = HoudiniNativePackage {
+            name: "my-tool".to_string(),
+            hpath: "$HOUDINI_PACKAGE_PATH/my-tool".to_string(),
+            load_package_once: true,
+            show: true,
+            enable: Some("houdini_version >= '21.0'".to_string()),
+            env: vec![{
+                let mut m = HashMap::new();
+                m.insert(
+                    "PKG_MY_TOOL".to_string(),
+                    HoudiniEnvValue::simple("$HOUDINI_PACKAGE_PATH/my-tool"),
+                );
+                m
+            }],
+            requires: Some(vec!["some-dep".to_string()]),
+            hpackage: HpackageMetadata {
+                version: "1.2.3".to_string(),
+            },
+        };
+
+        let json = serde_json::to_string_pretty(&pkg).unwrap();
+        assert!(json.contains("\"name\": \"my-tool\""));
+        assert!(json.contains("\"load_package_once\": true"));
+        assert!(json.contains("\"show\": true"));
+        assert!(json.contains("\"hpath\": \"$HOUDINI_PACKAGE_PATH/my-tool\""));
+        assert!(json.contains("\"version\": \"1.2.3\""));
+        assert!(json.contains("\"some-dep\""));
+    }
+
+    #[test]
+    fn houdini_native_package_omits_none_fields() {
+        let pkg = HoudiniNativePackage {
+            name: "test".to_string(),
+            hpath: "$HOUDINI_PACKAGE_PATH/test".to_string(),
+            load_package_once: true,
+            show: true,
+            enable: None,
+            env: vec![],
+            requires: None,
+            hpackage: HpackageMetadata {
+                version: "1.0.0".to_string(),
+            },
+        };
+
+        let json = serde_json::to_string_pretty(&pkg).unwrap();
+        assert!(!json.contains("enable"));
+        assert!(!json.contains("requires"));
     }
 }

@@ -18,7 +18,8 @@
 //! - [`PackageManifest`] - Primary type representing a complete `hpm.toml` file
 //! - [`DependencySpec`] - HPM dependency specifications (Registry, URL, or Path)
 //! - [`PythonDependencySpec`] - Python dependency specifications with extras
-//! - [`HoudiniPackage`] - Generated `package.json` structure for Houdini
+//! - [`HoudiniPackage`] - Generated `package.json` structure for HPM runtime
+//! - [`HoudiniNativePackage`] - Houdini-native `package.json` for direct Houdini use
 //! - [`Platform`] - Canonical platform identifiers for native packaging
 //! - [`NativeConfig`] - Platform-specific file declarations
 //! - [`PackageTemplate`] - Template system for generating package directories
@@ -110,7 +111,7 @@ mod proptest_helpers;
 
 // Re-exports for convenient access
 pub use dependency::DependencySpec;
-pub use houdini::{HoudiniEnvValue, HoudiniPackage};
+pub use houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 pub use manifest::{
     EnvMethod, HoudiniConfig, ManifestEnvEntry, NativeConfig, NativePlatformFiles, PackageInfo,
     PackageManifest, RegistryConfig, RegistryType,

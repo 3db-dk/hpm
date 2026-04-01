@@ -113,6 +113,7 @@ pub fn create_archive(
     ignore: &Gitignore,
     platform: Option<&Platform>,
     platform_filter: Option<&PlatformFilter>,
+    inject_files: &[(String, Vec<u8>)],
 ) -> Result<PathBuf, PackError> {
     // Replace `/` with `-` in package name for flat archive filenames
     let safe_name = name.replace('/', "-");
@@ -171,6 +172,12 @@ pub fn create_archive(
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
         zip.write_all(&buf)?;
+    }
+
+    // Write injected files
+    for (name, content) in inject_files {
+        zip.start_file(name.as_str(), options)?;
+        zip.write_all(content)?;
     }
 
     zip.finish()?;
@@ -237,6 +244,7 @@ pub fn pack(
     signing_key: Option<&SigningKey>,
     platform: Option<&Platform>,
     native_config: Option<&NativeConfig>,
+    inject_files: &[(String, Vec<u8>)],
 ) -> Result<PackResult, PackError> {
     let ignore = build_ignore_rules(package_dir)?;
 
@@ -253,6 +261,7 @@ pub fn pack(
         &ignore,
         platform,
         platform_filter.as_ref(),
+        inject_files,
     )?;
     let checksum = compute_archive_checksum(&archive_path)?;
 
@@ -363,6 +372,7 @@ version = "1.0.0"
             &ignore,
             None,
             None,
+            &[],
         )
         .unwrap();
 
@@ -400,6 +410,7 @@ version = "1.0.0"
             &ignore,
             None,
             None,
+            &[],
         )
         .unwrap();
         let path2 = create_archive(
@@ -410,6 +421,7 @@ version = "1.0.0"
             &ignore,
             None,
             None,
+            &[],
         )
         .unwrap();
 
@@ -435,6 +447,7 @@ version = "1.0.0"
             &ignore,
             None,
             None,
+            &[],
         )
         .unwrap();
 
@@ -493,6 +506,7 @@ version = "1.0.0"
             None,
             None,
             None,
+            &[],
         )
         .unwrap();
 
@@ -519,6 +533,7 @@ version = "1.0.0"
             Some(&signing_key),
             None,
             None,
+            &[],
         )
         .unwrap();
 
@@ -589,6 +604,7 @@ version = "1.0.0"
             None,
             Some(&platform),
             Some(&native_config),
+            &[],
         )
         .unwrap();
 
@@ -616,6 +632,7 @@ version = "1.0.0"
             None,
             Some(&platform),
             Some(&native_config),
+            &[],
         )
         .unwrap();
 
@@ -649,6 +666,7 @@ version = "1.0.0"
             None,
             None,
             None,
+            &[],
         )
         .unwrap();
 
@@ -657,5 +675,44 @@ version = "1.0.0"
             "test-pkg-1.0.0.zip"
         );
         assert!(result.platform.is_none());
+    }
+
+    #[test]
+    fn inject_files_added_to_archive() {
+        let dir = TempDir::new().unwrap();
+        create_test_package(dir.path());
+
+        let output_dir = TempDir::new().unwrap();
+        let inject = vec![(
+            "test-pkg.json".to_string(),
+            b"{\"name\": \"test-pkg\"}".to_vec(),
+        )];
+
+        let result = pack(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            output_dir.path(),
+            None,
+            None,
+            None,
+            &inject,
+        )
+        .unwrap();
+
+        let file = fs::File::open(&result.archive_path).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let names: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .collect();
+
+        assert!(names.contains(&"test-pkg.json".to_string()));
+        assert!(names.contains(&"hpm.toml".to_string()));
+
+        // Verify injected file content
+        let mut injected = zip.by_name("test-pkg.json").unwrap();
+        let mut content = String::new();
+        std::io::Read::read_to_string(&mut injected, &mut content).unwrap();
+        assert_eq!(content, "{\"name\": \"test-pkg\"}");
     }
 }
