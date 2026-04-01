@@ -637,6 +637,8 @@ hpm pack --json --output dist/
 
 When a `[native]` section is declared in `hpm.toml`, `--platform` defaults to the host platform and produces a platform-filtered archive containing only the files relevant to that target.
 
+**Houdini-native package.json:** If no `{slug}.json` file exists in the package directory, `hpm pack` automatically generates one and includes it in the archive. This file follows Houdini's native package format, making the archive directly usable by Houdini's built-in package system without any HPM runtime. If you provide your own hand-written `{slug}.json`, it will be included as-is.
+
 ---
 
 ### audit
