@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-05
+
 ### Added
 - `hpm pack` now auto-generates a Houdini-native `{slug}.json` in the archive if one doesn't already exist, making HPM packages directly usable by Houdini's built-in package system
 - `HoudiniNativePackage` and `HpackageMetadata` types for representing Houdini-native package metadata
