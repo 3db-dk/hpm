@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-04-05
+
+### Fixed
+- Flaky CLI tests that mutated the process-wide current directory now serialize via a shared mutex, eliminating races under parallel test execution
+
 ## [0.5.0] - 2026-04-05
 
 ### Added
