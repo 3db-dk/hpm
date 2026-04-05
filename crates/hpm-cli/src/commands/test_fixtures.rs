@@ -1,7 +1,45 @@
 //! Shared test fixtures for CLI command tests.
 
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
+
+/// Global mutex serializing tests that mutate the process-wide current directory.
+///
+/// Any test calling `env::set_current_dir()` or `env::current_dir()` must acquire
+/// this lock via [`CwdGuard`] to avoid races with parallel tests whose TempDirs
+/// may be dropped out from under them.
+static CWD_MUTEX: Mutex<()> = Mutex::new(());
+
+/// RAII guard that locks the cwd mutex, changes directory, and restores it on drop.
+///
+/// Tests that mutate the current directory should construct one of these at the
+/// start of the test and let it drop at the end.
+pub(crate) struct CwdGuard {
+    _guard: MutexGuard<'static, ()>,
+    original: PathBuf,
+}
+
+impl CwdGuard {
+    /// Lock the cwd mutex and change directory to `new_dir`, saving the original.
+    pub(crate) fn enter(new_dir: &Path) -> Self {
+        let guard = CWD_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let original = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        std::env::set_current_dir(new_dir).unwrap();
+        Self {
+            _guard: guard,
+            original,
+        }
+    }
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.original);
+    }
+}
 
 /// Options for generating a test hpm.toml manifest.
 #[derive(Default)]

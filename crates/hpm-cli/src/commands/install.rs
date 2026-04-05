@@ -644,8 +644,7 @@ async fn generate_lock_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
-    use std::env;
+    use crate::commands::test_fixtures::{CwdGuard, TestManifestOpts, write_test_manifest};
     use tempfile::TempDir;
 
     #[test]
@@ -722,7 +721,6 @@ version = "1.0.0"
     #[tokio::test]
     async fn test_install_dependencies_basic_manifest() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
 
         // Create test manifest without dependencies to test directory and lock file setup
         // (testing actual package installation requires network access and is not unit-testable)
@@ -739,13 +737,10 @@ min_version = "20.0"
 "#;
         std::fs::write(temp_dir.path().join("hpm.toml"), manifest_content).unwrap();
 
-        env::set_current_dir(temp_dir.path()).unwrap();
+        let _cwd = CwdGuard::enter(temp_dir.path());
 
         // Install dependencies (no deps, so this tests directory setup and lock file creation)
         let result = install_dependencies(None, false).await;
-
-        // Restore original directory (ignore errors - may fail on Windows with async tests)
-        let _ = env::set_current_dir(original_dir);
 
         // The function should complete successfully for manifests without dependencies
         // This tests the manifest parsing and directory setup logic

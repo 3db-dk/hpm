@@ -173,24 +173,18 @@ pub fn save_manifest(manifest: &PackageManifest, manifest_path: &Path) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
+    use crate::commands::test_fixtures::{CwdGuard, TestManifestOpts, write_test_manifest};
     use hpm_package::DependencySpec;
     use indexmap::IndexMap;
-    use std::env;
     use tempfile::TempDir;
 
     #[test]
     fn test_determine_manifest_path_current_directory() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
         write_test_manifest(temp_dir.path(), TestManifestOpts::default()).unwrap();
 
-        env::set_current_dir(temp_dir.path()).unwrap();
-
+        let _cwd = CwdGuard::enter(temp_dir.path());
         let result = determine_manifest_path(None);
-
-        let _ = env::set_current_dir(&original_dir);
 
         assert!(result.is_ok());
         let manifest_path = result.unwrap();
@@ -223,13 +217,9 @@ mod tests {
     #[test]
     fn test_determine_manifest_path_no_manifest() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        env::set_current_dir(temp_dir.path()).unwrap();
+        let _cwd = CwdGuard::enter(temp_dir.path());
 
         let result = determine_manifest_path(None);
-
-        env::set_current_dir(&original_dir).unwrap();
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();

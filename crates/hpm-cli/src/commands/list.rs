@@ -488,9 +488,8 @@ fn format_python_extras(spec: &PythonDependencySpec) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
+    use crate::commands::test_fixtures::{CwdGuard, TestManifestOpts, write_test_manifest};
     use hpm_package::{DependencySpec, PythonDependencySpec};
-    use std::env;
     use tempfile::TempDir;
 
     #[test]
@@ -626,8 +625,6 @@ mod tests {
     #[tokio::test]
     async fn test_list_dependencies_with_full_manifest() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
         write_test_manifest(
             temp_dir.path(),
             TestManifestOpts {
@@ -638,11 +635,8 @@ mod tests {
         )
         .unwrap();
 
-        env::set_current_dir(temp_dir.path()).unwrap();
-
+        let _cwd = CwdGuard::enter(temp_dir.path());
         let result = list_dependencies(None).await;
-
-        let _ = env::set_current_dir(&original_dir);
 
         assert!(result.is_ok());
     }
@@ -650,15 +644,10 @@ mod tests {
     #[tokio::test]
     async fn test_list_dependencies_no_dependencies() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
         write_test_manifest(temp_dir.path(), TestManifestOpts::default()).unwrap();
 
-        env::set_current_dir(temp_dir.path()).unwrap();
-
+        let _cwd = CwdGuard::enter(temp_dir.path());
         let result = list_dependencies(None).await;
-
-        env::set_current_dir(&original_dir).unwrap();
 
         assert!(result.is_ok());
     }

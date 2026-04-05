@@ -124,10 +124,9 @@ pub async fn remove_package(package_name: String, manifest_path: Option<PathBuf>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
+    use crate::commands::test_fixtures::{CwdGuard, TestManifestOpts, write_test_manifest};
     use hpm_package::DependencySpec;
     use indexmap::IndexMap;
-    use std::env;
     use tempfile::TempDir;
 
     #[test]
@@ -274,14 +273,10 @@ mod tests {
     #[test]
     fn test_remove_package_nonexistent_manifest() {
         let temp_dir = TempDir::new().unwrap();
-        let original_dir = env::current_dir().unwrap();
-
-        env::set_current_dir(temp_dir.path()).unwrap();
+        let _cwd = CwdGuard::enter(temp_dir.path());
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(remove_package("some-package".to_string(), None));
-
-        let _ = env::set_current_dir(original_dir);
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
