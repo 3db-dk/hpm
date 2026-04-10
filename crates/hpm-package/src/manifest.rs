@@ -245,8 +245,10 @@ impl PackageManifest {
         let mut hpath = vec![];
         let mut env = vec![];
 
-        // Add common paths
-        hpath.push("$HPM_PACKAGE_ROOT/otls".to_string());
+        // Point hpath at the package root so Houdini auto-discovers convention
+        // subdirs (otls/, desktop/, toolbar/, python_panels/, viewer_states/,
+        // python3.11libs/, etc.). See sidefx.com/docs/houdini/ref/plugins.html.
+        hpath.push("$HPM_PACKAGE_ROOT".to_string());
 
         // Python path environment
         let mut python_env = HashMap::new();
@@ -556,6 +558,10 @@ version = "0.1.0"
         manifest.env = Some(env);
 
         let houdini_pkg = manifest.generate_houdini_package();
+        assert_eq!(
+            houdini_pkg.hpath,
+            Some(vec!["$HPM_PACKAGE_ROOT".to_string()])
+        );
         let env_list = houdini_pkg.env.unwrap();
         // 2 hardcoded (PYTHONPATH, HOUDINI_SCRIPT_PATH) + 1 user-defined
         assert_eq!(env_list.len(), 3);

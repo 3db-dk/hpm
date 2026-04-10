@@ -337,9 +337,10 @@ proptest! {
             }
         }
 
-        // hpath should contain otls directory
+        // hpath should be exactly the package root so Houdini auto-discovers
+        // convention subdirs (otls/, desktop/, toolbar/, etc.)
         let hpath = houdini_pkg.hpath.unwrap();
-        prop_assert!(hpath.iter().any(|path| path.contains("otls")));
+        prop_assert_eq!(hpath, vec!["$HPM_PACKAGE_ROOT".to_string()]);
 
         // env should contain PYTHONPATH and HOUDINI_SCRIPT_PATH
         let env = houdini_pkg.env.unwrap();

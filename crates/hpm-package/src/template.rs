@@ -140,7 +140,7 @@ min_version = "19.5"
         let houdini_pkg = manifest.generate_houdini_package();
         serde_json::to_string_pretty(&houdini_pkg).unwrap_or_else(|_| {
             r#"{
-    "hpath": ["$HPM_PACKAGE_ROOT/otls"],
+    "hpath": ["$HPM_PACKAGE_ROOT"],
     "env": [
         {"PYTHONPATH": {"method": "prepend", "value": "$HPM_PACKAGE_ROOT/python"}},
         {"HOUDINI_SCRIPT_PATH": {"method": "prepend", "value": "$HPM_PACKAGE_ROOT/scripts"}}

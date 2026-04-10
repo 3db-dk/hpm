@@ -15,7 +15,7 @@ use std::collections::HashMap;
 ///
 /// ```json
 /// {
-///   "hpath": ["$HPM_PACKAGE_ROOT/otls"],
+///   "hpath": ["$HPM_PACKAGE_ROOT"],
 ///   "env": [
 ///     {"PYTHONPATH": {"method": "prepend", "value": "$HPM_PACKAGE_ROOT/python"}}
 ///   ],
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn houdini_package_builder() {
         let mut pkg = HoudiniPackage::new();
-        pkg.add_hpath("$HPM_PACKAGE_ROOT/otls");
+        pkg.add_hpath("$HPM_PACKAGE_ROOT");
         pkg.add_env(
             "PYTHONPATH",
             HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"),
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn houdini_package_serialization() {
         let mut pkg = HoudiniPackage::new();
-        pkg.add_hpath("$HPM_PACKAGE_ROOT/otls");
+        pkg.add_hpath("$HPM_PACKAGE_ROOT");
         pkg.add_env(
             "PYTHONPATH",
             HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"),

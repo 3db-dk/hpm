@@ -435,11 +435,10 @@ impl ProjectManager {
     ) -> Result<HoudiniPackage, ProjectError> {
         let package_path = &installed_package.install_path;
 
-        // Build hpath entries
-        let mut hpath = vec![];
-        if package_path.join("otls").exists() {
-            hpath.push(package_path.join("otls").to_string_lossy().to_string());
-        }
+        // Point hpath at the package root so Houdini auto-discovers convention
+        // subdirs (otls/, desktop/, toolbar/, python_panels/, viewer_states/,
+        // python3.11libs/, etc.). See sidefx.com/docs/houdini/ref/plugins.html.
+        let hpath = vec![package_path.to_string_lossy().to_string()];
 
         // Build environment variables
         let mut env = vec![];
@@ -823,14 +822,17 @@ mod tests {
             name: "test-package".to_string(),
             version: "1.0.0".to_string(),
             manifest,
-            install_path: package_path,
+            install_path: package_path.clone(),
             installed_at: std::time::SystemTime::now(),
         };
 
         let houdini_package = project_manager
             .create_houdini_package(&installed_package)
             .unwrap();
-        assert!(houdini_package.hpath.is_some());
+        assert_eq!(
+            houdini_package.hpath,
+            Some(vec![package_path.to_string_lossy().to_string()])
+        );
         assert!(houdini_package.env.is_some());
     }
 
@@ -884,6 +886,10 @@ mod tests {
         let houdini_package = project_manager
             .create_houdini_package(&installed_package)
             .unwrap();
+        assert_eq!(
+            houdini_package.hpath,
+            Some(vec![package_path.to_string_lossy().to_string()])
+        );
         let env_entries = houdini_package.env.as_ref().unwrap();
         let my_config_entry = env_entries
             .iter()
