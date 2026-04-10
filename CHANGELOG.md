@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-04-10
+
 ### Fixed
 - Generated per-package Houdini manifest `hpath` now points at the package root instead of `<root>/otls`, so Houdini auto-discovers convention subdirectories (`desktop/`, `toolbar/`, `radialmenu/`, `python_panels/`, `viewer_states/`, `python3.11libs/pythonrc.py`, `keymaps`, etc.) instead of only loading HDAs
 
