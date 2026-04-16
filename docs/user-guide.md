@@ -615,10 +615,20 @@ hpm pack [OPTIONS]
 ```
 
 **Options:**
-- `--key <PATH>` - Path to Ed25519 signing key (32-byte raw seed). Also reads from `HPM_SIGNING_KEY` env var
+- `--key <PATH>` - Path to Ed25519 signing key (PKCS#8 PEM). Overrides `HPM_SIGNING_KEY`
 - `--output <PATH>` - Output directory for the archive (default: current directory)
 - `--json` - Output result as JSON (useful for CI)
 - `--platform <PLATFORM>` - Target platform for native packages (auto-detected when `[native]` is declared)
+
+`HPM_SIGNING_KEY` may be either a path to a PEM file or inline PEM content (detected by the leading `-----BEGIN` marker), which lets CI secret stores inject the key as a plain string without writing a temp file.
+
+**Generate a signing key pair (one-time):**
+```bash
+openssl genpkey -algorithm ed25519 -out signing.pem
+openssl pkey -in signing.pem -pubout -out signing.pub.pem
+```
+
+Keep `signing.pem` private; publish `signing.pub.pem` to your registry or creator dashboard so consumers can verify signatures.
 
 **Examples:**
 ```bash
@@ -626,7 +636,11 @@ hpm pack [OPTIONS]
 hpm pack
 
 # Pack with signing
-hpm pack --key ~/.hpm/signing-key.bin
+hpm pack --key ~/.hpm/signing.pem
+
+# Pack with inline PEM from a CI secret
+export HPM_SIGNING_KEY="$(cat signing.pem)"
+hpm pack
 
 # Pack for a specific platform
 hpm pack --platform linux-x86_64

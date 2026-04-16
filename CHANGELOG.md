@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- `hpm pack --key` (and `HPM_SIGNING_KEY`, and `signing.key_path` in global config) now expects a PKCS#8 PEM file instead of a 32-byte raw seed. Regenerate keys with `openssl genpkey -algorithm ed25519 -out signing.pem`.
+
+### Added
+- `HPM_SIGNING_KEY` accepts inline PEM content (detected by a leading `-----BEGIN` marker) in addition to a file path, so CI secret stores can inject the key as a plain string without writing a temp file.
+- Documented the package-signing wire format in `docs/security.md`: Ed25519 over the archive bytes, signature emitted as standard base64 (RFC 4648), `keyId` = first 8 bytes of the public key hex-encoded.
+
 ## [0.5.2] - 2026-04-10
 
 ### Fixed

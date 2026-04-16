@@ -226,6 +226,41 @@ version = "1.2.0"
 3. **Verify after updates**: Review lock file changes in pull requests
 4. **Keep up to date**: Regularly run `hpm update` to check for newer versions
 
+## Package Signing
+
+`hpm pack --key` can sign the produced archive with an Ed25519 key so downstream registries and consumers can verify authorship before trusting a package.
+
+### Algorithm
+
+- **Signature scheme**: Ed25519 (RFC 8032).
+- **Private key format**: PKCS#8 PEM (`-----BEGIN PRIVATE KEY-----`). Generated with `openssl genpkey -algorithm ed25519`.
+- **Public key format**: SubjectPublicKeyInfo PEM (`-----BEGIN PUBLIC KEY-----`). Extracted with `openssl pkey -pubout`.
+- **Signature encoding**: standard base64 (RFC 4648, alphabet `A–Z a–z 0–9 + /` with `=` padding), emitted as `fileSignature`. Verifiers must decode with the standard alphabet, **not** base64url.
+- **Key identifier**: first 8 bytes of the Ed25519 public key, hex-encoded (16 characters), emitted as `keyId`. Lets registries index multiple keys per creator without transmitting the full public key on every artifact.
+
+### Generating and using a key
+
+```bash
+# One-time: generate the key pair
+openssl genpkey -algorithm ed25519 -out signing.pem
+openssl pkey -in signing.pem -pubout -out signing.pub.pem
+
+# Local signing
+hpm pack --key signing.pem
+
+# CI: inject the PEM as an env var secret (no temp file)
+export HPM_SIGNING_KEY="$(cat signing.pem)"
+hpm pack
+```
+
+Publish `signing.pub.pem` to your registry or creator dashboard; keep `signing.pem` out of version control and rotate it by issuing a new key pair and re-signing future releases under the new `keyId`.
+
+### Operational guidance
+
+- Store the private PEM in a secret manager (Infisical, Vault, GitHub Actions secrets) rather than on disk in CI runners.
+- Treat `keyId` as a public identifier — it leaks nothing about the private key, but anchors verification to a specific key version.
+- A `keyId` mismatch at verification time means either the wrong public key is configured, or the signer rotated keys without updating the registry.
+
 ## Configuration Security
 
 ### Global Configuration
@@ -263,6 +298,7 @@ If you discover a security vulnerability in HPM:
 
 | Version | Security Change |
 |---------|----------------|
+| 0.6.0 | Package signing: PKCS#8 PEM keys, Ed25519, standard-base64 signatures |
 | 0.3.0 | Native platform support with platform-filtered archives |
 | - | Project-level environment variable overrides |
 | 0.1.0 | Initial security features |
