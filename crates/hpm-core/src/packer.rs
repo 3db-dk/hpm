@@ -4,6 +4,7 @@
 //! checksum and optional Ed25519 signature.
 
 use base64::Engine;
+use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use glob::Pattern;
 use hpm_package::manifest::NativeConfig;
@@ -203,22 +204,21 @@ mod hex {
     }
 }
 
-/// Load an Ed25519 signing key from a file containing a 32-byte raw seed.
+/// Load an Ed25519 signing key from a PKCS#8 PEM file.
+///
+/// The file is expected to contain a `-----BEGIN PRIVATE KEY-----` block as
+/// produced by `openssl genpkey -algorithm ed25519`.
 pub fn load_signing_key(path: &Path) -> Result<SigningKey, PackError> {
-    let bytes = fs::read(path).map_err(|e| {
+    let pem = fs::read_to_string(path).map_err(|e| {
         PackError::SigningKey(format!("failed to read key file {}: {}", path.display(), e))
     })?;
+    load_signing_key_from_pem(&pem)
+}
 
-    if bytes.len() != 32 {
-        return Err(PackError::SigningKey(format!(
-            "key file must be exactly 32 bytes, got {}",
-            bytes.len()
-        )));
-    }
-
-    let mut seed = [0u8; 32];
-    seed.copy_from_slice(&bytes);
-    Ok(SigningKey::from_bytes(&seed))
+/// Parse an Ed25519 signing key from inline PKCS#8 PEM content.
+pub fn load_signing_key_from_pem(pem: &str) -> Result<SigningKey, PackError> {
+    SigningKey::from_pkcs8_pem(pem.trim())
+        .map_err(|e| PackError::SigningKey(format!("failed to parse PKCS#8 PEM: {e}")))
 }
 
 /// Sign an archive file, returning (base64 signature, hex key_id).
@@ -475,10 +475,10 @@ version = "1.0.0"
     }
 
     #[test]
-    fn invalid_key_file_wrong_size() {
+    fn invalid_key_file_not_pem() {
         let dir = TempDir::new().unwrap();
-        let key_path = dir.path().join("bad.key");
-        fs::write(&key_path, b"too-short").unwrap();
+        let key_path = dir.path().join("bad.pem");
+        fs::write(&key_path, b"garbage").unwrap();
 
         let result = load_signing_key(&key_path);
         assert!(result.is_err());
@@ -490,6 +490,40 @@ version = "1.0.0"
         let result = load_signing_key(Path::new("/nonexistent/key.bin"));
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PackError::SigningKey(_)));
+    }
+
+    #[test]
+    fn load_signing_key_pem_roundtrip() {
+        use ed25519_dalek::pkcs8::EncodePrivateKey;
+        use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
+
+        let original = SigningKey::from_bytes(&[7u8; 32]);
+        let pem = original.to_pkcs8_pem(LineEnding::LF).unwrap();
+
+        let dir = TempDir::new().unwrap();
+        let key_path = dir.path().join("signing.pem");
+        fs::write(&key_path, pem.as_bytes()).unwrap();
+
+        let loaded = load_signing_key(&key_path).unwrap();
+        assert_eq!(
+            loaded.verifying_key().to_bytes(),
+            original.verifying_key().to_bytes()
+        );
+    }
+
+    #[test]
+    fn load_signing_key_from_pem_inline() {
+        use ed25519_dalek::pkcs8::EncodePrivateKey;
+        use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
+
+        let original = SigningKey::from_bytes(&[9u8; 32]);
+        let pem = original.to_pkcs8_pem(LineEnding::LF).unwrap();
+
+        let loaded = load_signing_key_from_pem(&pem).unwrap();
+        assert_eq!(
+            loaded.verifying_key().to_bytes(),
+            original.verifying_key().to_bytes()
+        );
     }
 
     #[test]

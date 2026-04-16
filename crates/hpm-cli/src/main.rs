@@ -487,8 +487,8 @@ enum Commands {
     Check,
     /// Create a distributable package archive
     Pack {
-        /// Path to Ed25519 signing key (32-byte raw seed)
-        #[arg(long, env = "HPM_SIGNING_KEY")]
+        /// Path to Ed25519 signing key (PKCS#8 PEM). Overrides HPM_SIGNING_KEY env var.
+        #[arg(long)]
         key: Option<std::path::PathBuf>,
         /// Output directory for the archive (defaults to current directory)
         #[arg(long)]

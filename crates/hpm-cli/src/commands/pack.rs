@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use hpm_config::Config;
 use hpm_core::packer;
 use hpm_package::{PackageManifest, Platform};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::console::Console;
 
@@ -56,16 +56,22 @@ pub async fn execute(
         }
     }
 
-    // Resolve signing key: CLI flag → config fallback
-    let signing_key = match key {
-        Some(path) => Some(packer::load_signing_key(&path)?),
-        None => {
-            let config = Config::load().unwrap_or_default();
-            match config.signing.key_path {
-                Some(path) => Some(packer::load_signing_key(&path)?),
-                None => None,
-            }
+    // Resolve signing key: CLI flag → HPM_SIGNING_KEY env (PEM content or path) → config
+    let signing_key = if let Some(path) = key {
+        Some(packer::load_signing_key(&path)?)
+    } else if let Ok(value) = std::env::var("HPM_SIGNING_KEY") {
+        if value.trim_start().starts_with("-----BEGIN") {
+            Some(packer::load_signing_key_from_pem(&value)?)
+        } else {
+            Some(packer::load_signing_key(Path::new(&value))?)
         }
+    } else {
+        Config::load()
+            .unwrap_or_default()
+            .signing
+            .key_path
+            .map(|p| packer::load_signing_key(&p))
+            .transpose()?
     };
 
     let output_dir = output.unwrap_or_else(|| package_dir.clone());
