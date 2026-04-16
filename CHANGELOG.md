@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-16
+
 ### Breaking Changes
 - `hpm pack --key` (and `HPM_SIGNING_KEY`, and `signing.key_path` in global config) now expects a PKCS#8 PEM file instead of a 32-byte raw seed. Regenerate keys with `openssl genpkey -algorithm ed25519 -out signing.pem`.
 
