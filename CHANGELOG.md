@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- `hpm install` now errors out when `[houdini]` `min_version` is unparseable or
+  outside the supported range (Houdini 19/20/21) instead of silently falling
+  back to Python 3.9. This previously masked the Houdini-21 mapping bug below.
+
+### Fixed
+- Houdini 21 with `min_version = "21"` (bare major) now correctly resolves to
+  Python 3.11. Before, a bare major fell through to the default arm and
+  produced a Python 3.9 venv, so C-extension packages (pymongo, watchdog, etc.)
+  couldn't load under Houdini's Python 3.11 ABI.
+- `hpm install` now writes per-package Houdini manifests to
+  `.hpm/packages/{name}.json` with the shared venv's `site-packages` prepended
+  onto `PYTHONPATH`. The previous implementation built the config in memory
+  and discarded it, so `import qtpy` (and any other declared Python
+  dependency) failed inside Houdini despite a successful install.
+- Generated `PYTHONPATH` entries use `HoudiniEnvValue::prepend` and let Houdini
+  pick the path separator, fixing the hardcoded Unix-only `:` / `$PYTHONPATH`
+  that emitted malformed values on Windows.
+
+### Changed
+- `VenvManager::with_venvs_dir` and `PythonCleanupAnalyzer::with_venv_manager`
+  let callers (primarily tests) route at an isolated venvs directory instead
+  of the developer's real `~/.hpm/venvs/`. Flaky `test_end_to_end_python_workflow`
+  and `test_cleanup_system_comprehensive` now use tempdirs.
+
+### Removed
+- `hpm_python::integration` module (`generate_houdini_package_json`,
+  `update_package_json_with_python`, `extract_python_env_from_package_json`).
+  The module produced a non-Houdini JSON shape and was only exercised by its
+  own tests; Houdini manifest generation now lives in the install command.
+
 ## [0.6.0] - 2026-04-16
 
 ### Breaking Changes

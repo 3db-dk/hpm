@@ -120,18 +120,24 @@ HPM automatically maps Houdini versions to compatible Python versions:
 
 | Houdini Version | Python Version | Common Use Cases |
 |----------------|----------------|------------------|
-| 19.0 - 19.5    | Python 3.7     | Legacy workflows, older packages |
-| 20.0           | Python 3.9     | Current production, most packages |
-| 20.5           | Python 3.10    | Modern features, type hints |
+| 19.x           | Python 3.7     | Legacy workflows, older packages |
+| 20.0 - 20.4    | Python 3.9     | Current production, most packages |
+| 20.5+          | Python 3.10    | Modern features, type hints |
 | 21.x           | Python 3.11    | Latest features, performance improvements |
 
-The Python version is determined by the `min_version` in your `[houdini]` section:
+The Python version is determined by the `min_version` in your `[houdini]` section.
+Both `"21"` and `"21.0"` are accepted — bare majors are treated as `major.0`:
 
 ```toml
 [houdini]
-min_version = "20.0"  # Uses Python 3.9
-max_version = "20.5"  # Optional compatibility upper bound
+min_version = "21"    # Uses Python 3.11 (same as "21.0")
+max_version = "21.0"  # Optional compatibility upper bound
 ```
+
+Unparseable values (e.g. `"latest"`) and Houdini majors outside the table above
+(e.g. a future `"22"`) return an install-time error rather than silently picking
+a default — this surfaces mapping bugs instead of hiding them behind a venv that
+uses the wrong Python ABI.
 
 ## Virtual Environment Sharing
 
@@ -265,8 +271,10 @@ print(sys.path)
 
 **Solutions**:
 - Restart Houdini after package installation
-- Check that `package.json` files were generated correctly
-- Verify HOUDINI_PACKAGE_PATH includes your project
+- Check that `.hpm/packages/{name}.json` files were generated for each installed dep
+- Verify `HOUDINI_PACKAGE_PATH` includes `<project>/.hpm/packages` — that's where
+  HPM writes the per-package Houdini manifests with the venv's `PYTHONPATH`
+  wired in
 
 #### 3. Virtual Environment Creation Failures
 
@@ -413,22 +421,31 @@ The hash ensures:
 
 ### Houdini Integration
 
-HPM generates Houdini `package.json` files with PYTHONPATH injection:
+On `hpm install`, HPM writes a Houdini package manifest per installed dependency
+to `<project>/.hpm/packages/{name}.json`. Each file points `hpath` at the
+package's absolute install location and, for packages that declare
+`[python_dependencies]`, prepends the shared venv's `site-packages` onto
+`PYTHONPATH`:
 
 ```json
 {
-    "path": "$HPM_PACKAGE_ROOT",
+    "hpath": ["/absolute/path/to/installed/package"],
     "env": [
         {
-            "PYTHONPATH": "/path/to/venv/lib/python3.9/site-packages:$PYTHONPATH"
+            "PYTHONPATH": {
+                "method": "prepend",
+                "value": "/path/to/venv/site-packages"
+            }
         }
-    ]
+    ],
+    "enable": "houdini_version >= '21'"
 }
 ```
 
-Cross-platform path handling:
-- **Unix/macOS**: `{venv}/lib/python3.x/site-packages:$PYTHONPATH`
-- **Windows**: `{venv}\Lib\site-packages;%PYTHONPATH%`
+`method: prepend` delegates path-separator handling to Houdini itself, so the
+same manifest works on Windows (`;`) and Unix (`:`) without the installer
+embedding OS-specific joiners. Point `HOUDINI_PACKAGE_PATH` at
+`<project>/.hpm/packages` so Houdini picks up these files on launch.
 
 ### Performance Characteristics
 
