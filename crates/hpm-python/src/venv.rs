@@ -100,6 +100,22 @@ impl VenvManager {
         let hash = resolved_deps.hash();
         let venv_path = self.venvs_dir.join(&hash);
 
+        // Self-heal venvs left half-installed by earlier hpm versions: the
+        // pre-0.7.1 `--target` bug could populate metadata.json with a
+        // successful-looking dep set while leaving `site-packages` empty.
+        // Now that the install path is fixed, trusting `venv_path.exists()`
+        // alone still wedges users on the stale dir. Verify the expected
+        // packages are present; if not, drop the directory and rebuild.
+        if venv_path.exists() && self.venv_is_stale(&venv_path, resolved_deps).await {
+            warn!(
+                "Rebuilding venv {}: site-packages missing expected packages",
+                hash
+            );
+            fs::remove_dir_all(&venv_path)
+                .await
+                .context("Failed to remove stale virtual environment")?;
+        }
+
         if !venv_path.exists() {
             info!("Creating virtual environment for dependency set {}", hash);
             self.create_virtual_environment(&venv_path, resolved_deps)
@@ -114,6 +130,21 @@ impl VenvManager {
             .context("Failed to update virtual environment metadata")?;
 
         Ok(venv_path)
+    }
+
+    /// True when the venv's `site-packages` doesn't actually contain the
+    /// resolved packages it claims to. A venv with an empty resolved set is
+    /// never stale.
+    async fn venv_is_stale(&self, venv_path: &Path, resolved_deps: &ResolvedDependencySet) -> bool {
+        if resolved_deps.packages.is_empty() {
+            return false;
+        }
+        let site_packages =
+            self.get_python_site_packages_path(venv_path, &resolved_deps.python_version);
+        if fs::metadata(&site_packages).await.is_err() {
+            return true;
+        }
+        !any_package_present(&site_packages, resolved_deps).await
     }
 
     /// Create a new virtual environment
@@ -511,6 +542,61 @@ mod tests {
             found,
             "packaging-*.dist-info not found in {}",
             site_packages.display()
+        );
+    }
+
+    /// Ignored by default: simulates the exact state reported by a user after
+    /// upgrading from a buggy hpm — an empty `site-packages/` under a venv
+    /// whose metadata already claims the packages are installed.
+    /// `ensure_virtual_environment` must detect this and rebuild rather than
+    /// silently reusing it.
+    #[tokio::test]
+    #[ignore]
+    async fn test_ensure_heals_half_installed_venv() {
+        crate::initialize().await.expect("uv init failed");
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let manager = VenvManager::with_venvs_dir(tmp.path().to_path_buf());
+
+        let python = PythonVersion::new(3, 11, None);
+        let mut resolved = ResolvedDependencySet::new(python.clone());
+        resolved.add_package("packaging", "24.1");
+
+        // Pre-create the hashed venv dir, mimicking a pre-fix install:
+        // empty site-packages + metadata claiming everything landed.
+        let hash = resolved.hash();
+        let venv_path = tmp.path().join(&hash);
+        let site_packages = manager.get_python_site_packages_path(&venv_path, &python);
+        fs::create_dir_all(&site_packages).await.unwrap();
+        fs::write(site_packages.join("_virtualenv.pth"), b"")
+            .await
+            .unwrap();
+        let metadata = VenvMetadata::new(hash.clone(), resolved.clone(), venv_path.clone());
+        fs::write(
+            venv_path.join("metadata.json"),
+            serde_json::to_string_pretty(&metadata).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let result = manager
+            .ensure_virtual_environment(&resolved)
+            .await
+            .expect("ensure_virtual_environment should heal and rebuild");
+
+        let mut found = false;
+        let mut rd = std::fs::read_dir(manager.get_python_site_packages_path(&result, &python))
+            .expect("site-packages missing after heal");
+        while let Some(Ok(entry)) = rd.next() {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if name.starts_with("packaging-") && name.ends_with(".dist-info") {
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "stale venv was reused instead of rebuilt; packaging-*.dist-info missing"
         );
     }
 }
