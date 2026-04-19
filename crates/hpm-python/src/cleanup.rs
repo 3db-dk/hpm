@@ -17,6 +17,14 @@ impl PythonCleanupAnalyzer {
         }
     }
 
+    /// Construct an analyzer backed by an explicit `VenvManager`.
+    ///
+    /// Used by tests that point at a tempdir via `VenvManager::with_venvs_dir`
+    /// so they don't race with real state in `~/.hpm/venvs/`.
+    pub fn with_venv_manager(venv_manager: VenvManager) -> Self {
+        Self { venv_manager }
+    }
+
     /// Analyze orphaned virtual environments
     pub async fn analyze_orphaned_venvs(
         &self,

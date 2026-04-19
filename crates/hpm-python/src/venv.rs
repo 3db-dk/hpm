@@ -44,6 +44,14 @@ impl VenvManager {
         }
     }
 
+    /// Create a `VenvManager` rooted at an explicit venvs directory.
+    ///
+    /// Intended for tests and any caller that needs to isolate venv state from
+    /// the default `~/.hpm/venvs/` location.
+    pub fn with_venvs_dir(venvs_dir: PathBuf) -> Self {
+        Self { venvs_dir }
+    }
+
     /// Ensure a virtual environment exists for the given dependency set
     ///
     /// This is the primary method for obtaining a virtual environment. It:
