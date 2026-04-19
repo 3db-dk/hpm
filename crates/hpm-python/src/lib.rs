@@ -158,7 +158,6 @@
 pub mod bundled;
 pub mod cleanup;
 pub mod dependency;
-pub mod integration;
 pub mod resolver;
 pub mod types;
 pub mod update;
@@ -169,12 +168,6 @@ pub mod integration_tests;
 
 // Dependency collection
 pub use dependency::collect_python_dependencies;
-
-// Houdini integration
-pub use integration::{
-    extract_python_env_from_package_json, generate_houdini_package_json,
-    update_package_json_with_python,
-};
 
 // UV resolver
 pub use resolver::resolve_dependencies;
