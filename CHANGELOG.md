@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-19
+
 ### Breaking Changes
 - `hpm install` now errors out when `[houdini]` `min_version` is unparseable or
   outside the supported range (Houdini 19/20/21) instead of silently falling
