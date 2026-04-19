@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-04-19
+
+### Fixed
+- `VenvManager::ensure_virtual_environment` now self-heals venvs left
+  half-installed by earlier hpm versions. Previously, if a pre-0.7.1 run had
+  created a venv directory whose `metadata.json` claimed the packages were
+  installed but whose `site-packages/` was empty (the `--target` bug),
+  upgrading to 0.7.1 wasn't enough — `ensure_virtual_environment` trusted
+  the existing directory and skipped the install. It now checks that each
+  resolved package has a `dist-info` in `site-packages/` before reusing the
+  venv, and deletes + rebuilds when the check fails.
+
 ## [0.7.1] - 2026-04-19
 
 ### Fixed
