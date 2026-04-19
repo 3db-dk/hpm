@@ -414,7 +414,8 @@ impl ProjectManager {
             .await
             .map_err(|e| ProjectError::PythonResolution(format!("{:#}", e)))?;
 
-        let site_packages = venv_manager.get_python_site_packages_path(&venv_path);
+        let site_packages =
+            venv_manager.get_python_site_packages_path(&venv_path, &resolved.python_version);
         info!("Python venv site-packages: {}", site_packages.display());
         Ok(Some(site_packages))
     }

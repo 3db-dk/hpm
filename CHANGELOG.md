@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `hpm install` now actually installs Python dependencies into the shared
+  venv. The installer had been running `uv pip install --target
+  {venv}/lib/python/site-packages` — a path no real venv uses — so uv planted
+  files where the venv's own interpreter never looked, leaving
+  `~/.hpm/venvs/<hash>/Lib/site-packages` empty while metadata.json claimed
+  success. Installs now use `uv pip install --python {venv}/bin/python` (or
+  `Scripts/python.exe` on Windows) and verify a `dist-info` directory lands
+  for at least one resolved package before writing metadata.
+- `VenvManager::get_python_site_packages_path` returns the real per-version
+  Unix layout (`lib/pythonX.Y/site-packages`) instead of the fictional
+  `lib/python/site-packages`, so generated `PYTHONPATH` entries point at a
+  directory Python will actually import from. Callers pass the resolved
+  Python version through.
+
 ## [0.7.0] - 2026-04-19
 
 ### Breaking Changes

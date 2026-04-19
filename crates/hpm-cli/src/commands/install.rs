@@ -511,7 +511,10 @@ async fn install_python_dependencies(manifests: &[PackageManifest]) -> Result<Op
 
     info!("Python virtual environment ready: {}", venv_path.display());
 
-    Ok(Some(venv_manager.get_python_site_packages_path(&venv_path)))
+    Ok(Some(venv_manager.get_python_site_packages_path(
+        &venv_path,
+        &resolved_deps.python_version,
+    )))
 }
 
 /// Write a Houdini package.json per installed dependency into `.hpm/packages/`.

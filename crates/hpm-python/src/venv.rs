@@ -2,7 +2,7 @@
 
 use crate::bundled::run_uv_command;
 use crate::get_venvs_dir;
-use crate::types::{OrphanedVenv, ResolvedDependencySet, VenvMetadata};
+use crate::types::{OrphanedVenv, PythonVersion, ResolvedDependencySet, VenvMetadata};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -161,18 +161,40 @@ impl VenvManager {
             .await
             .context("Failed to create resolved requirements file")?;
 
-        // Install packages using UV
-        let venv_str = venv_path.to_str().unwrap();
+        // Install into the venv's own Python. `--target` would drop files at an
+        // arbitrary path that the venv interpreter doesn't import from — that
+        // left ~/.hpm/venvs/<hash>/Lib/site-packages empty on Windows even
+        // though metadata claimed the packages were installed.
+        let python_exe = venv_python_executable(venv_path);
+        let python_str = python_exe
+            .to_str()
+            .context("Venv Python path is not UTF-8")?;
         run_uv_command(&[
             "pip",
             "install",
             "-r",
             req_file.path().to_str().unwrap(),
-            "--target",
-            &format!("{}/lib/python/site-packages", venv_str),
+            "--python",
+            python_str,
         ])
         .await
-        .context("Failed to install packages")?;
+        .context("Failed to install packages into virtual environment")?;
+
+        // Confirm at least one requested package actually landed in the venv
+        // before we write metadata claiming success. This would have caught
+        // the `--target` regression loudly instead of silently.
+        let site_packages =
+            self.get_python_site_packages_path(venv_path, &resolved_deps.python_version);
+        if !resolved_deps.packages.is_empty() {
+            let populated = fs::metadata(&site_packages).await.is_ok()
+                && any_package_present(&site_packages, resolved_deps).await;
+            if !populated {
+                return Err(anyhow::anyhow!(
+                    "uv reported success but {} is missing the installed packages",
+                    site_packages.display()
+                ));
+            }
+        }
 
         debug!(
             "Installed {} packages in virtual environment",
@@ -334,17 +356,82 @@ impl VenvManager {
         Ok(())
     }
 
-    /// Get the Python site-packages path for a virtual environment
-    pub fn get_python_site_packages_path(&self, venv_path: &Path) -> PathBuf {
+    /// Get the Python site-packages path for a virtual environment.
+    ///
+    /// The Unix layout is `lib/pythonX.Y/site-packages` — the previous
+    /// hardcoded `lib/python/site-packages` didn't exist in any real venv,
+    /// so PYTHONPATH pointed at a directory Python never populated. The
+    /// caller supplies the Python version (already known from the resolved
+    /// dependency set) so we don't have to parse `pyvenv.cfg` here.
+    pub fn get_python_site_packages_path(
+        &self,
+        venv_path: &Path,
+        python_version: &PythonVersion,
+    ) -> PathBuf {
         #[cfg(target_os = "windows")]
         {
+            let _ = python_version; // Windows venvs share one Lib/site-packages
             venv_path.join("Lib").join("site-packages")
         }
         #[cfg(not(target_os = "windows"))]
         {
-            venv_path.join("lib").join("python").join("site-packages")
+            venv_path
+                .join("lib")
+                .join(format!(
+                    "python{}.{}",
+                    python_version.major, python_version.minor
+                ))
+                .join("site-packages")
         }
     }
+}
+
+/// Absolute path to the Python interpreter inside a venv created by `uv venv`.
+fn venv_python_executable(venv_path: &Path) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        venv_path.join("Scripts").join("python.exe")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        venv_path.join("bin").join("python")
+    }
+}
+
+/// Verify that at least one resolved package has a `dist-info` directory in
+/// `site_packages`. PEP 503 canonicalization means the dist-info directory
+/// name uses lowercase and underscores (e.g. `foo-bar` installs as
+/// `foo_bar-1.0.dist-info`), so we normalize both sides before comparing.
+async fn any_package_present(site_packages: &Path, resolved_deps: &ResolvedDependencySet) -> bool {
+    let Ok(mut entries) = fs::read_dir(site_packages).await else {
+        return false;
+    };
+    let mut dist_info_prefixes: Vec<String> = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if let Some(stem) = name.strip_suffix(".dist-info")
+            && let Some((pkg_name, _version)) = stem.rsplit_once('-')
+        {
+            dist_info_prefixes.push(normalize_pep503(pkg_name));
+        }
+    }
+    resolved_deps
+        .packages
+        .keys()
+        .any(|pkg| dist_info_prefixes.contains(&normalize_pep503(pkg)))
+}
+
+/// PEP 503 name normalization: lowercase, and collapse `-`/`_`/`.` to `_`.
+fn normalize_pep503(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c == '-' || c == '.' {
+            out.push('_');
+        } else {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    out
 }
 
 impl Default for VenvManager {
@@ -367,12 +454,63 @@ mod tests {
     async fn test_python_site_packages_path() {
         let manager = VenvManager::new();
         let venv_path = PathBuf::from("/test/venv");
-        let site_packages = manager.get_python_site_packages_path(&venv_path);
+        let python = PythonVersion::new(3, 11, None);
+        let site_packages = manager.get_python_site_packages_path(&venv_path, &python);
 
         #[cfg(target_os = "windows")]
         assert!(site_packages.ends_with("Lib/site-packages"));
 
         #[cfg(not(target_os = "windows"))]
-        assert!(site_packages.ends_with("lib/python/site-packages"));
+        assert!(
+            site_packages.ends_with("lib/python3.11/site-packages"),
+            "unexpected site-packages layout: {}",
+            site_packages.display()
+        );
+    }
+
+    /// Ignored by default: creates a real venv via the bundled uv and verifies
+    /// that installed packages land in `site-packages` (the Bug A regression
+    /// went unnoticed because no existing test actually invoked uv against a
+    /// venv). Run with `cargo test --package hpm-python -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn test_install_populates_real_site_packages() {
+        crate::initialize().await.expect("uv init failed");
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let manager = VenvManager::with_venvs_dir(tmp.path().to_path_buf());
+
+        let python = PythonVersion::new(3, 11, None);
+        let mut resolved = ResolvedDependencySet::new(python.clone());
+        // `packaging` is tiny and pure-Python; enough to prove uv installed
+        // into the venv rather than some phantom --target directory.
+        resolved.add_package("packaging", "24.1");
+
+        let venv_path = manager
+            .ensure_virtual_environment(&resolved)
+            .await
+            .expect("ensure_virtual_environment failed");
+
+        let site_packages = manager.get_python_site_packages_path(&venv_path, &python);
+        assert!(
+            site_packages.exists(),
+            "site-packages not created at {}",
+            site_packages.display()
+        );
+
+        let mut found = false;
+        let mut rd = std::fs::read_dir(&site_packages).unwrap();
+        while let Some(Ok(entry)) = rd.next() {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if name.starts_with("packaging-") && name.ends_with(".dist-info") {
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "packaging-*.dist-info not found in {}",
+            site_packages.display()
+        );
     }
 }

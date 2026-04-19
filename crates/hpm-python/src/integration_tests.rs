@@ -131,8 +131,12 @@ async fn test_end_to_end_python_workflow() {
     let venv_manager = venv::VenvManager::with_venvs_dir(venvs_tmp.path().to_path_buf());
     let venv_path = venvs_tmp.path().join(&venv_hash);
 
-    // Verify Python site packages path generation
-    let site_packages_path = venv_manager.get_python_site_packages_path(&venv_path);
+    // Verify Python site packages path generation. The Unix layout must
+    // match uv's real venv structure (`lib/pythonX.Y/site-packages`) — the
+    // previous `lib/python/site-packages` string was fictional and pointed
+    // PYTHONPATH at an empty directory.
+    let site_packages_path =
+        venv_manager.get_python_site_packages_path(&venv_path, &resolved_deps.python_version);
     #[cfg(target_os = "windows")]
     assert!(
         site_packages_path
@@ -141,9 +145,12 @@ async fn test_end_to_end_python_workflow() {
     );
     #[cfg(not(target_os = "windows"))]
     assert!(
-        site_packages_path
-            .to_string_lossy()
-            .contains("lib/python/site-packages")
+        site_packages_path.to_string_lossy().contains(&format!(
+            "lib/python{}.{}/site-packages",
+            resolved_deps.python_version.major, resolved_deps.python_version.minor
+        )),
+        "unexpected site-packages path: {}",
+        site_packages_path.display()
     );
 
     // Step 5: Test cleanup analyzer against the same isolated tempdir so any
