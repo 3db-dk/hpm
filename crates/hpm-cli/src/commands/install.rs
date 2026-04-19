@@ -3,7 +3,7 @@ use crate::progress::OperationProgress;
 use anyhow::{Context, Result};
 use futures::future::join_all;
 use hpm_core::{ArchiveFetcher, LockFile, LockedDependency, LockedPythonDependency, PackageSource};
-use hpm_package::PackageManifest;
+use hpm_package::{EnvMethod, HoudiniEnvValue, HoudiniPackage, PackageManifest};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
@@ -164,8 +164,10 @@ pub async fn install_dependencies(
         .map(|deps| deps.len())
         .sum();
 
-    // Install Python dependencies from all manifests (root + dependencies)
-    if total_python_deps > 0 {
+    // Install Python dependencies from all manifests (root + dependencies).
+    // Returns the venv's site-packages path (if any), which is then threaded into
+    // the generated Houdini manifests as a PYTHONPATH entry.
+    let venv_site_packages = if total_python_deps > 0 {
         progress.set_message(format!(
             "Installing {} Python dependencies from {} packages",
             total_python_deps,
@@ -176,12 +178,21 @@ pub async fn install_dependencies(
             total_python_deps,
             all_manifests.len()
         );
-        install_python_dependencies(&all_manifests, &hpm_dir)
+        install_python_dependencies(&all_manifests)
             .await
-            .context("Failed to install Python dependencies")?;
+            .context("Failed to install Python dependencies")?
     } else {
         info!("No Python dependencies specified in any package");
-    }
+        None
+    };
+
+    // Write per-package Houdini package.json files into .hpm/packages/{name}.json
+    // so Houdini can load each installed dep and so the shared venv's PYTHONPATH
+    // reaches packages that declare [python_dependencies].
+    progress.set_message("Generating Houdini package manifests");
+    write_houdini_manifests(&hpm_dir, &install_results, venv_site_packages.as_deref())
+        .await
+        .context("Failed to generate Houdini package manifests")?;
 
     // Generate or update lock file (skip in frozen lockfile mode)
     if frozen_lockfile {
@@ -459,26 +470,26 @@ fn load_package_manifest(package_path: &Path) -> Result<Option<PackageManifest>>
     Ok(Some(manifest))
 }
 
-/// Install Python dependencies using the hpm-python crate
+/// Install Python dependencies using the hpm-python crate.
 ///
-/// This function collects Python dependencies from the root manifest AND all
-/// installed HPM package dependencies, then resolves and installs them together.
-async fn install_python_dependencies(manifests: &[PackageManifest], _hpm_dir: &Path) -> Result<()> {
+/// Collects Python dependencies from the root manifest AND all installed HPM
+/// package dependencies, then resolves and installs them into a shared,
+/// content-addressable virtual environment. Returns the venv's site-packages
+/// path so the caller can wire it into Houdini package manifests.
+async fn install_python_dependencies(manifests: &[PackageManifest]) -> Result<Option<PathBuf>> {
     info!("Installing Python dependencies...");
 
-    // Initialize Python dependency management
     hpm_python::initialize()
         .await
         .context("Failed to initialize Python dependency management")?;
 
-    // Collect Python dependencies from all manifests (root + dependencies)
     let python_deps = hpm_python::collect_python_dependencies(manifests)
         .await
         .context("Failed to collect Python dependencies")?;
 
     if python_deps.dependencies.is_empty() {
         info!("No Python dependencies to process");
-        return Ok(());
+        return Ok(None);
     }
 
     info!(
@@ -486,14 +497,12 @@ async fn install_python_dependencies(manifests: &[PackageManifest], _hpm_dir: &P
         python_deps.dependencies.len()
     );
 
-    // Resolve dependencies to exact versions
     let resolved_deps = hpm_python::resolve_dependencies(&python_deps)
         .await
         .context("Failed to resolve Python dependencies")?;
 
     info!("Resolved {} Python packages", resolved_deps.packages.len());
 
-    // Ensure virtual environment exists
     let venv_manager = hpm_python::VenvManager::new();
     let venv_path = venv_manager
         .ensure_virtual_environment(&resolved_deps)
@@ -502,57 +511,150 @@ async fn install_python_dependencies(manifests: &[PackageManifest], _hpm_dir: &P
 
     info!("Python virtual environment ready: {}", venv_path.display());
 
-    // Generate Houdini integration files using the root manifest (first in the list)
-    if let Some(root_manifest) = manifests.first() {
-        generate_houdini_integration(root_manifest, &venv_path)
-            .await
-            .context("Failed to generate Houdini integration")?;
+    Ok(Some(venv_manager.get_python_site_packages_path(&venv_path)))
+}
+
+/// Write a Houdini package.json per installed dependency into `.hpm/packages/`.
+///
+/// Each file is picked up by Houdini when the project's `.hpm/packages` directory
+/// is on `HOUDINI_PACKAGE_PATH`. Absolute paths are used instead of
+/// `$HPM_PACKAGE_ROOT` so Houdini resolves them without additional env wiring.
+/// Packages that declare `[python_dependencies]` get the shared venv's
+/// `site-packages` prepended to `PYTHONPATH`.
+async fn write_houdini_manifests(
+    hpm_dir: &Path,
+    install_results: &HashMap<String, PackageInstallResult>,
+    venv_site_packages: Option<&Path>,
+) -> Result<()> {
+    let packages_json_dir = hpm_dir.join("packages");
+    tokio::fs::create_dir_all(&packages_json_dir)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to create Houdini package manifest directory: {}",
+                packages_json_dir.display()
+            )
+        })?;
+
+    for (name, result) in install_results {
+        let manifest = match load_package_manifest(&result.package_path)? {
+            Some(m) => m,
+            None => {
+                debug!("Skipping Houdini manifest for '{}' (no hpm.toml)", name);
+                continue;
+            }
+        };
+
+        let houdini_pkg =
+            build_houdini_package_for_install(&manifest, &result.package_path, venv_site_packages);
+
+        let manifest_path = packages_json_dir.join(format!("{}.json", name));
+        let file = std::fs::File::create(&manifest_path).with_context(|| {
+            format!(
+                "Failed to create Houdini manifest: {}",
+                manifest_path.display()
+            )
+        })?;
+        serde_json::to_writer_pretty(std::io::BufWriter::new(file), &houdini_pkg).with_context(
+            || {
+                format!(
+                    "Failed to serialize Houdini manifest: {}",
+                    manifest_path.display()
+                )
+            },
+        )?;
+        debug!("Wrote Houdini manifest: {}", manifest_path.display());
     }
 
     Ok(())
 }
 
-/// Generate Houdini package.json integration file
-async fn generate_houdini_integration(manifest: &PackageManifest, venv_path: &Path) -> Result<()> {
-    info!("Generating Houdini integration files");
+/// Build a `HoudiniPackage` for an installed dependency.
+///
+/// Mirrors the logic in `hpm_core::ProjectManager::create_houdini_package_with_python`
+/// but operates on the values the install command already has on hand. Any
+/// `$HPM_PACKAGE_ROOT` in user-declared env values is substituted with the
+/// package's absolute install path.
+fn build_houdini_package_for_install(
+    manifest: &PackageManifest,
+    package_path: &Path,
+    venv_site_packages: Option<&Path>,
+) -> HoudiniPackage {
+    let package_path_str = package_path.to_string_lossy().to_string();
 
-    // Create base Houdini package configuration
-    let mut houdini_pkg = manifest.generate_houdini_package();
+    let mut env: Vec<HashMap<String, HoudiniEnvValue>> = Vec::new();
 
-    // Add Python virtual environment to PYTHONPATH
-    if let Some(ref mut env) = houdini_pkg.env {
-        let python_site_packages = venv_path.join("lib").join("python").join("site-packages");
+    // Venv PYTHONPATH — only for packages that declare Python dependencies.
+    if let Some(site_packages) = venv_site_packages {
+        if manifest.python_dependencies.is_some() {
+            let mut map = HashMap::new();
+            map.insert(
+                "PYTHONPATH".to_string(),
+                HoudiniEnvValue::prepend(site_packages.to_string_lossy().to_string()),
+            );
+            env.push(map);
+        }
+    }
 
-        let mut python_env = std::collections::HashMap::new();
-        python_env.insert(
+    // Package's bundled python/ directory, if present.
+    let python_dir = package_path.join("python");
+    if python_dir.exists() {
+        let mut map = HashMap::new();
+        map.insert(
             "PYTHONPATH".to_string(),
-            hpm_package::HoudiniEnvValue::Simple(format!(
-                "{}:$PYTHONPATH",
-                python_site_packages.display()
-            )),
+            HoudiniEnvValue::prepend(python_dir.to_string_lossy().to_string()),
         );
-        env.push(python_env);
+        env.push(map);
     }
 
-    // Add HPM metadata
-    let mut hpm_metadata = std::collections::HashMap::new();
-    hpm_metadata.insert(
-        "HPM_PACKAGE_NAME".to_string(),
-        hpm_package::HoudiniEnvValue::Simple(manifest.package.name.clone()),
-    );
-    hpm_metadata.insert(
-        "HPM_PACKAGE_VERSION".to_string(),
-        hpm_package::HoudiniEnvValue::Simple(manifest.package.version.clone()),
-    );
-
-    if let Some(ref mut env) = houdini_pkg.env {
-        env.push(hpm_metadata);
-    } else {
-        houdini_pkg.env = Some(vec![hpm_metadata]);
+    // Package's bundled scripts/ directory, if present.
+    let scripts_dir = package_path.join("scripts");
+    if scripts_dir.exists() {
+        let mut map = HashMap::new();
+        map.insert(
+            "HOUDINI_SCRIPT_PATH".to_string(),
+            HoudiniEnvValue::prepend(scripts_dir.to_string_lossy().to_string()),
+        );
+        env.push(map);
     }
 
-    info!("Houdini integration configuration generated");
-    Ok(())
+    // User-declared [env] entries from the package's hpm.toml.
+    if let Some(user_env) = &manifest.env {
+        for (key, entry) in user_env {
+            let value = entry.value.replace("$HPM_PACKAGE_ROOT", &package_path_str);
+            let houdini_value = match entry.method {
+                EnvMethod::Set => HoudiniEnvValue::set(value),
+                EnvMethod::Prepend => HoudiniEnvValue::prepend(value),
+                EnvMethod::Append => HoudiniEnvValue::append(value),
+            };
+            let mut map = HashMap::new();
+            map.insert(key.clone(), houdini_value);
+            env.push(map);
+        }
+    }
+
+    let enable = manifest.houdini.as_ref().and_then(|cfg| {
+        let mut conditions = Vec::new();
+        if let Some(min_version) = &cfg.min_version {
+            conditions.push(format!("houdini_version >= '{}'", min_version));
+        }
+        if let Some(max_version) = &cfg.max_version {
+            conditions.push(format!("houdini_version <= '{}'", max_version));
+        }
+        if conditions.is_empty() {
+            None
+        } else {
+            Some(conditions.join(" and "))
+        }
+    });
+
+    HoudiniPackage {
+        hpath: Some(vec![package_path_str]),
+        env: if env.is_empty() { None } else { Some(env) },
+        enable,
+        requires: None,
+        recommends: None,
+    }
 }
 
 /// Generate or update the hpm.lock file

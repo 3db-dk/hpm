@@ -115,27 +115,36 @@ fn convert_spec_to_dependency(name: &str, spec: &PythonDependencySpec) -> Result
     }
 }
 
-/// Map Houdini version to appropriate Python version
+/// Map Houdini version to appropriate Python version.
+///
+/// Accepts both `"21"` and `"21.0"` — bare majors are treated as `major.0`, so
+/// Houdini 21 → Python 3.11 matches the documented mapping. Unparseable input
+/// or versions outside the supported range return an error; silent fallbacks
+/// hide bugs (e.g. installing a Python 3.9 venv for Houdini 21).
 fn map_houdini_to_python_version(houdini_version: &str) -> Result<PythonVersion> {
-    // Parse Houdini version (e.g., "19.5", "20.0", "20.5")
-    let version_parts: Vec<&str> = houdini_version.split('.').collect();
-    if version_parts.len() < 2 {
-        return Ok(PythonVersion::new(3, 9, None)); // Default fallback
+    let mut parts = houdini_version.split('.');
+    let major: u32 = parts
+        .next()
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Could not parse Houdini version '{}': expected a numeric major version (e.g. '21' or '20.5')",
+                houdini_version
+            )
+        })?;
+    let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+
+    match (major, minor) {
+        (19, _) => Ok(PythonVersion::new(3, 7, None)),
+        (20, 0..=4) => Ok(PythonVersion::new(3, 9, None)),
+        (20, _) => Ok(PythonVersion::new(3, 10, None)),
+        (21, _) => Ok(PythonVersion::new(3, 11, None)),
+        _ => Err(anyhow::anyhow!(
+            "No Python version mapping for Houdini {}; supported majors are 19, 20, 21. \
+             Update map_houdini_to_python_version in hpm-python if you need a newer version.",
+            houdini_version
+        )),
     }
-
-    let major: u32 = version_parts[0].parse().unwrap_or(19);
-    let minor: u32 = version_parts[1].parse().unwrap_or(5);
-
-    // Map Houdini versions to Python versions based on typical distributions
-    let python_version = match (major, minor) {
-        (19, 0..=5) => PythonVersion::new(3, 7, None),
-        (20, 0) => PythonVersion::new(3, 9, None),
-        (20, 5) => PythonVersion::new(3, 10, None),
-        (21, _) => PythonVersion::new(3, 11, None),
-        _ => PythonVersion::new(3, 9, None), // Default
-    };
-
-    Ok(python_version)
 }
 
 #[cfg(test)]
@@ -224,6 +233,23 @@ mod tests {
         );
         assert_eq!(
             map_houdini_to_python_version("21.0").unwrap(),
+            PythonVersion::new(3, 11, None)
+        );
+    }
+
+    #[test]
+    fn test_houdini_to_python_version_bare_major() {
+        // Bare major versions (no minor) must resolve the same as "X.0".
+        assert_eq!(
+            map_houdini_to_python_version("19").unwrap(),
+            PythonVersion::new(3, 7, None)
+        );
+        assert_eq!(
+            map_houdini_to_python_version("20").unwrap(),
+            PythonVersion::new(3, 9, None)
+        );
+        assert_eq!(
+            map_houdini_to_python_version("21").unwrap(),
             PythonVersion::new(3, 11, None)
         );
     }

@@ -125,9 +125,11 @@ async fn test_end_to_end_python_workflow() {
     let venv_hash = resolved_deps.hash();
     assert_eq!(venv_hash.len(), 16); // SHA-256 truncated to 16 chars
 
-    // Step 4: Test VenvManager operations
-    let venv_manager = venv::VenvManager::new();
-    let venv_path = get_venvs_dir().join(&venv_hash);
+    // Step 4: Test VenvManager operations against an isolated tempdir so the
+    // test doesn't read the developer's real `~/.hpm/venvs/` contents.
+    let venvs_tmp = tempfile::TempDir::new().expect("Failed to create tempdir");
+    let venv_manager = venv::VenvManager::with_venvs_dir(venvs_tmp.path().to_path_buf());
+    let venv_path = venvs_tmp.path().join(&venv_hash);
 
     // Verify Python site packages path generation
     let site_packages_path = venv_manager.get_python_site_packages_path(&venv_path);
@@ -144,24 +146,11 @@ async fn test_end_to_end_python_workflow() {
             .contains("lib/python/site-packages")
     );
 
-    // Step 5: Test Houdini package.json generation
-    let package_json_with_python =
-        integration::generate_houdini_package_json("test-package", Some(&venv_path))
-            .expect("Failed to generate package.json");
-
-    // Verify package.json contains PYTHONPATH
-    assert_eq!(package_json_with_python["path"], "$HPM_PACKAGE_ROOT");
-    assert_eq!(package_json_with_python["hpm_managed"], true);
-    assert_eq!(package_json_with_python["hpm_package"], "test-package");
-
-    let env_array = package_json_with_python["env"].as_array().unwrap();
-    assert_eq!(env_array.len(), 1);
-    let pythonpath = env_array[0]["PYTHONPATH"].as_str().unwrap();
-    assert!(pythonpath.contains("site-packages"));
-    assert!(pythonpath.ends_with("$PYTHONPATH") || pythonpath.ends_with("%PYTHONPATH%"));
-
-    // Step 6: Test cleanup analyzer
-    let cleanup_analyzer = cleanup::PythonCleanupAnalyzer::new();
+    // Step 5: Test cleanup analyzer against the same isolated tempdir so any
+    // real venvs on the developer's machine don't leak into the assertions.
+    let cleanup_analyzer = cleanup::PythonCleanupAnalyzer::with_venv_manager(
+        venv::VenvManager::with_venvs_dir(venvs_tmp.path().to_path_buf()),
+    );
     let venv_stats = cleanup_analyzer
         .get_venv_stats()
         .await
@@ -264,12 +253,13 @@ async fn test_virtual_environment_sharing() {
 
 #[tokio::test]
 async fn test_houdini_python_version_mapping_edge_cases() {
-    // Test edge cases in Houdini -> Python version mapping through dependency collection
+    // Unparseable or unmapped Houdini versions must hard-fail rather than
+    // silently install a wrong Python version into the venv (the original
+    // tumblepipe/Houdini-21 bug was masked by a silent 3.9 fallback).
     use hpm_package::{HoudiniConfig, PackageInfo};
     use indexmap::IndexMap;
 
-    // Test with invalid Houdini version - should fall back to default Python version
-    let manifest = PackageManifest {
+    let make_manifest = |version: &str| PackageManifest {
         package: PackageInfo {
             path: "studio/test-package".to_string(),
             name: "Test Package".to_string(),
@@ -285,7 +275,7 @@ async fn test_houdini_python_version_mapping_edge_cases() {
             categories: None,
         },
         houdini: Some(HoudiniConfig {
-            min_version: Some("invalid".to_string()),
+            min_version: Some(version.to_string()),
             max_version: None,
         }),
         native: None,
@@ -296,22 +286,35 @@ async fn test_houdini_python_version_mapping_edge_cases() {
         scripts: None,
     };
 
-    let manifests = vec![manifest];
-    let collected_deps = dependency::collect_python_dependencies(&manifests)
+    // Garbage input → error.
+    let err = dependency::collect_python_dependencies(&[make_manifest("invalid")])
         .await
-        .expect("Failed to collect Python dependencies");
+        .expect_err("expected error for unparseable Houdini version");
+    assert!(
+        err.to_string().contains("Could not parse Houdini version"),
+        "unexpected error message: {err}"
+    );
 
-    // Should fall back to default Python version
-    assert!(collected_deps.python_version.is_some());
-    let py_version = collected_deps.python_version.unwrap();
-    assert_eq!(py_version.major, 3);
-    assert_eq!(py_version.minor, 9); // Default fallback
+    // Known-but-unmapped future major → error (so we don't silently pick an
+    // outdated Python ABI when a new Houdini ships).
+    let err = dependency::collect_python_dependencies(&[make_manifest("22.0")])
+        .await
+        .expect_err("expected error for unmapped Houdini major");
+    assert!(
+        err.to_string().contains("No Python version mapping"),
+        "unexpected error message: {err}"
+    );
 }
 
 #[tokio::test]
 async fn test_cleanup_system_comprehensive() {
-    // Test the cleanup system's ability to track virtual environments
-    let cleanup_analyzer = cleanup::PythonCleanupAnalyzer::new();
+    // Test the cleanup system's ability to track virtual environments.
+    // Route the analyzer at an empty tempdir so we don't inspect (or delete
+    // from) the developer's real `~/.hpm/venvs/`.
+    let venvs_tmp = tempfile::TempDir::new().expect("Failed to create tempdir");
+    let cleanup_analyzer = cleanup::PythonCleanupAnalyzer::with_venv_manager(
+        venv::VenvManager::with_venvs_dir(venvs_tmp.path().to_path_buf()),
+    );
 
     // Test with no active packages (should find no orphans since no venvs exist)
     let active_packages = vec![];
