@@ -376,7 +376,7 @@ impl ProjectManager {
         // Initialize UV binary (downloads on first use)
         hpm_python::initialize()
             .await
-            .map_err(|e| ProjectError::PythonResolution(e.to_string()))?;
+            .map_err(|e| ProjectError::PythonResolution(format!("{:#}", e)))?;
 
         // Collect python dependencies from all package manifests
         let manifests: Vec<PackageManifest> = installed_packages
@@ -385,7 +385,7 @@ impl ProjectManager {
             .collect();
         let collected = collect_python_dependencies(&manifests)
             .await
-            .map_err(|e| ProjectError::PythonResolution(e.to_string()))?;
+            .map_err(|e| ProjectError::PythonResolution(format!("{:#}", e)))?;
 
         if collected.dependencies.is_empty() {
             return Ok(None);
@@ -399,7 +399,7 @@ impl ProjectManager {
         // Resolve to exact versions via UV pip compile
         let resolved = resolve_dependencies(&collected)
             .await
-            .map_err(|e| ProjectError::PythonResolution(e.to_string()))?;
+            .map_err(|e| ProjectError::PythonResolution(format!("{:#}", e)))?;
 
         info!(
             "Resolved {} Python packages (hash: {})",
@@ -412,7 +412,7 @@ impl ProjectManager {
         let venv_path = venv_manager
             .ensure_virtual_environment(&resolved)
             .await
-            .map_err(|e| ProjectError::PythonResolution(e.to_string()))?;
+            .map_err(|e| ProjectError::PythonResolution(format!("{:#}", e)))?;
 
         let site_packages = venv_manager.get_python_site_packages_path(&venv_path);
         info!("Python venv site-packages: {}", site_packages.display());
