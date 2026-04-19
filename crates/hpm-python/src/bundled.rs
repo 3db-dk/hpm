@@ -325,14 +325,22 @@ pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output> {
 
     debug!("Running UV command: {:?} {:?}", uv_path, args);
 
-    let output = tokio::process::Command::new(uv_path)
-        .args(args)
+    let mut cmd = tokio::process::Command::new(uv_path);
+    cmd.args(args)
         .env("UV_CACHE_DIR", get_hpm_dir().join("uv-cache"))
         .env("UV_CONFIG_FILE", get_hpm_dir().join("uv-config/uv.toml"))
         .env("UV_NO_SYNC", "1")
-        .env("UV_SYSTEM_PYTHON", "0")
-        .output()
-        .await?;
+        .env("UV_SYSTEM_PYTHON", "0");
+
+    // Suppress the brief console window flash that UV (a CLI tool) would
+    // otherwise show when spawned from a GUI parent on Windows.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+
+    let output = cmd.output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

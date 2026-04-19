@@ -140,13 +140,17 @@ impl GitRegistry {
             if cache_dir.join(".git").exists() {
                 // Pull latest
                 info!("Updating registry index '{}'...", display_name);
-                let output = std::process::Command::new("git")
-                    .args(["pull", "--ff-only", "-q"])
-                    .current_dir(&cache_dir)
-                    .output()
-                    .map_err(|e| {
-                        RegistryError::GitError(format!("Failed to run git pull: {}", e))
-                    })?;
+                let mut cmd = std::process::Command::new("git");
+                cmd.args(["pull", "--ff-only", "-q"])
+                    .current_dir(&cache_dir);
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+                }
+                let output = cmd.output().map_err(|e| {
+                    RegistryError::GitError(format!("Failed to run git pull: {}", e))
+                })?;
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -162,13 +166,17 @@ impl GitRegistry {
                 if let Some(parent) = cache_dir.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                let output = std::process::Command::new("git")
-                    .args(["clone", "--depth=1", "-q", &remote_url])
-                    .arg(&cache_dir)
-                    .output()
-                    .map_err(|e| {
-                        RegistryError::GitError(format!("Failed to run git clone: {}", e))
-                    })?;
+                let mut cmd = std::process::Command::new("git");
+                cmd.args(["clone", "--depth=1", "-q", &remote_url])
+                    .arg(&cache_dir);
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+                }
+                let output = cmd.output().map_err(|e| {
+                    RegistryError::GitError(format!("Failed to run git clone: {}", e))
+                })?;
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
