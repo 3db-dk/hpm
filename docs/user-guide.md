@@ -1022,20 +1022,26 @@ Package C: numpy==1.25.0, requests==2.28.0 → venv: f6e5d4c3b2a1 (different)
 
 ### Generated Houdini Integration
 
-HPM automatically generates `package.json` files with Python environment integration:
+HPM automatically generates `package.json` files with Python environment integration.
+Per-package manifests are written to `<project>/.hpm/packages/{name}.json`:
 
 ```json
 {
-  "path": "$HPM_PACKAGE_ROOT",
+  "hpath": ["/Users/user/.hpm/packages/geometry-tools@1.0.0"],
   "env": [
     {
-      "PYTHONPATH": "/Users/user/.hpm/venvs/a1b2c3d4e5f6/lib/python/site-packages:$PYTHONPATH"
+      "PYTHONPATH": {
+        "method": "prepend",
+        "value": "/Users/user/.hpm/venvs/a1b2c3d4e5f6/lib/python3.11/site-packages"
+      }
     }
   ],
-  "hpm_managed": true,
-  "hpm_package": "geometry-tools"
+  "enable": "houdini_version >= '21'"
 }
 ```
+
+`method: prepend` lets Houdini pick the platform path separator, so the same
+manifest works on Windows (`;`) and Unix (`:`).
 
 ### Python Environment Cleanup
 
@@ -1140,7 +1146,8 @@ HPM manages a global storage system for efficient package sharing:
 ├── venvs/                         # Python virtual environments
 │   ├── a1b2c3d4e5f6/             # Content-addressable environments
 │   │   ├── metadata.json         # Environment metadata
-│   │   └── lib/python/site-packages/
+│   │   ├── pyvenv.cfg
+│   │   └── lib/python3.11/site-packages/   # Lib\site-packages on Windows
 │   └── f6e5d4c3b2a1/
 ├── cache/                         # Download cache and metadata
 ├── uv-cache/                      # Isolated UV package cache
@@ -1164,18 +1171,23 @@ HPM manages a global storage system for efficient package sharing:
 HPM automatically generates and manages these files:
 
 #### package.json (Houdini Integration)
+
+Per-package manifest written to `<project>/.hpm/packages/{name}.json` at install
+time. `hpath` is an absolute path to the extracted package; the PYTHONPATH
+entry appears only when the package declares `[python_dependencies]`.
+
 ```json
 {
-  "path": "$HPM_PACKAGE_ROOT",
-  "load_package_once": true,
+  "hpath": ["/Users/user/.hpm/packages/my-package@1.0.0"],
   "env": [
     {
-      "PYTHONPATH": "/Users/user/.hpm/venvs/a1b2c3d4e5f6/lib/python/site-packages:$PYTHONPATH"
+      "PYTHONPATH": {
+        "method": "prepend",
+        "value": "/Users/user/.hpm/venvs/a1b2c3d4e5f6/lib/python3.11/site-packages"
+      }
     }
   ],
-  "hpm_managed": true,
-  "hpm_package": "my-package",
-  "hpm_version": "1.0.0"
+  "enable": "houdini_version >= '21'"
 }
 ```
 

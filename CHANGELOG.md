@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory Python will actually import from. Callers pass the resolved
   Python version through.
 
+### Changed
+- Updated `docs/user-guide.md` and `docs/architecture.md` to match the
+  current Houdini manifest shape (`hpath` + `HoudiniEnvValue` prepend) and
+  the real venv layout. The old examples showed `hpm_managed`/`hpm_package`
+  fields and a `generate_houdini_manifest` function that were removed in
+  0.7.0.
+
 ## [0.7.0] - 2026-04-19
 
 ### Breaking Changes

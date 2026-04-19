@@ -353,7 +353,7 @@ HPM implements a content-addressable global storage system that optimizes for di
 ├── venvs/                                # Python virtual environments
 │   ├── a1b2c3d4e5f6/                    # Content-addressable venv
 │   │   ├── metadata.json                # Environment metadata
-│   │   ├── lib/python3.x/site-packages/
+│   │   ├── lib/pythonX.Y/site-packages/    # Lib\site-packages on Windows
 │   │   └── pyvenv.cfg
 │   └── f6e5d4c3b2a1/
 ├── cache/                                # Download cache
@@ -491,34 +491,32 @@ impl VenvManager {
 
 ### Houdini Integration
 
-Generated `package.json` files provide seamless Houdini integration:
+At install time, HPM writes one Houdini `package.json` per dependency into
+`<project>/.hpm/packages/{name}.json`. `hpath` is the absolute path to the
+extracted package (in global storage), and `PYTHONPATH` is prepended with the
+shared venv's `site-packages` for packages that declare
+`[python_dependencies]`:
 
-```rust
-pub fn generate_houdini_manifest(
-    package_name: &str,
-    package_path: &Path,
-    python_venv: Option<&Path>
-) -> Result<HoudiniManifest> {
-    let mut manifest = HoudiniManifest {
-        path: "$HPM_PACKAGE_ROOT".to_string(),
-        load_package_once: Some(true),
-        env: Vec::new(),
-        hpm_managed: Some(true),
-        hpm_package: Some(package_name.to_string()),
-    };
-
-    // Add Python virtual environment to PYTHONPATH
-    if let Some(venv_path) = python_venv {
-        let site_packages = venv_path.join("lib/pythonX.X/site-packages");
-        manifest.env.push(EnvVar {
-            key: "PYTHONPATH".to_string(),
-            value: format!("{}:$PYTHONPATH", site_packages.display()),
-        });
+```json
+{
+  "hpath": ["/Users/user/.hpm/packages/my-package@1.0.0"],
+  "env": [
+    {
+      "PYTHONPATH": {
+        "method": "prepend",
+        "value": "/Users/user/.hpm/venvs/a1b2c3d4/lib/python3.11/site-packages"
+      }
     }
-
-    Ok(manifest)
+  ],
+  "enable": "houdini_version >= '21'"
 }
 ```
+
+Using `method: "prepend"` delegates path-separator handling to Houdini, so the
+same manifest works on Windows (`;`) and Unix (`:`) without embedding an
+OS-specific joiner. Point `HOUDINI_PACKAGE_PATH` at `<project>/.hpm/packages`
+so Houdini picks up these manifests on launch. The generator lives in
+`hpm-cli::commands::install::build_houdini_package_for_install`.
 
 ---
 
