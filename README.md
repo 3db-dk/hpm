@@ -1,9 +1,12 @@
-# HPM
+# HPM — Houdini Package Manager
 
-A package manager for [SideFX Houdini](https://www.sidefx.com/products/houdini/), written in Rust.
+A modern package manager for [SideFX Houdini](https://www.sidefx.com/products/houdini/), written in Rust.
 
-HPM manages Houdini packages and their Python dependencies with reproducible installs,
-a lock file, and isolated virtual environments.
+HPM manages Houdini packages and their Python dependencies. It produces
+reproducible installs with a lock file and checksum verification, shares
+Python virtual environments across packages with identical resolved
+dependencies, and generates the Houdini `package.json` files needed for
+Houdini to pick the packages up on launch.
 
 ## Install
 
@@ -24,18 +27,22 @@ cargo build --release
 # Create a new package
 hpm init my-tools
 
-# Add a dependency from a registry
-hpm add geometry-tools@1.0.0
+# Add a registry (one-time, per user)
+hpm registry add https://api.3db.dk/v1/registry --name houdinihub
 
-# Add a local path dependency
+# Add dependencies
+hpm add some-creator/geometry-tools@1.0.0
 hpm add local-tools --path ../local-tools
 
 # Install everything (HPM packages + Python deps)
 hpm install
 
-# See what you have
+# List what you have
 hpm list --tree
 ```
+
+Then point Houdini at the generated manifests by adding
+`<project>/.hpm/packages` to `HOUDINI_PACKAGE_PATH`.
 
 ## Package manifest
 
@@ -43,19 +50,21 @@ Packages are defined in `hpm.toml`:
 
 ```toml
 [package]
-path = "my-studio/my-tools"
-name = "My Tools"
+path = "my-studio/my-tools"       # scoped creator/slug identifier
+name = "My Tools"                 # display name
 version = "1.0.0"
 description = "Custom Houdini tools"
 authors = ["Name <name@example.com>"]
 license = "MIT"
 
 [houdini]
-min_version = "20.0"
+min_version = "20.5"              # maps to Python 3.10
+max_version = "21.0"              # optional upper bound
 
 [dependencies]
 "my-studio/utility-nodes" = "1.0.0"
-material-lib = { path = "../material-lib", optional = true }
+"my-studio/material-lib" = { version = "2.0.0", optional = true }
+local-tools = { path = "../local-tools" }
 
 [python_dependencies]
 numpy = ">=1.20.0"
@@ -79,43 +88,56 @@ files = ["lib/macos-universal/*"]
 files = ["lib/windows-x86_64/*"]
 ```
 
+See the [user guide](docs/user-guide.md) for the full manifest reference.
+
 ## Commands
 
 | Command | Description |
 |---------|-------------|
 | `hpm init [name]` | Create a new package (`--bare` for manifest only) |
-| `hpm add <pkg>` | Add a dependency (`name@version`, `--path`, `--optional`) |
+| `hpm add <pkg>...` | Add dependencies (`name@version`, `--path`, `--optional`) |
 | `hpm remove <pkg>` | Remove a dependency |
 | `hpm install` | Install all dependencies (`--frozen-lockfile` for CI) |
 | `hpm update [pkg...]` | Update dependencies (`--dry-run` to preview) |
 | `hpm list` | Show dependencies (`--tree` for tree view) |
-| `hpm check` | Validate package configuration |
-| `hpm search <query>` | Search registries for packages |
-| `hpm pack` | Create a signed archive (`--key` for signing, `--platform` for native packages) |
-| `hpm clean` | Remove orphaned packages and venvs (`--dry-run`, `--python-only`) |
-| `hpm audit` | Security audit on dependencies |
+| `hpm check` | Validate manifest and package structure |
+| `hpm search <query>` | Search configured registries |
+| `hpm pack` | Build a distributable archive (`--key` to sign, `--platform` for native) |
+| `hpm clean` | Remove orphaned packages and venvs (`--dry-run`, `--python-only`, `--comprehensive`) |
+| `hpm audit` | Security checks on the current project |
 | `hpm registry <sub>` | Manage registries (`add`, `list`, `remove`, `update`) |
-| `hpm completions <shell>` | Generate shell completions (bash, zsh, fish, powershell) |
+| `hpm completions <shell>` | Generate shell completions |
 
-All commands accept `-v` for verbose output and `--output json` for machine-readable output.
+Every command accepts `-v` for verbose output, `-q` for quiet,
+`-C <dir>` to change working directory, and
+`--output {human,json,json-lines,json-compact}` for machine-readable output.
 
 ## Python dependencies
 
-Python dependencies declared in `[python_dependencies]` are resolved using a bundled
-copy of [uv](https://github.com/astral-sh/uv) and installed into content-addressable
-virtual environments under `~/.hpm/venvs/`. Packages with identical resolved Python
-dependencies share the same venv.
+Python dependencies declared in `[python_dependencies]` are resolved with a
+bundled copy of [uv](https://github.com/astral-sh/uv) and installed into
+content-addressable virtual environments under `~/.hpm/venvs/`. Packages
+whose resolved Python dependencies hash to the same set share a single venv.
 
-HPM automatically maps Houdini versions to the correct Python version (e.g. Houdini 20.0
-uses Python 3.9, 20.5 uses 3.10) and injects the venv into Houdini's `PYTHONPATH` via
-the generated `package.json`.
+HPM picks the Python version from `[houdini].min_version`:
+
+| Houdini    | Python |
+|-----------:|--------|
+| 19.x       | 3.7    |
+| 20.0–20.4  | 3.9    |
+| 20.5+      | 3.10   |
+| 21.x       | 3.11   |
+
+Houdini versions outside this table produce an install-time error rather than
+a silent fallback (this caught a real Houdini-21 ABI bug in 0.7.0). See the
+[Python guide](docs/python-guide.md).
 
 ## How it works
 
-- **Resolution** — Uses the [PubGrub](https://github.com/dart-lang/pub/blob/master/doc/solver.md) algorithm (same as uv, Dart, Swift PM) with conflict learning and backtracking.
-- **Lock file** — `hpm.lock` pins exact versions and checksums for reproducible installs.
-- **Storage** — Packages live in `~/.hpm/packages/`, Python venvs in `~/.hpm/venvs/`.
-- **Houdini integration** — Generates Houdini `package.json` files with search paths and environment variables.
+- **Resolution** — PubGrub-style solver with conflict learning and backtracking.
+- **Lock file** — `hpm.lock` pins exact versions, sources, and SHA-256 checksums.
+- **Storage** — `~/.hpm/packages/` for packages, `~/.hpm/venvs/` for Python environments (same layout on Linux, macOS, Windows).
+- **Houdini integration** — `hpm install` writes one `{name}.json` per dependency into `<project>/.hpm/packages/`. Point Houdini's `HOUDINI_PACKAGE_PATH` at that directory.
 
 ## Project structure
 
@@ -123,10 +145,10 @@ the generated `package.json`.
 crates/
   hpm-cli/       CLI frontend (clap)
   hpm-core/      Storage, installation, lock files, project discovery
-  hpm-config/    Global configuration (~/.hpm/config.toml)
+  hpm-config/    Configuration loading and schema
   hpm-resolver/  PubGrub dependency resolver
-  hpm-package/   Package manifest parsing, Houdini package.json generation
-  hpm-python/    Python venv management (uv integration)
+  hpm-package/   Manifest parsing, Houdini package.json generation
+  hpm-python/    Python venv management (bundled uv)
   hpm-error/     Shared error types
 ```
 
@@ -139,11 +161,13 @@ cargo clippy --all-targets -- -D warnings      # lint
 cargo fmt --check                              # format check
 ```
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup details and the contribution
+workflow.
+
 ## Documentation
 
-Full documentation is available in the [docs/](docs/) directory, or online at [hpm.readthedocs.io](https://hpm.readthedocs.io/).
-
-To build locally with [mdBook](https://rust-lang.github.io/mdBook/):
+The full documentation lives in [docs/](docs/) and is published at
+[hpm.readthedocs.io](https://hpm.readthedocs.io/). To build it locally:
 
 ```sh
 mdbook serve
@@ -151,4 +175,4 @@ mdbook serve
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

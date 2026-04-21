@@ -1,19 +1,24 @@
 # HPM Documentation
 
-Welcome to the documentation for HPM (Houdini Package Manager) - a Rust-based package management system for SideFX Houdini.
+HPM (Houdini Package Manager) is a Rust-based package manager for SideFX
+Houdini. It manages both Houdini packages and their Python dependencies,
+produces reproducible installs with a lock file and SHA-256 checksums, and
+generates the `package.json` files Houdini needs to load packages at launch.
 
-## User Documentation (published on ReadTheDocs)
+## User documentation
 
-- **[User Guide](user-guide.md)** - Installation, commands, configuration, and troubleshooting
-- **[Python Guide](python-guide.md)** - Managing Python dependencies in Houdini packages
-- **[Security Guide](security.md)** - Security features, best practices, and threat model
+Published to [hpm.readthedocs.io](https://hpm.readthedocs.io/):
 
-## Developer Documentation (in-repo)
+- **[User guide](user-guide.md)** — install, commands, the `hpm.toml` manifest, global configuration, troubleshooting.
+- **[Python dependencies](python-guide.md)** — `[python_dependencies]`, Houdini-to-Python version mapping, venv sharing, cleanup.
+- **[Registries](registries.md)** — configuring API and Git registries, per-user vs per-project, search and caching.
+- **[Security](security.md)** — checksums, package signing, `hpm audit`, threat model.
 
-These docs are for contributors and are not published to ReadTheDocs:
+## Contributor documentation
 
-- **[Architecture](architecture.md)** - System design, algorithms, and implementation details
-- **[API Overview](api-overview.md)** - Crate structure and key types (full API via `cargo doc`)
-- **[Testing Guide](testing.md)** - Testing strategy including property-based testing
+In-repo, not published:
 
-See also: **[CONTRIBUTING.md](../CONTRIBUTING.md)** for development setup and contribution guidelines.
+- **[Architecture](architecture.md)** — system design, dependency resolution, cleanup, Python integration.
+- **[API overview](api-overview.md)** — crate structure and key public types. Full rustdoc via `cargo doc`.
+- **[Testing guide](testing.md)** — property-based testing strategy.
+- **[CONTRIBUTING.md](../CONTRIBUTING.md)** — development setup, workflow, pull request guidelines.

@@ -1,912 +1,533 @@
-# HPM User Guide
+# User Guide
 
-HPM (Houdini Package Manager) is a modern, Rust-based package management system for SideFX Houdini that provides industry-standard dependency management capabilities equivalent to npm for Node.js, uv for Python, or cargo for Rust.
+HPM is a Rust-based package manager for SideFX Houdini. It manages both HPM
+packages (Houdini tools, HDAs, scripts, shelf tools, toolbars, etc.) and the
+Python dependencies those packages need, and it produces the Houdini
+`package.json` files that let Houdini find them at launch.
 
-## Table of Contents
+This guide covers installation, the command surface, the `hpm.toml` manifest,
+global configuration, and troubleshooting.
 
-1. [Installation](#installation)
-2. [Getting Started](#getting-started)
-3. [Package Management](#package-management)
-4. [Command Reference](#command-reference)
-5. [Configuration](#configuration)
-6. [Python Dependencies](#python-dependencies)
-7. [Package Structure](#package-structure)
-8. [Troubleshooting](#troubleshooting)
-9. [Advanced Usage](#advanced-usage)
+## Table of contents
 
-## Installation
+1. [Install](#install)
+2. [First package](#first-package)
+3. [Registries](#registries)
+4. [Command reference](#command-reference)
+5. [The `hpm.toml` manifest](#the-hpmtoml-manifest)
+6. [Global configuration](#global-configuration)
+7. [Storage layout](#storage-layout)
+8. [Houdini integration](#houdini-integration)
+9. [Output formats and automation](#output-formats-and-automation)
+10. [Troubleshooting](#troubleshooting)
+
+## Install
 
 ### Prerequisites
 
-- **Rust 1.85 or later** - Required for building HPM from source
-- **SideFX Houdini 19.5+** - The target application for package management
-- **Git** (optional) - For version control integration during package initialization
+- SideFX Houdini 19.x, 20.x, or 21.x (for integration — HPM itself runs fine without it).
+- Rust 1.85+ if building from source.
+- Git (optional; used by `hpm init --vcs git`).
 
-### Pre-built Binaries
+### From a pre-built binary
 
-Pre-built binaries are available on GitHub Releases:
+Download the binary for your platform from the
+[latest release](https://github.com/3db-dk/hpm/releases/latest) and put it on
+your `PATH`. Verify with:
 
-<https://github.com/3db-dk/hpm/releases/latest>
+```sh
+hpm --version
+```
 
-Download the appropriate binary for your platform and add it to your `PATH`.
+### From source
 
-### Build from Source
-
-Alternatively, you can build HPM from source:
-
-```bash
-# Clone the repository
+```sh
 git clone https://github.com/3db-dk/hpm.git
 cd hpm
-
-# Build the release version
 cargo build --release
-
-# The hpm binary will be available at target/release/hpm
-# Optionally, add it to your PATH
-export PATH="$PWD/target/release:$PATH"
+# binary: target/release/hpm
 ```
 
-### Verification
+### Shell completions
 
-Verify your installation:
+```sh
+# Bash (add to ~/.bashrc)
+eval "$(hpm completions bash)"
 
-```bash
-hpm --version
-# Output: hpm 0.3.1
+# Zsh (add to ~/.zshrc)
+eval "$(hpm completions zsh)"
+
+# Fish
+hpm completions fish | source
+
+# PowerShell (add to $PROFILE)
+hpm completions powershell | Out-String | Invoke-Expression
 ```
 
-## Getting Started
+Supported shells: `bash`, `zsh`, `fish`, `powershell`, `elvish`.
 
-### Your First Package
+## First package
 
-Create your first Houdini package with HPM:
-
-```bash
-# Create a new package with standard structure
+```sh
 hpm init my-first-package --description "My first Houdini package"
-
-# Navigate to the package directory
 cd my-first-package
-
-# Examine the generated structure
-ls -la
 ```
 
-This creates a complete Houdini package structure:
+The standard template creates this layout:
 
 ```
 my-first-package/
-├── hpm.toml           # Package manifest
-├── package.json       # Generated Houdini package file  
-├── README.md          # Package documentation
-├── otls/             # Digital assets directory
-├── python/           # Python modules directory
-│   └── __init__.py   
-├── scripts/          # Shelf tools and scripts
-├── presets/          # Node presets
-├── config/           # Configuration files
-└── tests/            # Test files
+├── hpm.toml           # HPM manifest
+├── README.md
+├── otls/              # HDAs / .otl files
+├── python/            # Python modules (python/__init__.py is pre-created)
+├── scripts/           # Shelf tools and script hooks
+├── presets/           # Node presets
+├── config/            # Configuration files
+└── tests/             # Test files
 ```
 
-### Basic Workflow
+Pass `--bare` for just `hpm.toml` and `README.md` — use this when you have a
+custom layout or are wrapping an existing codebase.
 
-The typical HPM workflow follows these steps:
+### A typical workflow
 
-1. **Initialize** - Create or work with an HPM package
-2. **Add Dependencies** - Include packages your project needs
-3. **Install** - Download and set up all dependencies
-4. **Develop** - Build your Houdini tools and assets
-5. **Maintain** - Update dependencies and clean up unused packages
-
-```bash
-# 1. Initialize (if creating new package)
-hpm init advanced-geometry-tools
-
-# 2. Add dependencies
-hpm add utility-nodes@1.0.0
-hpm add material-library@2.0.0 --optional
-
-# 3. Install all dependencies
-hpm install
-
-# 4. Check package health
-hpm check
-
-# 5. List current dependencies
-hpm list
-
-# 6. Clean up unused packages periodically
-hpm clean --dry-run  # Preview what will be cleaned
-hpm clean            # Perform cleanup
+```sh
+hpm init my-tools                        # 1. scaffold
+hpm add some-creator/utility-nodes@1.0.0 # 2. add deps
+hpm add local-tools --path ../local-tools
+hpm install                              # 3. resolve & install
+hpm check                                # 4. sanity check
+hpm list --tree                          # 5. inspect
 ```
 
-## Package Management
+Then wire Houdini up — see [Houdini integration](#houdini-integration).
 
-### Package Initialization
+## Registries
 
-HPM supports two package templates:
+HPM resolves package names through one or more **registries**. A registry is
+either an HTTP API endpoint or a Git repository serving a Cargo-style index.
+Without at least one registry configured, `hpm search` and `hpm add <name>@<version>`
+have nowhere to look.
 
-#### Standard Package (Default)
-Creates a complete Houdini package structure with all standard directories:
+```sh
+# API registry (auto-detected by URL)
+hpm registry add https://api.3db.dk/v1/registry --name houdinihub
 
-```bash
-hpm init my-package --description "Custom Houdini tools"
+# Git-index registry (auto-detected by .git suffix or host)
+hpm registry add https://github.com/studio/hpm-packages.git --name studio --type git
+
+hpm registry list
+hpm registry update      # refresh caches
+hpm registry remove studio
 ```
 
-#### Bare Package
-Creates only the essential `hpm.toml` manifest for custom layouts:
+Global registries live in `~/.hpm/config.toml` under `[[registries]]`. A
+project can also declare registries in its own `hpm.toml` under
+`[[registries]]` — handy for studios that want each project to pin the
+registries it resolves against. See [`[[registries]]`](#registries-array) below.
 
-```bash
-hpm init --bare minimal-package
+A dependency can target a specific registry:
+
+```toml
+[dependencies]
+studio-tools = { version = "1.0.0", registry = "studio" }
 ```
 
-#### Advanced Initialization Options
+Without `registry`, HPM resolves through every configured registry in order.
 
-```bash
-# Full customization
-hpm init advanced-tools \
-  --description "Advanced geometry manipulation tools" \
-  --author "Artist Name <artist@studio.com>" \
-  --license Apache-2.0 \
-  --version 0.2.0 \
-  --houdini-min 20.0 \
-  --houdini-max 21.0 \
-  --vcs git
-```
+## Command reference
 
-### Adding Dependencies
+### Global options
 
-HPM resolves dependencies from configured registries:
-
-```bash
-# Add a package (resolved from configured registries)
-hpm add utility-nodes@1.0.0
-
-# Add multiple packages at once
-hpm add pkg1@1.0.0 pkg2@2.0.0
-
-# Add local path dependency
-hpm add local-tools --path ../my-local-tools
-
-# Add optional dependencies
-hpm add visualization-tools@1.0.0 --optional
-
-# Add to specific project
-hpm add node-library@1.0.0 --package /path/to/project/
-```
-
-### Removing Dependencies
-
-Remove dependencies from your project manifest:
-
-```bash
-# Remove from current project
-hpm remove old-package
-
-# Remove from specific project  
-hpm remove unused-library --package /path/to/project/
-
-# Remove from specific manifest
-hpm remove legacy-tools --package /path/to/project/hpm.toml
-```
-
-**Important**: The `remove` command only removes the dependency from your `hpm.toml` manifest. The actual downloaded package files remain available for reuse by other projects. Use `hpm clean` to remove unused package files.
-
-### Installing Dependencies
-
-Install all dependencies specified in your `hpm.toml`:
-
-```bash
-# Install from current directory
-hpm install
-
-# Install from specific manifest
-hpm install --manifest /path/to/project/hpm.toml
-hpm install -m ../other-project/hpm.toml
-
-# Install from directory containing hpm.toml
-hpm install --manifest /path/to/project/
-```
-
-The install command:
-- Resolves HPM package dependencies
-- Creates content-addressable Python virtual environments
-- Sets up project structure in `.hpm/` directory
-- Generates `hpm.lock` with resolved dependency information
-- Configures Houdini integration via generated `package.json` files
-
-### Updating Packages
-
-Keep your dependencies current with the update system:
-
-```bash
-# Preview available updates
-hpm update --dry-run
-
-# Update all packages to latest compatible versions
-hpm update
-
-# Update specific packages only
-hpm update numpy geometry-tools material-library
-
-# Update specific project
-hpm update --package /path/to/project/
-
-# Automated updates (for scripts/CI)
-hpm update --yes
-
-# Machine-readable output for automation
-hpm update --dry-run --output json
-hpm update --yes --output json-lines
-```
-
-### Viewing Package Information
-
-List and inspect your project dependencies:
-
-```bash
-# List dependencies from current project
-hpm list
-
-# List dependencies from specific project
-hpm list --package /path/to/project/
-hpm list --package /path/to/project/hpm.toml
-```
-
-Example output:
-```
-Package: geometry-tools v1.2.0
-Description: Advanced geometry manipulation tools for Houdini
-Houdini compatibility: min: 20.0, max: 21.0
-
-HPM Dependencies:
-  utility-nodes ^2.1.0
-  material-library 1.5 (optional)
-  mesh-utils git: https://github.com/example/mesh-utils (tag: v1.0)
-
-Python Dependencies:
-  numpy >=1.20.0
-  matplotlib ^3.5.0 (optional)
-  requests >=2.25.0 [security,socks]
-```
-
-### Package Validation
-
-Verify your package configuration and compatibility:
-
-```bash
-# Check current package
-hpm check
-
-# Check specific project
-hpm check --package /path/to/project/
-```
-
-The check command validates:
-- Manifest syntax and required fields
-- Houdini version compatibility
-- Dependency constraint validity
-- Package structure integrity
-
-### System Maintenance
-
-HPM includes intelligent cleanup systems to manage disk usage:
-
-```bash
-# Preview cleanup operations (recommended first step)
-hpm clean --dry-run
-
-# Interactive cleanup with confirmation
-hpm clean
-
-# Automated cleanup for scripts
-hpm clean --yes
-
-# Clean only Python virtual environments
-hpm clean --python-only --dry-run
-hpm clean --python-only
-
-# Comprehensive cleanup (packages + Python environments)
-hpm clean --comprehensive --dry-run
-hpm clean --comprehensive --yes
-```
-
-The cleanup system:
-- **Never removes packages needed by active projects**
-- **Preserves transitive dependencies automatically**
-- **Detects orphaned packages through project scanning**
-- **Warns when no projects found (prevents removing all packages)**
-- **Supports Python virtual environment cleanup**
-
-## Command Reference
-
-### Global Options
-
-All HPM commands support these global options:
+Available on every command:
 
 | Option | Description |
 |--------|-------------|
-| `-v, --verbose` | Increase verbosity (use multiple times for more detail) |
-| `-q, --quiet` | Suppress output except for errors |
-| `--color <WHEN>` | Control color output: `auto`, `always`, `never` |
-| `--output <FORMAT>` | Set output format: `human`, `json`, `json-lines`, `json-compact` |
-| `-C, --directory <DIR>` | Run command in specified directory |
+| `-v, --verbose` | Increase verbosity (repeat for more detail). |
+| `-q, --quiet` | Suppress non-error output. |
+| `--color <when>` | `auto`, `always`, or `never`. |
+| `--output <format>` | `human` (default), `json`, `json-lines`, `json-compact`. |
+| `-C, --directory <dir>` | Run as if invoked from `<dir>`. |
 
-### Command Overview
+### `hpm init`
 
-| Command | Purpose |
-|---------|---------|
-| [`init`](#init) | Initialize new HPM package |
-| [`add`](#add) | Add package dependencies |
-| [`remove`](#remove) | Remove package dependency |
-| [`install`](#install) | Install dependencies from hpm.toml |
-| [`update`](#update) | Update packages to latest versions |
-| [`list`](#list) | Display package information |
-| [`check`](#check) | Validate package configuration |
-| [`clean`](#clean) | Clean orphaned packages |
-| [`search`](#search) | Search registries for packages |
-| [`pack`](#pack) | Create distributable package archive |
-| [`audit`](#audit) | Run security checks on packages |
-| [`registry`](#registry) | Manage package registries |
-| [`completions`](#completions) | Generate shell completions |
+Create a new HPM package.
 
-### init
-
-Initialize a new HPM package with standardized structure.
-
-```bash
+```
 hpm init [OPTIONS] [NAME]
 ```
 
-**Arguments:**
-- `NAME` - Package name (optional, defaults to current directory name)
+**Options**
 
-**Options:**
-- `--description <DESC>` - Package description
-- `--author <AUTHOR>` - Package author (format: "Name <email@example.com>")
-- `--version <VERSION>` - Initial version (default: "0.1.0")
-- `--license <LICENSE>` - License identifier (default: "MIT")
-- `--houdini-min <VERSION>` - Minimum Houdini version
-- `--houdini-max <VERSION>` - Maximum Houdini version
-- `--bare` - Create minimal package structure (only hpm.toml)
-- `--vcs <VCS>` - Initialize version control: `git`, `none` (default: "git")
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--description <text>` | — | Package description. |
+| `--author <name>` | `git config user.*` if set | Author (`"Name <email>"`). |
+| `--version <v>` | `0.1.0` | Initial version. |
+| `--license <id>` | `MIT` | License identifier. |
+| `--houdini-min <v>` | `19.5` | Minimum Houdini version. |
+| `--houdini-max <v>` | — | Maximum Houdini version. |
+| `--bare` | off | Skip standard directories; create only `hpm.toml` and `README.md`. |
+| `--vcs <vcs>` | `git` | `git` or `none`. |
 
-**Examples:**
-```bash
-# Basic package creation
-hpm init my-houdini-tools
+**Examples**
 
-# Minimal package
-hpm init --bare simple-package
-
-# Full customization
+```sh
+hpm init my-tools
+hpm init --bare minimal
 hpm init advanced-tools \
-  --description "Professional geometry tools" \
-  --author "Studio Artist <artist@studio.com>" \
+  --description "Advanced geometry tools" \
+  --author "Artist <artist@studio.com>" \
   --license Apache-2.0 \
-  --houdini-min 20.0 \
-  --houdini-max 21.0
+  --houdini-min 20.5 --houdini-max 21.0
 ```
 
-### add
+### `hpm add`
 
-Add package dependencies to your project's hpm.toml manifest.
+Add one or more dependencies to `hpm.toml`.
 
-```bash
+```
 hpm add [OPTIONS] <PACKAGE>...
 ```
 
-**Arguments:**
-- `PACKAGE...` - One or more package names to add
+`<PACKAGE>` is either a bare name (resolved from registries at install time)
+or `name@version`. `name` uses the `creator/slug` form.
 
-**Options:**
-- `--path <PATH>` - Local path to package (for path dependencies)
-- `-p, --package <PATH>` - Path to directory containing hpm.toml or direct path to hpm.toml file
-- `--optional` - Mark dependency as optional
+**Options**
 
-**Examples:**
-```bash
-# Add a registry-resolved dependency
-hpm add utility-nodes@1.0.0
+| Flag | Description |
+|------|-------------|
+| `--path <dir>` | Add as a local path dependency (only valid with a single package). |
+| `-p, --package <path>` | Path to the manifest to modify (`hpm.toml` or containing dir). Defaults to cwd. |
+| `--optional` | Mark all added dependencies as optional. |
 
-# Add multiple packages at once
-hpm add pkg1@1.0.0 pkg2@2.0.0
+**Examples**
 
-# Add local path dependency
-hpm add local-tools --path ../my-local-tools
-
-# Add optional dependency
-hpm add material-library@1.0.0 --optional
-
-# Add to specific project
-hpm add mesh-utils@1.0.0 --package /path/to/project/
+```sh
+hpm add studio/utility-nodes@1.0.0
+hpm add studio/a@1.0.0 studio/b@2.0.0
+hpm add local-tools --path ../local-tools
+hpm add studio/visualize@1.0.0 --optional
+hpm add studio/lib@1.0.0 -p /path/to/project
 ```
 
-**Note:** Packages are resolved from registries configured in `[[registries]]` in your `hpm.toml` or global `~/.hpm/config.toml`.
+### `hpm remove`
 
-### remove
+Remove a dependency from `hpm.toml`. This does **not** delete package files
+from `~/.hpm/packages/` — run `hpm clean` for that.
 
-Remove a package dependency from your project's hpm.toml manifest.
-
-```bash
+```
 hpm remove [OPTIONS] <PACKAGE>
 ```
 
-**Arguments:**
-- `PACKAGE` - Name of the package to remove
+| Flag | Description |
+|------|-------------|
+| `-p, --package <path>` | Manifest to modify. |
 
-**Options:**
-- `-p, --package <PATH>` - Path to directory containing hpm.toml or direct path to hpm.toml file
+### `hpm install`
 
-**Examples:**
-```bash
-# Remove from current project
-hpm remove old-package
+Resolve and install every dependency declared in `hpm.toml`.
 
-# Remove from specific project
-hpm remove unused-library --package /path/to/project/
 ```
-
-### install
-
-Install all dependencies specified in hpm.toml manifest.
-
-```bash
 hpm install [OPTIONS]
 ```
 
-**Options:**
-- `-m, --manifest <PATH>` - Path to hpm.toml file or directory containing it
+Install does the following:
 
-**Examples:**
-```bash
-# Install from current directory
-hpm install
+1. Loads `hpm.toml`.
+2. If `hpm.lock` exists, verifies cached packages against stored checksums and warns if the lock is older than 90 days.
+3. Resolves HPM dependencies through configured registries and downloads anything missing to `~/.hpm/packages/`.
+4. Collects Python dependencies from the root manifest and every installed dependency's manifest, resolves them with the bundled `uv`, and installs them into a content-addressable venv in `~/.hpm/venvs/<hash>/`.
+5. Writes one Houdini manifest per installed dependency to `<project>/.hpm/packages/{name}.json`.
+6. Writes or updates `hpm.lock`.
 
-# Install from specific manifest
-hpm install --manifest /path/to/project/hpm.toml
-hpm install -m ../other-project/
+**Options**
+
+| Flag | Description |
+|------|-------------|
+| `-m, --manifest <path>` | Path to `hpm.toml` (or its containing directory). |
+| `--frozen-lockfile` | Fail if `hpm.lock` is missing or would need to change. Use in CI. |
+
+### `hpm update`
+
+Update dependencies to their latest compatible versions.
+
 ```
-
-### update
-
-Update packages to their latest compatible versions.
-
-```bash
 hpm update [OPTIONS] [PACKAGES]...
 ```
 
-**Arguments:**
-- `PACKAGES` - Only update these specific packages (optional)
+With no packages, updates all. With specific packages, updates only those.
 
-**Options:**
-- `-p, --package <PATH>` - Path to directory containing hpm.toml or direct path to hpm.toml file
-- `--dry-run` - Preview changes without applying them
-- `-y, --yes` - Skip confirmation prompts
+| Flag | Description |
+|------|-------------|
+| `-p, --package <path>` | Manifest to operate on. |
+| `--dry-run` | Print the proposed plan without applying it. |
+| `-y, --yes` | Skip the confirmation prompt. |
 
-**Examples:**
-```bash
-# Preview all available updates
+**Examples**
+
+```sh
 hpm update --dry-run
-
-# Update all packages
 hpm update
-
-# Update specific packages
-hpm update numpy geometry-tools
-
-# Update with automation
-hpm update --yes --output json
+hpm update studio/geometry-tools
+hpm update --yes --output json      # CI-friendly
 ```
 
-### list
+### `hpm list`
 
-Display comprehensive package information and dependencies.
+Display installed dependencies and their metadata.
 
-```bash
+```
 hpm list [OPTIONS]
 ```
 
-**Options:**
-- `-p, --package <PATH>` - Path to directory containing hpm.toml or direct path to hpm.toml file
-- `--tree` - Display dependencies as a visual tree
+| Flag | Description |
+|------|-------------|
+| `-p, --package <path>` | Manifest to read. |
+| `--tree` | Render dependencies as a tree. |
 
-**Examples:**
-```bash
-# List current project dependencies
-hpm list
+### `hpm check`
 
-# List as visual tree
-hpm list --tree
+Validate `hpm.toml` and the surrounding project.
 
-# List specific project dependencies
-hpm list --package /path/to/project/
 ```
-
-**Tree output example:**
-```
-my-package v1.0.0
-├── geometry-tools (repo@abc1234)
-├── utility-nodes (repo@def5678) [optional]
-└── local-tools (path: ../local-tools)
-
-Python dependencies:
-├── numpy >=1.20.0
-└── requests >=2.25.0
-```
-
-### check
-
-Validate package configuration and Houdini compatibility.
-
-```bash
-hpm check [OPTIONS]
-```
-
-**Examples:**
-```bash
-# Check current package
 hpm check
-
-# Check with verbose output
-hpm check --verbose
 ```
 
-### clean
+Check runs:
 
-Clean orphaned packages and Python virtual environments.
+- `hpm.toml` exists, parses, and passes manifest validation (scoped `creator/slug` path, semver version, `[native]` consistency).
+- Houdini version constraints are well-formed and `min_version <= max_version`.
+- Generated Houdini `package.json` serializes cleanly.
+- Soft warnings for: missing description, missing authors, missing keywords, missing `[houdini]`, missing README or license file, missing `.gitignore` when a `.git` directory is present, packages larger than 100 MB, and individual files larger than 10 MB.
 
-```bash
-hpm clean [OPTIONS]
+Check is advisory — warnings do not fail the command.
+
+### `hpm search`
+
+Search every configured registry for packages matching a query.
+
 ```
-
-**Options:**
-- `--dry-run` - Preview cleanup operations without removing anything
-- `--yes` - Skip confirmation prompts for automation
-- `--python-only` - Clean only Python virtual environments
-- `--comprehensive` - Clean both packages and Python environments
-
-**Examples:**
-```bash
-# Preview cleanup (recommended first step)
-hpm clean --dry-run
-
-# Interactive cleanup
-hpm clean
-
-# Comprehensive automated cleanup
-hpm clean --comprehensive --yes
-
-# Clean only Python environments
-hpm clean --python-only --dry-run
-```
-
-### search
-
-Search configured registries for packages.
-
-```bash
 hpm search <QUERY>
 ```
 
-**Arguments:**
-- `QUERY` - Search query string
+If no registries are configured, HPM prints instructions to add one.
 
-**Examples:**
-```bash
-# Search for geometry-related packages
-hpm search geometry
+### `hpm pack`
 
-# JSON output for scripting
-hpm search terrain --output json
+Build a distributable archive from the current package.
+
 ```
-
-If no registries are configured, HPM will display a message guiding you to add one with `hpm registry add`.
-
----
-
-### pack
-
-Create a distributable package archive from the current package.
-
-```bash
 hpm pack [OPTIONS]
 ```
 
-**Options:**
-- `--key <PATH>` - Path to Ed25519 signing key (PKCS#8 PEM). Overrides `HPM_SIGNING_KEY`
-- `--output <PATH>` - Output directory for the archive (default: current directory)
-- `--json` - Output result as JSON (useful for CI)
-- `--platform <PLATFORM>` - Target platform for native packages (auto-detected when `[native]` is declared)
+Pack runs `hpm check` first, then:
 
-`HPM_SIGNING_KEY` may be either a path to a PEM file or inline PEM content (detected by the leading `-----BEGIN` marker), which lets CI secret stores inject the key as a plain string without writing a temp file.
+1. Auto-generates a Houdini-native `{slug}.json` inside the archive unless the user has provided one. This file follows Houdini's own package format, so the archive is usable by Houdini even without HPM.
+2. Filters files by `[native]` platform when the manifest has a `[native]` section.
+3. Produces a `.zip` archive plus a SHA-256 checksum.
+4. If a signing key is supplied, produces an Ed25519 signature over the archive bytes and emits a `keyId`.
 
-**Generate a signing key pair (one-time):**
-```bash
+**Options**
+
+| Flag | Description |
+|------|-------------|
+| `--key <path>` | Ed25519 PKCS#8 PEM private key. Overrides `HPM_SIGNING_KEY`. |
+| `--output <dir>` | Output directory. Defaults to the current directory. |
+| `--json` | Emit the result as JSON (useful in CI). |
+| `--platform <id>` | Override host-platform detection. Valid: `linux-x86_64`, `macos-universal`, `windows-x86_64`. Only legal when `[native]` is declared. |
+
+**Signing key resolution order**
+
+1. `--key <path>` (CLI flag).
+2. `HPM_SIGNING_KEY` environment variable. If its value starts with `-----BEGIN`, it's treated as inline PEM; otherwise it's a path.
+3. `[signing].key_path` in `~/.hpm/config.toml`.
+
+**Generating a signing key**
+
+```sh
 openssl genpkey -algorithm ed25519 -out signing.pem
 openssl pkey -in signing.pem -pubout -out signing.pub.pem
 ```
 
-Keep `signing.pem` private; publish `signing.pub.pem` to your registry or creator dashboard so consumers can verify signatures.
+Keep `signing.pem` secret. Publish `signing.pub.pem` so consumers can verify.
+See [Security](security.md#package-signing) for the wire format.
 
-**Examples:**
-```bash
-# Basic pack
-hpm pack
+### `hpm audit`
 
-# Pack with signing
-hpm pack --key ~/.hpm/signing.pem
+Run a security audit on the current project.
 
-# Pack with inline PEM from a CI secret
-export HPM_SIGNING_KEY="$(cat signing.pem)"
-hpm pack
-
-# Pack for a specific platform
-hpm pack --platform linux-x86_64
-
-# CI-friendly output
-hpm pack --json --output dist/
 ```
-
-When a `[native]` section is declared in `hpm.toml`, `--platform` defaults to the host platform and produces a platform-filtered archive containing only the files relevant to that target.
-
-**Houdini-native package.json:** If no `{slug}.json` file exists in the package directory, `hpm pack` automatically generates one and includes it in the archive. This file follows Houdini's native package format, making the archive directly usable by Houdini's built-in package system without any HPM runtime. If you provide your own hand-written `{slug}.json`, it will be included as-is.
-
----
-
-### audit
-
-Run security checks on the current package and its dependencies.
-
-```bash
 hpm audit [OPTIONS]
 ```
 
-**Options:**
-- `-m, --manifest <PATH>` - Path to hpm.toml (default: current directory)
+| Flag | Description |
+|------|-------------|
+| `-m, --manifest <path>` | Manifest to audit. |
 
-**Checks performed:**
-- **HTTP URLs** - Warns about insecure HTTP Git URLs (should use HTTPS)
-- **Lock file presence** - Verifies `hpm.lock` exists for reproducible builds
-- **Lock file staleness** - Warns if the lock file is older than 90 days
-- **Checksum verification** - Validates package checksums against the lock file
+Audit checks:
 
-**Examples:**
-```bash
-# Audit current package
-hpm audit
+- **HTTP URLs** — flags any `url = ...` dependency whose URL is `http://` rather than `https://`.
+- **Lock file presence** — warns if `hpm.lock` is missing.
+- **Lock file staleness** — warns if `hpm.lock` is older than 90 days.
+- **Checksum verification** — verifies every cached package in `~/.hpm/packages/` matches the checksum stored in `hpm.lock`.
 
-# Audit a specific project
-hpm audit -m /path/to/project/hpm.toml
+See [Security](security.md) for more.
+
+### `hpm clean`
+
+Remove orphaned packages and/or venvs that no active project depends on.
+
+```
+hpm clean [OPTIONS]
 ```
 
----
+| Flag | Description |
+|------|-------------|
+| `-n, --dry-run` | Print what would be removed, without touching anything. |
+| `-y, --yes` | Skip confirmation. |
+| `--package <pattern>` | Target specific package patterns. |
+| `--python-only` | Clean only orphaned venvs. |
+| `--comprehensive` | Clean packages **and** venvs. |
 
-### registry
+HPM identifies active projects via `[projects]` in `~/.hpm/config.toml`
+(`explicit_paths` plus recursive `search_roots`). Anything reachable from
+those projects is preserved; the rest is a candidate for removal.
 
-Manage package registries.
+### `hpm registry`
 
-```bash
-hpm registry <SUBCOMMAND>
+Manage registries in `~/.hpm/config.toml`. See [Registries](#registries).
+
 ```
-
-#### registry add
-
-Add a new registry.
-
-```bash
-hpm registry add <URL> [OPTIONS]
-```
-
-**Arguments:**
-- `URL` - Registry URL (API endpoint or Git remote)
-
-**Options:**
-- `--name <NAME>` - Display name / alias for this registry
-- `--type <TYPE>` - Registry type: `api` or `git` (auto-detected if omitted)
-
-**Examples:**
-```bash
-# Add an API registry
-hpm registry add https://packages.studio.com/v1 --name studio
-
-# Add a Git registry
-hpm registry add https://github.com/studio/hpm-packages.git --type git
-```
-
-#### registry list
-
-List all configured registries.
-
-```bash
+hpm registry add <URL> [--name <alias>] [--type api|git]
 hpm registry list
-```
-
-#### registry remove
-
-Remove a configured registry.
-
-```bash
 hpm registry remove <NAME>
-```
-
-**Arguments:**
-- `NAME` - Registry name to remove
-
-#### registry update
-
-Refresh all registry caches.
-
-```bash
 hpm registry update
 ```
 
----
+If `--type` is omitted, HPM infers it: URLs ending in `.git` or hosted on
+`github.com` / `gitea.*` are treated as `git`; everything else is `api`.
 
-### completions
+### `hpm completions`
 
-Generate shell completion scripts.
+Emit shell completion scripts — see [Install](#install).
 
-```bash
-hpm completions <SHELL>
-```
+## The `hpm.toml` manifest
 
-**Arguments:**
-- `SHELL` - Target shell: `bash`, `zsh`, `fish`, `powershell`, `elvish`
-
-**Examples:**
-```bash
-# Bash - add to ~/.bashrc
-eval "$(hpm completions bash)"
-
-# Zsh - add to ~/.zshrc
-eval "$(hpm completions zsh)"
-
-# Fish - add to ~/.config/fish/config.fish
-hpm completions fish | source
-
-# PowerShell - add to $PROFILE
-hpm completions powershell | Out-String | Invoke-Expression
-```
-
-## Configuration
-
-### Package Manifest (hpm.toml)
-
-The `hpm.toml` file is the heart of every HPM package, containing all metadata and dependency information:
+A minimal manifest:
 
 ```toml
 [package]
-path = "my-studio/my-houdini-tool"
-name = "My Houdini Tool"
+path = "my-studio/my-tools"
+name = "My Tools"
 version = "1.0.0"
-description = "Custom Houdini digital assets and tools"
-authors = ["Your Name <email@example.com>"]
-license = "MIT"
-readme = "README.md"
-keywords = ["houdini", "geometry", "tools"]
-
-[houdini]
-min_version = "19.5"
-max_version = "21.0"
-
-# HPM package dependencies (resolved from configured registries)
-[dependencies]
-"my-studio/utility-nodes" = "1.0.0"
-"other-creator/material-library" = { version = "2.0.0", optional = true }
-local-tools = { path = "../local-tools" }
-
-# Python dependencies with Houdini integration
-[python_dependencies]
-numpy = ">=1.20.0"
-requests = { version = ">=2.25.0", extras = ["security", "socks"] }
-matplotlib = { version = "^3.5.0", optional = true }
-
-# Environment variables for Houdini
-[env]
-MY_TOOL_CONFIG = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
-HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
-
-# Native library packaging (for packages with compiled binaries)
-[native]
-platforms = ["linux-x86_64", "macos-universal", "windows-x86_64"]
-
-[native.linux-x86_64]
-files = ["lib/linux-x86_64/*"]
-
-[native.macos-universal]
-files = ["lib/macos-universal/*"]
-
-[native.windows-x86_64]
-files = ["lib/windows-x86_64/*"]
-
-# Package scripts for automation
-[scripts]
-build = "python scripts/build.py"
-test = "python -m pytest tests/"
-format = "python -m black python/"
 ```
 
-#### Package Section
+All sections, in the order they appear in practice:
 
-The `[package]` section contains core package metadata:
+### `[package]`
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `path` | Yes | Scoped package path: `creator/slug` (e.g. `my-studio/my-tool`) |
-| `name` | Yes | Freeform display name (e.g. "My Tool") |
-| `version` | Yes | Package version (semantic versioning) |
-| `description` | No | Brief package description |
-| `authors` | No | List of package authors |
-| `license` | No | License identifier (e.g., "MIT", "Apache-2.0") |
-| `readme` | No | Path to README file |
-| `keywords` | No | List of keywords for discovery |
+| `path` | yes | Scoped identifier, `creator/slug`. Both segments must be kebab-case (lowercase letters, digits, hyphens). Example: `tumblehead/tumble-rig`. |
+| `name` | yes | Freeform display name. |
+| `version` | yes | Semantic version, `major.minor.patch`. |
+| `description` | no | Short description. |
+| `authors` | no | List of `"Name <email>"` strings. |
+| `license` | no | License identifier (e.g. `MIT`, `Apache-2.0`). |
+| `readme` | no | Path to README, relative to the package. Defaults to `README.md` for `init`-generated packages. |
+| `homepage` | no | Project homepage URL. |
+| `repository` | no | Repository URL. |
+| `documentation` | no | Documentation URL. |
+| `keywords` | no | List of keywords for discovery. |
+| `categories` | no | List of categories. |
 
-#### Houdini Section
+### `[houdini]`
 
-The `[houdini]` section specifies Houdini compatibility:
+Houdini version constraints:
 
-| Field | Description |
-|-------|-------------|
-| `min_version` | Minimum supported Houdini version |
-| `max_version` | Maximum supported Houdini version |
-
-#### Dependencies
-
-HPM resolves dependencies from configured registries:
-
-##### Registry Dependencies
 ```toml
-[dependencies]
-# Simple version string (resolved from all configured registries)
-utility-nodes = "1.0.0"
-
-# With options
-material-library = { version = "2.0.0", optional = true }
-
-# Target a specific registry
-studio-tools = { version = "1.0.0", registry = "studio-internal" }
+[houdini]
+min_version = "20.5"
+max_version = "21.0"   # optional
 ```
 
-##### Path Dependencies
+Both fields accept `"major"` (e.g. `"21"`) or `"major.minor"` (e.g. `"21.0"`).
+`min_version` drives the bundled Python version — see [Python guide](python-guide.md).
+
+### `[dependencies]`
+
+HPM package dependencies. Keys are scoped `creator/slug` paths. Values take
+one of four shapes:
+
 ```toml
 [dependencies]
-# Local path dependency (for development)
-local-tools = { path = "../my-local-tools" }
-dev-utilities = { path = "./packages/dev-utils", optional = true }
+
+# 1. Registry, version-only (shorthand)
+"studio/utility-nodes" = "1.0.0"
+
+# 2. Registry with options
+"studio/material-library" = { version = "2.0.0", optional = true }
+"studio/internal-tool" = { version = "1.0.0", registry = "studio" }
+
+# 3. Direct URL (pre-built archive)
+"studio/prebuilt" = { url = "https://pkg.example.com/prebuilt-1.0.0.zip", version = "1.0.0" }
+
+# 4. Local path (development)
+local-tools = { path = "../local-tools" }
+local-tools = { path = "../local-tools", optional = true }
 ```
 
-**Note:** Registry dependencies are resolved by version. The lock file (`hpm.lock`) pins exact versions and checksums for reproducible builds.
+The lock file (`hpm.lock`) records the resolved version and SHA-256 checksum
+for each dependency, so subsequent installs are reproducible and tamper-evident.
 
-#### Environment Variables
+### `[python_dependencies]`
 
-The `[env]` section declares environment variables that are set when Houdini loads the package. Each entry specifies a method and a value:
+Python packages, installed through the bundled `uv` into a shared venv:
 
-| Method | Description |
-|--------|-------------|
-| `set` | Set the variable to the given value |
-| `prepend` | Prepend the value to the existing variable |
-| `append` | Append the value to the existing variable |
+```toml
+[python_dependencies]
+
+# Version constraint shorthand
+numpy = ">=1.20.0"
+
+# Detailed form
+requests = { version = ">=2.25.0", extras = ["security", "socks"] }
+matplotlib = { version = "^3.5.0", optional = true }
+```
+
+Version constraints use PEP 440 syntax (same as pip/uv). See
+[Python guide](python-guide.md) for the Houdini→Python version mapping and
+venv sharing behavior.
+
+### `[env]`
+
+Environment variables to set when Houdini loads the package. The key is the
+variable name; the value is a `{ method, value }` pair:
 
 ```toml
 [env]
 MY_PLUGIN_ROOT = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
 HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
+HOUDINI_AUDIT_LOG = { method = "append", value = "$HPM_PACKAGE_ROOT/logs/audit" }
 ```
 
-Use `$HPM_PACKAGE_ROOT` to reference the package installation directory. These variables are merged with HPM's built-in environment variables (PYTHONPATH, HOUDINI_SCRIPT_PATH) when generating Houdini's `package.json`.
+| Method | Effect |
+|--------|--------|
+| `set` | Replace the variable. |
+| `prepend` | Prepend to the existing variable (Houdini picks the platform separator). |
+| `append` | Append to the existing variable. |
 
-#### Native Section
+Use `$HPM_PACKAGE_ROOT` to refer to the installed package directory. HPM
+merges these entries with its built-in `PYTHONPATH` and `HOUDINI_SCRIPT_PATH`
+entries when generating the Houdini manifest.
 
-The `[native]` section declares platform-specific files for packages that ship compiled binaries (shared libraries, HDK plugins). When present, `hpm pack` produces per-platform archives instead of a single fat archive.
+### `[native]`
 
-| Field | Description |
-|-------|-------------|
-| `platforms` | List of supported platform identifiers |
-| `[native.<platform>]` | Sub-table with `files` glob patterns for each platform |
-
-Supported platforms: `linux-x86_64`, `macos-universal`, `windows-x86_64`.
+Declare that this package ships per-platform binaries (HDK plugins, shared
+libraries). When `[native]` is present, `hpm pack` produces a slim, per-platform
+archive that includes only the files relevant to the target platform.
 
 ```toml
 [native]
@@ -922,622 +543,279 @@ files = ["lib/macos-universal/*"]
 files = ["lib/windows-x86_64/*"]
 ```
 
-When `[native]` is declared, `hpm pack` auto-detects the host platform and produces a slim archive (e.g., `my-tool-1.0.0-linux-x86_64.zip`) containing only shared files plus the target platform's native files. Use `--platform` to explicitly target a different platform.
+Valid platform identifiers: `linux-x86_64`, `macos-universal`, `windows-x86_64`.
+`files` uses glob patterns relative to the package root. `hpm pack`
+auto-detects the host platform; pass `--platform <id>` to target a different one.
 
-### Global Configuration (~/.hpm/config.toml)
+### `[[registries]]` <a id="registries-array"></a>
 
-Global HPM settings stored in your home directory:
+Per-project registries. Same shape as the global version in `~/.hpm/config.toml`:
+
+```toml
+[[registries]]
+name = "houdinihub"
+url = "https://api.3db.dk/v1/registry"
+type = "api"
+
+[[registries]]
+name = "studio"
+url = "https://github.com/studio/hpm-packages.git"
+type = "git"
+```
+
+Project registries are additive to global registries.
+
+### `[scripts]`
+
+Named scripts for the package. Reserved for a future `hpm run` command —
+currently parsed and validated by `hpm check` but not executed.
+
+```toml
+[scripts]
+build = "python scripts/build.py"
+test = "python -m pytest tests/"
+```
+
+## Global configuration
+
+HPM reads `~/.hpm/config.toml` if it exists, then `<cwd>/.hpm/config.toml`
+(project override) if it exists. Any missing sections fall back to defaults.
 
 ```toml
 [install]
-# Package installation paths
-package_dir = "packages"
-cache_dir = "cache"
+path = "packages/hpm"        # relative install path inside projects
+parallel_downloads = 8
+
+[storage]
+home_dir = "/Users/me/.hpm"                # default: $HOME/.hpm
+cache_dir = "/Users/me/.hpm/cache"
+packages_dir = "/Users/me/.hpm/packages"
+registry_cache_dir = "/Users/me/.hpm/registry"
 
 [projects]
-# Project discovery configuration
+explicit_paths = [
+    "/Users/me/studio/pipeline",
+]
 search_roots = [
-  "/Users/username/houdini-projects",
-  "/shared/studio-projects"
+    "/Users/me/houdini-projects",
 ]
 max_search_depth = 3
-ignore_patterns = [".git", "node_modules", "*.tmp", ".DS_Store"]
+ignore_patterns = [".git", ".hg", ".svn", "node_modules", "backup", "archive", ".cache", "temp", "tmp"]
 
-# Explicit project paths (always monitored)
-explicit_paths = [
-  "/important/project1",
-  "/critical/project2"
-]
+[[registries]]
+name = "houdinihub"
+url = "https://api.3db.dk/v1/registry"
+type = "api"
 
-[python]
-# Python environment configuration
-cache_dir = "python-cache"
-max_environments = 50
-cleanup_threshold_days = 30
-
-[ui]
-# User interface preferences
-color = "auto"  # auto, always, never
-progress_bars = true
-confirm_destructive = true
+[signing]
+key_path = "/Users/me/.hpm/signing.pem"    # fallback for `hpm pack`
 ```
 
-## Python Dependencies
+### What each section controls
 
-HPM provides comprehensive Python dependency management for Houdini packages, addressing the challenge of conflicting Python dependencies across multiple packages.
+**`[install]`**
+- `path` — the directory inside a project where `hpm install` writes the per-dependency Houdini manifests. Under the hood this is also where `.hpm/packages` is resolved; the default `packages/hpm` rarely needs changing.
+- `parallel_downloads` — maximum concurrent downloads from registries (default `8`).
 
-### Key Features
+**`[storage]`**
+- `home_dir` — HPM's root on disk. Default `$HOME/.hpm` on every platform (Linux, macOS, Windows). All other storage paths derive from this by default.
+- `cache_dir`, `packages_dir`, `registry_cache_dir` — override individual subdirectories without moving the whole root.
 
-- **Content-Addressable Virtual Environments** - Packages with identical resolved dependencies share virtual environments
-- **UV-Powered Resolution** - High-performance dependency resolution using bundled UV
-- **Houdini Integration** - Seamless PYTHONPATH injection via generated package.json files
-- **Intelligent Cleanup** - Automatic orphaned virtual environment detection and removal
-- **Conflict Detection** - Automatic detection and reporting of dependency conflicts
+**`[projects]`** — drives `hpm clean`'s orphan detection.
+- `explicit_paths` — absolute project paths that are always considered active.
+- `search_roots` — directories scanned recursively for active projects.
+- `max_search_depth` — recursion limit for search_roots (default `3`).
+- `ignore_patterns` — directory names/prefixes to skip during scanning. Matches full names or prefixes, not globs.
 
-### Specifying Python Dependencies
+**`[[registries]]`** — list of registries. Same shape as
+[`[[registries]]`](#registries-array) in `hpm.toml`.
 
-Add Python dependencies to your `hpm.toml`:
+**`[signing]`**
+- `key_path` — fallback Ed25519 PKCS#8 PEM path for `hpm pack` when neither `--key` nor `HPM_SIGNING_KEY` is set.
 
-```toml
-[python_dependencies]
-# Basic version constraints
-numpy = ">=1.20.0"
-requests = "^2.28.0"
+## Storage layout
 
-# Dependencies with extras
-matplotlib = { version = "^3.5.0", extras = ["tk"] }
-
-# Optional dependencies
-seaborn = { version = ">=0.11.0", optional = true }
-
-# Complex specifications
-scientific-tools = {
-  version = ">=1.0.0",
-  extras = ["analysis", "visualization"],
-  optional = false
-}
-```
-
-### Houdini Version Mapping
-
-HPM automatically maps Houdini versions to compatible Python versions:
-
-| Houdini Version | Python Version | Notes |
-|----------------|----------------|-------|
-| 19.0 - 19.5 | Python 3.7 | Legacy support |
-| 20.0 | Python 3.9 | Current stable |
-| 20.5 | Python 3.10 | Enhanced performance |
-| 21.x | Python 3.11 | Latest features |
-
-### Virtual Environment Sharing
-
-Multiple packages with identical resolved dependencies automatically share virtual environments:
-
-```bash
-# Example: Two packages with same resolved dependencies
-Package A: numpy==1.24.0, requests==2.28.0 → venv: a1b2c3d4e5f6
-Package B: numpy==1.24.0, requests==2.28.0 → venv: a1b2c3d4e5f6 (shared)
-Package C: numpy==1.25.0, requests==2.28.0 → venv: f6e5d4c3b2a1 (different)
-```
-
-### Generated Houdini Integration
-
-HPM automatically generates `package.json` files with Python environment integration.
-Per-package manifests are written to `<project>/.hpm/packages/{name}.json`:
-
-```json
-{
-  "hpath": ["/Users/user/.hpm/packages/geometry-tools@1.0.0"],
-  "env": [
-    {
-      "PYTHONPATH": {
-        "method": "prepend",
-        "value": "/Users/user/.hpm/venvs/a1b2c3d4e5f6/lib/python3.11/site-packages"
-      }
-    }
-  ],
-  "enable": "houdini_version >= '21'"
-}
-```
-
-`method: prepend` lets Houdini pick the platform path separator, so the same
-manifest works on Windows (`;`) and Unix (`:`).
-
-### Python Environment Cleanup
-
-HPM's cleanup system extends to Python virtual environments:
-
-```bash
-# Preview Python environment cleanup
-hpm clean --python-only --dry-run
-
-# Clean orphaned Python environments
-hpm clean --python-only
-
-# Comprehensive cleanup (packages + Python)
-hpm clean --comprehensive --dry-run
-hpm clean --comprehensive
-```
-
-### Troubleshooting Python Issues
-
-Common Python dependency scenarios and solutions:
-
-#### Conflicting Versions
-```bash
-# HPM will detect and report conflicts
-$ hpm install
-Error: Package error: Conflicting Python dependencies detected
-  numpy: package-a requires ">=1.20.0", package-b requires ">=1.25.0"
-  help: Update package-a to use numpy ">=1.25.0" or make one dependency optional
-```
-
-#### Missing Python Version
-If Houdini version mapping fails, HPM automatically falls back to Python 3.9 with a warning.
-
-#### Virtual Environment Corruption
-HPM automatically detects and recreates corrupted virtual environments during installation.
-
-#### Network Issues
-UV dependency resolution failures are reported with full context and suggested solutions.
-
-## Package Structure
-
-HPM creates standardized Houdini package structures that integrate seamlessly with Houdini's package loading system.
-
-### Standard Package Template
-
-The standard template creates a complete Houdini package structure:
-
-```
-my-package/
-├── hpm.toml              # HPM package manifest
-├── package.json          # Generated Houdini package file  
-├── README.md             # Package documentation
-├── .gitignore           # Git ignore file (if using Git)
-├── otls/                # Digital assets directory
-│   └── .gitkeep         # Ensure directory exists in Git
-├── python/              # Python modules directory
-│   └── __init__.py      # Python package initialization
-├── scripts/             # Shelf tools and scripts directory
-│   └── .gitkeep
-├── presets/             # Node presets directory
-│   └── .gitkeep
-├── config/              # Configuration files directory
-│   └── .gitkeep
-└── tests/               # Test files directory
-    └── .gitkeep
-```
-
-### Bare Package Template
-
-The bare template creates only the essential `hpm.toml` for custom layouts:
-
-```
-minimal-package/
-├── hpm.toml             # HPM package manifest only
-└── README.md            # Basic documentation
-```
-
-### Project Integration Structure
-
-When you run `hpm install`, HPM creates a project integration structure:
-
-```
-your-project/
-├── hpm.toml             # Project manifest
-├── hpm.lock             # Dependency lock file (generated)
-├── .hpm/                # HPM project directory
-│   └── packages/        # Package installation references
-│       ├── utility-nodes.json
-│       └── material-library.json
-└── (your project files...)
-```
-
-### Global Storage Structure
-
-HPM manages a global storage system for efficient package sharing:
+HPM stores everything under `~/.hpm/` on every supported platform. Use
+`[storage]` to change the root or individual subdirectories.
 
 ```
 ~/.hpm/
-├── packages/                      # Versioned package storage
-│   ├── utility-nodes@2.1.0/      # Individual package installations
-│   └── material-library@1.5.0/
-├── venvs/                         # Python virtual environments
-│   ├── a1b2c3d4e5f6/             # Content-addressable environments
-│   │   ├── metadata.json         # Environment metadata
-│   │   ├── pyvenv.cfg
-│   │   └── lib/python3.11/site-packages/   # Lib\site-packages on Windows
-│   └── f6e5d4c3b2a1/
-├── cache/                         # Download cache and metadata
-├── uv-cache/                      # Isolated UV package cache
-├── config.toml                   # Global configuration
-└── logs/                         # Operation logs
+├── config.toml                      # global configuration (optional)
+├── packages/                        # extracted packages (global dedupe)
+│   └── creator/
+│       └── slug@1.0.0/
+├── venvs/                           # content-addressable Python venvs
+│   └── a1b2c3d4e5f6/
+│       ├── pyvenv.cfg
+│       ├── lib/python3.11/site-packages/   # Lib\site-packages on Windows
+│       └── metadata.json
+├── cache/                           # download cache
+├── registry/                        # registry index caches (one dir per registry)
+├── tools/                           # bundled uv binary
+├── uv-cache/                        # isolated uv cache (never touches your system uv)
+├── uv-config/                       # isolated uv config
+└── logs/                            # operational logs
 ```
 
-### Directory Purposes
+Per-project layout:
 
-| Directory | Purpose | Contents |
-|-----------|---------|----------|
-| `otls/` | Digital Assets | Houdini Digital Assets (.hda, .otl files) |
-| `python/` | Python Code | Python modules and packages for Houdini |
-| `scripts/` | Tools & Automation | Shelf tools, event handlers, automation scripts |
-| `presets/` | Node Presets | Parameter presets and node configurations |
-| `config/` | Configuration | Environment variables, pipeline configuration |
-| `tests/` | Testing | Unit tests, integration tests, test assets |
+```
+<project>/
+├── hpm.toml
+├── hpm.lock                         # pinned versions + checksums
+├── .hpm/
+│   ├── config.toml                  # project-level overrides (optional)
+│   └── packages/                    # Houdini manifests, one per dependency
+│       ├── utility-nodes.json
+│       └── material-library.json
+└── (your package sources)
+```
 
-### Generated Files
+## Houdini integration
 
-HPM automatically generates and manages these files:
-
-#### package.json (Houdini Integration)
-
-Per-package manifest written to `<project>/.hpm/packages/{name}.json` at install
-time. `hpath` is an absolute path to the extracted package; the PYTHONPATH
-entry appears only when the package declares `[python_dependencies]`.
+`hpm install` writes one Houdini `package.json` per dependency into
+`<project>/.hpm/packages/{name}.json`. Each file points `hpath` at the
+absolute location of the extracted package in `~/.hpm/packages/` and, for
+packages that declare `[python_dependencies]`, prepends the shared venv's
+`site-packages` onto `PYTHONPATH`:
 
 ```json
 {
-  "hpath": ["/Users/user/.hpm/packages/my-package@1.0.0"],
+  "hpath": ["/Users/me/.hpm/packages/studio/utility-nodes@1.0.0"],
   "env": [
     {
       "PYTHONPATH": {
         "method": "prepend",
-        "value": "/Users/user/.hpm/venvs/a1b2c3d4e5f6/lib/python3.11/site-packages"
+        "value": "/Users/me/.hpm/venvs/a1b2c3d4e5f6/lib/python3.11/site-packages"
       }
     }
   ],
-  "enable": "houdini_version >= '21'"
+  "enable": "houdini_version >= '20.5'"
 }
 ```
 
-#### hpm.lock (Dependency Lock File)
-```toml
-# This file is automatically generated by HPM
-# Do not modify manually
+`method: "prepend"` delegates path-separator handling to Houdini, so the same
+manifest works on Unix (`:`) and Windows (`;`) without HPM embedding an
+OS-specific joiner.
 
-[[package]]
-name = "utility-nodes"
-git = "https://github.com/studio/utility-nodes"
-commit = "abc1234def5678901234567890abcdef12345678"
+To make Houdini pick these up, add `<project>/.hpm/packages` to
+`HOUDINI_PACKAGE_PATH`. For a studio-wide setup, set it in the shell or in
+your DCC launcher; for a one-off project, set it when launching Houdini:
 
-[[package]]
-name = "numpy"
-version = "1.24.0"
-source = "python"
-python_version = "3.9"
+```sh
+HOUDINI_PACKAGE_PATH="$PWD/.hpm/packages:$HOUDINI_PACKAGE_PATH" houdini
 ```
 
-## Security
+`hpath` points directly at the extracted package root, so Houdini auto-discovers
+its convention subdirectories (`otls/`, `desktop/`, `toolbar/`, `python_panels/`,
+`viewer_states/`, `python3.11libs/pythonrc.py`, `keymaps/`, …).
 
-HPM includes several security features to protect your projects:
+## Output formats and automation
 
-### Checksum Verification
+All commands emit human-readable output by default. The `--output` global
+flag selects a machine-readable format instead:
 
-Packages are verified against SHA-256 checksums stored in `hpm.lock`:
+| Format | When to use |
+|--------|-------------|
+| `human` | Default. Colored, styled for terminal use. |
+| `json` | Pretty-printed JSON. |
+| `json-lines` | One JSON object per line. Good for streaming and log ingestion. |
+| `json-compact` | Single-line JSON. Minimal bandwidth. |
 
-```bash
-# Checksums are automatically verified during install
-hpm install
+Errors in any machine-readable format are also emitted as JSON, with fields
+`success`, `error`, `error_type`, and `elapsed_ms`.
 
-# Manually verify all package checksums
-hpm audit
+A typical CI recipe:
+
+```sh
+set -e
+hpm install --frozen-lockfile                 # fail if lock is stale
+hpm audit                                       # warn on security issues
+hpm pack --json --output dist/                  # produce archive + manifest
 ```
 
-### HTTPS Warnings
-
-HPM warns when using insecure HTTP URLs:
-
-```bash
-# This will show a security warning
-hpm add --git http://github.com/user/repo --version 1.0.0
-# Warning: Using HTTP instead of HTTPS for Git URL
-```
-
-### Frozen Lockfile Mode
-
-Use `--frozen-lockfile` in CI for reproducible builds:
-
-```bash
-# Fails if lock file doesn't exist or would change
-hpm install --frozen-lockfile
-```
-
-### Security Audit
-
-Run `hpm audit` to check for security issues:
-
-```bash
-hpm audit
-```
-
-This checks:
-- HTTP URLs (should use HTTPS)
-- Lock file presence and age
-- Package checksum integrity
-
-For detailed security information, see the [Security Guide](security.md).
+`hpm update --dry-run --output json` is useful for nightly jobs that want to
+detect available updates without applying them.
 
 ## Troubleshooting
 
-### Common Issues and Solutions
+### Package not found
 
-#### Package Not Found
-```bash
-Error: Package error: Package 'nonexistent-package' not found
+```
+Error: Package error: Package 'studio/foo' not found
 ```
 
-**Solution**: Verify the package name and ensure the Git repository URL and commit hash are correct. HPM uses Git-based dependencies, so the package must be available in the specified Git repository.
+Check `hpm registry list` — if it's empty, add one with `hpm registry add`.
+If registries are configured, run `hpm registry update` and try again.
 
-#### Directory Already Exists
-```bash
-Error: Package error: Directory 'my-package' already exists
-help: Choose a different name or remove the existing directory
+### Houdini version mapping failed
+
+```
+Error: No Python version mapping for Houdini 22; supported majors are 19, 20, 21.
 ```
 
-**Solution**: Use a different package name or remove the existing directory if safe to do so.
+As of 0.7.0, an unsupported `[houdini].min_version` is a hard error rather
+than a silent fallback. Update `hpm-python` if you need to add a new major,
+or set `min_version` to a supported value.
 
-#### Permission Denied
-```bash
-Error: I/O error: Permission denied (os error 13)
-help: Check file permissions and ensure you have write access to the target directory
+### Checksum mismatch at install time
+
+```
+Error: Package integrity check failed: ...
 ```
 
-**Solution**: Ensure you have write permissions to the target directory or run with appropriate permissions.
+Means the cached package in `~/.hpm/packages/` no longer matches the
+checksum recorded in `hpm.lock`. Either someone tampered with the cache, or
+the cache predates a lock-file rewrite. Remove the offending directory
+under `~/.hpm/packages/` and run `hpm install` again.
 
-#### Network Connection Issues
-```bash
-Error: Network error: Connection timeout
-help: Check your internet connection and proxy settings
+### Lock file is stale
+
+```
+Lock file is 120 days old. Consider running 'hpm update' to check for newer versions.
 ```
 
-**Solution**: Verify internet connectivity and check if you're behind a corporate firewall that requires proxy configuration.
+Advisory warning. HPM will still install; `hpm update` refreshes the lock.
 
-#### Python Environment Issues
-```bash
-Error: Python dependency resolution failed: Could not find compatible Python version
-help: Ensure Houdini version is correctly specified in hpm.toml
+### `--frozen-lockfile` fails in CI
+
+The lock file either doesn't exist yet or would need to change. If this is a
+fresh project, run `hpm install` locally, commit `hpm.lock`, and retry. If
+the project already has a lock and CI still fails, a dependency's resolution
+has drifted — review the diff from `hpm update --dry-run`.
+
+### Python packages aren't importable inside Houdini
+
+Check that:
+
+1. `HOUDINI_PACKAGE_PATH` includes `<project>/.hpm/packages`.
+2. The generated `.hpm/packages/{name}.json` has a `PYTHONPATH` entry for the offending package.
+3. The venv directory it points to exists and contains `site-packages/`. If it doesn't, upgrade past 0.7.2 — earlier versions had a bug where the venv's `site-packages` was empty despite a successful install.
+
+Restart Houdini after any change to `HOUDINI_PACKAGE_PATH`.
+
+### Debug logging
+
+```sh
+RUST_LOG=debug hpm install
+RUST_LOG=hpm_core=debug,hpm_python=trace hpm install    # per-module
 ```
 
-**Solution**: Check your `houdini.min_version` setting in `hpm.toml` and ensure it's valid.
+### Resetting state
 
-### Debug Mode
-
-Enable debug logging for detailed troubleshooting:
-
-```bash
-# Enable debug logging for all HPM operations
-RUST_LOG=debug hpm <command>
-
-# Enable debug logging for specific modules
-RUST_LOG=hpm_core=debug hpm clean --dry-run
-RUST_LOG=hpm_python=debug hpm install
-```
-
-### Configuration Issues
-
-#### Invalid hpm.toml Syntax
-HPM validates your `hpm.toml` file and provides detailed error messages:
-
-```bash
-$ hpm check
-Error: Config error: Invalid TOML syntax at line 5, column 12
-help: Check the syntax around line 5 in your hpm.toml file
-```
-
-#### Dependency Conflicts
-```bash
-$ hpm install  
-Error: Package error: Dependency conflict detected
-  utility-nodes requires geometry-tools "^1.0.0"
-  material-library requires geometry-tools "^2.0.0"
-help: Update one of the packages to use a compatible version range
-```
-
-### Performance Issues
-
-#### Slow Dependency Resolution
-```bash
-# Use parallel downloads
-hpm install --verbose  # Shows download progress
-
-# Clear cache if corrupted
-rm -rf ~/.hpm/cache
-hpm install
-```
-
-#### Large Virtual Environment Cache
-```bash
-# Clean up old Python environments
-hpm clean --python-only --dry-run
-hpm clean --python-only
-
-# Check disk usage
-du -sh ~/.hpm/venvs/
-```
-
-### Recovery Operations
-
-#### Reset HPM Configuration
-```bash
-# Backup existing configuration
-cp ~/.hpm/config.toml ~/.hpm/config.toml.backup
-
-# Remove all HPM data (nuclear option)
-rm -rf ~/.hpm/
-
-# Reinstall packages
-hpm install
-```
-
-#### Fix Corrupted Project State
-```bash
-# Remove generated files and reinstall
+```sh
+# per-project reset
 rm -rf .hpm/ hpm.lock
 hpm install
+
+# global reset (last resort)
+rm -rf ~/.hpm/
+hpm install                  # will re-download everything
 ```
 
-### Getting Help
+### Getting help
 
-#### Built-in Help
-```bash
-# General help
-hpm --help
-
-# Command-specific help
-hpm init --help
-hpm clean --help
-
-# Version information
-hpm --version
-```
-
-#### Verbose Output
-```bash
-# Increase verbosity for more information
-hpm --verbose install
-hpm -vv clean --dry-run  # Very verbose
-```
-
-#### Support Channels
-
-- **Issues**: [GitHub Issues](https://github.com/3db-dk/hpm/issues) for bug reports
-- **Discussions**: [GitHub Discussions](https://github.com/3db-dk/hpm/discussions) for questions
-- **Documentation**: [CLAUDE.md](https://github.com/3db-dk/hpm/blob/main/CLAUDE.md) for development guidelines
-
-## Advanced Usage
-
-### Output Formats
-
-HPM supports multiple output formats for different use cases:
-
-#### Human-Readable (Default)
-```bash
-hpm install
-# Package 'geometry-tools' installed successfully
-# Warning: Optional dependency 'visualization-tools' not found
-```
-
-#### JSON Output
-```bash
-hpm --output json install
-# {
-#   "success": true,
-#   "command": "install",
-#   "message": "3 packages installed",
-#   "elapsed_ms": 1250
-# }
-```
-
-#### JSON Lines (Streaming)
-```bash
-hpm --output json-lines update --dry-run
-# {"type":"update","package":"numpy","from":"1.23.0","to":"1.24.0"}  
-# {"type":"update","package":"requests","from":"2.27.0","to":"2.28.0"}
-```
-
-#### JSON Compact
-```bash
-hpm --output json-compact list
-# {"success":true,"packages":[{"name":"numpy","version":"1.24.0"}]}
-```
-
-### Automation and CI/CD
-
-HPM is designed for automation with machine-readable output and non-interactive modes:
-
-```bash
-#!/bin/bash
-# Example CI/CD script
-
-set -e  # Exit on any error
-
-# Install dependencies non-interactively
-hpm install --quiet
-
-# Check for updates (without applying)
-UPDATES=$(hpm update --dry-run --output json --quiet)
-echo "Available updates: $UPDATES"
-
-# Clean up old packages automatically
-hpm clean --yes --quiet
-
-# Validate package configuration
-hpm check --quiet
-```
-
-### Custom Workflows
-
-#### Development Setup Script
-```bash
-#!/bin/bash
-# dev-setup.sh - Set up development environment
-
-echo "Setting up Houdini development environment..."
-
-# Initialize package if not exists
-if [ ! -f "hpm.toml" ]; then
-    hpm init $(basename "$PWD") --description "Development package"
-fi
-
-# Install dependencies
-hpm install
-
-# Add common development dependencies
-hpm add test-assets --git https://github.com/studio/test-assets --commit abc123
-hpm add debug-tools --git https://github.com/studio/debug --commit def456 --optional
-
-echo "Development environment ready!"
-```
-
-#### Package Maintenance Script
-```bash
-#!/bin/bash
-# maintenance.sh - Regular package maintenance
-
-echo "Performing HPM maintenance..."
-
-# Check for security updates
-hpm update --dry-run --output json > updates.json
-
-# Clean up orphaned packages
-CLEANED=$(hpm clean --dry-run --output json)
-echo "Cleanup analysis: $CLEANED"
-
-# Validate all configurations
-hpm check --verbose
-
-echo "Maintenance complete!"
-```
-
-### Environment Integration
-
-#### Shell Configuration
-Add to your `.bashrc` or `.zshrc`:
-
-```bash
-# HPM environment setup
-export PATH="/path/to/hpm/target/release:$PATH"
-
-# Enable HPM shell completions
-eval "$(hpm completions bash)"  # or zsh, fish, powershell
-
-# HPM aliases for common operations
-alias hpm-update="hpm update --dry-run && hpm update"
-alias hpm-clean="hpm clean --dry-run && hpm clean"
-alias hpm-check="hpm check && hpm list"
-```
-
-#### Studio Integration
-For studio environments, consider centralizing configuration:
-
-```bash
-# Studio-wide HPM configuration
-export HPM_CONFIG="/shared/studio/hpm-config.toml"
-export HPM_CACHE="/shared/cache/hpm"
-
-# Project templates
-export HPM_TEMPLATE_DIR="/shared/templates/hpm"
-```
-
-This comprehensive user guide provides everything needed to effectively use HPM for Houdini package management. For technical details about HPM's architecture and development, see the Developer Documentation.
+- `hpm --help`, `hpm <command> --help`.
+- Report bugs at <https://github.com/3db-dk/hpm/issues>.
+- The [Python guide](python-guide.md) covers venvs, sharing, and `uv` integration in more depth.
+- The [Security guide](security.md) covers signing, checksums, and the threat model.

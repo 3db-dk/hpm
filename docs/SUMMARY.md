@@ -2,8 +2,9 @@
 
 [Introduction](README.md)
 
-# User Guide
+# User guide
 
-- [User Guide](user-guide.md)
-- [Python Guide](python-guide.md)
+- [Getting started](user-guide.md)
+- [Python dependencies](python-guide.md)
+- [Registries](registries.md)
 - [Security](security.md)
