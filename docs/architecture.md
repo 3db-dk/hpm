@@ -1,302 +1,283 @@
-# HPM Architecture
+# Architecture
 
-This document provides a comprehensive technical overview of HPM (Houdini Package Manager), covering system design, algorithms, and implementation details.
+Technical overview of HPM — system design, dependency resolution, cleanup,
+storage, and Python integration. Intended for contributors and integrators.
 
-## Table of Contents
+## Table of contents
 
-1. [System Overview](#system-overview)
-2. [Architectural Principles](#architectural-principles)
-3. [Core Components](#core-components)
-4. [Dependency Resolution](#dependency-resolution)
-5. [Project-Aware Cleanup System](#project-aware-cleanup-system)
-6. [Storage Architecture](#storage-architecture)
-7. [Python Integration](#python-integration)
-8. [Security & Performance](#security--performance)
+1. [System overview](#system-overview)
+2. [Crate layout](#crate-layout)
+3. [Core types](#core-types)
+4. [Dependency resolution](#dependency-resolution)
+5. [Install flow](#install-flow)
+6. [Project-aware cleanup](#project-aware-cleanup)
+7. [Storage architecture](#storage-architecture)
+8. [Python integration](#python-integration)
+9. [Security and performance](#security-and-performance)
+10. [Extension points](#extension-points)
 
----
+## System overview
 
-## System Overview
-
-HPM is a Rust-based package management system designed for SideFX Houdini. The architecture emphasizes safety, performance, and seamless integration with existing Houdini workflows.
-
-### High-Level Architecture
-
-```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          HPM System Architecture                            │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  User Interface Layer                                                       │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  CLI (hpm-cli)                                                      │   │
-│  │  • Commands: init, add, remove, install, list, clean, update, check │   │
-│  │  • Output Formats: Human-readable, JSON, JSON Lines                 │   │
-│  │  • Shell Completions: bash, zsh, fish, powershell, elvish           │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │                                       │
-│                                    ▼                                       │
-│  Core Package Management (hpm-core)                                        │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │   │
-│  │  │  Storage    │  │ Discovery   │  │ Dependency  │  │  Manager   │  │   │
-│  │  │ Management  │  │ & Analysis  │  │ Resolution  │  │ Operations │  │   │
-│  │  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘  │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │                                       │
-│                                    ▼                                       │
-│  Specialized Modules                                                       │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────────┐ │   │
-│  │ │  Python     │ │   Package   │ │   Config    │ │     Error       │ │   │
-│  │ │ Integration │ │  Manifest   │ │ Management  │ │    Handling     │ │   │
-│  │ │(hpm-python) │ │(hpm-package)│ │(hpm-config) │ │  (hpm-error)    │ │   │
-│  │ └─────────────┘ └─────────────┘ └─────────────┘ └─────────────────┘ │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │                                       │
-│                                    ▼                                       │
-│  External Integrations                                                     │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Houdini Package System  │  Python Ecosystem  │  Git Integration    │   │
-│  │  • package.json         │  • PyPI via UV     │  • Repository Clone │   │
-│  │  • HOUDINI_PATH         │  • Virtual Envs    │  • Commit Pinning   │   │
-│  │  • Environment Setup    │  • Dependency Tree │  • Path References  │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### System Characteristics
-
-- **Language**: Rust (2024 edition, 1.85+ required)
-- **Concurrency Model**: Async/await with Tokio runtime
-- **Architecture Pattern**: Modular monolith with plugin points
-- **Configuration**: TOML-based hierarchical configuration system
-- **Testing**: Unit, integration, and property-based testing
-
----
-
-## Architectural Principles
-
-### 1. Safety First
-
-**Memory Safety**: Rust's ownership system eliminates null pointer dereferences, buffer overflows, and data races.
-
-**Operation Safety**: All package operations are atomic or provide strong consistency guarantees. The system never leaves packages in inconsistent states.
-
-**Dependency Safety**: The cleanup system guarantees that packages required by active projects are never removed.
-
-### 2. Performance and Efficiency
-
-**Zero-Cost Abstractions**: High-level APIs compile to efficient machine code without runtime overhead.
-
-**Concurrent Operations**: Async I/O handles concurrent package operations efficiently.
-
-**Content Deduplication**: Both HPM packages and Python virtual environments use content-addressable storage to eliminate duplication.
-
-### 3. Modular Design
-
-**Separation of Concerns**: Each crate has a single, well-defined responsibility with minimal coupling.
-
-**Interface-Driven**: Trait-based abstractions allow for different implementations.
-
-**Extensibility**: Plugin points for custom behavior without modifying core code.
-
-### 4. Integration-Friendly
-
-**Houdini-Native**: Generated `package.json` files work seamlessly with Houdini.
-
-**Tool Integration**: Machine-readable output formats support CI/CD pipelines.
-
-**Standard Conventions**: Follows established patterns from npm, cargo, and uv.
-
----
-
-## Core Components
-
-### CLI Layer (hpm-cli)
-
-The command-line interface provides user-facing functionality.
+HPM is a modular monolith. A single binary (`hpm-cli`) drives a handful of
+focused library crates. Responsibilities are split along stable seams:
+manifest parsing, configuration, resolution, storage, Python, and errors all
+live in their own crates so they can be reused (e.g., a desktop app can
+depend on the library crates and skip the CLI entirely).
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              CLI Architecture                               │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  Command Parser (Clap)                                                      │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  • Argument validation and type conversion                          │   │
-│  │  • Subcommand routing with help generation                          │   │
-│  │  • Global options (verbosity, output format, colors)               │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │                                       │
-│                                    ▼                                       │
-│  Output & Error Handling                                                   │
-│  ┌─────────────────────┐              ┌───────────────────────────────┐   │
-│  │   Console System    │              │      Error Reporting          │   │
-│  │ • Styled output     │              │ • Structured error types     │   │
-│  │ • Color management  │ ────────────▶│ • Contextual help messages   │   │
-│  │ • Progress bars     │              │ • Machine-readable errors    │   │
-│  └─────────────────────┘              └───────────────────────────────┘   │
-│                                    │                                       │
-│                                    ▼                                       │
-│  Command Implementation                                                    │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  init, add, remove, install, list, clean, update, check, completions│   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│ CLI (hpm-cli)                                                          │
+│   • subcommands: init, add, remove, install, update, list, search,    │
+│     check, pack, audit, clean, registry, completions                  │
+│   • output formats: human, json, json-lines, json-compact              │
+│   • shell completions: bash, zsh, fish, powershell, elvish             │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+┌───────────────────────────────────▼────────────────────────────────────┐
+│ Core orchestration (hpm-core)                                          │
+│   • StorageManager: global package install/remove/list                 │
+│   • ProjectDiscovery: scan configured paths for active projects        │
+│   • LockFile / LockedDependency / PackageSource                        │
+│   • Registry trait + ApiRegistry, GitRegistry                          │
+│   • ArchiveFetcher, packer                                             │
+└─────────┬──────────────────┬──────────────────┬──────────────────┬─────┘
+          │                  │                  │                  │
+┌─────────▼───────┐ ┌────────▼────────┐ ┌───────▼──────┐ ┌─────────▼─────┐
+│ hpm-package     │ │ hpm-python      │ │ hpm-resolver │ │ hpm-config    │
+│   PackageManifest│ │   VenvManager   │ │   Resolver   │ │   Config      │
+│   DependencySpec │ │   PythonVersion │ │   VersionReq │ │   Storage/    │
+│   NativeConfig   │ │   ResolvedSet   │ │              │ │   Projects/   │
+│   Platform       │ │   bundled uv    │ │              │ │   Signing     │
+│   HoudiniPackage │ └─────────────────┘ └──────────────┘ └───────────────┘
+└──────────────────┘
+          │
+┌─────────▼────────┐
+│ hpm-error        │
+│   Error enums    │
+└──────────────────┘
 ```
 
-### Package Manifest Processing (hpm-package)
+Key non-functional properties:
 
-Handles `hpm.toml` parsing and validation.
+- **Language**: Rust, edition 2024, MSRV 1.85.
+- **Async runtime**: Tokio, multi-thread.
+- **Configuration**: TOML throughout (manifests, lock file, global config).
+- **Testing**: unit, integration, and property-based (proptest) tests.
+
+## Crate layout
+
+| Crate | Responsibility |
+|-------|----------------|
+| `hpm-cli` | Command-line frontend (clap). Turns command-line invocations into calls on the library crates. |
+| `hpm-core` | Storage, project discovery, lock file, registry trait + two implementations, archive fetching/packing. |
+| `hpm-package` | `hpm.toml` parsing and validation, dependency/Python dependency types, Houdini `package.json` generation, platform enum. |
+| `hpm-python` | Bundled `uv`, content-addressable venv management, Houdini→Python version mapping, venv cleanup analysis. |
+| `hpm-resolver` | PubGrub-style dependency solver. |
+| `hpm-config` | Global and project configuration loading and merging. |
+| `hpm-error` | Shared error types. |
+
+Dependencies flow downward: `hpm-cli` depends on everything else, `hpm-core`
+depends on package/python/resolver/config/error, and so on. No crate depends
+upward.
+
+## Core types
+
+Selected public types. See `cargo doc --workspace --no-deps --open` for the
+full list.
+
+### hpm-package
 
 ```rust
-#[derive(Debug, Deserialize, Serialize)]
 pub struct PackageManifest {
-    pub package: PackageMetadata,
-    pub houdini: Option<HoudiniCompatibility>,
-    pub dependencies: BTreeMap<String, DependencySpec>,
-    pub dev_dependencies: Option<BTreeMap<String, DependencySpec>>,
-    pub python_dependencies: Option<BTreeMap<String, PythonDependencySpec>>,
+    pub package: PackageInfo,
+    pub houdini: Option<HoudiniConfig>,
+    pub native: Option<NativeConfig>,
+    pub registries: Option<Vec<RegistryConfig>>,
+    pub dependencies: Option<IndexMap<String, DependencySpec>>,
+    pub python_dependencies: Option<IndexMap<String, PythonDependencySpec>>,
     pub env: Option<IndexMap<String, ManifestEnvEntry>>,
-    pub scripts: Option<BTreeMap<String, String>>,
+    pub scripts: Option<HashMap<String, String>>,
+}
+
+pub struct PackageInfo {
+    pub path: String,              // "creator/slug"
+    pub name: String,              // freeform display name
+    pub version: String,           // semver
+    pub description: Option<String>,
+    pub authors: Option<Vec<String>>,
+    pub license: Option<String>,
+    pub readme: Option<String>,
+    pub homepage: Option<String>,
+    pub repository: Option<String>,
+    pub documentation: Option<String>,
+    pub keywords: Option<Vec<String>>,
+    pub categories: Option<Vec<String>>,
+}
+
+pub enum DependencySpec {
+    Simple(String),                                          // "1.0.0"
+    Url { url: String, version: String, optional: bool },
+    Path { path: String, optional: bool },
+    Registry { version: String, registry: Option<String>, optional: bool },
+}
+
+pub enum Platform {
+    LinuxX86_64,      // "linux-x86_64"
+    MacosUniversal,   // "macos-universal"
+    WindowsX86_64,    // "windows-x86_64"
 }
 ```
 
-### Configuration Management (hpm-config)
+### hpm-core
 
-Hierarchical configuration system:
+```rust
+pub struct LockFile {
+    pub version: u32,
+    pub package: LockPackageInfo,
+    pub dependencies: BTreeMap<String, LockedDependency>,
+    pub python_dependencies: BTreeMap<String, LockedPythonDependency>,
+    pub metadata: Option<LockMetadata>,
+}
 
-1. **Default Values** - Built-in sensible defaults
-2. **Global Config** (`~/.hpm/config.toml`) - User-wide settings
-3. **Project Config** (`.hpm/config.toml`) - Project-specific overrides
-4. **Environment Variables** - Runtime configuration
-5. **CLI Arguments** - Command-specific overrides
+pub struct LockedDependency {
+    pub version: String,
+    pub checksum: Option<String>,    // "sha256:<hex>"
+    pub source: PackageSource,
+    pub dependencies: Vec<String>,   // transitive names
+}
 
-### Error Handling System (hpm-error)
+#[async_trait]
+pub trait Registry: Send + Sync {
+    async fn search(&self, query: &str) -> Result<SearchResults, RegistryError>;
+    async fn get_versions(&self, name: &str) -> Result<Vec<RegistryEntry>, RegistryError>;
+    async fn get_version(&self, name: &str, version: &str) -> Result<RegistryEntry, RegistryError>;
+    async fn refresh(&self) -> Result<(), RegistryError>;
+    async fn config(&self) -> Result<RegistryConfig, RegistryError>;
+    fn name(&self) -> &str;
+}
+```
 
-Exit code strategy:
-- **0**: Success
-- **1**: User error (configuration, input, usage)
-- **2**: Internal error (bugs, unexpected conditions)
-- **N**: External command exit code
+### hpm-python
 
----
+```rust
+pub struct PythonVersion {
+    pub major: u8,
+    pub minor: u8,
+    pub patch: Option<u8>,
+}
 
-## Dependency Resolution
+pub struct ResolvedDependencySet {
+    pub python_version: PythonVersion,
+    pub packages: BTreeMap<String, ResolvedPackage>,
+}
 
-HPM's dependency resolution is inspired by PubGrub but adapted for Houdini package management.
+pub struct VenvManager { /* … */ }
 
-### Theoretical Foundation
+impl VenvManager {
+    pub async fn ensure_virtual_environment(
+        &self,
+        resolved: &ResolvedDependencies
+    ) -> Result<PathBuf>;
+}
+```
 
-The dependency resolution problem is modeled as a **Constraint Satisfaction Problem (CSP)**:
+### hpm-config
 
-- **Variables**: Each package name
-- **Domains**: Available versions for each package
-- **Constraints**: Version requirements
+```rust
+pub struct Config {
+    pub install: InstallConfig,
+    pub storage: StorageConfig,
+    pub projects: ProjectsConfig,
+    pub registries: Vec<RegistrySourceConfig>,
+    pub signing: SigningConfig,
+}
+
+pub struct StorageConfig {
+    pub home_dir: PathBuf,            // default: $HOME/.hpm
+    pub cache_dir: PathBuf,
+    pub packages_dir: PathBuf,
+    pub registry_cache_dir: PathBuf,
+}
+```
+
+Configuration merges in this order: defaults → `~/.hpm/config.toml` →
+`<cwd>/.hpm/config.toml` → environment → CLI flags.
+
+## Dependency resolution
+
+HPM's resolver (`hpm-resolver`) is PubGrub-inspired: the same family of
+algorithms `uv`, Dart's `pub`, and Swift PM use. It models resolution as a
+constraint-satisfaction problem.
 
 ```text
 Given:
-  - P = {p₁, p₂, ..., pₙ} (set of packages)
-  - V(pᵢ) = {v₁, v₂, ..., vₖ} (available versions)
-  - C = {c₁, c₂, ..., cₘ} (version constraints)
+  P = { p₁, …, pₙ }        packages
+  V(pᵢ) = { v₁, …, vₖ }    available versions
+  C = { c₁, …, cₘ }        version constraints
 
-Find:
-  - Assignment A: P → V such that ∀cᵢ ∈ C, cᵢ(A) = true
+Find an assignment A: P → V such that ∀c ∈ C, c(A) holds.
 ```
 
-### Core Data Structures
+The solver:
 
-```rust
-/// Central dependency resolution engine
-pub struct DependencyResolver {
-    package_cache: HashMap<PackageId, PackageMetadata>,
-    conflict_db: ConflictDatabase,
-    config: ResolverConfig,
-}
+1. Starts with the root manifest's direct dependencies.
+2. Picks the highest version that satisfies all current constraints for a candidate package.
+3. Recursively adds that version's transitive dependencies.
+4. On conflict, learns a minimal explanation of why the current path is infeasible and backtracks.
+5. Continues until an assignment exists or failure is final.
 
-/// Resolution state during incremental solving
-pub struct ResolutionState {
-    assignments: HashMap<String, Version>,
-    pending_constraints: Vec<VersionConstraint>,
-    conflicts: Vec<DependencyConflict>,
-    decision_stack: Vec<DecisionPoint>,
-}
-```
+### Version requirement grammar
 
-### Resolution Algorithm
+HPM manifest values accept the usual semver constraint operators:
 
-1. **Incremental Solving**: Build solutions incrementally, backtracking on conflicts
-2. **Conflict Learning**: Remember conflicts to avoid repeating failed paths
-3. **Version Selection**: Choose versions satisfying all constraints with minimal conflicts
-4. **Transitive Resolution**: Recursively resolve dependencies of dependencies
+| Form | Meaning |
+|------|---------|
+| `=1.2.3`, `1.2.3` | Exact. |
+| `^1.2.3` | Compatible with the given major (`>=1.2.3, <2.0.0`). |
+| `~1.2.3` | Patch updates allowed (`>=1.2.3, <1.3.0`). |
+| `>=1.0.0, <2.0.0` | Explicit range. |
 
-### Version Constraints
-
-```rust
-pub enum VersionRequirement {
-    Exact(Version),           // =1.2.3
-    Caret(Version),           // ^1.2.3 (>=1.2.3, <2.0.0)
-    Tilde(Version),           // ~1.2.3 (>=1.2.3, <1.3.0)
-    Range { min, max },       // >=1.0.0, <2.0.0
-    Union(Vec<...>),          // >=1.0.0 || >=2.0.0
-    Intersection(Vec<...>),   // >=1.0.0, <2.0.0
-}
-```
-
----
-
-## Project-Aware Cleanup System
-
-HPM's cleanup system safely identifies and removes orphaned packages while preserving dependencies needed by active projects.
-
-### Mathematical Foundation
+## Install flow
 
 ```text
-Given:
-  - I = {i₁, i₂, ..., iₙ} (installed packages)
-  - P = {p₁, p₂, ..., pₘ} (active projects)
-  - D: P → 2^I (dependency function)
-  - T: I → 2^I (transitive dependency function)
-
-Find:
-  - O = I \ ⋃(p∈P) T(D(p)) (orphaned packages)
+ ┌──────────────────────────────────────────────────────────────────────┐
+ │ hpm install                                                          │
+ ├──────────────────────────────────────────────────────────────────────┤
+ │  1. Load hpm.toml                                                    │
+ │  2. If hpm.lock exists:                                              │
+ │       verify cached packages against stored checksums               │
+ │       warn if metadata.generated_at > 90 days                       │
+ │  3. Resolve HPM dependencies                                         │
+ │       query configured registries                                    │
+ │       backtrack on conflict                                          │
+ │  4. Download and extract missing packages into ~/.hpm/packages/      │
+ │  5. Merge [python_dependencies] from root + every dep manifest       │
+ │  6. Resolve with bundled uv, hash the resolved set, pick or         │
+ │     rebuild ~/.hpm/venvs/<hash>/                                     │
+ │  7. uv pip install --python <venv>/bin/python                        │
+ │  8. Write <project>/.hpm/packages/{name}.json per dep               │
+ │  9. Write hpm.lock                                                   │
+ └──────────────────────────────────────────────────────────────────────┘
 ```
 
-### Algorithm
+`--frozen-lockfile` inserts a check between steps 2 and 3 that aborts if
+the solver's output would require a different lock than the existing one.
 
-1. **Global Project Discovery**: Scan configured paths to find all HPM-managed projects
-2. **Dependency Graph Construction**: Build complete graphs including transitive dependencies
-3. **Set-Based Orphan Detection**: Calculate `Installed - Reachable`
-4. **Safety Verification**: Multi-layer validation before removal
+## Project-aware cleanup
 
-### Project Discovery
+`hpm clean` removes packages and venvs no active project depends on. The
+identity of "active projects" comes from the `[projects]` config section.
 
-```rust
-pub struct ProjectDiscovery {
-    config: ProjectsConfig,
-}
+```text
+  I = installed packages in ~/.hpm/packages/
+  P = active projects discovered via ProjectDiscovery
+  D(p) = direct deps declared by project p
+  T(I) = transitive closure over the dependency graph
 
-impl ProjectDiscovery {
-    pub fn find_projects(&self) -> Result<Vec<DiscoveredProject>> {
-        let mut projects = Vec::new();
-
-        // Add explicit project paths
-        for path in &self.config.explicit_paths {
-            if let Some(project) = self.discover_project(path)? {
-                projects.push(project);
-            }
-        }
-
-        // Search configured root directories
-        for root in &self.config.search_roots {
-            self.search_recursive(root, 0, &mut projects)?;
-        }
-
-        Ok(projects)
-    }
-}
+  orphans = I \ T( ⋃ D(p) )
 ```
 
-### Dependency Graph
+Implementation outline:
 
 ```rust
 pub struct GlobalDependencyGraph {
@@ -307,323 +288,184 @@ pub struct GlobalDependencyGraph {
 }
 
 impl GlobalDependencyGraph {
-    /// Calculate transitive closure of dependencies
-    pub fn calculate_reachable_packages(&self) -> HashSet<PackageId> {
-        let mut reachable = HashSet::new();
+    pub fn reachable(&self) -> HashSet<PackageId> {
+        let mut seen = HashSet::new();
         let mut stack: Vec<_> = self.roots.iter().cloned().collect();
-
-        while let Some(package_id) = stack.pop() {
-            if reachable.insert(package_id.clone()) {
-                if let Some(deps) = self.edges.get(&package_id) {
+        while let Some(id) = stack.pop() {
+            if seen.insert(id.clone()) {
+                if let Some(deps) = self.edges.get(&id) {
                     stack.extend(deps.iter().cloned());
                 }
             }
         }
-
-        reachable
+        seen
     }
 
-    /// Orphaned = Installed - Reachable
-    pub fn identify_orphaned_packages(&self, installed: &HashSet<PackageId>) -> Vec<PackageId> {
-        let reachable = self.calculate_reachable_packages();
+    pub fn orphans(&self, installed: &HashSet<PackageId>) -> Vec<PackageId> {
+        let reachable = self.reachable();
         installed.difference(&reachable).cloned().collect()
     }
 }
 ```
 
----
+Project discovery scans `explicit_paths` plus recursive walks of
+`search_roots`, respecting `max_search_depth` and skipping directory names
+that match `ignore_patterns`. Only directories containing an `hpm.toml` are
+considered projects.
 
-## Storage Architecture
+Python venv cleanup uses the same principle against the `metadata.json` files
+in each venv, which list the HPM packages using that venv.
 
-### Global Storage Design
+## Storage architecture
 
-HPM implements a content-addressable global storage system that optimizes for disk usage and access performance.
+HPM stores everything under `~/.hpm/` on every supported platform. The
+layout is content-addressable where it helps:
 
 ```text
-~/.hpm/                                    # HPM root directory
-├── packages/                              # Global package storage
-│   ├── utility-nodes@2.1.0/              # Versioned packages
-│   │   ├── hpm.toml                      # Package manifest
-│   │   ├── package.json                  # Generated Houdini manifest
-│   │   ├── otls/                         # Digital assets
-│   │   ├── python/                       # Python modules
-│   │   ├── scripts/                      # Shelf tools
-│   │   └── presets/                      # Node presets
-│   └── material-library@1.5.0/
-├── venvs/                                # Python virtual environments
-│   ├── a1b2c3d4e5f6/                    # Content-addressable venv
-│   │   ├── metadata.json                # Environment metadata
-│   │   ├── lib/pythonX.Y/site-packages/    # Lib\site-packages on Windows
-│   │   └── pyvenv.cfg
-│   └── f6e5d4c3b2a1/
-├── cache/                                # Download cache
-├── uv-cache/                            # Isolated UV package cache
-├── config.toml                          # Global HPM configuration
-└── logs/                                # Operation logs
+~/.hpm/
+├── config.toml
+├── packages/
+│   └── creator/
+│       └── slug@1.0.0/
+│           ├── hpm.toml
+│           ├── (package sources)
+│           └── … (Houdini convention subdirs)
+├── venvs/
+│   └── <12-char hash>/           # hash of resolved set + Python version
+│       ├── pyvenv.cfg
+│       ├── bin/                  # or Scripts/ on Windows
+│       ├── lib/pythonX.Y/site-packages/
+│       └── metadata.json
+├── cache/                        # download cache
+├── registry/                     # one subdir per registry
+│   └── <registry name>/
+├── tools/                        # bundled uv binary
+├── uv-cache/                     # isolated uv cache
+├── uv-config/
+└── logs/
 ```
 
-### Project Integration
-
-Each project maintains lightweight references to globally stored packages:
+Per-project:
 
 ```text
-project/
-├── hpm.toml                             # Project manifest
-├── hpm.lock                             # Dependency lock file
-└── .hpm/                                # HPM project directory
-    └── packages/                        # Package references
-        ├── utility-nodes.json          # Reference to global package
+<project>/
+├── hpm.toml
+├── hpm.lock
+└── .hpm/
+    ├── config.toml               # optional
+    └── packages/
+        ├── utility-nodes.json    # generated Houdini manifests
         └── material-library.json
 ```
 
-**Benefits**:
-- **Deduplication**: One global copy per package version
-- **Performance**: Fast project setup through references
-- **Consistency**: Single source of truth
-- **Safety**: Cleanup never removes packages needed by active projects
+Global packages are shared across projects; each project holds only the
+per-dependency Houdini manifest and a lockfile. This keeps disk usage sane
+across a studio's worth of projects.
 
----
+## Python integration
 
-## Python Integration
+The Python layer runs on three ideas, in descending order of importance:
 
-HPM's Python integration solves dependency conflicts through content-addressable virtual environments.
+1. **Content-addressable venvs.** Hash the resolved dependency set, use it as the venv directory name. Same hash → same venv → shared across packages.
+2. **Bundled uv.** A copy of `uv` ships with HPM and lives at `~/.hpm/tools/uv`. Its cache (`~/.hpm/uv-cache/`) and config (`~/.hpm/uv-config/`) are isolated from any system `uv` so HPM never perturbs your other Python work.
+3. **Houdini manifest generation.** For each HPM package that declares Python dependencies, HPM writes `<project>/.hpm/packages/{name}.json` with `PYTHONPATH` prepended at the shared venv's `site-packages`.
 
-### Content-Addressable System
-
-```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                 Python Content-Addressable Architecture                     │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  Package Manifests                                                          │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
-│  │   Package A     │  │   Package B     │  │   Package C     │             │
-│  │ numpy>=1.20.0   │  │ numpy>=1.20.0   │  │ numpy>=1.25.0   │             │
-│  │ requests^2.28   │  │ requests^2.28   │  │ scipy>=1.9.0    │             │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘             │
-│           │                    │                    │                       │
-│           ▼                    ▼                    ▼                       │
-│                                                                             │
-│  UV-Powered Resolution                                                      │
-│  ┌─────────────────────────────────────────────────────────────────┐       │
-│  │  Resolved Dependency Sets:                                      │       │
-│  │                                                                 │       │
-│  │  Set 1 (Packages A & B - identical deps):                      │       │
-│  │  └─ numpy==1.24.0, requests==2.28.0                           │       │
-│  │     Hash: sha256(...) → a1b2c3d4e5f6                          │       │
-│  │                                                                 │       │
-│  │  Set 2 (Package C - different deps):                           │       │
-│  │  └─ numpy==1.25.0, scipy==1.9.0                               │       │
-│  │     Hash: sha256(...) → f6e5d4c3b2a1                          │       │
-│  └─────────────────────────────────────────────────────────────────┘       │
-│                           │                    │                           │
-│                           ▼                    ▼                           │
-│                                                                             │
-│  Virtual Environment Storage (~/.hpm/venvs/)                               │
-│  ┌─────────────────┐                  ┌─────────────────┐                  │
-│  │  a1b2c3d4e5f6   │ ◄── Shared ──► │  f6e5d4c3b2a1   │                  │
-│  │ (A & B share)   │     by A & B    │ (C uses)        │                  │
-│  └─────────────────┘                  └─────────────────┘                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Hash Algorithm
+### Hash function
 
 ```rust
-pub fn calculate_content_hash(resolved: &ResolvedDependencies) -> String {
+// simplified
+pub fn content_hash(resolved: &ResolvedDependencies) -> String {
     let mut hasher = Sha256::new();
-
-    // Include Python version
-    hasher.update(resolved.python_version.as_bytes());
-
-    // Include sorted package specifications (deterministic ordering)
+    hasher.update(format!("python:{}", resolved.python_version));
     let mut packages: Vec<_> = resolved.packages.iter().collect();
     packages.sort_by_key(|(name, _)| name.as_str());
-
     for (name, spec) in packages {
         hasher.update(name.as_bytes());
         hasher.update(spec.version.as_bytes());
-
-        if let Some(extras) = &spec.extras {
-            let mut sorted_extras = extras.clone();
-            sorted_extras.sort();
-            for extra in sorted_extras {
-                hasher.update(extra.as_bytes());
-            }
+        for extra in spec.extras.iter().flatten() {
+            hasher.update(extra.as_bytes());
         }
     }
-
-    // Return first 12 characters for readability
-    format!("{:x}", hasher.finalize())[..12].to_string()
+    hex::encode(hasher.finalize())[..12].to_string()
 }
 ```
 
-### Virtual Environment Management
+### Houdini→Python mapping
 
-```rust
-pub struct VenvManager {
-    venvs_dir: PathBuf,
-    uv_path: PathBuf,
-}
+| Houdini | Python |
+|---------|--------|
+| 19.x | 3.7 |
+| 20.0 – 20.4 | 3.9 |
+| 20.5+ | 3.10 |
+| 21.x | 3.11 |
 
-impl VenvManager {
-    pub async fn ensure_virtual_environment(
-        &self,
-        resolved: &ResolvedDependencies
-    ) -> Result<PathBuf> {
-        let content_hash = calculate_content_hash(resolved);
-        let venv_path = self.venvs_dir.join(&content_hash);
+Unsupported majors return an error. No silent fallback. This caught a real
+Houdini 21 ABI bug in 0.7.0 where packages compiled for Python 3.9 wouldn't
+load under Houdini 21's embedded Python 3.11.
 
-        // Return existing environment if valid
-        if venv_path.exists() && self.validate_environment(&venv_path, resolved).await? {
-            tracing::info!("Reusing virtual environment: {}", content_hash);
-            return Ok(venv_path);
-        }
-
-        // Create new virtual environment
-        tracing::info!("Creating virtual environment: {}", content_hash);
-        self.create_virtual_environment(&venv_path, resolved).await?;
-
-        Ok(venv_path)
-    }
-}
-```
-
-### Houdini Integration
-
-At install time, HPM writes one Houdini `package.json` per dependency into
-`<project>/.hpm/packages/{name}.json`. `hpath` is the absolute path to the
-extracted package (in global storage), and `PYTHONPATH` is prepended with the
-shared venv's `site-packages` for packages that declare
-`[python_dependencies]`:
+### Generated Houdini manifest
 
 ```json
 {
-  "hpath": ["/Users/user/.hpm/packages/my-package@1.0.0"],
+  "hpath": ["/Users/me/.hpm/packages/studio/my-tool@1.0.0"],
   "env": [
     {
       "PYTHONPATH": {
         "method": "prepend",
-        "value": "/Users/user/.hpm/venvs/a1b2c3d4/lib/python3.11/site-packages"
+        "value": "/Users/me/.hpm/venvs/a1b2c3d4e5f6/lib/python3.11/site-packages"
       }
     }
   ],
-  "enable": "houdini_version >= '21'"
+  "enable": "houdini_version >= '20.5'"
 }
 ```
 
-Using `method: "prepend"` delegates path-separator handling to Houdini, so the
-same manifest works on Windows (`;`) and Unix (`:`) without embedding an
-OS-specific joiner. Point `HOUDINI_PACKAGE_PATH` at `<project>/.hpm/packages`
-so Houdini picks up these manifests on launch. The generator lives in
+`method: "prepend"` delegates path-separator handling to Houdini so the same
+manifest works on Windows (`;`) and Unix (`:`) without embedding an
+OS-specific joiner. Generator lives in
 `hpm-cli::commands::install::build_houdini_package_for_install`.
 
----
+## Security and performance
 
-## Security & Performance
+### Security
 
-### Security Architecture
+- **Transport**: TLS through rustls (pure Rust, no OpenSSL). Certificate verification against the platform trust store.
+- **Integrity**: SHA-256 over every installed archive, recorded in `hpm.lock`, verified before every install.
+- **Signing**: `hpm pack --key` signs archives with Ed25519 over PKCS#8 PEM private keys. `keyId` = first 8 bytes of public key, hex-encoded. See [Security](security.md#package-signing) for the wire format.
+- **Isolation**: bundled `uv` runs out-of-process with its own cache and config, never touching system state.
 
-**Transport Security**:
-- Mandatory TLS 1.3 for network communications
-- Certificate validation to prevent MITM attacks
-- Perfect forward secrecy
+### Performance
 
-**Package Integrity**:
-- SHA-256 checksums for all packages
-- Manifest validation against schemas
-- Git commit pinning for reproducibility
+- **Concurrent downloads**: registry-fronted installs run in parallel, bounded by `[install].parallel_downloads` (default 8).
+- **Content-addressable dedup**: both HPM packages (keyed by `creator/slug@version`) and Python venvs (keyed by resolved-set hash) are deduplicated globally.
+- **Cache hits**: `uv`'s cache eliminates wheel re-downloads across projects; HPM's venv cache eliminates install work when a matching set is found.
+- **Atomic filesystem ops**: packages are extracted to a temp directory and renamed into place to avoid partial states.
 
-**Isolation**:
-- Process isolation for UV execution
-- Cache isolation from system tools
-- Environment variable sandboxing
+## Extension points
 
-### Performance Optimizations
+### Programmatic configuration
 
-**Concurrent Operations**:
-```rust
-pub async fn install_multiple_packages(packages: Vec<PackageSpec>) -> Result<Vec<InstallResult>> {
-    let mut join_set = JoinSet::new();
-
-    for package in packages {
-        join_set.spawn(async move {
-            install_single_package(package).await
-        });
-    }
-
-    let mut results = Vec::new();
-    while let Some(result) = join_set.join_next().await {
-        results.push(result??);
-    }
-
-    Ok(results)
-}
-```
-
-**Caching Strategy**:
-- Package metadata cache to reduce network requests
-- Download cache to avoid re-downloading
-- Virtual environment sharing maximizes cache hits
-- Resolved dependency graph caching
-
-**Memory Management**:
-- Zero-copy operations via references
-- Streaming I/O for large packages
-- RAII patterns for resource cleanup
-
-**Disk I/O Optimization**:
-- Parallel file operations
-- Binary formats where appropriate
-- Atomic operations to prevent corruption
-
----
-
-## Extension Points
-
-### Command Extensions
-
-Add custom CLI commands by extending the command system with clap:
+The library crates can be used without the CLI. `hpm-config::ConfigBuilder`
+builds a `Config` in-memory for embedders (desktop apps, pipeline tools):
 
 ```rust
-use clap::Subcommand;
+use hpm_config::{Config, RegistryType};
 
-#[derive(Subcommand)]
-pub enum CustomCommands {
-    /// Analyze package dependencies for security vulnerabilities
-    SecurityScan {
-        #[arg(short, long)]
-        package: Option<String>,
-
-        #[arg(long, default_value = "medium")]
-        severity: String,
-    },
-}
+let config = Config::builder()
+    .registry("houdinihub", "https://api.3db.dk/v1/registry", RegistryType::Api)
+    .storage_dir("/studio/shared/.hpm")
+    .install_path("packages/hpm")
+    .build();
 ```
 
-### Configuration Extensions
+### Registry trait
 
-```toml
-[plugin.custom_validator]
-enable = true
-strict_mode = false
-rules = ["rule1", "rule2"]
-```
+Any type that implements the `Registry` async trait can be plugged into a
+`RegistrySet` and used for resolution. The built-in `ApiRegistry` and
+`GitRegistry` are reference implementations.
 
-### Plugin System (Future)
+### Plugin system
 
-A formal plugin system is planned, based on an async trait interface:
-
-```rust
-#[async_trait]
-pub trait HpmPlugin: Send + Sync {
-    fn metadata(&self) -> PluginMetadata;
-    async fn initialize(&mut self, context: &PluginContext) -> Result<(), PluginError>;
-    async fn execute(&self, command: &str, args: &[String]) -> Result<PluginResult, PluginError>;
-    async fn cleanup(&mut self) -> Result<(), PluginError>;
-}
-```
-
----
-
-This architecture provides the foundation for understanding HPM's design decisions, implementation patterns, and extensibility mechanisms.
+Not implemented. The CLI surface is currently fixed at compile time. A
+dynamic plugin system is on the roadmap but not prioritized — most studios
+are better served by wrapping HPM in a higher-level pipeline tool.

@@ -1,89 +1,117 @@
-# HPM API Overview
+# API Overview
 
-This document provides a high-level overview of HPM's crate structure and key public types. For full API documentation with function signatures, examples, and detailed type information, generate rustdoc locally:
+This document maps HPM's crate layout to its key public types. For full API
+docs with signatures and examples, generate rustdoc locally:
 
-```bash
-cargo doc --workspace --all-features --no-deps --open
+```sh
+cargo doc --workspace --no-deps --open
 ```
 
-## Crate Structure
+## Crate graph
 
 ```text
 ┌──────────────┐
-│   hpm-cli    │  Command-line interface (clap)
+│   hpm-cli    │   Command-line frontend (clap). Binary.
+└──────┬───────┘
+       │ depends on everything below
+┌──────▼───────┐
+│   hpm-core   │   Storage, discovery, lock file, registry trait, archive I/O
+├──────────────┤
+│  hpm-package │   Manifest parsing, Houdini integration, dependency types
+├──────────────┤
+│  hpm-python  │   Venv management, bundled uv, Houdini→Python mapping
+├──────────────┤
+│ hpm-resolver │   PubGrub-style solver
 └──────┬───────┘
        │
 ┌──────▼───────┐
-│   hpm-core   │  Storage, discovery, dependency analysis, cleanup
+│  hpm-config  │   Configuration loading and merging
 ├──────────────┤
-│  hpm-package │  Manifest processing, templates, Houdini integration
-├──────────────┤
-│  hpm-python  │  Python venv management, UV integration
-├──────────────┤
-│ hpm-resolver │  PubGrub dependency resolution engine
-└──────┬───────┘
-       │
-┌──────▼───────┐
-│  hpm-config  │  Configuration management
-├──────────────┤
-│  hpm-error   │  Structured error types
+│  hpm-error   │   Shared error types
 └──────────────┘
 ```
 
-## Key Types by Crate
+## Key types by crate
 
 ### hpm-core
 
 | Type | Purpose |
 |------|---------|
-| `StorageManager` | Global package storage operations (install, remove, list, cleanup) |
-| `ProjectDiscovery` | Filesystem scanning to find HPM-managed projects |
-| `GlobalDependencyGraph` | Dependency graph for orphan detection during cleanup |
-| `PackageManager` | High-level orchestration of package operations |
+| `StorageManager` | Global package install/remove/list. Backed by `~/.hpm/packages/`. |
+| `ProjectDiscovery` | Scans `[projects]` paths to enumerate active HPM projects. |
+| `GlobalDependencyGraph` | Reachability-based orphan detection for `hpm clean`. |
+| `LockFile`, `LockedDependency`, `LockedPythonDependency`, `LockMetadata` | `hpm.lock` types. |
+| `PackageSource` | Discriminated union of registry, URL, and path sources. |
+| `Registry` (async trait) | Registry abstraction. `ApiRegistry` and `GitRegistry` implement it. |
+| `RegistrySet` | Composite that fans requests out to every configured registry. |
+| `ArchiveFetcher` | Downloads and extracts registry-hosted archives. |
+| `packer` | Produces signed/unsigned `.zip` archives for `hpm pack`. |
 
 ### hpm-package
 
 | Type | Purpose |
 |------|---------|
-| `PackageManifest` | Parsed `hpm.toml` with all sections (package, houdini, dependencies, env, etc.) |
-| `PackageTemplate` | Standard and bare package scaffolding |
-| `Platform` | Target platform enum (linux-x86_64, windows-x86_64, macos-x86_64, macos-aarch64) |
-| `NativeConfig` | Platform-specific file declarations for `[native]` builds |
+| `PackageManifest` | Parsed `hpm.toml` (every section). |
+| `PackageInfo` | Contents of `[package]`. |
+| `HoudiniConfig` | Contents of `[houdini]`. |
+| `DependencySpec` | Untagged enum: `Simple(String) \| Url {..} \| Path {..} \| Registry {..}`. |
+| `PythonDependencySpec` | Untagged enum: `Simple(String) \| Detailed {..}`. |
+| `ManifestEnvEntry`, `EnvMethod` | `[env]` entries and methods (`set`/`prepend`/`append`). |
+| `NativeConfig`, `NativePlatformFiles` | `[native]` and per-platform file globs. |
+| `Platform` | Canonical platform enum: `LinuxX86_64`, `MacosUniversal`, `WindowsX86_64`. |
+| `RegistryConfig`, `RegistryType` | `[[registries]]` entries in manifests. |
+| `PackageTemplate` | Scaffolding for `hpm init` (standard and `--bare`). |
+| `HoudiniPackage`, `HoudiniNativePackage`, `HoudiniEnvValue` | Houdini `package.json` output types. |
 
 ### hpm-python
 
 | Type | Purpose |
 |------|---------|
-| `VenvManager` | Content-addressable virtual environment creation and sharing |
-| `PythonVersion` | Houdini-to-Python version mapping |
-| `ResolvedDependencies` | UV-resolved dependency set with content hash |
+| `VenvManager` | Creates and reuses content-addressable venvs. |
+| `PythonVersion` | Houdini-to-Python version value. |
+| `ResolvedDependencies`, `ResolvedDependencySet`, `ResolvedPackage` | UV-resolved dependency sets with content hash. |
+| `PythonCleanupAnalyzer` | Detects orphan venvs for `hpm clean --python-only`. |
 
 ### hpm-resolver
 
 | Type | Purpose |
 |------|---------|
-| `Resolver` | PubGrub-inspired incremental dependency solver |
-| `VersionRequirement` | Version constraint types (exact, caret, tilde, range, union) |
-| `ResolutionState` | In-progress resolution with conflict learning |
+| `Resolver` | PubGrub-style incremental solver with conflict learning. |
+| `VersionReq` | Parsed version requirement. |
+| `ResolutionState`, `DecisionPoint` | Solver state for backtracking. |
 
 ### hpm-config
 
 | Type | Purpose |
 |------|---------|
-| `Config` | Hierarchical configuration (defaults < global < project < env < CLI) |
-| `StorageConfig` | Package storage paths and settings |
-| `ProjectsConfig` | Project discovery paths and search roots |
+| `Config` | Top-level config (defaults < `~/.hpm/config.toml` < project config < env < flags). |
+| `ConfigBuilder` | In-memory `Config` construction for library consumers. |
+| `StorageConfig` | `home_dir`, `cache_dir`, `packages_dir`, `registry_cache_dir`. |
+| `InstallConfig` | `path`, `parallel_downloads`. |
+| `ProjectsConfig` | `explicit_paths`, `search_roots`, `max_search_depth`, `ignore_patterns`. |
+| `RegistrySourceConfig`, `RegistryType` | Registry entries from `[[registries]]`. |
+| `SigningConfig` | `key_path` fallback for `hpm pack`. |
+| `ProjectConfig` | Per-project paths (`.hpm/packages/`, `hpm.lock`, `hpm.toml`). |
 
 ### hpm-error
 
 | Type | Purpose |
 |------|---------|
-| `HpmError` | Top-level error enum with structured variants |
-| Exit codes | 0 = success, 1 = user error, 2 = internal error |
+| `HpmError` | Top-level error enum with structured variants (`Config`, `Package`, `Network`, `Io`, `Internal`, `External`). |
 
-## Design Principles
+Exit codes used by `hpm-cli`:
 
-- **Minimal coupling**: Each crate has a single responsibility; dependencies flow downward
-- **Async by default**: Core operations use async/await with Tokio
-- **Content-addressable storage**: Both packages and Python venvs use hash-based deduplication
-- **Safety guarantees**: Cleanup never removes packages needed by active projects
+| Code | Meaning |
+|------|---------|
+| 0 | Success. |
+| 1 | User error — bad configuration, bad input, missing manifest, etc. |
+| 2 | Internal error — unexpected condition or bug. |
+| _N_ | Pass-through exit code from an invoked external tool. |
+
+## Design principles
+
+- **Minimal coupling.** Each crate owns one concern; no upward dependencies.
+- **Async by default.** Everything I/O-bound runs on Tokio.
+- **Content-addressable storage.** Both HPM packages (`creator/slug@version`) and Python venvs (SHA-256 over the resolved set) deduplicate globally.
+- **Safety by construction.** Cleanup never removes a package an active project needs; lock file checksums are verified before every install; signing is opt-in but standard when used.
+- **TOML-first configuration.** Every persistent config — manifest, lock file, global config — is TOML and hand-editable.
