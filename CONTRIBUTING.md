@@ -31,15 +31,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 #### Git hooks
 
-Versioned pre-commit / commit-msg hooks live in `.githooks/`. Point git at
-them once per clone:
+A versioned pre-commit hook lives in `.githooks/`. Point git at it once per
+clone:
 
 ```bash
 just install-hooks   # runs 'git config core.hooksPath .githooks'
 ```
 
-`pre-commit` runs `just pre-commit` (fmt + clippy). `commit-msg` enforces
-[Conventional Commits](https://www.conventionalcommits.org/).
+The hook runs `just pre-commit` (fmt + clippy). Commit messages follow
+[Conventional Commits](https://www.conventionalcommits.org/) by convention,
+not enforcement.
 
 #### Additional Tools Installation
 ```bash
