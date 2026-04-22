@@ -1,7 +1,7 @@
 //! Integration tests for Python dependency management system
 
-use crate::*;
 use hpm_package::{HoudiniConfig, PackageInfo, PackageManifest, PythonDependencySpec};
+use hpm_python::{cleanup, dependency, types, venv};
 use indexmap::IndexMap;
 
 #[tokio::test]
