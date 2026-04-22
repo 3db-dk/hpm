@@ -26,10 +26,12 @@ cargo doc --workspace --no-deps --open
        │
 ┌──────▼───────┐
 │  hpm-config  │   Configuration loading and merging
-├──────────────┤
-│  hpm-error   │   Shared error types
 └──────────────┘
 ```
+
+Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
+`ResolverError`, `ConfigError`). `hpm-cli` converts these into a single
+`CliError` with exit codes and help hints.
 
 ## Key types by crate
 
@@ -93,11 +95,12 @@ cargo doc --workspace --no-deps --open
 | `SigningConfig` | `key_path` fallback for `hpm pack`. |
 | `ProjectConfig` | Per-project paths (`.hpm/packages/`, `hpm.lock`, `hpm.toml`). |
 
-### hpm-error
+### hpm-cli
 
 | Type | Purpose |
 |------|---------|
-| `HpmError` | Top-level error enum with structured variants (`Config`, `Package`, `Network`, `Io`, `Internal`, `External`). |
+| `CliError` | CLI-facing error enum with categorised variants (`Config`, `Package`, `Network`, `Io`, `Internal`, `External`). Carries optional help text. |
+| `ExitStatus` | Process-exit code abstraction; converts `&CliError -> ExitStatus -> ExitCode`. |
 
 Exit codes used by `hpm-cli`:
 

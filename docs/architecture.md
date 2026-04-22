@@ -50,12 +50,11 @@ depend on the library crates and skip the CLI entirely).
 │   Platform       │ │   bundled uv    │ │              │ │   Signing     │
 │   HoudiniPackage │ └─────────────────┘ └──────────────┘ └───────────────┘
 └──────────────────┘
-          │
-┌─────────▼────────┐
-│ hpm-error        │
-│   Error enums    │
-└──────────────────┘
 ```
+
+Each crate defines its own error type (e.g. `StorageError`, `ResolverError`,
+`ConfigError`) via `thiserror`. Errors surface to the user through `CliError`
+in `hpm-cli`, which converts them to exit codes and help hints.
 
 Key non-functional properties:
 
@@ -74,11 +73,11 @@ Key non-functional properties:
 | `hpm-python` | Bundled `uv`, content-addressable venv management, Houdini→Python version mapping, venv cleanup analysis. |
 | `hpm-resolver` | PubGrub-style dependency solver. |
 | `hpm-config` | Global and project configuration loading and merging. |
-| `hpm-error` | Shared error types. |
 
 Dependencies flow downward: `hpm-cli` depends on everything else, `hpm-core`
-depends on package/python/resolver/config/error, and so on. No crate depends
-upward.
+depends on package/python/resolver/config, and so on. No crate depends
+upward. Domain errors (`StorageError`, `ResolverError`, `ConfigError`, ...)
+live in the crate that produces them.
 
 ## Core types
 
@@ -283,7 +282,6 @@ Implementation outline:
 pub struct GlobalDependencyGraph {
     packages: HashMap<PackageId, PackageNode>,
     edges: HashMap<PackageId, HashSet<PackageId>>,
-    reverse_edges: HashMap<PackageId, HashSet<PackageId>>,
     roots: HashSet<PackageId>,
 }
 

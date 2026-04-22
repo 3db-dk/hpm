@@ -86,7 +86,6 @@ crates/
   hpm-resolver/  PubGrub dependency resolver
   hpm-package/   Package manifest parsing, Houdini integration
   hpm-python/    Python venv management (uv integration)
-  hpm-error/     Shared error types
 ```
 
 ## Development Guidelines

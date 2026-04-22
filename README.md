@@ -149,7 +149,6 @@ crates/
   hpm-resolver/  PubGrub dependency resolver
   hpm-package/   Manifest parsing, Houdini package.json generation
   hpm-python/    Python venv management (bundled uv)
-  hpm-error/     Shared error types
 ```
 
 ## Development

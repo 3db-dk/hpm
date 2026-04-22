@@ -26,5 +26,4 @@ cargo fmt --check    # check formatting
 | `hpm-config` | Configuration loading/saving |
 | `hpm-resolver` | Dependency resolution |
 | `hpm-package` | Package format and metadata |
-| `hpm-error` | Shared error types (miette) |
 | `hpm-python` | Python environment integration |

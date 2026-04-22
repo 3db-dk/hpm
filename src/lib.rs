@@ -12,7 +12,6 @@
 //! - [`hpm-resolver`] - PubGrub-based dependency resolver
 //! - [`hpm-package`] - Package manifest parsing and Houdini integration
 //! - [`hpm-python`] - Python virtual environment management (uv integration)
-//! - [`hpm-error`] - Shared error types
 //!
 //! ## Quick Start
 //!
