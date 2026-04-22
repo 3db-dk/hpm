@@ -29,6 +29,18 @@ cargo fmt
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+#### Git hooks
+
+Versioned pre-commit / commit-msg hooks live in `.githooks/`. Point git at
+them once per clone:
+
+```bash
+just install-hooks   # runs 'git config core.hooksPath .githooks'
+```
+
+`pre-commit` runs `just pre-commit` (fmt + clippy). `commit-msg` enforces
+[Conventional Commits](https://www.conventionalcommits.org/).
+
 #### Additional Tools Installation
 ```bash
 cargo install cargo-machete cargo-audit cargo-tarpaulin

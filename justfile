@@ -123,9 +123,10 @@ watch-quality:
 
 # === GIT HOOKS ===
 
-# Install git hooks
+# Point git at the versioned hooks in .githooks/
 install-hooks:
-    ./scripts/install-git-hooks.sh
+    git config core.hooksPath .githooks
+    @echo "git hooks: .githooks/ (run 'git config --unset core.hooksPath' to disable)"
 
 # === MCP SERVERS ===
 
