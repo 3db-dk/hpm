@@ -191,7 +191,7 @@ use crate::output::OutputFormat;
 use anyhow::{Context, Result};
 use hpm_config::Config;
 use hpm_package::PackageManifest;
-use hpm_python::update::PythonUpdateManager;
+use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use std::path::PathBuf;
 use tracing::info as log_info;
 
@@ -254,9 +254,8 @@ pub async fn update_packages(options: UpdateOptions) -> Result<()> {
         manifest.package.name
     ));
 
-    // Initialize managers
-    let mut python_manager = PythonUpdateManager::new(config.storage.home_dir.clone())?;
     // Registry client will be initialized when registry is ready
+    let _ = config; // reserved for future per-project config-driven behaviour
 
     // Find packages to update (simplified for now)
     let updates = find_available_updates(&manifest, &options.packages).await?;
@@ -309,8 +308,7 @@ pub async fn update_packages(options: UpdateOptions) -> Result<()> {
     // Update Python packages and virtual environments
     let python_updates: Vec<_> = updates.iter().filter(|u| u.is_python).collect();
     if !python_updates.is_empty() {
-        updated_packages
-            .extend(update_python_packages(&mut python_manager, &python_updates, &manifest).await?);
+        updated_packages.extend(update_python_packages(&python_updates, &manifest).await?);
     }
 
     // Output results
@@ -375,7 +373,6 @@ async fn find_available_updates(
 }
 
 async fn update_python_packages(
-    python_manager: &mut PythonUpdateManager,
     updates: &[&PackageUpdate],
     manifest: &PackageManifest,
 ) -> Result<Vec<String>> {
@@ -384,22 +381,20 @@ async fn update_python_packages(
     if updates.iter().any(|u| u.requires_venv_update) {
         console::info("Resolving updated Python dependencies...");
 
-        // Use update manager to handle Python environment updates
-        let update_result = python_manager
-            .update_python_environment(
-                &manifest.package.name,
-                manifest,
-                None, // Current venv path would be determined from project state
-            )
-            .await?;
-
-        if update_result.venv_migrated {
-            console::info("Python virtual environment updated successfully");
-        } else {
-            console::info("Python virtual environment is up to date");
+        let deps = collect_python_dependencies(std::slice::from_ref(manifest)).await?;
+        if deps.dependencies.is_empty() {
+            return Ok(updated);
         }
 
-        updated.extend(update_result.updated_packages);
+        let resolved = resolve_dependencies(&deps).await?;
+        VenvManager::new()
+            .ensure_virtual_environment(&resolved)
+            .await?;
+
+        console::info("Python virtual environment updated");
+        for (name, version) in &resolved.packages {
+            updated.push(format!("{name}=={version}"));
+        }
     }
 
     Ok(updated)

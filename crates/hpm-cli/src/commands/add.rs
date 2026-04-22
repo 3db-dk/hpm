@@ -108,7 +108,8 @@ pub async fn add_packages(
             // Parse name@version syntax
             let (pkg_name, requested_version) = parse_name_version(package_name);
 
-            let config = Config::load().unwrap_or_default();
+            let config = Config::load()
+                .map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
             let registry_set = build_registry_set(&config);
 
             if registry_set.is_empty() {

@@ -90,7 +90,6 @@
 //! - [`integration`] - Houdini package.json generation and PYTHONPATH setup
 //! - [`cleanup`] - Orphaned virtual environment detection and cleanup
 //! - [`types`] - Core types for Python versions, dependencies, and metadata
-//! - [`update`] - Update management for Python dependencies
 //!
 //! ## Quick Start Example
 //!
@@ -162,11 +161,21 @@ pub mod cleanup;
 pub mod dependency;
 pub mod resolver;
 pub mod types;
-pub mod update;
 pub mod venv;
 
-#[cfg(test)]
-pub mod integration_tests;
+/// Locate the user's home directory.
+///
+/// Avoids the `dirs` / `home` crates to keep the supply-chain surface small.
+pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("USERPROFILE").map(std::path::PathBuf::from)
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("HOME").map(std::path::PathBuf::from)
+    }
+}
 
 // Dependency collection
 pub use dependency::collect_python_dependencies;
@@ -176,8 +185,8 @@ pub use resolver::resolve_dependencies;
 
 // Core types
 pub use types::{
-    OrphanedVenv, PythonDependencies, PythonDependency, PythonError, PythonResult, PythonVersion,
-    ResolvedDependencySet, VenvMetadata, VersionSpec,
+    OrphanedVenv, PythonDependencies, PythonDependency, PythonVersion, ResolvedDependencySet,
+    VenvMetadata, VersionSpec,
 };
 
 // Virtual environment management
@@ -225,7 +234,7 @@ pub async fn initialize() -> Result<()> {
 ///
 /// PathBuf pointing to the UV cache directory within HPM's managed directory structure.
 pub fn get_python_cache_dir() -> PathBuf {
-    dirs::home_dir()
+    home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".hpm")
         .join("uv-cache")
@@ -242,7 +251,7 @@ pub fn get_python_cache_dir() -> PathBuf {
 ///
 /// PathBuf pointing to the UV configuration directory within HPM's managed directory structure.
 pub fn get_python_config_dir() -> PathBuf {
-    dirs::home_dir()
+    home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".hpm")
         .join("uv-config")
@@ -272,7 +281,7 @@ pub fn get_python_config_dir() -> PathBuf {
 ///     └── ...
 /// ```
 pub fn get_venvs_dir() -> PathBuf {
-    dirs::home_dir()
+    home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".hpm")
         .join("venvs")

@@ -276,7 +276,7 @@ impl VenvManager {
             VenvMetadata::new(hash, resolved_deps.clone(), venv_path.to_path_buf())
         };
 
-        metadata.last_used = Some(chrono::Utc::now());
+        metadata.last_used = Some(std::time::SystemTime::now());
 
         // Write updated metadata
         let metadata_json =

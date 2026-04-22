@@ -22,7 +22,8 @@ pub async fn add_registry(
     name: Option<String>,
     registry_type: Option<String>,
 ) -> Result<()> {
-    let mut config = Config::load().unwrap_or_default();
+    let mut config =
+        Config::load().map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
 
     // Infer registry type from URL if not specified
     let reg_type = match registry_type.as_deref() {
@@ -80,7 +81,8 @@ pub async fn add_registry(
 
 /// List configured registries.
 pub async fn list_registries() -> Result<()> {
-    let config = Config::load().unwrap_or_default();
+    let config =
+        Config::load().map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
 
     if config.registries.is_empty() {
         println!("{}", style("No registries configured.").dim());
@@ -121,7 +123,8 @@ pub async fn list_registries() -> Result<()> {
 
 /// Remove a registry by name.
 pub async fn remove_registry(name: String) -> Result<()> {
-    let mut config = Config::load().unwrap_or_default();
+    let mut config =
+        Config::load().map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
 
     if !config.remove_registry(&name) {
         bail!("Registry '{}' not found.", name);
@@ -140,7 +143,8 @@ pub async fn remove_registry(name: String) -> Result<()> {
 
 /// Update (refresh) all registry caches.
 pub async fn update_registries() -> Result<()> {
-    let config = Config::load().unwrap_or_default();
+    let config =
+        Config::load().map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
 
     if config.registries.is_empty() {
         println!("{}", style("No registries configured.").dim());

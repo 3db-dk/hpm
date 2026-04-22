@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
+use console::style;
 use hpm_package::{PackageManifest, PackageTemplate};
-use owo_colors::{OwoColorize, Style};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -104,34 +104,34 @@ pub async fn init_package(options: InitOptions) -> Result<String> {
         info!("Initialized git repository");
     }
 
-    // Print success message with styling
     if options.bare {
         println!(
             "{}",
-            format!(
-                "Successfully created minimal Houdini package '{}'",
-                package_name
-            )
-            .style(Style::new().green())
+            style(format!(
+                "Successfully created minimal Houdini package '{package_name}'"
+            ))
+            .green()
         );
     } else {
         println!(
             "{}",
-            format!("Successfully created Houdini package '{}'", package_name)
-                .style(Style::new().green())
+            style(format!(
+                "Successfully created Houdini package '{package_name}'"
+            ))
+            .green()
         );
     }
 
-    println!("\n{}", "Package structure:".style(Style::new().bold()));
+    println!("\n{}", style("Package structure:").bold());
     print_directory_tree(&target_dir, 0)?;
 
     if !options.bare {
-        println!("\n{}", "Next steps:".style(Style::new().bold()));
-        println!("  {} {}", "cd".style(Style::new().cyan()), package_name);
+        println!("\n{}", style("Next steps:").bold());
+        println!("  {} {}", style("cd").cyan(), package_name);
         println!(
             "  {} {}",
-            "hpm add".style(Style::new().cyan()),
-            "# Add dependencies".style(Style::new().bright_black())
+            style("hpm add").cyan(),
+            style("# Add dependencies").black().bright()
         );
     }
 

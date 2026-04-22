@@ -216,14 +216,13 @@
 //!
 //! ```rust,ignore
 //! use hpm_resolver::{
-//!     DependencyResolver, RegistryProvider, ResolverConfig,
+//!     DependencyResolver, PackageProvider, ResolverConfig,
 //!     Requirement, Priority, Version, VersionConstraint
 //! };
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! // Create a provider that can fetch package information
-//! # let my_registry_client = todo!();
-//! let provider = RegistryProvider::new(Box::new(my_registry_client));
+//! // Your implementation of `PackageProvider` (see below)
+//! # let provider: MyProvider = todo!();
 //!
 //! // Configure the resolver
 //! let config = ResolverConfig {
@@ -283,7 +282,6 @@
 //!     // Your package source implementation
 //! }
 //!
-//! #[async_trait::async_trait]
 //! impl PackageProvider for MyCustomProvider {
 //!     async fn get_package_info(&mut self, name: &str, version: &Version) -> Result<PackageInfo> {
 //!         // Fetch package information from your source
@@ -363,7 +361,7 @@
 //! This resolver is designed specifically for HPM but can be adapted for other package managers.
 //! It integrates seamlessly with:
 //!
-//! - HPM registry protocol via `RegistryProvider`
+//! - HPM registry protocol via a custom `PackageProvider` implementation
 //! - HPM package manifests via `PackageInfo` structures  
 //! - HPM update commands for dependency graph updates
 //! - HPM conflict resolution for user-friendly error reporting
@@ -491,45 +489,25 @@ pub enum IncompatibilityCause {
     Root,
 }
 
-/// Trait for querying package information from a registry
-#[async_trait::async_trait]
+/// Trait for querying package information from a registry.
+///
+/// Uses native async-fn-in-trait (Rust 1.75+). Implementors are used
+/// through the generic `DependencyResolver<P: PackageProvider>`, so
+/// the trait does not need to be dyn-compatible.
 pub trait PackageProvider {
-    async fn get_package_info(&mut self, name: &str, version: &Version) -> Result<PackageInfo>;
-    async fn list_versions(&mut self, name: &str) -> Result<Vec<Version>>;
-    async fn get_latest_version(&mut self, name: &str) -> Result<Option<Version>>;
-}
-
-/// Registry-based package provider
-pub struct RegistryProvider {
-    client: Box<dyn RegistryClient>,
-}
-
-#[async_trait::async_trait]
-pub trait RegistryClient: Send + Sync {
-    async fn fetch_package_info(&mut self, name: &str, version: &Version) -> Result<PackageInfo>;
-    async fn fetch_package_versions(&mut self, name: &str) -> Result<Vec<Version>>;
-}
-
-impl RegistryProvider {
-    pub fn new(client: Box<dyn RegistryClient>) -> Self {
-        Self { client }
-    }
-}
-
-#[async_trait::async_trait]
-impl PackageProvider for RegistryProvider {
-    async fn get_package_info(&mut self, name: &str, version: &Version) -> Result<PackageInfo> {
-        self.client.fetch_package_info(name, version).await
-    }
-
-    async fn list_versions(&mut self, name: &str) -> Result<Vec<Version>> {
-        self.client.fetch_package_versions(name).await
-    }
-
-    async fn get_latest_version(&mut self, name: &str) -> Result<Option<Version>> {
-        let versions = self.list_versions(name).await?;
-        Ok(versions.into_iter().max())
-    }
+    fn get_package_info(
+        &mut self,
+        name: &str,
+        version: &Version,
+    ) -> impl std::future::Future<Output = Result<PackageInfo>> + Send;
+    fn list_versions(
+        &mut self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<Version>>> + Send;
+    fn get_latest_version(
+        &mut self,
+        name: &str,
+    ) -> impl std::future::Future<Output = Result<Option<Version>>> + Send;
 }
 
 /// Errors that can occur during resolution

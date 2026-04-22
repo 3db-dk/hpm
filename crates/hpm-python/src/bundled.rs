@@ -1,71 +1,44 @@
 //! UV binary management with download-on-first-use
 //!
-//! This module manages the UV binary used for Python dependency resolution.
-//! UV is downloaded on first use and cached for subsequent operations.
+//! UV is downloaded on first use and cached under `~/.hpm/tools/`. All UV
+//! invocations run against HPM's isolated cache and config — we never fall
+//! back to a system UV.
 
 use anyhow::{Context, Result};
-use std::env;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
-/// UV version to download
 const UV_VERSION: &str = "0.5.9";
 
-/// Get the HPM directory
-fn get_hpm_dir() -> PathBuf {
-    dirs::home_dir()
+fn hpm_dir() -> PathBuf {
+    crate::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".hpm")
 }
 
-/// Get platform-specific UV download URL
-fn get_uv_download_url() -> Option<&'static str> {
+/// Platform-specific UV release archive name (filename only).
+fn uv_archive_name() -> Option<&'static str> {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        Some(concat!(
-            "https://github.com/astral-sh/uv/releases/download/",
-            "0.5.9",
-            "/uv-x86_64-pc-windows-msvc.zip"
-        ))
+        Some("uv-x86_64-pc-windows-msvc.zip")
     }
-
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     {
-        Some(concat!(
-            "https://github.com/astral-sh/uv/releases/download/",
-            "0.5.9",
-            "/uv-x86_64-apple-darwin.tar.gz"
-        ))
+        Some("uv-x86_64-apple-darwin.tar.gz")
     }
-
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        Some(concat!(
-            "https://github.com/astral-sh/uv/releases/download/",
-            "0.5.9",
-            "/uv-aarch64-apple-darwin.tar.gz"
-        ))
+        Some("uv-aarch64-apple-darwin.tar.gz")
     }
-
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        Some(concat!(
-            "https://github.com/astral-sh/uv/releases/download/",
-            "0.5.9",
-            "/uv-x86_64-unknown-linux-gnu.tar.gz"
-        ))
+        Some("uv-x86_64-unknown-linux-gnu.tar.gz")
     }
-
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
     {
-        Some(concat!(
-            "https://github.com/astral-sh/uv/releases/download/",
-            "0.5.9",
-            "/uv-aarch64-unknown-linux-gnu.tar.gz"
-        ))
+        Some("uv-aarch64-unknown-linux-gnu.tar.gz")
     }
-
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "x86_64"),
@@ -78,80 +51,65 @@ fn get_uv_download_url() -> Option<&'static str> {
     }
 }
 
-/// Get the expected UV binary name for the current platform
-fn get_uv_binary_name() -> &'static str {
-    #[cfg(target_os = "windows")]
-    {
-        "uv.exe"
-    }
+fn uv_download_url() -> Option<String> {
+    uv_archive_name().map(|name| {
+        format!("https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/{name}")
+    })
+}
 
-    #[cfg(not(target_os = "windows"))]
-    {
+fn uv_binary_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "uv.exe"
+    } else {
         "uv"
     }
 }
 
-/// Setup UV environment variables for complete isolation
-pub fn setup_uv_environment() {
-    let hpm_dir = get_hpm_dir();
-
-    // SAFETY: This is called early in program startup before any threads are spawned,
-    // so modifying environment variables is safe.
-    unsafe {
-        env::set_var("UV_CACHE_DIR", hpm_dir.join("uv-cache"));
-        env::set_var("UV_CONFIG_FILE", hpm_dir.join("uv-config/uv.toml"));
-        env::set_var("UV_NO_SYNC", "1");
-        env::set_var("UV_SYSTEM_PYTHON", "0");
-    }
-
-    debug!("UV environment configured for isolation");
+/// Env vars every UV invocation must run under so that UV never touches
+/// system caches or configuration.
+fn uv_env() -> [(&'static str, PathBuf); 4] {
+    let hpm = hpm_dir();
+    [
+        ("UV_CACHE_DIR", hpm.join("uv-cache")),
+        ("UV_CONFIG_FILE", hpm.join("uv-config/uv.toml")),
+        ("UV_NO_SYNC", PathBuf::from("1")),
+        ("UV_SYSTEM_PYTHON", PathBuf::from("0")),
+    ]
 }
 
-/// Ensure UV binary is available and properly configured
+/// Ensure the bundled UV binary is downloaded and isolation configured.
+///
+/// Returns the path to the bundled UV binary. Errors if UV cannot be
+/// downloaded or the current platform is unsupported — no system-UV fallback.
 pub async fn ensure_uv_binary() -> Result<PathBuf> {
-    let hpm_dir = get_hpm_dir();
+    let hpm_dir = hpm_dir();
     let tools_dir = hpm_dir.join("tools");
-    let uv_path = tools_dir.join(get_uv_binary_name());
+    let uv_path = tools_dir.join(uv_binary_name());
 
-    // Check if UV is already downloaded
-    if uv_path.exists() {
+    if !uv_path.exists() {
+        info!("Downloading UV {} for the first time...", UV_VERSION);
+        download_uv(&uv_path).await?;
+    } else {
         debug!("UV binary already exists at {:?}", uv_path);
-        // Ensure isolation config exists (may have been deleted or never created)
-        setup_uv_isolation(&hpm_dir).await?;
-        setup_uv_environment();
-        return Ok(uv_path);
     }
 
-    // Download UV
-    info!("Downloading UV {} for the first time...", UV_VERSION);
-    download_uv(&uv_path).await?;
-
-    // Setup isolation
     setup_uv_isolation(&hpm_dir).await?;
-
-    // Setup environment variables
-    setup_uv_environment();
-
     Ok(uv_path)
 }
 
-/// Download UV binary from GitHub releases
 async fn download_uv(target_path: &Path) -> Result<()> {
-    let download_url = get_uv_download_url()
+    let download_url = uv_download_url()
         .ok_or_else(|| anyhow::anyhow!("UV is not available for this platform"))?;
 
     info!("Downloading UV from {}", download_url);
 
-    // Create parent directory
     if let Some(parent) = target_path.parent() {
         fs::create_dir_all(parent).await?;
     }
 
-    // Download the archive
     let client = reqwest::Client::builder().user_agent("hpm").build()?;
-
     let response = client
-        .get(download_url)
+        .get(&download_url)
         .send()
         .await
         .context("Failed to download UV")?;
@@ -166,7 +124,6 @@ async fn download_uv(target_path: &Path) -> Result<()> {
     let archive_data = response.bytes().await?;
     info!("Downloaded {} bytes", archive_data.len());
 
-    // Extract the binary based on archive type
     if download_url.ends_with(".zip") {
         extract_zip(&archive_data, target_path).await?;
     } else if download_url.ends_with(".tar.gz") {
@@ -175,7 +132,6 @@ async fn download_uv(target_path: &Path) -> Result<()> {
         return Err(anyhow::anyhow!("Unknown archive format"));
     }
 
-    // Verify the binary exists
     if !target_path.exists() {
         return Err(anyhow::anyhow!(
             "UV binary not found after extraction at {:?}",
@@ -187,14 +143,12 @@ async fn download_uv(target_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Extract UV from a .zip archive (Windows)
 async fn extract_zip(archive_data: &[u8], target_path: &Path) -> Result<()> {
-    let uv_binary_name = get_uv_binary_name();
+    let uv_binary_name = uv_binary_name();
     let target_dir = target_path.parent().unwrap().to_path_buf();
     let target_path = target_path.to_path_buf();
     let archive_data = archive_data.to_vec();
 
-    // ZipFile contains `dyn Read` which is !Send, so extract in a blocking task
     let contents = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
         use std::io::{Cursor, Read};
 
@@ -223,16 +177,14 @@ async fn extract_zip(archive_data: &[u8], target_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Extract UV from a .tar.gz archive (macOS/Linux)
 async fn extract_tar_gz(archive_data: &[u8], target_path: &Path) -> Result<()> {
-    let uv_binary_name = get_uv_binary_name();
+    let uv_binary_name = uv_binary_name();
     let target_dir = target_path.parent().unwrap().to_path_buf();
     let target_path = target_path.to_path_buf();
     let archive_data = archive_data.to_vec();
 
     fs::create_dir_all(&target_dir).await?;
 
-    // tar/flate2 do synchronous I/O, so extract in a blocking task
     tokio::task::spawn_blocking(move || -> Result<()> {
         use flate2::read::GzDecoder;
         use std::io::Cursor;
@@ -269,25 +221,21 @@ async fn extract_tar_gz(archive_data: &[u8], target_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Setup UV isolation directories and configuration
 async fn setup_uv_isolation(hpm_dir: &Path) -> Result<()> {
     debug!("Setting up UV isolation in {:?}", hpm_dir);
 
-    // Create isolated UV directories
     let cache_dir = hpm_dir.join("uv-cache");
     let config_dir = hpm_dir.join("uv-config");
 
     fs::create_dir_all(&cache_dir).await?;
     fs::create_dir_all(&config_dir).await?;
 
-    // Create isolated UV configuration
-    // Use forward slashes for TOML compatibility (Windows backslashes cause unicode escape issues)
+    // Forward slashes keep the TOML cross-platform (Windows backslashes trigger unicode escapes).
     let cache_dir_str = cache_dir.to_string_lossy().replace('\\', "/");
     let uv_config = format!(
         r#"# HPM UV isolation configuration
-cache-dir = "{cache_dir}"
-"#,
-        cache_dir = cache_dir_str
+cache-dir = "{cache_dir_str}"
+"#
     );
 
     fs::write(config_dir.join("uv.toml"), uv_config).await?;
@@ -296,41 +244,17 @@ cache-dir = "{cache_dir}"
     Ok(())
 }
 
-/// Check if UV binary is available (either downloaded or system)
-pub async fn check_uv_availability() -> Result<PathBuf> {
-    // First try to use our downloaded version
-    match ensure_uv_binary().await {
-        Ok(path) => Ok(path),
-        Err(e) => {
-            warn!("Failed to setup downloaded UV: {}", e);
-
-            // Try to find system UV as fallback
-            if let Ok(system_uv) = which::which("uv") {
-                warn!("Using system UV as fallback: {:?}", system_uv);
-                setup_uv_environment(); // Still setup isolation
-                Ok(system_uv)
-            } else {
-                Err(anyhow::anyhow!(
-                    "UV is not available. Failed to download: {}. Please install UV manually (https://docs.astral.sh/uv/)",
-                    e
-                ))
-            }
-        }
-    }
-}
-
-/// Run UV command with proper isolation
+/// Run UV with HPM's isolated cache and config applied per-invocation.
 pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output> {
-    let uv_path = check_uv_availability().await?;
+    let uv_path = ensure_uv_binary().await?;
 
     debug!("Running UV command: {:?} {:?}", uv_path, args);
 
     let mut cmd = tokio::process::Command::new(uv_path);
-    cmd.args(args)
-        .env("UV_CACHE_DIR", get_hpm_dir().join("uv-cache"))
-        .env("UV_CONFIG_FILE", get_hpm_dir().join("uv-config/uv.toml"))
-        .env("UV_NO_SYNC", "1")
-        .env("UV_SYSTEM_PYTHON", "0");
+    cmd.args(args);
+    for (key, value) in uv_env() {
+        cmd.env(key, value);
+    }
 
     // Suppress the brief console window flash that UV (a CLI tool) would
     // otherwise show when spawned from a GUI parent on Windows.
@@ -373,20 +297,18 @@ mod tests {
     }
 
     #[test]
-    fn test_uv_environment_setup() {
-        setup_uv_environment();
-
-        // Check that environment variables are set
-        assert!(env::var("UV_CACHE_DIR").is_ok());
-        assert!(env::var("UV_CONFIG_FILE").is_ok());
-        assert_eq!(env::var("UV_NO_SYNC").unwrap(), "1");
-        assert_eq!(env::var("UV_SYSTEM_PYTHON").unwrap(), "0");
+    fn test_uv_env() {
+        let env = uv_env();
+        let keys: Vec<_> = env.iter().map(|(k, _)| *k).collect();
+        assert!(keys.contains(&"UV_CACHE_DIR"));
+        assert!(keys.contains(&"UV_CONFIG_FILE"));
+        assert!(keys.contains(&"UV_NO_SYNC"));
+        assert!(keys.contains(&"UV_SYSTEM_PYTHON"));
     }
 
     #[test]
-    fn test_get_uv_download_url() {
-        // This should return Some on supported platforms
-        let url = get_uv_download_url();
+    fn test_uv_download_url() {
+        let url = uv_download_url();
         #[cfg(any(
             all(target_os = "windows", target_arch = "x86_64"),
             all(target_os = "macos", target_arch = "x86_64"),
@@ -398,8 +320,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_uv_binary_name() {
-        let name = get_uv_binary_name();
+    fn test_uv_binary_name() {
+        let name = uv_binary_name();
         #[cfg(target_os = "windows")]
         assert_eq!(name, "uv.exe");
         #[cfg(not(target_os = "windows"))]

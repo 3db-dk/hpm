@@ -270,7 +270,7 @@ async fn execute_comprehensive_cleanup(
     if dry_run {
         println!("Analyzing packages and Python environments for cleanup (dry run)...");
         let result = storage_manager
-            .cleanup_comprehensive_dry_run(&config.projects)
+            .cleanup_comprehensive(&config.projects, true)
             .await?;
 
         if result.total_items_that_would_be_cleaned() == 0 {
@@ -307,7 +307,7 @@ async fn execute_comprehensive_cleanup(
     } else if automated {
         println!("Performing comprehensive cleanup (packages + Python environments)...");
         let result = storage_manager
-            .cleanup_comprehensive(&config.projects)
+            .cleanup_comprehensive(&config.projects, false)
             .await?;
 
         if result.total_items_cleaned() == 0 {
@@ -342,7 +342,7 @@ async fn execute_comprehensive_cleanup(
         // Interactive cleanup
         println!("Analyzing packages and Python environments for cleanup...");
         let result = storage_manager
-            .cleanup_comprehensive_dry_run(&config.projects)
+            .cleanup_comprehensive(&config.projects, true)
             .await?;
 
         if result.total_items_that_would_be_cleaned() == 0 {
@@ -383,7 +383,7 @@ async fn execute_comprehensive_cleanup(
         if response == "y" || response == "yes" {
             println!("Performing comprehensive cleanup...");
             let result = storage_manager
-                .cleanup_comprehensive(&config.projects)
+                .cleanup_comprehensive(&config.projects, false)
                 .await?;
 
             println!(

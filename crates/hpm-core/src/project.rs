@@ -32,7 +32,8 @@ impl ProjectManager {
         let project_config = hpm_config::Config::load_project_config(&project_root);
 
         // Create fetcher using HPM's cache and packages directories
-        let config = hpm_config::Config::load().unwrap_or_default();
+        let config =
+            hpm_config::Config::load().map_err(|e| ProjectError::ConfigLoad(e.to_string()))?;
         let cache_dir = config
             .storage
             .packages_dir
@@ -153,7 +154,8 @@ impl ProjectManager {
             let registry_set = {
                 let has_registry_deps = dependencies.values().any(|spec| spec.is_registry());
                 if has_registry_deps {
-                    let config = hpm_config::Config::load().unwrap_or_default();
+                    let config = hpm_config::Config::load()
+                        .map_err(|e| ProjectError::ConfigLoad(e.to_string()))?;
                     let registry_configs: Vec<hpm_config::RegistrySourceConfig> =
                         if let Some(ref regs) = manifest_registries {
                             regs.iter()
@@ -746,6 +748,9 @@ pub enum ProjectError {
 
     #[error("Python dependency resolution failed: {0}")]
     PythonResolution(String),
+
+    #[error("Failed to load HPM configuration: {0}")]
+    ConfigLoad(String),
 }
 
 #[cfg(test)]

@@ -406,7 +406,6 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait]
     impl PackageProvider for MockProvider {
         async fn get_package_info(&mut self, name: &str, version: &Version) -> Result<PackageInfo> {
             self.packages

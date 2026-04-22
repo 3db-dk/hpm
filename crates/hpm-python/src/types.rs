@@ -8,6 +8,61 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Serde helper: `SystemTime` <-> i64 Unix epoch seconds.
+mod epoch_seconds {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+    use std::time::Duration;
+
+    pub fn serialize<S: Serializer>(time: &SystemTime, ser: S) -> Result<S::Ok, S::Error> {
+        let secs = time
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        ser.serialize_i64(secs)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<SystemTime, D::Error> {
+        let secs = i64::deserialize(de)?;
+        Ok(if secs >= 0 {
+            UNIX_EPOCH + Duration::from_secs(secs as u64)
+        } else {
+            UNIX_EPOCH - Duration::from_secs((-secs) as u64)
+        })
+    }
+}
+
+mod epoch_seconds_opt {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+    use std::time::Duration;
+
+    pub fn serialize<S: Serializer>(time: &Option<SystemTime>, ser: S) -> Result<S::Ok, S::Error> {
+        match time {
+            Some(t) => {
+                let secs = t
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                ser.serialize_some(&secs)
+            }
+            None => ser.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Option<SystemTime>, D::Error> {
+        let opt = Option::<i64>::deserialize(de)?;
+        Ok(opt.map(|secs| {
+            if secs >= 0 {
+                UNIX_EPOCH + Duration::from_secs(secs as u64)
+            } else {
+                UNIX_EPOCH - Duration::from_secs((-secs) as u64)
+            }
+        }))
+    }
+}
 
 /// Python version specification
 ///
@@ -249,16 +304,17 @@ impl ResolvedDependencySet {
 pub struct VenvMetadata {
     pub hash: String,
     pub dependency_set: ResolvedDependencySet,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    #[serde(default)]
-    pub last_used: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(with = "epoch_seconds")]
+    pub created_at: SystemTime,
+    #[serde(default, with = "epoch_seconds_opt")]
+    pub last_used: Option<SystemTime>,
     pub used_by_packages: Vec<String>,
     pub path: PathBuf,
 }
 
 impl VenvMetadata {
     pub fn new(hash: String, dependency_set: ResolvedDependencySet, path: PathBuf) -> Self {
-        let now = chrono::Utc::now();
+        let now = SystemTime::now();
         Self {
             hash,
             dependency_set,
@@ -291,40 +347,9 @@ pub struct OrphanedVenv {
     pub hash: String,
     pub path: PathBuf,
     pub size: u64,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub last_used: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: SystemTime,
+    pub last_used: Option<SystemTime>,
 }
-
-/// Python dependency management errors
-#[derive(Debug, thiserror::Error)]
-pub enum PythonError {
-    #[error("Conflicting Python dependencies: {conflicts:?}")]
-    ConflictingDependencies { conflicts: Vec<String> },
-
-    #[error("Python version {required} not compatible with Houdini")]
-    IncompatiblePythonVersion { required: String },
-
-    #[error("Failed to resolve dependencies: {message}")]
-    ResolutionFailed { message: String },
-
-    #[error("UV binary not found and extraction failed")]
-    UvNotAvailable,
-
-    #[error("Virtual environment creation failed: {path}")]
-    VenvCreationFailed { path: PathBuf },
-
-    #[error("Virtual environment not found: {hash}")]
-    VenvNotFound { hash: String },
-
-    #[error("Invalid Python version format: {version}")]
-    InvalidPythonVersion { version: String },
-
-    #[error("Package installation failed: {package}")]
-    InstallationFailed { package: String },
-}
-
-/// Result type for Python operations
-pub type PythonResult<T> = Result<T, PythonError>;
 
 #[cfg(test)]
 mod tests {

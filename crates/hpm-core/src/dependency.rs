@@ -39,7 +39,6 @@ pub struct PackageNode {
 pub struct DependencyGraph {
     nodes: HashMap<PackageId, PackageNode>,
     edges: HashMap<PackageId, HashSet<PackageId>>, // package -> its dependencies
-    reverse_edges: HashMap<PackageId, HashSet<PackageId>>, // package -> packages that depend on it
 }
 
 impl Default for DependencyGraph {
@@ -53,15 +52,13 @@ impl DependencyGraph {
         Self {
             nodes: HashMap::new(),
             edges: HashMap::new(),
-            reverse_edges: HashMap::new(),
         }
     }
 
     pub fn add_node(&mut self, node: PackageNode) {
         let id = node.id.clone();
         self.nodes.insert(id.clone(), node);
-        self.edges.entry(id.clone()).or_default();
-        self.reverse_edges.entry(id).or_default();
+        self.edges.entry(id).or_default();
     }
 
     pub fn add_dependency(&mut self, package: &PackageId, dependency: &PackageId) {
@@ -69,11 +66,6 @@ impl DependencyGraph {
             .entry(package.clone())
             .or_default()
             .insert(dependency.clone());
-
-        self.reverse_edges
-            .entry(dependency.clone())
-            .or_default()
-            .insert(package.clone());
     }
 
     pub fn mark_reachable_from_roots(&self, roots: &[PackageId]) -> HashSet<PackageId> {
@@ -101,15 +93,6 @@ impl DependencyGraph {
             .keys()
             .filter(|id| !needed_packages.contains(id))
             .cloned()
-            .collect()
-    }
-
-    pub fn get_package_dependents(&self, package: &PackageId) -> Vec<PackageId> {
-        self.reverse_edges
-            .get(package)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
             .collect()
     }
 

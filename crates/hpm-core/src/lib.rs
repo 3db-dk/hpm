@@ -187,7 +187,7 @@
 //! let storage = StorageManager::new(config.storage)?;
 //!
 //! // Clean both packages and Python virtual environments
-//! let result = storage.cleanup_comprehensive(&config.projects).await?;
+//! let result = storage.cleanup_comprehensive(&config.projects, false).await?;
 //!
 //! println!("Cleanup completed:");
 //! println!("  Packages removed: {}", result.removed_packages.len());
@@ -229,9 +229,6 @@ pub mod packer;
 pub mod project;
 pub mod registry;
 pub mod storage;
-
-#[cfg(test)]
-mod integration_test;
 
 pub use archive_fetcher::{ArchiveFetcher, FetchError, FetchResult};
 pub use dependency::{

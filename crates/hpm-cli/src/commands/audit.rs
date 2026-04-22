@@ -87,10 +87,12 @@ pub async fn audit_packages(manifest_path: Option<PathBuf>) -> Result<()> {
                 }
 
                 // Check 4: Checksum verification
-                let config = hpm_config::Config::load().unwrap_or_default();
-                match lock.verify_checksums(&config.storage.packages_dir) {
-                    Ok(()) => passed.push("Package checksums verified"),
-                    Err(e) => warnings.push(format!("Checksum verification failed: {}", e)),
+                match hpm_config::Config::load() {
+                    Ok(config) => match lock.verify_checksums(&config.storage.packages_dir) {
+                        Ok(()) => passed.push("Package checksums verified"),
+                        Err(e) => warnings.push(format!("Checksum verification failed: {e}")),
+                    },
+                    Err(e) => warnings.push(format!("Failed to load HPM config: {e}")),
                 }
             }
             Err(e) => {

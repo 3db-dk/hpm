@@ -430,6 +430,7 @@ impl StorageManager {
         Ok(orphaned_packages)
     }
 
+    /// Remove orphaned packages. Returns identifiers of the packages actually removed.
     pub async fn cleanup_unused(
         &self,
         projects_config: &ProjectsConfig,
@@ -448,7 +449,6 @@ impl StorageManager {
             orphaned_packages.len()
         );
 
-        // Remove orphaned packages
         let mut removed_packages = Vec::new();
         for package_id in orphaned_packages {
             match self
@@ -476,126 +476,87 @@ impl StorageManager {
         Ok(removed_packages)
     }
 
+    /// Plan — but don't execute — an orphan cleanup.
+    ///
+    /// Returns the list of package identifiers that `cleanup_unused` *would*
+    /// remove if called. Safe to call repeatedly.
     pub async fn cleanup_unused_dry_run(
         &self,
         projects_config: &ProjectsConfig,
     ) -> Result<Vec<String>, StorageError> {
-        info!("Starting dry-run project-aware package cleanup");
-
-        let orphaned_packages = self.find_orphaned_packages(projects_config).await?;
-
-        let orphaned_identifiers: Vec<String> =
-            orphaned_packages.iter().map(|id| id.identifier()).collect();
-
-        info!(
-            "Dry run: would remove {} orphaned packages",
-            orphaned_identifiers.len()
-        );
-        for identifier in &orphaned_identifiers {
-            info!("Would remove: {}", identifier);
+        let orphaned = self.find_orphaned_packages(projects_config).await?;
+        let ids: Vec<String> = orphaned.iter().map(|id| id.identifier()).collect();
+        info!("Dry run: would remove {} orphaned packages", ids.len());
+        for id in &ids {
+            info!("Would remove: {id}");
         }
-
-        Ok(orphaned_identifiers)
+        Ok(ids)
     }
 
-    /// Comprehensive cleanup including both packages and Python virtual environments
+    /// Comprehensive cleanup: orphaned packages + orphaned Python virtual environments.
+    ///
+    /// When `dry_run` is true, nothing is removed — the result lists what *would*
+    /// have been removed.
     pub async fn cleanup_comprehensive(
         &self,
         projects_config: &ProjectsConfig,
+        dry_run: bool,
     ) -> Result<ComprehensiveCleanupResult, StorageError> {
-        info!("Starting comprehensive cleanup (packages + Python environments)");
-
-        // First, perform package cleanup
-        let removed_packages = self.cleanup_unused(projects_config).await?;
-
-        // Then, perform Python virtual environment cleanup
-        let python_analyzer = PythonCleanupAnalyzer::new();
-
-        // Get list of active packages after cleanup
-        let remaining_packages = self
-            .list_installed()
-            .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
-        let active_package_names: Vec<String> = remaining_packages
-            .into_iter()
-            .map(|p| format!("{}@{}", p.name, p.version))
-            .collect();
-
-        // Find and clean up orphaned virtual environments
-        let orphaned_venvs = python_analyzer
-            .analyze_orphaned_venvs(&active_package_names)
-            .await
-            .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
-
-        let python_result = python_analyzer
-            .cleanup_orphaned_venvs(&orphaned_venvs, false)
-            .await
-            .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
-
-        let result = ComprehensiveCleanupResult {
-            removed_packages,
-            python_cleanup: python_result,
-        };
-
         info!(
-            "Comprehensive cleanup completed: {} packages, {} venvs, {} space freed",
-            result.removed_packages.len(),
-            result.python_cleanup.items_cleaned(),
-            result.python_cleanup.format_space_freed()
+            "Starting comprehensive cleanup{} (packages + Python environments)",
+            if dry_run { " dry run" } else { "" }
         );
 
-        Ok(result)
-    }
+        // 1. Package cleanup.
+        let removed_packages = if dry_run {
+            self.cleanup_unused_dry_run(projects_config).await?
+        } else {
+            self.cleanup_unused(projects_config).await?
+        };
 
-    /// Comprehensive cleanup dry run including both packages and Python virtual environments
-    pub async fn cleanup_comprehensive_dry_run(
-        &self,
-        projects_config: &ProjectsConfig,
-    ) -> Result<ComprehensiveCleanupResult, StorageError> {
-        info!("Starting comprehensive cleanup dry run");
-
-        // First, get packages that would be removed
-        let would_remove_packages = self.cleanup_unused_dry_run(projects_config).await?;
-
-        // Get list of packages that would remain after cleanup
+        // 2. Build the set of packages that remain (or would remain) after package cleanup.
         let all_installed = self
             .list_installed()
             .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
-
-        // Filter out packages that would be removed
         let remaining_packages: Vec<String> = all_installed
             .into_iter()
             .filter_map(|p| {
-                let package_id = format!("{}@{}", p.name, p.version);
-                if would_remove_packages.contains(&package_id) {
-                    None
-                } else {
-                    Some(package_id)
-                }
+                let id = format!("{}@{}", p.name, p.version);
+                (!removed_packages.contains(&id)).then_some(id)
             })
             .collect();
 
-        // Analyze Python virtual environments
+        // 3. Python virtual environment cleanup against the remaining set.
         let python_analyzer = PythonCleanupAnalyzer::new();
         let orphaned_venvs = python_analyzer
             .analyze_orphaned_venvs(&remaining_packages)
             .await
             .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
 
-        let python_result = python_analyzer
-            .cleanup_orphaned_venvs(&orphaned_venvs, true) // dry_run = true
+        let python_cleanup = python_analyzer
+            .cleanup_orphaned_venvs(&orphaned_venvs, dry_run)
             .await
             .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
 
         let result = ComprehensiveCleanupResult {
-            removed_packages: would_remove_packages,
-            python_cleanup: python_result,
+            removed_packages,
+            python_cleanup,
         };
 
-        info!(
-            "Comprehensive cleanup dry run completed: {} packages, {} venvs would be removed",
-            result.removed_packages.len(),
-            result.python_cleanup.items_that_would_be_cleaned()
-        );
+        if dry_run {
+            info!(
+                "Comprehensive cleanup dry run: {} packages, {} venvs would be removed",
+                result.removed_packages.len(),
+                result.python_cleanup.items_that_would_be_cleaned()
+            );
+        } else {
+            info!(
+                "Comprehensive cleanup completed: {} packages, {} venvs, {} space freed",
+                result.removed_packages.len(),
+                result.python_cleanup.items_cleaned(),
+                result.python_cleanup.format_space_freed()
+            );
+        }
 
         Ok(result)
     }

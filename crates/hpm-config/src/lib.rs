@@ -284,10 +284,13 @@ pub enum ConfigError {
     },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
     pub install: InstallConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
     pub projects: ProjectsConfig,
     #[serde(default)]
     pub registries: Vec<RegistrySourceConfig>,
@@ -324,16 +327,67 @@ pub enum RegistryType {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InstallConfig {
+    #[serde(default = "default_install_path")]
     pub path: String,
+    #[serde(default = "default_parallel_downloads")]
     pub parallel_downloads: usize,
+}
+
+fn default_install_path() -> String {
+    "packages/hpm".to_string()
+}
+
+fn default_parallel_downloads() -> usize {
+    8
+}
+
+impl Default for InstallConfig {
+    fn default() -> Self {
+        Self {
+            path: default_install_path(),
+            parallel_downloads: default_parallel_downloads(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
+    #[serde(default = "default_storage_home")]
     pub home_dir: PathBuf,
+    #[serde(default = "default_storage_cache")]
     pub cache_dir: PathBuf,
+    #[serde(default = "default_storage_packages")]
     pub packages_dir: PathBuf,
+    #[serde(default = "default_storage_registry_cache")]
     pub registry_cache_dir: PathBuf,
+}
+
+fn default_storage_home() -> PathBuf {
+    Config::default_home_dir()
+}
+
+fn default_storage_cache() -> PathBuf {
+    default_storage_home().join("cache")
+}
+
+fn default_storage_packages() -> PathBuf {
+    default_storage_home().join("packages")
+}
+
+fn default_storage_registry_cache() -> PathBuf {
+    default_storage_home().join("registry")
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        let home_dir = default_storage_home();
+        Self {
+            cache_dir: home_dir.join("cache"),
+            packages_dir: home_dir.join("packages"),
+            registry_cache_dir: home_dir.join("registry"),
+            home_dir,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -351,35 +405,25 @@ pub struct ProjectConfig {
     pub manifest_file: PathBuf,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        let home_dir = Self::default_home_dir();
-
-        Self {
-            install: InstallConfig {
-                path: "packages/hpm".to_string(),
-                parallel_downloads: 8,
-            },
-            storage: StorageConfig {
-                home_dir: home_dir.clone(),
-                cache_dir: home_dir.join("cache"),
-                packages_dir: home_dir.join("packages"),
-                registry_cache_dir: home_dir.join("registry"),
-            },
-            projects: ProjectsConfig::default(),
-            registries: vec![],
-            signing: SigningConfig::default(),
-        }
+/// Locate the user's home directory.
+///
+/// Avoids the `dirs` / `home` crates to keep the supply-chain surface small.
+fn user_home() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("USERPROFILE").map(PathBuf::from)
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("HOME").map(PathBuf::from)
     }
 }
 
 impl Config {
     pub fn default_home_dir() -> PathBuf {
-        if let Some(home_dir) = home::home_dir() {
-            home_dir.join(".hpm")
-        } else {
-            PathBuf::from(".hpm")
-        }
+        user_home()
+            .map(|h| h.join(".hpm"))
+            .unwrap_or_else(|| PathBuf::from(".hpm"))
     }
 
     /// Load configuration from the standard locations.
@@ -431,14 +475,10 @@ impl Config {
 
     /// Parse configuration from a TOML string.
     fn parse_toml(content: &str, path: &Path) -> Result<Self, ConfigError> {
-        // Parse into a partial config that allows missing fields
-        let partial: PartialConfig = toml::from_str(content).map_err(|e| ConfigError::Parse {
+        toml::from_str(content).map_err(|e| ConfigError::Parse {
             path: path.to_path_buf(),
             source: Box::new(e),
-        })?;
-
-        // Convert partial config to full config with defaults
-        Ok(partial.into_config())
+        })
     }
 
     /// Merge another configuration into this one.
@@ -623,114 +663,6 @@ impl ConfigBuilder {
 
         config.registries = self.registries;
         config
-    }
-}
-
-/// Partial configuration for parsing TOML files that may have missing fields.
-/// All fields are optional and will be filled with defaults when converting to Config.
-#[derive(Debug, Deserialize, Default)]
-struct PartialConfig {
-    install: Option<PartialInstallConfig>,
-    storage: Option<PartialStorageConfig>,
-    projects: Option<PartialProjectsConfig>,
-    #[serde(default)]
-    registries: Option<Vec<RegistrySourceConfig>>,
-    signing: Option<PartialSigningConfig>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PartialSigningConfig {
-    key_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PartialInstallConfig {
-    path: Option<String>,
-    parallel_downloads: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PartialStorageConfig {
-    home_dir: Option<PathBuf>,
-    cache_dir: Option<PathBuf>,
-    packages_dir: Option<PathBuf>,
-    registry_cache_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PartialProjectsConfig {
-    explicit_paths: Option<Vec<PathBuf>>,
-    search_roots: Option<Vec<PathBuf>>,
-    max_search_depth: Option<usize>,
-    ignore_patterns: Option<Vec<String>>,
-}
-
-impl PartialConfig {
-    fn into_config(self) -> Config {
-        let default = Config::default();
-
-        let home_dir = self
-            .storage
-            .as_ref()
-            .and_then(|s| s.home_dir.clone())
-            .unwrap_or(default.storage.home_dir.clone());
-
-        Config {
-            install: InstallConfig {
-                path: self
-                    .install
-                    .as_ref()
-                    .and_then(|i| i.path.clone())
-                    .unwrap_or(default.install.path),
-                parallel_downloads: self
-                    .install
-                    .and_then(|i| i.parallel_downloads)
-                    .unwrap_or(default.install.parallel_downloads),
-            },
-            storage: StorageConfig {
-                home_dir: home_dir.clone(),
-                cache_dir: self
-                    .storage
-                    .as_ref()
-                    .and_then(|s| s.cache_dir.clone())
-                    .unwrap_or_else(|| home_dir.join("cache")),
-                packages_dir: self
-                    .storage
-                    .as_ref()
-                    .and_then(|s| s.packages_dir.clone())
-                    .unwrap_or_else(|| home_dir.join("packages")),
-                registry_cache_dir: self
-                    .storage
-                    .as_ref()
-                    .and_then(|s| s.registry_cache_dir.clone())
-                    .unwrap_or_else(|| home_dir.join("registry")),
-            },
-            projects: ProjectsConfig {
-                explicit_paths: self
-                    .projects
-                    .as_ref()
-                    .and_then(|p| p.explicit_paths.clone())
-                    .unwrap_or(default.projects.explicit_paths),
-                search_roots: self
-                    .projects
-                    .as_ref()
-                    .and_then(|p| p.search_roots.clone())
-                    .unwrap_or(default.projects.search_roots),
-                max_search_depth: self
-                    .projects
-                    .as_ref()
-                    .and_then(|p| p.max_search_depth)
-                    .unwrap_or(default.projects.max_search_depth),
-                ignore_patterns: self
-                    .projects
-                    .and_then(|p| p.ignore_patterns)
-                    .unwrap_or(default.projects.ignore_patterns),
-            },
-            registries: self.registries.unwrap_or(default.registries),
-            signing: SigningConfig {
-                key_path: self.signing.and_then(|s| s.key_path),
-            },
-        }
     }
 }
 

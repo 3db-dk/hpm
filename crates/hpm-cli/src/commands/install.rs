@@ -1,11 +1,11 @@
 use super::manifest_utils::{determine_manifest_path, load_manifest};
 use crate::progress::OperationProgress;
 use anyhow::{Context, Result};
-use futures::future::join_all;
 use hpm_core::{ArchiveFetcher, LockFile, LockedDependency, LockedPythonDependency, PackageSource};
 use hpm_package::{EnvMethod, HoudiniEnvValue, HoudiniPackage, PackageManifest};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
 /// Install dependencies from hpm.toml manifest
@@ -84,7 +84,8 @@ pub async fn install_dependencies(
     // Verify cached packages against lock file checksums
     if let Some(ref lock) = existing_lock {
         progress.set_message("Verifying cached packages");
-        let config = hpm_config::Config::load().unwrap_or_default();
+        let config = hpm_config::Config::load()
+            .map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
         let packages_dir = &config.storage.packages_dir;
 
         if let Err(e) = lock.verify_checksums(packages_dir) {
@@ -255,7 +256,8 @@ async fn install_hpm_dependencies(
     info!("Installing HPM dependencies...");
 
     // Get global storage directories from config
-    let config = hpm_config::Config::load().unwrap_or_default();
+    let config = hpm_config::Config::load()
+        .map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
     let cache_dir = config.storage.cache_dir.clone();
     let packages_dir = config.storage.packages_dir.clone();
 
@@ -281,114 +283,109 @@ async fn install_hpm_dependencies(
         .await
         .context("Failed to create project packages directory")?;
 
-    // Phase 1: Prepare all fetch operations and their metadata
-    let fetch_tasks: Vec<_> = dependencies
-        .iter()
-        .map(|(name, spec)| {
-            let fetcher = fetcher.clone();
-            let name = name.clone();
-            let spec = spec.clone();
-            let registry_set = registry_set.clone();
+    // Phase 1 + 2: Spawn all fetches in parallel via a JoinSet.
+    let mut fetch_tasks: JoinSet<anyhow::Result<(String, _, PackageSource)>> = JoinSet::new();
+    for (name, spec) in dependencies.iter() {
+        let fetcher = fetcher.clone();
+        let name = name.clone();
+        let spec = spec.clone();
+        let registry_set = registry_set.clone();
 
-            async move {
-                info!("Processing dependency: {}", name);
+        fetch_tasks.spawn(async move {
+            info!("Processing dependency: {}", name);
 
-                // Convert dependency spec to package source
-                let source = match &spec {
-                    hpm_package::DependencySpec::Simple(version) => {
-                        info!("  {} - Registry @ {}", name, version);
-                        let rs = registry_set
-                            .as_ref()
-                            .expect("registry set built for registry deps");
-                        let entry = rs.get_version(&name, version).await.with_context(|| {
-                            format!("Failed to resolve {}@{} from registry", name, version)
-                        })?;
-                        let src = PackageSource::url(&entry.dl, version)
-                            .context("Invalid URL from registry")?;
-                        if let Some(warning) = src.security_warning() {
-                            warn!("Security: {} - {}", name, warning);
-                        }
-                        src
+            // Convert dependency spec to package source
+            let source = match &spec {
+                hpm_package::DependencySpec::Simple(version) => {
+                    info!("  {} - Registry @ {}", name, version);
+                    let rs = registry_set
+                        .as_ref()
+                        .expect("registry set built for registry deps");
+                    let entry = rs.get_version(&name, version).await.with_context(|| {
+                        format!("Failed to resolve {}@{} from registry", name, version)
+                    })?;
+                    let src = PackageSource::url(&entry.dl, version)
+                        .context("Invalid URL from registry")?;
+                    if let Some(warning) = src.security_warning() {
+                        warn!("Security: {} - {}", name, warning);
                     }
-                    hpm_package::DependencySpec::Registry {
-                        version, optional, ..
-                    } => {
-                        info!("  {} - Registry @ {}", name, version);
-                        if *optional {
-                            debug!("  {} is optional", name);
-                        }
-                        let rs = registry_set
-                            .as_ref()
-                            .expect("registry set built for registry deps");
-                        let entry = rs.get_version(&name, version).await.with_context(|| {
-                            format!("Failed to resolve {}@{} from registry", name, version)
-                        })?;
-                        let src = PackageSource::url(&entry.dl, version)
-                            .context("Invalid URL from registry")?;
-                        if let Some(warning) = src.security_warning() {
-                            warn!("Security: {} - {}", name, warning);
-                        }
-                        src
-                    }
-                    hpm_package::DependencySpec::Url {
-                        url,
-                        version,
-                        optional,
-                    } => {
-                        info!("  {} - Url: {} @ {}", name, url, version);
-                        if *optional {
-                            debug!("  {} is optional", name);
-                        }
-                        let src = PackageSource::url(url, version).context("Invalid URL")?;
-
-                        // Security warning for HTTP URLs
-                        if let Some(warning) = src.security_warning() {
-                            warn!("Security: {} - {}", name, warning);
-                        }
-
-                        src
-                    }
-                    hpm_package::DependencySpec::Path { path, optional } => {
-                        info!("  {} - Path: {}", name, path);
-                        if *optional {
-                            debug!("  {} is optional", name);
-                        }
-                        PackageSource::path(path)
-                    }
-                };
-
-                // Fetch the package (this is the expensive network/disk operation)
-                let fetch_result = fetcher
-                    .fetch(&source, &name)
-                    .await
-                    .with_context(|| format!("Failed to fetch package: {}", name))?;
-
-                if fetch_result.from_cache {
-                    info!("  {} found in cache", name);
-                } else {
-                    info!("  {} downloaded and extracted", name);
+                    src
                 }
+                hpm_package::DependencySpec::Registry {
+                    version, optional, ..
+                } => {
+                    info!("  {} - Registry @ {}", name, version);
+                    if *optional {
+                        debug!("  {} is optional", name);
+                    }
+                    let rs = registry_set
+                        .as_ref()
+                        .expect("registry set built for registry deps");
+                    let entry = rs.get_version(&name, version).await.with_context(|| {
+                        format!("Failed to resolve {}@{} from registry", name, version)
+                    })?;
+                    let src = PackageSource::url(&entry.dl, version)
+                        .context("Invalid URL from registry")?;
+                    if let Some(warning) = src.security_warning() {
+                        warn!("Security: {} - {}", name, warning);
+                    }
+                    src
+                }
+                hpm_package::DependencySpec::Url {
+                    url,
+                    version,
+                    optional,
+                } => {
+                    info!("  {} - Url: {} @ {}", name, url, version);
+                    if *optional {
+                        debug!("  {} is optional", name);
+                    }
+                    let src = PackageSource::url(url, version).context("Invalid URL")?;
 
-                debug!(
-                    "  {} checksum: {}",
-                    name,
-                    &fetch_result.checksum[..fetch_result.checksum.len().min(16)]
-                );
+                    // Security warning for HTTP URLs
+                    if let Some(warning) = src.security_warning() {
+                        warn!("Security: {} - {}", name, warning);
+                    }
 
-                Ok::<_, anyhow::Error>((name, fetch_result, source))
+                    src
+                }
+                hpm_package::DependencySpec::Path { path, optional } => {
+                    info!("  {} - Path: {}", name, path);
+                    if *optional {
+                        debug!("  {} is optional", name);
+                    }
+                    PackageSource::path(path)
+                }
+            };
+
+            // Fetch the package (this is the expensive network/disk operation)
+            let fetch_result = fetcher
+                .fetch(&source, &name)
+                .await
+                .with_context(|| format!("Failed to fetch package: {}", name))?;
+
+            if fetch_result.from_cache {
+                info!("  {} found in cache", name);
+            } else {
+                info!("  {} downloaded and extracted", name);
             }
-        })
-        .collect();
 
-    // Phase 2: Execute all fetches in parallel
-    info!("Fetching {} packages in parallel...", fetch_tasks.len());
-    let fetch_results = join_all(fetch_tasks).await;
+            debug!(
+                "  {} checksum: {}",
+                name,
+                &fetch_result.checksum[..fetch_result.checksum.len().min(16)]
+            );
+
+            Ok::<_, anyhow::Error>((name, fetch_result, source))
+        });
+    }
 
     // Phase 3: Process results and create symlinks sequentially
+    info!("Fetching {} packages in parallel...", fetch_tasks.len());
     let mut results = HashMap::new();
 
-    for result in fetch_results {
-        let (name, fetch_result, resolved_source) = result?;
+    while let Some(joined) = fetch_tasks.join_next().await {
+        let (name, fetch_result, resolved_source) = joined.context("Fetch task panicked")??;
 
         // Create reference in project packages directory
         let project_pkg_link = project_packages_dir.join(&name);
