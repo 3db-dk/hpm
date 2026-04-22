@@ -315,11 +315,34 @@ async fn validate_best_practices(
 
     // Check for scripts
     if let Some(ref scripts) = manifest.scripts {
-        result.add_info(format!("[OK] Package defines {} script(s)", scripts.len()));
+        let mut total = scripts.commands.len();
+        if let Some(platform) = &scripts.platform {
+            total += platform.linux.as_ref().map_or(0, |m| m.len());
+            total += platform.macos.as_ref().map_or(0, |m| m.len());
+            total += platform.windows.as_ref().map_or(0, |m| m.len());
+        }
+        result.add_info(format!("[OK] Package defines {} script(s)", total));
 
-        for (script_name, script_cmd) in scripts {
-            if script_cmd.trim().is_empty() {
-                result.add_warning(format!("Script '{}' has empty command", script_name));
+        let mut check_entry = |label: String, cmd: &str| {
+            if cmd.trim().is_empty() {
+                result.add_warning(format!("Script '{}' has empty command", label));
+            }
+        };
+
+        for (name, cmd) in &scripts.commands {
+            check_entry(name.clone(), cmd);
+        }
+        if let Some(platform) = &scripts.platform {
+            for (os, entries) in [
+                ("linux", &platform.linux),
+                ("macos", &platform.macos),
+                ("windows", &platform.windows),
+            ] {
+                if let Some(entries) = entries {
+                    for (name, cmd) in entries {
+                        check_entry(format!("{}:{}", os, name), cmd);
+                    }
+                }
             }
         }
     }

@@ -36,6 +36,62 @@ pub struct ManifestEnvEntry {
     pub value: String,
 }
 
+/// Platform-scoped script overrides.
+///
+/// Deserialized from `[scripts.platform.<os>]` sub-tables. Each entry is a map
+/// of script name → shell command that overrides the top-level `[scripts]`
+/// entry for the matching OS.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PlatformScripts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<IndexMap<String, String>>,
+}
+
+impl PlatformScripts {
+    /// Entries for the given OS key (`"linux"`, `"macos"`, `"windows"`).
+    pub fn for_os(&self, os: &str) -> Option<&IndexMap<String, String>> {
+        match os {
+            "linux" => self.linux.as_ref(),
+            "macos" => self.macos.as_ref(),
+            "windows" => self.windows.as_ref(),
+            _ => None,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.linux.is_none() && self.macos.is_none() && self.windows.is_none()
+    }
+}
+
+fn platform_scripts_is_none_or_empty(p: &Option<PlatformScripts>) -> bool {
+    p.as_ref().is_none_or(PlatformScripts::is_empty)
+}
+
+/// Package-defined scripts from `[scripts]`.
+///
+/// Top-level entries live in `commands` and apply to every platform. An
+/// optional `[scripts.platform.<os>]` sub-table supplies per-OS overrides;
+/// when a script name appears in both, the platform-specific entry wins for
+/// that OS.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PackageScripts {
+    #[serde(default, skip_serializing_if = "platform_scripts_is_none_or_empty")]
+    pub platform: Option<PlatformScripts>,
+    #[serde(flatten)]
+    pub commands: IndexMap<String, String>,
+}
+
+impl PackageScripts {
+    /// True when neither top-level nor platform entries exist.
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty() && platform_scripts_is_none_or_empty(&self.platform)
+    }
+}
+
 /// Native platform configuration for multi-architecture packaging.
 ///
 /// Declares which files belong to which platform, enabling per-platform archives.
@@ -81,7 +137,8 @@ pub struct PackageManifest {
     pub python_dependencies: Option<IndexMap<String, PythonDependencySpec>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, ManifestEnvEntry>>,
-    pub scripts: Option<HashMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scripts: Option<PackageScripts>,
 }
 
 /// Package metadata information
@@ -178,6 +235,51 @@ impl PackageManifest {
             env: None,
             scripts: None,
         }
+    }
+
+    /// Resolve the effective scripts for the given platform.
+    ///
+    /// Starts with the top-level `[scripts]` entries (which apply everywhere)
+    /// and overlays any `[scripts.platform.<os>]` entries for the current OS,
+    /// where platform-specific entries win on collision. Insertion order from
+    /// the manifest is preserved; platform-only scripts appear after the
+    /// top-level ones.
+    ///
+    /// Passing `None` (e.g. when the host platform cannot be identified)
+    /// yields only the top-level commands.
+    pub fn resolved_scripts(&self, platform: Option<Platform>) -> IndexMap<String, String> {
+        let Some(scripts) = &self.scripts else {
+            return IndexMap::new();
+        };
+
+        let mut out = scripts.commands.clone();
+
+        if let (Some(platform), Some(platform_scripts)) = (platform, &scripts.platform)
+            && let Some(entries) = platform_scripts.for_os(platform.os_key())
+        {
+            for (name, cmd) in entries {
+                out.insert(name.clone(), cmd.clone());
+            }
+        }
+
+        out
+    }
+
+    /// Resolve a single script command for the given platform.
+    ///
+    /// Same precedence rule as [`resolved_scripts`](Self::resolved_scripts):
+    /// platform override wins over the top-level entry.
+    pub fn script_for(&self, name: &str, platform: Option<Platform>) -> Option<String> {
+        let scripts = self.scripts.as_ref()?;
+
+        if let (Some(platform), Some(platform_scripts)) = (platform, &scripts.platform)
+            && let Some(entries) = platform_scripts.for_os(platform.os_key())
+            && let Some(cmd) = entries.get(name)
+        {
+            return Some(cmd.clone());
+        }
+
+        scripts.commands.get(name).cloned()
     }
 
     /// Validate the package manifest for common errors
@@ -836,6 +938,201 @@ version = "0.1.0"
         // Only the PKG_ env entry
         assert_eq!(pkg.env.len(), 1);
         assert!(pkg.env[0].contains_key("PKG_BARE_PKG"));
+    }
+
+    #[test]
+    fn scripts_flat_map_roundtrip() {
+        let toml_str = r#"
+[package]
+path = "studio/my-package"
+name = "My Package"
+version = "0.1.0"
+
+[scripts]
+build = "cargo build"
+test = "cargo test"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let scripts = manifest.scripts.as_ref().unwrap();
+        assert_eq!(scripts.commands.len(), 2);
+        assert_eq!(scripts.commands["build"], "cargo build");
+        assert_eq!(scripts.commands["test"], "cargo test");
+        assert!(scripts.platform.is_none());
+
+        // Preserves declaration order in the flattened commands map.
+        let names: Vec<&String> = scripts.commands.keys().collect();
+        assert_eq!(names, vec!["build", "test"]);
+    }
+
+    #[test]
+    fn scripts_platform_overrides_parse() {
+        let toml_str = r#"
+[package]
+path = "studio/claudini"
+name = "Claudini"
+version = "1.0.0"
+
+[scripts]
+build = "cargo build"
+
+[scripts.platform.windows]
+register = "\"$HPM_PACKAGE_ROOT/plugin/bin/claudini2.exe\" register"
+
+[scripts.platform.macos]
+register = "\"$HPM_PACKAGE_ROOT/plugin/bin/claudini2\" register"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let scripts = manifest.scripts.as_ref().unwrap();
+        assert_eq!(scripts.commands["build"], "cargo build");
+
+        let platform = scripts.platform.as_ref().unwrap();
+        assert!(platform.linux.is_none());
+        let win = platform.windows.as_ref().unwrap();
+        assert!(win["register"].contains("claudini2.exe"));
+        let mac = platform.macos.as_ref().unwrap();
+        assert_eq!(
+            mac["register"],
+            "\"$HPM_PACKAGE_ROOT/plugin/bin/claudini2\" register"
+        );
+    }
+
+    #[test]
+    fn scripts_resolve_merges_platform_over_flat() {
+        let toml_str = r#"
+[package]
+path = "studio/claudini"
+name = "Claudini"
+version = "1.0.0"
+
+[scripts]
+build = "cargo build"
+register = "fallback"
+
+[scripts.platform.windows]
+register = "windows-specific"
+unregister = "windows-only"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+
+        let resolved = manifest.resolved_scripts(Some(Platform::WindowsX86_64));
+        assert_eq!(resolved["build"], "cargo build");
+        assert_eq!(resolved["register"], "windows-specific");
+        assert_eq!(resolved["unregister"], "windows-only");
+
+        // macOS has no platform entry — falls back to the flat map.
+        let resolved_mac = manifest.resolved_scripts(Some(Platform::MacosUniversal));
+        assert_eq!(resolved_mac["register"], "fallback");
+        assert!(!resolved_mac.contains_key("unregister"));
+
+        // Unknown platform returns flat-only.
+        let resolved_none = manifest.resolved_scripts(None);
+        assert_eq!(resolved_none.len(), 2);
+        assert_eq!(resolved_none["register"], "fallback");
+    }
+
+    #[test]
+    fn script_for_respects_platform_precedence() {
+        let toml_str = r#"
+[package]
+path = "studio/tool"
+name = "Tool"
+version = "1.0.0"
+
+[scripts]
+register = "fallback"
+
+[scripts.platform.linux]
+register = "linux-specific"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(
+            manifest.script_for("register", Some(Platform::LinuxX86_64)),
+            Some("linux-specific".to_string())
+        );
+        assert_eq!(
+            manifest.script_for("register", Some(Platform::MacosUniversal)),
+            Some("fallback".to_string())
+        );
+        assert_eq!(
+            manifest.script_for("missing", Some(Platform::LinuxX86_64)),
+            None
+        );
+    }
+
+    #[test]
+    fn scripts_absent_resolves_empty() {
+        let toml_str = r#"
+[package]
+path = "studio/pkg"
+name = "Pkg"
+version = "0.1.0"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        assert!(manifest.scripts.is_none());
+        assert!(
+            manifest
+                .resolved_scripts(Some(Platform::LinuxX86_64))
+                .is_empty()
+        );
+        assert_eq!(manifest.script_for("anything", None), None);
+    }
+
+    #[test]
+    fn scripts_platform_only_no_flat() {
+        let toml_str = r#"
+[package]
+path = "studio/pkg"
+name = "Pkg"
+version = "0.1.0"
+
+[scripts.platform.linux]
+register = "linux-register"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let scripts = manifest.scripts.as_ref().unwrap();
+        assert!(scripts.commands.is_empty());
+        assert!(scripts.platform.as_ref().unwrap().linux.is_some());
+
+        let resolved = manifest.resolved_scripts(Some(Platform::LinuxX86_64));
+        assert_eq!(resolved["register"], "linux-register");
+        let resolved_mac = manifest.resolved_scripts(Some(Platform::MacosUniversal));
+        assert!(resolved_mac.is_empty());
+    }
+
+    #[test]
+    fn scripts_toml_roundtrip_preserves_platform_table() {
+        let mut manifest = PackageManifest::new(
+            "studio/tool".to_string(),
+            "Tool".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
+        let mut commands = IndexMap::new();
+        commands.insert("build".to_string(), "cargo build".to_string());
+
+        let mut win = IndexMap::new();
+        win.insert("register".to_string(), "tool.exe register".to_string());
+
+        manifest.scripts = Some(PackageScripts {
+            commands,
+            platform: Some(PlatformScripts {
+                linux: None,
+                macos: None,
+                windows: Some(win),
+            }),
+        });
+
+        let toml_str = toml::to_string(&manifest).unwrap();
+        let roundtripped: PackageManifest = toml::from_str(&toml_str).unwrap();
+        let scripts = roundtripped.scripts.unwrap();
+        assert_eq!(scripts.commands["build"], "cargo build");
+        assert_eq!(
+            scripts.platform.unwrap().windows.unwrap()["register"],
+            "tool.exe register"
+        );
     }
 
     #[test]

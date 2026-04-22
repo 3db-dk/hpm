@@ -31,6 +31,16 @@ impl Platform {
             Self::WindowsX86_64 => "windows-x86_64",
         }
     }
+
+    /// Short OS identifier used for platform-scoped manifest sections
+    /// (e.g. `[scripts.platform.<os>]`).
+    pub fn os_key(&self) -> &'static str {
+        match self {
+            Self::LinuxX86_64 => "linux",
+            Self::MacosUniversal => "macos",
+            Self::WindowsX86_64 => "windows",
+        }
+    }
 }
 
 impl fmt::Display for Platform {
