@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-22
+
 ### Breaking Changes
 - Dropped support for Houdini 19.x (Python 3.7) and Houdini 20.0–20.4
   (Python 3.9). Both Python interpreters are past upstream end-of-life.
