@@ -95,7 +95,18 @@ pub struct PackageManifest {
     pub dependencies: Option<IndexMap<String, DependencySpec>>,
     pub python_dependencies: Option<IndexMap<String, PythonDependencySpec>>,
     pub env: Option<IndexMap<String, ManifestEnvEntry>>,
-    pub scripts: Option<HashMap<String, String>>,
+    pub scripts: Option<PackageScripts>,
+}
+
+pub struct PackageScripts {
+    pub platform: Option<PlatformScripts>,        // [scripts.platform.<os>]
+    pub commands: IndexMap<String, String>,       // flat entries under [scripts]
+}
+
+pub struct PlatformScripts {
+    pub linux: Option<IndexMap<String, String>>,
+    pub macos: Option<IndexMap<String, String>>,
+    pub windows: Option<IndexMap<String, String>>,
 }
 
 pub struct PackageInfo {

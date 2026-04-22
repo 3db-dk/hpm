@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Support for Houdini 22.x → Python 3.13.
+- `[scripts.platform.<os>]` sub-tables (`linux`/`macos`/`windows`) for
+  per-OS overrides of package scripts. Top-level `[scripts]` entries
+  still apply on every platform; platform-specific entries win for the
+  matching host. New helpers `PackageManifest::resolved_scripts` and
+  `script_for` expose a single resolution rule for desktop / CLI / CI
+  consumers.
 
 ### Changed
 - `map_houdini_to_python_version` error message now lists the new

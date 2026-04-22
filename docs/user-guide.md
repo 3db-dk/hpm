@@ -576,6 +576,31 @@ build = "python scripts/build.py"
 test = "python -m pytest tests/"
 ```
 
+Entries under `[scripts]` apply on every platform. For scripts whose
+command differs per OS (for example, calling a `.exe` on Windows but an
+extensionless binary elsewhere), add a `[scripts.platform.<os>]` sub-table.
+Valid OS keys are `linux`, `macos`, and `windows`; a platform-specific
+entry wins over the top-level one on the matching host, and the top-level
+entry is used as a fallback on OSes that aren't listed.
+
+```toml
+[scripts]
+build = "cargo build"                        # runs on any platform
+
+[scripts.platform.windows]
+register   = "\"$HPM_PACKAGE_ROOT/plugin/bin/tool.exe\" register"
+unregister = "\"$HPM_PACKAGE_ROOT/plugin/bin/tool.exe\" unregister"
+
+[scripts.platform.macos]
+register = "\"$HPM_PACKAGE_ROOT/plugin/bin/tool\" register"
+```
+
+Consumers resolve scripts through `PackageManifest::resolved_scripts(platform)`
+(all entries for the given host, merged) or `script_for(name, platform)`
+(single lookup). A script that is only defined under `[scripts.platform.*]`
+is simply absent on OSes without an entry — UIs can use this to hide
+menu items rather than fail at runtime.
+
 ## Global configuration
 
 HPM reads `~/.hpm/config.toml` if it exists, then `<cwd>/.hpm/config.toml`
