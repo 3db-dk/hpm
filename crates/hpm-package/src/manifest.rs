@@ -168,7 +168,7 @@ impl PackageManifest {
                 categories: None,
             },
             houdini: Some(HoudiniConfig {
-                min_version: Some("19.5".to_string()),
+                min_version: Some("20.5".to_string()),
                 max_version: None,
             }),
             native: None,

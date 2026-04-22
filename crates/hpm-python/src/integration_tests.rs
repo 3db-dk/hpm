@@ -44,7 +44,7 @@ async fn test_end_to_end_python_workflow() {
             categories: None,
         },
         houdini: Some(HoudiniConfig {
-            min_version: Some("20.0".to_string()),
+            min_version: Some("20.5".to_string()),
             max_version: None,
         }),
         native: None,
@@ -85,7 +85,7 @@ async fn test_end_to_end_python_workflow() {
             categories: None,
         },
         houdini: Some(HoudiniConfig {
-            min_version: Some("20.0".to_string()), // Same as package A
+            min_version: Some("20.5".to_string()), // Same as package A
             max_version: None,
         }),
         native: None,
@@ -108,11 +108,11 @@ async fn test_end_to_end_python_workflow() {
     assert!(collected_deps.dependencies.contains_key("scipy"));
     assert!(collected_deps.dependencies.contains_key("matplotlib"));
 
-    // Python version should be mapped from Houdini version (20.0 -> Python 3.9)
+    // Python version should be mapped from Houdini version (20.5 -> Python 3.10)
     assert!(collected_deps.python_version.is_some());
     let py_version = collected_deps.python_version.unwrap();
     assert_eq!(py_version.major, 3);
-    assert_eq!(py_version.minor, 9);
+    assert_eq!(py_version.minor, 10);
 
     // Step 2: Test dependency resolution (mock since UV may not be available)
     // In a real scenario, this would resolve to exact versions
@@ -261,8 +261,7 @@ async fn test_virtual_environment_sharing() {
 #[tokio::test]
 async fn test_houdini_python_version_mapping_edge_cases() {
     // Unparseable or unmapped Houdini versions must hard-fail rather than
-    // silently install a wrong Python version into the venv (the original
-    // tumblepipe/Houdini-21 bug was masked by a silent 3.9 fallback).
+    // silently install a wrong Python version into the venv.
     use hpm_package::{HoudiniConfig, PackageInfo};
     use indexmap::IndexMap;
 
@@ -304,7 +303,7 @@ async fn test_houdini_python_version_mapping_edge_cases() {
 
     // Known-but-unmapped future major → error (so we don't silently pick an
     // outdated Python ABI when a new Houdini ships).
-    let err = dependency::collect_python_dependencies(&[make_manifest("22.0")])
+    let err = dependency::collect_python_dependencies(&[make_manifest("23.0")])
         .await
         .expect_err("expected error for unmapped Houdini major");
     assert!(

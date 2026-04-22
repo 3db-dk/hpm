@@ -19,7 +19,7 @@ use std::collections::HashMap;
 ///   "env": [
 ///     {"PYTHONPATH": {"method": "prepend", "value": "$HPM_PACKAGE_ROOT/python"}}
 ///   ],
-///   "enable": "houdini_version >= '19.5'"
+///   "enable": "houdini_version >= '20.5'"
 /// }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,7 +168,7 @@ mod tests {
             "PYTHONPATH",
             HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"),
         );
-        pkg.set_enable("houdini_version >= '19.5'");
+        pkg.set_enable("houdini_version >= '20.5'");
 
         assert!(pkg.hpath.is_some());
         assert_eq!(pkg.hpath.as_ref().unwrap().len(), 1);

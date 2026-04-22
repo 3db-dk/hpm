@@ -83,31 +83,32 @@ have pinned, defeating the lock file's reproducibility guarantee.
 HPM reads `[houdini].min_version` from the manifest and maps it to the Python
 version Houdini ships that interpreter with:
 
-| Houdini version | Python version |
-|-----------------|----------------|
-| 19.x            | 3.7 |
-| 20.0 – 20.4     | 3.9 |
-| 20.5, 20.x (x ≥ 5) | 3.10 |
-| 21.x            | 3.11 |
+| Houdini version    | Python version |
+|--------------------|----------------|
+| 20.5, 20.x (x ≥ 5) | 3.10           |
+| 21.x               | 3.11           |
+| 22.x               | 3.13           |
 
 Both `"21"` and `"21.0"` are accepted — bare majors are treated as `major.0`.
+
+### Unsupported: Houdini 19.x and 20.0 – 20.4
+
+These ship Python 3.7 and 3.9 respectively, both past upstream end-of-life.
+HPM refuses to create venvs against them rather than installing a dead ABI.
+If you need to run one of those Houdini versions, stay on HPM 0.7.x.
 
 ### No silent fallback
 
 If `min_version` is unparseable (`"latest"`) or points at a Houdini major
-outside this table (`"22"`, `"18"`), `hpm install` **errors out** rather
-than silently picking Python 3.9.
+outside this table (`"23"`, `"18"`), `hpm install` **errors out** rather
+than silently picking a wrong Python — an ABI-mismatched venv would let
+the install succeed and then break C-extension imports (`pymongo`,
+`watchdog`, …) at Houdini launch instead.
 
 ```
-Error: No Python version mapping for Houdini 22; supported majors are 19, 20, 21.
-Update map_houdini_to_python_version in hpm-python if you need a newer version.
+Error: No Python version mapping for Houdini 23; supported versions are 20.5+, 21, 22.
+Houdini 19.x (Python 3.7) and 20.0–20.4 (Python 3.9) are past EOL.
 ```
-
-This is deliberate. Earlier versions of HPM fell back to Python 3.9 silently,
-which masked a real Houdini 21 bug: C-extension packages (`pymongo`,
-`watchdog`, etc.) compiled against Python 3.9 ABI would fail to load under
-Houdini 21's embedded Python 3.11. The hard error surfaces mapping gaps
-immediately instead of at Houdini launch.
 
 If you need a new Houdini major before HPM ships support for it, update the
 mapping in `crates/hpm-python/src/dependency.rs::map_houdini_to_python_version`

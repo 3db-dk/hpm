@@ -40,7 +40,7 @@
 //! ```text
 //! Package: geometry-tools v1.2.0
 //! Description: Advanced geometry manipulation tools for Houdini
-//! Houdini compatibility: min: 20.0, max: 21.0
+//! Houdini compatibility: min: 20.5, max: 22.0
 //!
 //! HPM Dependencies:
 //!   utility-nodes ^2.1.0

@@ -65,7 +65,7 @@ authors = ["Test Author <test@example.com>"]
 license = "MIT"
 
 [houdini]
-min_version = "20.0"
+min_version = "20.5"
 "#
     .to_string();
 

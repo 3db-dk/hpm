@@ -119,8 +119,12 @@ fn convert_spec_to_dependency(name: &str, spec: &PythonDependencySpec) -> Result
 ///
 /// Accepts both `"21"` and `"21.0"` — bare majors are treated as `major.0`, so
 /// Houdini 21 → Python 3.11 matches the documented mapping. Unparseable input
-/// or versions outside the supported range return an error; silent fallbacks
-/// hide bugs (e.g. installing a Python 3.9 venv for Houdini 21).
+/// or versions outside the supported range return an error rather than a
+/// silent fallback, so typos and unrecognised future majors surface at install
+/// time instead of producing an ABI-mismatched venv.
+///
+/// Houdini 19.x (Python 3.7) and 20.0–20.4 (Python 3.9) are intentionally
+/// unsupported: their Python interpreters are past upstream EOL.
 fn map_houdini_to_python_version(houdini_version: &str) -> Result<PythonVersion> {
     let mut parts = houdini_version.split('.');
     let major: u32 = parts
@@ -135,13 +139,12 @@ fn map_houdini_to_python_version(houdini_version: &str) -> Result<PythonVersion>
     let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
 
     match (major, minor) {
-        (19, _) => Ok(PythonVersion::new(3, 7, None)),
-        (20, 0..=4) => Ok(PythonVersion::new(3, 9, None)),
-        (20, _) => Ok(PythonVersion::new(3, 10, None)),
+        (20, 5..) => Ok(PythonVersion::new(3, 10, None)),
         (21, _) => Ok(PythonVersion::new(3, 11, None)),
+        (22, _) => Ok(PythonVersion::new(3, 13, None)),
         _ => Err(anyhow::anyhow!(
-            "No Python version mapping for Houdini {}; supported majors are 19, 20, 21. \
-             Update map_houdini_to_python_version in hpm-python if you need a newer version.",
+            "No Python version mapping for Houdini {}; supported versions are 20.5+, 21, 22. \
+             Houdini 19.x (Python 3.7) and 20.0–20.4 (Python 3.9) are past EOL.",
             houdini_version
         )),
     }
@@ -192,7 +195,7 @@ mod tests {
                 categories: None,
             },
             houdini: Some(HoudiniConfig {
-                min_version: Some("20.0".to_string()),
+                min_version: Some("20.5".to_string()),
                 max_version: None,
             }),
             native: None,
@@ -210,23 +213,15 @@ mod tests {
         assert!(result.dependencies.contains_key("numpy"));
         assert!(result.dependencies.contains_key("requests"));
 
-        // Check that Python version was mapped correctly (Houdini 20.0 -> Python 3.9)
+        // Check that Python version was mapped correctly (Houdini 20.5 -> Python 3.10)
         assert!(result.python_version.is_some());
         let py_version = result.python_version.unwrap();
         assert_eq!(py_version.major, 3);
-        assert_eq!(py_version.minor, 9);
+        assert_eq!(py_version.minor, 10);
     }
 
     #[test]
     fn test_houdini_to_python_version_mapping() {
-        assert_eq!(
-            map_houdini_to_python_version("19.5").unwrap(),
-            PythonVersion::new(3, 7, None)
-        );
-        assert_eq!(
-            map_houdini_to_python_version("20.0").unwrap(),
-            PythonVersion::new(3, 9, None)
-        );
         assert_eq!(
             map_houdini_to_python_version("20.5").unwrap(),
             PythonVersion::new(3, 10, None)
@@ -235,23 +230,38 @@ mod tests {
             map_houdini_to_python_version("21.0").unwrap(),
             PythonVersion::new(3, 11, None)
         );
+        assert_eq!(
+            map_houdini_to_python_version("22.0").unwrap(),
+            PythonVersion::new(3, 13, None)
+        );
     }
 
     #[test]
     fn test_houdini_to_python_version_bare_major() {
-        // Bare major versions (no minor) must resolve the same as "X.0".
-        assert_eq!(
-            map_houdini_to_python_version("19").unwrap(),
-            PythonVersion::new(3, 7, None)
-        );
-        assert_eq!(
-            map_houdini_to_python_version("20").unwrap(),
-            PythonVersion::new(3, 9, None)
-        );
+        // Bare major versions (no minor) must resolve the same as "X.0"
+        // — which for 20 is 20.0, unsupported.
         assert_eq!(
             map_houdini_to_python_version("21").unwrap(),
             PythonVersion::new(3, 11, None)
         );
+        assert_eq!(
+            map_houdini_to_python_version("22").unwrap(),
+            PythonVersion::new(3, 13, None)
+        );
+    }
+
+    #[test]
+    fn test_houdini_to_python_version_eol_rejected() {
+        // Python 3.7 and 3.9 are past upstream EOL; the corresponding Houdini
+        // majors must hard-fail rather than silently installing a dead ABI.
+        for dead in ["19.0", "19.5", "20.0", "20.4"] {
+            let err = map_houdini_to_python_version(dead)
+                .expect_err("expected error for EOL-Python Houdini version");
+            assert!(
+                err.to_string().contains("No Python version mapping"),
+                "unexpected error for {dead}: {err}"
+            );
+        }
     }
 
     #[test]

@@ -187,14 +187,14 @@
 //! hpm init my-houdini-tools --author "Artist <artist@studio.com>"
 //!
 //! # Create minimal package structure
-//! hpm init --bare minimal-package --houdini-min 20.0
+//! hpm init --bare minimal-package --houdini-min 20.5
 //!
 //! # Initialize with custom metadata
 //! hpm init advanced-tools \
 //!   --description "Advanced geometry manipulation tools" \
 //!   --license Apache-2.0 \
-//!   --houdini-min 19.5 \
-//!   --houdini-max 21.0
+//!   --houdini-min 20.5 \
+//!   --houdini-max 22.0
 //! ```
 //!
 //! ### Dependency Management

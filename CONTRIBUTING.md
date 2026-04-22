@@ -8,7 +8,7 @@ Thank you for your interest in contributing to HPM (Houdini Package Manager).
 
 #### Required Tools
 - **Rust 1.85 or later** - The project requires modern Rust features
-- **SideFX Houdini 19.5+** - For testing integration features and package compatibility
+- **SideFX Houdini 20.5+** - For testing integration features and package compatibility
 - **Git** - Version control and contribution workflow
 
 #### Optional Tools

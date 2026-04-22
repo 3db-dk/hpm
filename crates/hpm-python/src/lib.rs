@@ -74,10 +74,12 @@
 //!
 //! | Houdini Version | Python Version | Notes                    |
 //! |----------------|----------------|--------------------------|
-//! | 19.0 - 19.5    | Python 3.7     | Legacy support           |
-//! | 20.0           | Python 3.9     | Current stable           |
-//! | 20.5           | Python 3.10    | Enhanced performance     |
-//! | 21.x           | Python 3.11    | Latest features          |
+//! | 20.5           | Python 3.10    | Minimum supported        |
+//! | 21.x           | Python 3.11    |                          |
+//! | 22.x           | Python 3.13    | Latest                   |
+//!
+//! Houdini 19.x (Python 3.7) and 20.0–20.4 (Python 3.9) are unsupported —
+//! their Python interpreters are past upstream EOL.
 //!
 //! ## Module Organization
 //!

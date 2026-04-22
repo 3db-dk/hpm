@@ -838,7 +838,7 @@ authors = ["Test Author <test@example.com>"]
 license = "MIT"
 
 [houdini]
-min_version = "20.0"
+min_version = "20.5"
 "#;
         std::fs::write(temp_dir.path().join("hpm.toml"), manifest_content).unwrap();
 

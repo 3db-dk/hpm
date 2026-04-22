@@ -123,14 +123,14 @@ HPM picks the Python version from `[houdini].min_version`:
 
 | Houdini    | Python |
 |-----------:|--------|
-| 19.x       | 3.7    |
-| 20.0–20.4  | 3.9    |
 | 20.5+      | 3.10   |
 | 21.x       | 3.11   |
+| 22.x       | 3.13   |
 
-Houdini versions outside this table produce an install-time error rather than
-a silent fallback (this caught a real Houdini-21 ABI bug in 0.7.0). See the
-[Python guide](docs/python-guide.md).
+Houdini 19.x (Python 3.7) and 20.0–20.4 (Python 3.9) are unsupported — their
+Python interpreters are past upstream EOL. Unsupported versions produce an
+install-time error rather than a silent fallback (this caught a real Houdini-21
+ABI bug in 0.7.0). See the [Python guide](docs/python-guide.md).
 
 ## How it works
 

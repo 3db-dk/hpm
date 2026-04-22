@@ -394,14 +394,14 @@ pub fn content_hash(resolved: &ResolvedDependencies) -> String {
 
 | Houdini | Python |
 |---------|--------|
-| 19.x | 3.7 |
-| 20.0 – 20.4 | 3.9 |
 | 20.5+ | 3.10 |
 | 21.x | 3.11 |
+| 22.x | 3.13 |
 
-Unsupported majors return an error. No silent fallback. This caught a real
-Houdini 21 ABI bug in 0.7.0 where packages compiled for Python 3.9 wouldn't
-load under Houdini 21's embedded Python 3.11.
+Unsupported versions return an error. No silent fallback — an ABI-mismatched
+venv would break C-extension imports at Houdini launch instead of surfacing
+the mapping gap at install time. Houdini 19.x (Python 3.7) and 20.0–20.4
+(Python 3.9) are unsupported: their Python interpreters are past upstream EOL.
 
 ### Generated Houdini manifest
 

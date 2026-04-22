@@ -116,10 +116,9 @@ mod tests {
     /// Strategy to generate Houdini version strings
     fn houdini_version_strategy() -> impl Strategy<Value = String> {
         prop_oneof![
-            Just("19.5".to_string()),
-            Just("20.0".to_string()),
             Just("20.5".to_string()),
             Just("21.0".to_string()),
+            Just("22.0".to_string()),
             r"[1-2][0-9]\.[0-9]", // Generate reasonable Houdini versions
         ]
     }

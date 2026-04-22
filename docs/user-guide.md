@@ -25,7 +25,7 @@ global configuration, and troubleshooting.
 
 ### Prerequisites
 
-- SideFX Houdini 19.x, 20.x, or 21.x (for integration — HPM itself runs fine without it).
+- SideFX Houdini 20.5, 21.x, or 22.x (for integration — HPM itself runs fine without it).
 - Rust 1.85+ if building from source.
 - Git (optional; used by `hpm init --vcs git`).
 
@@ -166,7 +166,7 @@ hpm init [OPTIONS] [NAME]
 | `--author <name>` | `git config user.*` if set | Author (`"Name <email>"`). |
 | `--version <v>` | `0.1.0` | Initial version. |
 | `--license <id>` | `MIT` | License identifier. |
-| `--houdini-min <v>` | `19.5` | Minimum Houdini version. |
+| `--houdini-min <v>` | `20.5` | Minimum Houdini version. |
 | `--houdini-max <v>` | — | Maximum Houdini version. |
 | `--bare` | off | Skip standard directories; create only `hpm.toml` and `README.md`. |
 | `--vcs <vcs>` | `git` | `git` or `none`. |

@@ -400,7 +400,7 @@ mod tests {
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
             license: "MIT".to_string(),
-            houdini_min: Some("19.5".to_string()),
+            houdini_min: Some("20.5".to_string()),
             houdini_max: None,
             bare: true,
             vcs: "none".to_string(),
@@ -433,7 +433,7 @@ mod tests {
         assert!(hpm_toml_content.contains("description = \"Test bare package\""));
         assert!(hpm_toml_content.contains("Test Author <test@example.com>"));
         assert!(hpm_toml_content.contains("license = \"MIT\""));
-        assert!(hpm_toml_content.contains("min_version = \"19.5\""));
+        assert!(hpm_toml_content.contains("min_version = \"20.5\""));
     }
 
     #[tokio::test]
@@ -446,7 +446,7 @@ mod tests {
             author: Some("Test Author <test@example.com>".to_string()),
             version: "2.1.0".to_string(),
             license: "Apache-2.0".to_string(),
-            houdini_min: Some("19.5".to_string()),
+            houdini_min: Some("20.5".to_string()),
             houdini_max: Some("21.0".to_string()),
             bare: false,
             vcs: "none".to_string(),
@@ -487,7 +487,7 @@ mod tests {
         assert!(hpm_toml_content.contains("description = \"A comprehensive test package\""));
         assert!(hpm_toml_content.contains("Test Author <test@example.com>"));
         assert!(hpm_toml_content.contains("license = \"Apache-2.0\""));
-        assert!(hpm_toml_content.contains("min_version = \"19.5\""));
+        assert!(hpm_toml_content.contains("min_version = \"20.5\""));
         assert!(hpm_toml_content.contains("max_version = \"21.0\""));
 
         // Validate package.json content (Houdini package manifest)
@@ -496,7 +496,7 @@ mod tests {
         assert_eq!(package_json["env"].as_array().unwrap().len(), 2);
         assert!(package_json_content.contains("PYTHONPATH"));
         assert!(package_json_content.contains("HOUDINI_SCRIPT_PATH"));
-        assert!(package_json_content.contains("houdini_version >= '19.5'"));
+        assert!(package_json_content.contains("houdini_version >= '20.5'"));
         assert!(package_json["hpath"].as_array().is_some());
 
         // Validate README.md content

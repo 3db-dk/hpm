@@ -116,7 +116,7 @@ readme = "README.md"
 keywords = ["houdini"]
 
 [houdini]
-min_version = "19.5"
+min_version = "20.5"
 "#,
                 manifest.package.path,
                 manifest.package.name,
@@ -145,7 +145,7 @@ min_version = "19.5"
         {"PYTHONPATH": {"method": "prepend", "value": "$HPM_PACKAGE_ROOT/python"}},
         {"HOUDINI_SCRIPT_PATH": {"method": "prepend", "value": "$HPM_PACKAGE_ROOT/scripts"}}
     ],
-    "enable": "houdini_version >= '19.5'"
+    "enable": "houdini_version >= '20.5'"
 }"#
             .to_string()
         })

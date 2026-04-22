@@ -30,7 +30,7 @@ pub struct RegistryEntry {
     /// Key ID used for signing
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kid: Option<String>,
-    /// Houdini version compatibility range (e.g., ">=20.0,<22.0")
+    /// Houdini version compatibility range (e.g., ">=20.5,<23.0")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub houdini_compat: Option<String>,
     /// Target platform for this archive variant (None = universal)

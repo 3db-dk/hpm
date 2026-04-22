@@ -755,7 +755,7 @@ version = "1.0.0"
 description = "A test package"
 
 [houdini]
-min_version = "19.5"
+min_version = "20.5"
 "#;
         std::fs::write(package_dir.join("hpm.toml"), manifest_content).unwrap();
 
@@ -889,7 +889,7 @@ version = "1.0.0"
 description = "A fire effects package"
 
 [houdini]
-min_version = "19.5"
+min_version = "20.5"
 "#;
         std::fs::write(package_dir.join("hpm.toml"), manifest_content).unwrap();
 

@@ -20,8 +20,8 @@ use std::str::FromStr;
 /// use hpm_python::PythonVersion;
 ///
 /// // Create a Python version
-/// let version = PythonVersion::new(3, 9, Some(12));
-/// assert_eq!(version.to_string(), "3.9.12");
+/// let version = PythonVersion::new(3, 11, Some(9));
+/// assert_eq!(version.to_string(), "3.11.9");
 ///
 /// // Parse from string
 /// let parsed: PythonVersion = "3.10".parse().unwrap();
@@ -33,9 +33,9 @@ use std::str::FromStr;
 pub struct PythonVersion {
     /// Major version number (e.g., 3 for Python 3.x)
     pub major: u8,
-    /// Minor version number (e.g., 9 for Python 3.9.x)
+    /// Minor version number (e.g., 11 for Python 3.11.x)
     pub minor: u8,
-    /// Optional patch version number (e.g., 12 for Python 3.9.12)
+    /// Optional patch version number (e.g., 9 for Python 3.11.9)
     pub patch: Option<u8>,
 }
 

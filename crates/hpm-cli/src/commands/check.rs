@@ -471,25 +471,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_valid_houdini_version() {
-        assert!(is_valid_houdini_version("20.0"));
-        assert!(is_valid_houdini_version("19.5"));
-        assert!(is_valid_houdini_version("20.0.123"));
+        assert!(is_valid_houdini_version("21.0"));
+        assert!(is_valid_houdini_version("20.5"));
+        assert!(is_valid_houdini_version("22.0.123"));
 
         assert!(!is_valid_houdini_version("invalid"));
         assert!(!is_valid_houdini_version(""));
-        assert!(!is_valid_houdini_version("20"));
-        assert!(!is_valid_houdini_version("20.0.0.1"));
+        assert!(!is_valid_houdini_version("21"));
+        assert!(!is_valid_houdini_version("21.0.0.1"));
     }
 
     #[tokio::test]
     async fn test_compare_versions() {
-        assert_eq!(compare_versions("20.0", "19.5"), Some(1));
-        assert_eq!(compare_versions("19.5", "20.0"), Some(-1));
-        assert_eq!(compare_versions("20.0", "20.0"), Some(0));
-        assert_eq!(compare_versions("20.0.1", "20.0"), Some(1));
+        assert_eq!(compare_versions("21.0", "20.5"), Some(1));
+        assert_eq!(compare_versions("20.5", "21.0"), Some(-1));
+        assert_eq!(compare_versions("21.0", "21.0"), Some(0));
+        assert_eq!(compare_versions("21.0.1", "21.0"), Some(1));
 
-        assert_eq!(compare_versions("invalid", "20.0"), None);
-        assert_eq!(compare_versions("20.0", "invalid"), None);
+        assert_eq!(compare_versions("invalid", "21.0"), None);
+        assert_eq!(compare_versions("21.0", "invalid"), None);
     }
 
     #[tokio::test]
@@ -520,7 +520,7 @@ version = "1.0.0"
 description = "A test package"
 
 [houdini]
-min_version = "19.5"
+min_version = "20.5"
 "#;
 
         std::fs::write(&manifest_path, manifest_content).unwrap();
