@@ -73,6 +73,17 @@ pub async fn install_dependencies(
                 Some(lock)
             }
             Err(e) => {
+                // Frozen mode promises the install reproduces the lockfile.
+                // Silently skipping an unparseable lockfile would bypass that
+                // promise — surface it instead so the user can repair or
+                // regenerate the lockfile explicitly.
+                if frozen_lockfile {
+                    return Err(anyhow::anyhow!(
+                        "--frozen-lockfile requires a valid hpm.lock, but loading it failed: {}. \
+                         Re-run without --frozen-lockfile to regenerate it.",
+                        e
+                    ));
+                }
                 warn!("Failed to load existing lock file: {}", e);
                 None
             }
