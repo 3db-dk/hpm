@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-04-23
+
 ### Fixed
 - `VenvManager::ensure_virtual_environment` now treats a venv whose
   `metadata.json` fails to deserialize as stale and rebuilds it, instead
