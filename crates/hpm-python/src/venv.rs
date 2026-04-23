@@ -106,14 +106,16 @@ impl VenvManager {
         // Now that the install path is fixed, trusting `venv_path.exists()`
         // alone still wedges users on the stale dir. Verify the expected
         // packages are present; if not, drop the directory and rebuild.
-        if venv_path.exists() && self.venv_is_stale(&venv_path, resolved_deps).await {
-            warn!(
-                "Rebuilding venv {}: site-packages missing expected packages",
-                hash
-            );
-            fs::remove_dir_all(&venv_path)
-                .await
-                .context("Failed to remove stale virtual environment")?;
+        // Also rebuild when metadata.json is from an incompatible schema —
+        // otherwise launch fails hard on the parse error with no way to
+        // clear the cache from the UI.
+        if venv_path.exists() {
+            if let Some(reason) = self.venv_staleness_reason(&venv_path, resolved_deps).await {
+                warn!("Rebuilding venv {}: {}", hash, reason);
+                fs::remove_dir_all(&venv_path)
+                    .await
+                    .context("Failed to remove stale virtual environment")?;
+            }
         }
 
         if !venv_path.exists() {
@@ -132,19 +134,45 @@ impl VenvManager {
         Ok(venv_path)
     }
 
-    /// True when the venv's `site-packages` doesn't actually contain the
-    /// resolved packages it claims to. A venv with an empty resolved set is
-    /// never stale.
-    async fn venv_is_stale(&self, venv_path: &Path, resolved_deps: &ResolvedDependencySet) -> bool {
-        if resolved_deps.packages.is_empty() {
-            return false;
+    /// Returns a human-readable reason if the venv at `venv_path` should be
+    /// rebuilt, or `None` if it's reusable.
+    ///
+    /// Staleness sources:
+    /// - `site-packages` is missing or doesn't contain the resolved packages
+    ///   (e.g. the pre-0.7.1 `--target` bug).
+    /// - `metadata.json` exists but can't be deserialized, which happens when
+    ///   the schema changed across hpm versions. Without this check, launch
+    ///   fails hard on the parse error with no way to clear the cache from
+    ///   the UI.
+    async fn venv_staleness_reason(
+        &self,
+        venv_path: &Path,
+        resolved_deps: &ResolvedDependencySet,
+    ) -> Option<&'static str> {
+        if !resolved_deps.packages.is_empty() {
+            let site_packages =
+                self.get_python_site_packages_path(venv_path, &resolved_deps.python_version);
+            if fs::metadata(&site_packages).await.is_err() {
+                return Some("site-packages missing");
+            }
+            if !any_package_present(&site_packages, resolved_deps).await {
+                return Some("site-packages missing expected packages");
+            }
         }
-        let site_packages =
-            self.get_python_site_packages_path(venv_path, &resolved_deps.python_version);
-        if fs::metadata(&site_packages).await.is_err() {
-            return true;
+
+        let metadata_path = venv_path.join("metadata.json");
+        if metadata_path.exists() {
+            match fs::read_to_string(&metadata_path).await {
+                Ok(content) => {
+                    if serde_json::from_str::<VenvMetadata>(&content).is_err() {
+                        return Some("metadata.json is from an incompatible schema");
+                    }
+                }
+                Err(_) => return Some("metadata.json is unreadable"),
+            }
         }
-        !any_package_present(&site_packages, resolved_deps).await
+
+        None
     }
 
     /// Create a new virtual environment
@@ -597,6 +625,43 @@ mod tests {
         assert!(
             found,
             "stale venv was reused instead of rebuilt; packaging-*.dist-info missing"
+        );
+    }
+
+    /// Legacy hpm versions serialized `created_at`/`last_used` as ISO 8601
+    /// strings; the current schema expects i64 epoch seconds. A venv written
+    /// by the old version must be recognised as stale so the caller rebuilds
+    /// rather than propagating the parse error as a hard launch failure.
+    #[tokio::test]
+    async fn test_unparseable_metadata_flagged_as_stale() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let manager = VenvManager::with_venvs_dir(tmp.path().to_path_buf());
+
+        let python = PythonVersion::new(3, 11, None);
+        let resolved = ResolvedDependencySet::new(python);
+        let venv_path = tmp.path().join("legacy-venv");
+        fs::create_dir_all(&venv_path).await.unwrap();
+
+        // Pre-0.8 shape: ISO 8601 strings where the current schema wants i64.
+        let legacy = r#"{
+            "hash": "deadbeef",
+            "dependency_set": {
+                "python_version": {"major": 3, "minor": 11, "patch": null},
+                "packages": {}
+            },
+            "created_at": "2026-04-21T11:09:23.090683Z",
+            "last_used": "2026-04-22T13:43:18.436012800Z",
+            "used_by_packages": [],
+            "path": "/tmp/legacy-venv"
+        }"#;
+        fs::write(venv_path.join("metadata.json"), legacy)
+            .await
+            .unwrap();
+
+        let reason = manager.venv_staleness_reason(&venv_path, &resolved).await;
+        assert!(
+            reason.is_some(),
+            "legacy metadata.json should be flagged as stale",
         );
     }
 }

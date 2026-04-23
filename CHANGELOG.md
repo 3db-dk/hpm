@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `VenvManager::ensure_virtual_environment` now treats a venv whose
+  `metadata.json` fails to deserialize as stale and rebuilds it, instead
+  of propagating the parse error as a hard launch failure. This
+  self-heals venvs written by pre-0.8 hpm (ISO 8601 timestamp strings)
+  when launched by 0.8+ (i64 epoch seconds), without users needing to
+  manually delete `~/.hpm/venvs/<hash>/`.
+
 ## [0.8.1] - 2026-04-23
 
 ### Fixed
