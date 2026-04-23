@@ -84,36 +84,115 @@ impl ProjectManager {
     pub async fn add_dependency(&self, spec: &PackageSpec) -> Result<(), ProjectError> {
         info!("Adding dependency: {} {}", spec.name, spec.version_req);
 
-        // 1. Install package to global storage if not already installed
-        let installed_package = if !self
+        let installed_packages = self
             .storage_manager
-            .package_exists(&spec.name, spec.version_req.as_str())
-        {
-            self.storage_manager
-                .install_package(spec)
-                .await
-                .map_err(|e| ProjectError::PackageInstallation(e.to_string()))?
-        } else {
-            // Find existing installed package
-            let installed_packages = self
-                .storage_manager
-                .list_installed()
-                .map_err(|e| ProjectError::StorageRead(e.to_string()))?;
+            .list_installed()
+            .map_err(|e| ProjectError::StorageRead(e.to_string()))?;
 
-            installed_packages
-                .into_iter()
-                .find(|p| p.name == spec.name && p.is_compatible_with(&spec.version_req))
-                .ok_or_else(|| ProjectError::PackageNotFound(spec.name.clone()))?
+        let installed_package = if let Some(pkg) = installed_packages.iter().find(|p| {
+            Self::matches_spec_name(p, &spec.name) && p.is_compatible_with(&spec.version_req)
+        }) {
+            info!(
+                "Package {} already installed with compatible version {}",
+                spec.name, pkg.version
+            );
+            pkg.clone()
+        } else {
+            self.resolve_and_install_from_registry(spec).await?
         };
 
-        // 2. Generate Houdini package manifest
         self.generate_houdini_manifest(&installed_package)?;
-
-        // 3. Update project manifest and lock file
         self.update_project_manifest(spec)?;
 
         info!("Successfully added dependency: {}", spec.name);
         Ok(())
+    }
+
+    /// Match an installed package against a spec name, handling both scoped
+    /// (`creator/slug`) and bare (`slug`) names. The package's canonical
+    /// identifier is `manifest.package.path`; `InstalledPackage.name` only
+    /// holds the slug.
+    fn matches_spec_name(pkg: &InstalledPackage, spec_name: &str) -> bool {
+        pkg.manifest.package.path == spec_name || pkg.name == spec_name
+    }
+
+    /// Resolve a package spec against configured registries and install it.
+    async fn resolve_and_install_from_registry(
+        &self,
+        spec: &PackageSpec,
+    ) -> Result<InstalledPackage, ProjectError> {
+        let config =
+            hpm_config::Config::load().map_err(|e| ProjectError::ConfigLoad(e.to_string()))?;
+        let registry_set = crate::registry::RegistrySet::from_configs(
+            &config.registries,
+            &config.storage.registry_cache_dir,
+        );
+
+        if registry_set.is_empty() {
+            return Err(ProjectError::PackageInstallation(format!(
+                "Cannot install {} {}: no registries configured",
+                spec.name, spec.version_req
+            )));
+        }
+
+        let entry = self.resolve_registry_entry(&registry_set, spec).await?;
+        self.fetch_and_install_pkg(
+            &spec.name,
+            &entry.version.clone(),
+            PackageSource::Url {
+                url: entry.dl,
+                version: entry.version,
+            },
+        )
+        .await
+    }
+
+    /// Resolve a `PackageSpec` to a concrete `RegistryEntry`. If the spec's
+    /// requirement parses as an exact semver version, look it up directly;
+    /// otherwise list all versions and pick the highest matching one.
+    async fn resolve_registry_entry(
+        &self,
+        registry_set: &crate::registry::RegistrySet,
+        spec: &PackageSpec,
+    ) -> Result<crate::registry::RegistryEntry, ProjectError> {
+        let req_str = spec.version_req.as_str();
+
+        if semver::Version::parse(req_str).is_ok() {
+            return registry_set
+                .get_version(&spec.name, req_str)
+                .await
+                .map_err(|e| {
+                    ProjectError::PackageInstallation(format!(
+                        "Failed to resolve {}@{} from registry: {}",
+                        spec.name, req_str, e
+                    ))
+                });
+        }
+
+        let mut versions = registry_set.get_versions(&spec.name).await.map_err(|e| {
+            ProjectError::PackageInstallation(format!(
+                "Failed to list versions for {}: {}",
+                spec.name, e
+            ))
+        })?;
+
+        versions.retain(|v| !v.yanked && spec.version_req.matches(&v.version));
+        versions.sort_by(|a, b| {
+            match (
+                semver::Version::parse(&a.version),
+                semver::Version::parse(&b.version),
+            ) {
+                (Ok(va), Ok(vb)) => vb.cmp(&va),
+                _ => b.version.cmp(&a.version),
+            }
+        });
+
+        versions.into_iter().next().ok_or_else(|| {
+            ProjectError::PackageInstallation(format!(
+                "No version of {} matches requirement {}",
+                spec.name, req_str
+            ))
+        })
     }
 
     pub async fn remove_dependency(&self, name: &str) -> Result<(), ProjectError> {
@@ -933,5 +1012,32 @@ mod tests {
             }
             _ => panic!("Expected Detailed env value"),
         }
+    }
+
+    #[test]
+    fn matches_spec_name_handles_scoped_and_bare() {
+        let manifest = hpm_package::PackageManifest::new(
+            "tumblehead/claudini2".to_string(),
+            "Claudini 2".to_string(),
+            "0.4.0".to_string(),
+            None,
+            None,
+            None,
+        );
+        let pkg = InstalledPackage {
+            name: "claudini2".to_string(),
+            version: "0.4.0".to_string(),
+            manifest,
+            install_path: PathBuf::from("/tmp/claudini2@0.4.0"),
+            installed_at: std::time::SystemTime::now(),
+        };
+
+        assert!(ProjectManager::matches_spec_name(
+            &pkg,
+            "tumblehead/claudini2"
+        ));
+        assert!(ProjectManager::matches_spec_name(&pkg, "claudini2"));
+        assert!(!ProjectManager::matches_spec_name(&pkg, "other/claudini2"));
+        assert!(!ProjectManager::matches_spec_name(&pkg, "unrelated"));
     }
 }

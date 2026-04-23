@@ -186,35 +186,6 @@ impl StorageManager {
         }))
     }
 
-    pub async fn install_package(
-        &self,
-        spec: &PackageSpec,
-    ) -> Result<InstalledPackage, StorageError> {
-        info!("Installing package: {} {}", spec.name, spec.version_req);
-
-        // Check if we already have a compatible version installed
-        let installed = self.list_installed()?;
-        for pkg in &installed {
-            if pkg.name == spec.name && pkg.is_compatible_with(&spec.version_req) {
-                info!(
-                    "Package {} already installed with compatible version {}",
-                    spec.name, pkg.version
-                );
-                return Ok(pkg.clone());
-            }
-        }
-
-        // For now, return an error indicating the package needs to be installed
-        // In a full implementation, this would:
-        // 1. Query the registry for available versions matching spec.version_req
-        // 2. Download the best matching version
-        // 3. Extract and validate the package
-        Err(StorageError::PackageNotFound(format!(
-            "Package {} {} not found in registry. Use 'hpm install --from-path <path>' to install from a local directory.",
-            spec.name, spec.version_req
-        )))
-    }
-
     /// Install a package from a local directory path.
     /// The directory must contain a valid hpm.toml manifest.
     pub async fn install_from_path(

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `ProjectManager::add_dependency` now resolves first-install packages
+  through the configured registries (mirroring `sync_dependencies`)
+  instead of calling a stub that always returned `PackageNotFound`.
+  Scoped names like `creator/slug` are also matched correctly against
+  already-installed packages.
+
+### Removed
+- `StorageManager::install_package` (the unimplemented stub). Callers
+  should go through `ProjectManager::add_dependency` or
+  `StorageManager::install_from_path`.
+
 ## [0.8.0] - 2026-04-22
 
 ### Breaking Changes
