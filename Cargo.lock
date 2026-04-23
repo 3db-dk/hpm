@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-cli"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -836,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-config"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -848,7 +848,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -878,7 +878,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-package"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "indexmap",
  "proptest",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-python"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "flate2",
@@ -913,7 +913,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-resolver"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "proptest",
@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-workspace"
-version = "0.8.0"
+version = "0.8.1"
 
 [[package]]
 name = "http"
