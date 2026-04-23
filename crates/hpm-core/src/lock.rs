@@ -238,7 +238,19 @@ impl LockFile {
     /// Save the lock file to the given path
     pub fn save(&self, path: &Path) -> Result<(), LockError> {
         let content = self.to_toml()?;
-        std::fs::write(path, content).map_err(|e| LockError::Write {
+
+        // Atomic write: stage to <path>.tmp, then rename. A crash mid-write
+        // otherwise leaves a truncated `hpm.lock` — every subsequent
+        // `install` warns and regenerates, which is visible churn for
+        // something the user didn't do wrong.
+        let mut tmp_path = path.as_os_str().to_os_string();
+        tmp_path.push(".tmp");
+        let tmp_path = std::path::PathBuf::from(tmp_path);
+        std::fs::write(&tmp_path, content).map_err(|e| LockError::Write {
+            path: tmp_path.clone(),
+            source: e,
+        })?;
+        std::fs::rename(&tmp_path, path).map_err(|e| LockError::Write {
             path: path.to_path_buf(),
             source: e,
         })?;
@@ -544,6 +556,30 @@ mod tests {
         // Should contain OS and arch
         assert!(platform.contains('-'));
         assert!(!platform.is_empty());
+    }
+
+    /// `LockFile::save` stages to `<path>.tmp` and renames. Verify that a
+    /// stale `.tmp` from a previous interrupted save doesn't block the
+    /// next save (the `.tmp` must be replaced, not refused), and that the
+    /// final path reflects the new content rather than the stale staged
+    /// bytes.
+    #[test]
+    fn save_overwrites_stale_tmp_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let lock_path = temp_dir.path().join("hpm.lock");
+        let tmp_path = temp_dir.path().join("hpm.lock.tmp");
+
+        // Simulate an interrupted save: a leftover .tmp with garbage.
+        std::fs::write(&tmp_path, b"garbage from a previous crash").unwrap();
+
+        let lock = LockFile::new("acme/widget".to_string(), "1.0.0".to_string());
+        lock.save(&lock_path).expect("save should succeed");
+
+        assert!(lock_path.exists(), "lock file must exist after save");
+        assert!(!tmp_path.exists(), "tmp file should have been renamed away");
+
+        let loaded = LockFile::load(&lock_path).expect("load should succeed");
+        assert_eq!(loaded.package.name, "acme/widget");
     }
 
     // Property-based tests cover all other functionality with better coverage

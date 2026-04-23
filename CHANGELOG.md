@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   self-heals venvs written by pre-0.8 hpm (ISO 8601 timestamp strings)
   when launched by 0.8+ (i64 epoch seconds), without users needing to
   manually delete `~/.hpm/venvs/<hash>/`.
+- `Config::load` no longer aborts when `~/.hpm/config.toml` is
+  malformed. It warns and falls back to defaults, so a corrupted user
+  config can be repaired with any `hpm` command instead of requiring a
+  manual file edit. Project `.hpm/config.toml` still fails hard.
+- `hpm install --frozen-lockfile` now fails loudly when `hpm.lock`
+  exists but can't be parsed, instead of silently skipping checksum
+  verification and defeating the reproducibility guarantee the flag
+  promises.
+- `Config::save`, `LockFile::save` and the per-package Houdini manifest
+  writer now stage writes to `<path>.tmp` and atomically rename into
+  place, so a crash mid-write can't leave a truncated `config.toml`,
+  `hpm.lock`, or `.hpm/packages/*.json`.
 
 ## [0.8.1] - 2026-04-23
 

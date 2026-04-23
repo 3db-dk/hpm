@@ -427,13 +427,27 @@ impl ProjectManager {
             .project_config
             .package_manifest_path(&installed_package.name);
 
-        // Write directly to file using buffered writer to avoid intermediate string allocation
-        let file = std::fs::File::create(&manifest_path)
-            .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
-        let writer = std::io::BufWriter::new(file);
+        // Atomic write: stage to <path>.tmp then rename. Houdini reads
+        // these manifests on launch; a crash or interrupt mid-write leaves
+        // a truncated JSON that Houdini chokes on and blocks the project.
+        let mut tmp_path = manifest_path.as_os_str().to_os_string();
+        tmp_path.push(".tmp");
+        let tmp_path = PathBuf::from(tmp_path);
 
-        serde_json::to_writer_pretty(writer, &houdini_package)
-            .map_err(|e| ProjectError::JsonSerialization(e.to_string()))?;
+        {
+            let file = std::fs::File::create(&tmp_path)
+                .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
+            let mut writer = std::io::BufWriter::new(file);
+            serde_json::to_writer_pretty(&mut writer, &houdini_package)
+                .map_err(|e| ProjectError::JsonSerialization(e.to_string()))?;
+            use std::io::Write;
+            writer
+                .flush()
+                .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
+        }
+
+        std::fs::rename(&tmp_path, &manifest_path)
+            .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
 
         debug!("Generated Houdini manifest for {}", installed_package.name);
         Ok(())

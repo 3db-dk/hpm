@@ -569,7 +569,18 @@ impl Config {
         }
 
         let content = toml::to_string_pretty(self)?;
-        std::fs::write(path, content).map_err(|e| ConfigError::Write {
+
+        // Atomic write: stage to <path>.tmp, then rename. A crash or
+        // interrupt mid-write would otherwise leave a truncated TOML that
+        // every subsequent `Config::load()` has to warn-and-recover from.
+        let mut tmp_path = path.as_os_str().to_os_string();
+        tmp_path.push(".tmp");
+        let tmp_path = PathBuf::from(tmp_path);
+        std::fs::write(&tmp_path, content).map_err(|e| ConfigError::Write {
+            path: tmp_path.clone(),
+            source: e,
+        })?;
+        std::fs::rename(&tmp_path, path).map_err(|e| ConfigError::Write {
             path: path.to_path_buf(),
             source: e,
         })?;
