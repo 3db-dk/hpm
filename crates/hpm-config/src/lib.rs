@@ -254,7 +254,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Errors that can occur when loading configuration
 #[derive(Debug, thiserror::Error)]
@@ -437,13 +437,27 @@ impl Config {
     pub fn load() -> Result<Self, ConfigError> {
         let mut config = Self::default();
 
-        // Load user config from ~/.hpm/config.toml
+        // Load user config from ~/.hpm/config.toml.
+        // A malformed user config must not lock the user out: every CLI
+        // command calls `load()`, so propagating a parse error here leaves
+        // no way to run `hpm config ...` to repair it. Fall back to defaults
+        // and warn instead. Project configs below are user-authored and
+        // project-scoped, so those still fail hard.
         let user_config_path = Self::default_home_dir().join("config.toml");
         if user_config_path.exists() {
             debug!("Loading user config from {:?}", user_config_path);
-            let user_config = Self::load_from_path(&user_config_path)?;
-            config.merge(user_config);
-            info!("Loaded user configuration from {:?}", user_config_path);
+            match Self::load_from_path(&user_config_path) {
+                Ok(user_config) => {
+                    config.merge(user_config);
+                    info!("Loaded user configuration from {:?}", user_config_path);
+                }
+                Err(e) => {
+                    warn!(
+                        "Ignoring malformed user config at {:?}: {}. Using defaults.",
+                        user_config_path, e
+                    );
+                }
+            }
         }
 
         // Load project config from .hpm/config.toml in current directory
