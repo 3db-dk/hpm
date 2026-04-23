@@ -22,10 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exists but can't be parsed, instead of silently skipping checksum
   verification and defeating the reproducibility guarantee the flag
   promises.
-- `Config::save`, `LockFile::save` and the per-package Houdini manifest
-  writer now stage writes to `<path>.tmp` and atomically rename into
-  place, so a crash mid-write can't leave a truncated `config.toml`,
-  `hpm.lock`, or `.hpm/packages/*.json`.
+- `Config::save`, `LockFile::save`, the per-package Houdini manifest
+  writer, and venv `metadata.json` updates now stage writes to
+  `<path>.tmp` and atomically rename into place, so a crash mid-write
+  can't leave a truncated `config.toml`, `hpm.lock`,
+  `.hpm/packages/*.json`, or `~/.hpm/venvs/<hash>/metadata.json`. The
+  venv self-heal still covers any legacy truncation that slipped in
+  before this change.
 
 ## [0.8.1] - 2026-04-23
 

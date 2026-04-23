@@ -306,12 +306,20 @@ impl VenvManager {
 
         metadata.last_used = Some(std::time::SystemTime::now());
 
-        // Write updated metadata
+        // Atomic write: stage to <path>.tmp then rename. The self-heal
+        // path rebuilds the entire venv on a truncated metadata.json,
+        // which is expensive — avoid triggering it on a crash mid-write.
         let metadata_json =
             serde_json::to_string_pretty(&metadata).context("Failed to serialize metadata")?;
-        fs::write(&metadata_path, metadata_json)
+        let mut tmp_path = metadata_path.as_os_str().to_os_string();
+        tmp_path.push(".tmp");
+        let tmp_path = PathBuf::from(tmp_path);
+        fs::write(&tmp_path, metadata_json)
             .await
             .context("Failed to write metadata file")?;
+        fs::rename(&tmp_path, &metadata_path)
+            .await
+            .context("Failed to commit metadata file")?;
 
         Ok(())
     }
