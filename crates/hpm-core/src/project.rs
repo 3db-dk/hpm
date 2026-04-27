@@ -580,20 +580,27 @@ impl ProjectManager {
             env.push(scripts_env);
         }
 
-        // Append user-defined env vars from [env] section, applying project-level overrides
+        // Append user-defined env vars from [env] section, applying project-level overrides.
+        // A package entry with `required = true` and no value is a placeholder
+        // that the project's [env] must override; otherwise we hard-error so
+        // the package is not silently launched without a value it depends on.
         if let Some(user_env) = &installed_package.manifest.env {
             for (key, entry) in user_env {
-                // Check if project has an override for this env var
-                let effective_entry = if let Some(overrides) = project_env_overrides {
-                    overrides.get(key).unwrap_or(entry)
-                } else {
-                    entry
-                };
+                let override_entry = project_env_overrides
+                    .as_ref()
+                    .and_then(|overrides| overrides.get(key));
+                let effective_entry = override_entry.unwrap_or(entry);
 
+                let raw_value = effective_entry.value.as_ref().ok_or_else(|| {
+                    ProjectError::MissingRequiredEnv {
+                        var: key.clone(),
+                        package: installed_package.name.clone(),
+                    }
+                })?;
+
+                let resolved_value =
+                    raw_value.replace("$HPM_PACKAGE_ROOT", &package_path.to_string_lossy());
                 let mut env_map = HashMap::new();
-                let resolved_value = effective_entry
-                    .value
-                    .replace("$HPM_PACKAGE_ROOT", &package_path.to_string_lossy());
                 env_map.insert(
                     key.clone(),
                     hpm_package::HoudiniEnvValue::Detailed {
@@ -844,6 +851,12 @@ pub enum ProjectError {
 
     #[error("Failed to load HPM configuration: {0}")]
     ConfigLoad(String),
+
+    #[error(
+        "Required env var '{var}' for package '{package}' has no value. \
+         Set it in this project's [env] section in hpm.toml."
+    )]
+    MissingRequiredEnv { var: String, package: String },
 }
 
 #[cfg(test)]
@@ -965,7 +978,8 @@ mod tests {
             "MY_CONFIG".to_string(),
             ManifestEnvEntry {
                 method: hpm_package::EnvMethod::Set,
-                value: "$HPM_PACKAGE_ROOT/default-config".to_string(),
+                value: Some("$HPM_PACKAGE_ROOT/default-config".to_string()),
+                required: false,
             },
         );
         manifest.env = Some(pkg_env);
@@ -1007,7 +1021,8 @@ mod tests {
             "MY_CONFIG".to_string(),
             ManifestEnvEntry {
                 method: hpm_package::EnvMethod::Set,
-                value: "/custom/config/path".to_string(),
+                value: Some("/custom/config/path".to_string()),
+                required: false,
             },
         );
 
@@ -1022,6 +1037,91 @@ mod tests {
         match my_config_entry.get("MY_CONFIG").unwrap() {
             hpm_package::HoudiniEnvValue::Detailed { method, value } => {
                 assert_eq!(value, "/custom/config/path");
+                assert_eq!(method, "set");
+            }
+            _ => panic!("Expected Detailed env value"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_houdini_package_required_env_without_override_errors() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = hpm_config::StorageConfig {
+            home_dir: temp_dir.path().join(".hpm"),
+            cache_dir: temp_dir.path().join(".hpm").join("cache"),
+            packages_dir: temp_dir.path().join(".hpm").join("packages"),
+            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
+        };
+        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
+
+        let mut manifest = hpm_package::PackageManifest::new(
+            "studio/needs-config".to_string(),
+            "Needs Config".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
+        let mut pkg_env = IndexMap::new();
+        pkg_env.insert(
+            "PROJECT_ROOT".to_string(),
+            ManifestEnvEntry {
+                method: hpm_package::EnvMethod::Set,
+                value: None,
+                required: true,
+            },
+        );
+        manifest.env = Some(pkg_env);
+
+        let package_path = temp_dir.path().join("needs-config@1.0.0");
+        std::fs::create_dir_all(&package_path).unwrap();
+
+        let installed_package = InstalledPackage {
+            name: "needs-config".to_string(),
+            version: "1.0.0".to_string(),
+            manifest,
+            install_path: package_path,
+            installed_at: std::time::SystemTime::now(),
+        };
+
+        // No project override: required placeholder must trigger MissingRequiredEnv.
+        let err = project_manager
+            .create_houdini_package(&installed_package)
+            .unwrap_err();
+        match err {
+            ProjectError::MissingRequiredEnv { var, package } => {
+                assert_eq!(var, "PROJECT_ROOT");
+                assert_eq!(package, "needs-config");
+            }
+            other => panic!("Expected MissingRequiredEnv, got {:?}", other),
+        }
+
+        // Project override supplies a value: should succeed and emit it.
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            "PROJECT_ROOT".to_string(),
+            ManifestEnvEntry {
+                method: hpm_package::EnvMethod::Set,
+                value: Some("/work/project".to_string()),
+                required: false,
+            },
+        );
+        let pkg = project_manager
+            .create_houdini_package_with_python(&installed_package, None, &Some(overrides))
+            .unwrap();
+        let entry = pkg
+            .env
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|m| m.contains_key("PROJECT_ROOT"))
+            .unwrap();
+        match entry.get("PROJECT_ROOT").unwrap() {
+            hpm_package::HoudiniEnvValue::Detailed { value, method } => {
+                assert_eq!(value, "/work/project");
                 assert_eq!(method, "set");
             }
             _ => panic!("Expected Detailed env value"),

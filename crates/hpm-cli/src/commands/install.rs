@@ -2,7 +2,8 @@ use super::manifest_utils::{determine_manifest_path, load_manifest};
 use crate::progress::OperationProgress;
 use anyhow::{Context, Result};
 use hpm_core::{ArchiveFetcher, LockFile, LockedDependency, LockedPythonDependency, PackageSource};
-use hpm_package::{EnvMethod, HoudiniEnvValue, HoudiniPackage, PackageManifest};
+use hpm_package::{EnvMethod, HoudiniEnvValue, HoudiniPackage, ManifestEnvEntry, PackageManifest};
+use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::task::JoinSet;
@@ -202,9 +203,14 @@ pub async fn install_dependencies(
     // so Houdini can load each installed dep and so the shared venv's PYTHONPATH
     // reaches packages that declare [python_dependencies].
     progress.set_message("Generating Houdini package manifests");
-    write_houdini_manifests(&hpm_dir, &install_results, venv_site_packages.as_deref())
-        .await
-        .context("Failed to generate Houdini package manifests")?;
+    write_houdini_manifests(
+        &hpm_dir,
+        &install_results,
+        venv_site_packages.as_deref(),
+        manifest.env.as_ref(),
+    )
+    .await
+    .context("Failed to generate Houdini package manifests")?;
 
     // Generate or update lock file (skip in frozen lockfile mode)
     if frozen_lockfile {
@@ -536,6 +542,7 @@ async fn write_houdini_manifests(
     hpm_dir: &Path,
     install_results: &HashMap<String, PackageInstallResult>,
     venv_site_packages: Option<&Path>,
+    project_env_overrides: Option<&IndexMap<String, ManifestEnvEntry>>,
 ) -> Result<()> {
     let packages_json_dir = hpm_dir.join("packages");
     tokio::fs::create_dir_all(&packages_json_dir)
@@ -556,8 +563,14 @@ async fn write_houdini_manifests(
             }
         };
 
-        let houdini_pkg =
-            build_houdini_package_for_install(&manifest, &result.package_path, venv_site_packages);
+        let houdini_pkg = build_houdini_package_for_install(
+            name,
+            &manifest,
+            &result.package_path,
+            venv_site_packages,
+            project_env_overrides,
+        )
+        .with_context(|| format!("Failed to build Houdini package for '{}'", name))?;
 
         let manifest_path = packages_json_dir.join(format!("{}.json", name));
         let file = std::fs::File::create(&manifest_path).with_context(|| {
@@ -587,10 +600,12 @@ async fn write_houdini_manifests(
 /// `$HPM_PACKAGE_ROOT` in user-declared env values is substituted with the
 /// package's absolute install path.
 fn build_houdini_package_for_install(
+    package_name: &str,
     manifest: &PackageManifest,
     package_path: &Path,
     venv_site_packages: Option<&Path>,
-) -> HoudiniPackage {
+    project_env_overrides: Option<&IndexMap<String, ManifestEnvEntry>>,
+) -> Result<HoudiniPackage> {
     let package_path_str = package_path.to_string_lossy().to_string();
 
     let mut env: Vec<HashMap<String, HoudiniEnvValue>> = Vec::new();
@@ -629,11 +644,26 @@ fn build_houdini_package_for_install(
         env.push(map);
     }
 
-    // User-declared [env] entries from the package's hpm.toml.
+    // User-declared [env] entries from the package's hpm.toml. Project-level
+    // [env] in the consuming project's hpm.toml overrides per key. A
+    // `required = true` placeholder with no value (and no override) is a hard
+    // error — the package wouldn't be launchable without it.
     if let Some(user_env) = &manifest.env {
         for (key, entry) in user_env {
-            let value = entry.value.replace("$HPM_PACKAGE_ROOT", &package_path_str);
-            let houdini_value = match entry.method {
+            let override_entry = project_env_overrides.and_then(|o| o.get(key));
+            let effective_entry = override_entry.unwrap_or(entry);
+
+            let raw_value = effective_entry.value.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Required env var '{}' for package '{}' has no value. \
+                     Set it in this project's [env] section in hpm.toml.",
+                    key,
+                    package_name
+                )
+            })?;
+
+            let value = raw_value.replace("$HPM_PACKAGE_ROOT", &package_path_str);
+            let houdini_value = match effective_entry.method {
                 EnvMethod::Set => HoudiniEnvValue::set(value),
                 EnvMethod::Prepend => HoudiniEnvValue::prepend(value),
                 EnvMethod::Append => HoudiniEnvValue::append(value),
@@ -659,13 +689,13 @@ fn build_houdini_package_for_install(
         }
     });
 
-    HoudiniPackage {
+    Ok(HoudiniPackage {
         hpath: Some(vec![package_path_str]),
         env: if env.is_empty() { None } else { Some(env) },
         enable,
         requires: None,
         recommends: None,
-    }
+    })
 }
 
 /// Generate or update the hpm.lock file

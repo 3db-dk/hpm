@@ -30,10 +30,22 @@ pub enum EnvMethod {
 }
 
 /// An environment variable entry declared in `[env]`.
+///
+/// `required = true` with no `value` declares a placeholder that the consuming
+/// project's `[env]` must override; otherwise the package fails to install.
+/// `required = true` alongside a `value` is allowed (the value acts as a
+/// default) and behaves the same as a non-required entry with that value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestEnvEntry {
     pub method: EnvMethod,
-    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub required: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Platform-scoped script overrides.
@@ -185,17 +197,22 @@ pub struct HoudiniConfig {
 }
 
 impl ManifestEnvEntry {
-    /// Convert to a Houdini environment variable value.
-    pub fn to_houdini_env_value(&self) -> HoudiniEnvValue {
+    /// Convert to a Houdini environment variable value, if a value is set.
+    ///
+    /// Returns `None` for required-but-unsupplied placeholders; callers
+    /// that have no override source (publish/scaffold paths) skip these,
+    /// while project-sync paths surface a hard error instead.
+    pub fn to_houdini_env_value(&self) -> Option<HoudiniEnvValue> {
+        let value = self.value.clone()?;
         let method = match self.method {
             EnvMethod::Set => "set",
             EnvMethod::Prepend => "prepend",
             EnvMethod::Append => "append",
         };
-        HoudiniEnvValue::Detailed {
+        Some(HoudiniEnvValue::Detailed {
             method: method.to_string(),
-            value: self.value.clone(),
-        }
+            value,
+        })
     }
 }
 
@@ -339,6 +356,19 @@ impl PackageManifest {
             }
         }
 
+        // Validate [env] entries: a missing value is only legal as a
+        // required-placeholder for project-level [env] to fill in.
+        if let Some(env) = &self.env {
+            for (key, entry) in env {
+                if entry.value.is_none() && !entry.required {
+                    return Err(format!(
+                        "env var '{}' has no value and is not marked required = true",
+                        key
+                    ));
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -374,11 +404,17 @@ impl PackageManifest {
         );
         env.push(scripts_env);
 
-        // Append user-defined env vars from [env] section
+        // Append user-defined env vars from [env] section. Required-but-
+        // unsupplied placeholders are skipped here because this generator has
+        // no project context to fill them in; project sync supplies them via
+        // `[env]` overrides and errors if any remain unsupplied.
         if let Some(user_env) = &self.env {
             for (key, entry) in user_env {
+                let Some(houdini_value) = entry.to_houdini_env_value() else {
+                    continue;
+                };
                 let mut env_map = HashMap::new();
-                env_map.insert(key.clone(), entry.to_houdini_env_value());
+                env_map.insert(key.clone(), houdini_value);
                 env.push(env_map);
             }
         }
@@ -438,16 +474,20 @@ impl PackageManifest {
         pkg_env.insert(pkg_var_name, HoudiniEnvValue::simple(&pkg_root));
         env.push(pkg_env);
 
-        // User-defined env vars with $HPM_PACKAGE_ROOT replaced
+        // User-defined env vars with $HPM_PACKAGE_ROOT replaced. Required-
+        // but-unsupplied placeholders are skipped (see generate_houdini_package).
         if let Some(user_env) = &self.env {
             for (key, entry) in user_env {
-                let mut env_map = HashMap::new();
-                let value = entry.value.replace("$HPM_PACKAGE_ROOT", &pkg_root);
+                let Some(raw_value) = entry.value.as_ref() else {
+                    continue;
+                };
+                let value = raw_value.replace("$HPM_PACKAGE_ROOT", &pkg_root);
                 let houdini_value = match entry.method {
                     EnvMethod::Set => HoudiniEnvValue::set(value),
                     EnvMethod::Prepend => HoudiniEnvValue::prepend(value),
                     EnvMethod::Append => HoudiniEnvValue::append(value),
                 };
+                let mut env_map = HashMap::new();
                 env_map.insert(key.clone(), houdini_value);
                 env.push(env_map);
             }
@@ -607,8 +647,91 @@ HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar"
         let env = manifest.env.unwrap();
         assert_eq!(env.len(), 2);
         assert_eq!(env["MY_PLUGIN_ROOT"].method, EnvMethod::Set);
-        assert_eq!(env["MY_PLUGIN_ROOT"].value, "$HPM_PACKAGE_ROOT/config");
+        assert_eq!(
+            env["MY_PLUGIN_ROOT"].value.as_deref(),
+            Some("$HPM_PACKAGE_ROOT/config")
+        );
+        assert!(!env["MY_PLUGIN_ROOT"].required);
         assert_eq!(env["HOUDINI_TOOLBAR_PATH"].method, EnvMethod::Prepend);
+    }
+
+    #[test]
+    fn env_required_without_value_deserializes() {
+        let toml_str = r#"
+[package]
+path = "studio/my-package"
+name = "My Package"
+version = "0.1.0"
+
+[env]
+PROJECT_ROOT = { method = "set", required = true }
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let env = manifest.env.as_ref().unwrap();
+        assert_eq!(env["PROJECT_ROOT"].method, EnvMethod::Set);
+        assert!(env["PROJECT_ROOT"].value.is_none());
+        assert!(env["PROJECT_ROOT"].required);
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn env_missing_value_without_required_is_invalid() {
+        // serde happily accepts the missing value (it's now Option), but
+        // validate() rejects it because non-required entries must declare a
+        // value.
+        let toml_str = r#"
+[package]
+path = "studio/my-package"
+name = "My Package"
+version = "0.1.0"
+
+[env]
+LEAKED = { method = "set" }
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let err = manifest.validate().unwrap_err();
+        assert!(err.contains("LEAKED"));
+        assert!(err.contains("required"));
+    }
+
+    #[test]
+    fn generate_houdini_package_skips_required_placeholders() {
+        let mut manifest = PackageManifest::new(
+            "studio/test".to_string(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
+        let mut env = IndexMap::new();
+        env.insert(
+            "PROJECT_ROOT".to_string(),
+            ManifestEnvEntry {
+                method: EnvMethod::Set,
+                value: None,
+                required: true,
+            },
+        );
+        env.insert(
+            "WITH_VALUE".to_string(),
+            ManifestEnvEntry {
+                method: EnvMethod::Set,
+                value: Some("/somewhere".to_string()),
+                required: false,
+            },
+        );
+        manifest.env = Some(env);
+
+        let pkg = manifest.generate_houdini_package();
+        let env_list = pkg.env.unwrap();
+        // 2 hardcoded (PYTHONPATH, HOUDINI_SCRIPT_PATH) + WITH_VALUE only.
+        assert_eq!(env_list.len(), 3);
+        assert!(
+            env_list.iter().all(|m| !m.contains_key("PROJECT_ROOT")),
+            "required-but-unsupplied placeholder should be skipped"
+        );
+        assert!(env_list.iter().any(|m| m.contains_key("WITH_VALUE")));
     }
 
     #[test]
@@ -654,7 +777,8 @@ version = "0.1.0"
             "MY_VAR".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Set,
-                value: "$HPM_PACKAGE_ROOT/data".to_string(),
+                value: Some("$HPM_PACKAGE_ROOT/data".to_string()),
+                required: false,
             },
         );
         manifest.env = Some(env);
@@ -1150,14 +1274,16 @@ register = "linux-register"
             "PATH_A".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Set,
-                value: "$HPM_PACKAGE_ROOT/a".to_string(),
+                value: Some("$HPM_PACKAGE_ROOT/a".to_string()),
+                required: false,
             },
         );
         env.insert(
             "PATH_B".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Append,
-                value: "$HPM_PACKAGE_ROOT/b:$HPM_PACKAGE_ROOT/c".to_string(),
+                value: Some("$HPM_PACKAGE_ROOT/b:$HPM_PACKAGE_ROOT/c".to_string()),
+                required: false,
             },
         );
         manifest.env = Some(env);
