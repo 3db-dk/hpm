@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-27
+
 ### Added
 - `[env]` entries in `hpm.toml` accept `required = true`. A package can
   declare an env var without a `value` to mark it as a placeholder that
@@ -14,7 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   project sync error out with `MissingRequiredEnv` when no value is
   supplied (by either the package's default or the project override),
   so packages aren't silently launched without env vars they depend on.
-  The `value` field is now optional in the schema.
+
+### Changed
+- `ManifestEnvEntry::value` is now `Option<String>` (was `String`) to
+  support required-without-default placeholders. TOML manifests are
+  backward compatible — existing `value = "..."` entries still parse —
+  but Rust API consumers that read the field directly need to update.
 
 ## [0.8.2] - 2026-04-23
 
