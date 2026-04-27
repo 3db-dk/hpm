@@ -58,7 +58,7 @@ Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
 | `HoudiniConfig` | Contents of `[houdini]`. |
 | `DependencySpec` | Untagged enum: `Simple(String) \| Url {..} \| Path {..} \| Registry {..}`. |
 | `PythonDependencySpec` | Untagged enum: `Simple(String) \| Detailed {..}`. |
-| `ManifestEnvEntry`, `EnvMethod` | `[env]` entries and methods (`set`/`prepend`/`append`). |
+| `ManifestEnvEntry`, `EnvMethod` | `[env]` entries (method, optional value, `required` flag) and methods (`set`/`prepend`/`append`). |
 | `NativeConfig`, `NativePlatformFiles` | `[native]` and per-platform file globs. |
 | `Platform` | Canonical platform enum: `LinuxX86_64`, `MacosUniversal`, `WindowsX86_64`. |
 | `RegistryConfig`, `RegistryType` | `[[registries]]` entries in manifests. |

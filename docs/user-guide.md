@@ -523,6 +523,32 @@ Use `$HPM_PACKAGE_ROOT` to refer to the installed package directory. HPM
 merges these entries with its built-in `PYTHONPATH` and `HOUDINI_SCRIPT_PATH`
 entries when generating the Houdini manifest.
 
+#### Required env vars
+
+A package can declare an env var as required without giving it a value. Any
+project that depends on the package must then supply the value in its own
+`[env]` section in `hpm.toml`. `hpm install` (and project sync) errors out
+otherwise — the package isn't launchable without it.
+
+```toml
+# In the package's hpm.toml
+[env]
+PROJECT_ASSETS = { method = "set", required = true }
+```
+
+```toml
+# In the consuming project's hpm.toml
+[env]
+PROJECT_ASSETS = { method = "set", value = "/mnt/studio/assets" }
+```
+
+`required = true` may be combined with a `value`; the value then acts as a
+default and the project override becomes optional. Without a value, the entry
+is a hard placeholder.
+
+A consuming project can also override any package-declared env var by
+re-declaring the same key in its own `[env]` — the project's entry wins.
+
 ### `[native]`
 
 Declare that this package ships per-platform binaries (HDK plugins, shared
