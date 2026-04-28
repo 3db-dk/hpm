@@ -37,24 +37,45 @@ pub struct PackResult {
 pub struct PlatformFilter {
     /// Glob patterns for files belonging to OTHER platforms (to exclude).
     pub exclude: Vec<Pattern>,
+    /// Glob patterns for the target platform's own files. Acts as an
+    /// override: a file matched by `exclude` is still kept when it is
+    /// also claimed by `target`, so manifests where two platforms share
+    /// a glob (intentional common content, e.g. a shared install path)
+    /// don't end up cancelling the file out of every archive.
+    pub target: Vec<Pattern>,
 }
 
 impl PlatformFilter {
     /// Build a filter from native config, excluding files for all platforms
-    /// other than the target.
+    /// other than the target. A file claimed by the target platform is
+    /// always kept, even if another platform also lists it.
     pub fn new(native_config: &NativeConfig, target: &Platform) -> Result<Self, PackError> {
         let target_str = target.as_str();
         let mut exclude = Vec::new();
+        let mut target_patterns = Vec::new();
         for (platform_str, platform_files) in &native_config.platform_files {
-            if platform_str != target_str {
-                for pattern in &platform_files.files {
-                    exclude.push(
-                        Pattern::new(pattern).map_err(|e| PackError::GlobPattern(e.to_string()))?,
-                    );
+            for pattern in &platform_files.files {
+                let compiled =
+                    Pattern::new(pattern).map_err(|e| PackError::GlobPattern(e.to_string()))?;
+                if platform_str == target_str {
+                    target_patterns.push(compiled);
+                } else {
+                    exclude.push(compiled);
                 }
             }
         }
-        Ok(Self { exclude })
+        Ok(Self {
+            exclude,
+            target: target_patterns,
+        })
+    }
+
+    /// Returns true if the relative path should be filtered out.
+    pub fn should_exclude(&self, rel_path: &str) -> bool {
+        if !self.exclude.iter().any(|p| p.matches(rel_path)) {
+            return false;
+        }
+        !self.target.iter().any(|p| p.matches(rel_path))
     }
 }
 
@@ -149,7 +170,7 @@ pub fn create_archive(
         // Filter out files belonging to other platforms
         if let Some(filter) = platform_filter {
             let rel_str = relative.to_string_lossy();
-            if filter.exclude.iter().any(|p| p.matches(&rel_str)) {
+            if filter.should_exclude(&rel_str) {
                 continue;
             }
         }
@@ -684,6 +705,120 @@ version = "1.0.0"
         // Should still contain shared files
         assert!(names.contains(&"hpm.toml".to_string()));
         assert!(names.contains(&"README.md".to_string()));
+    }
+
+    #[test]
+    fn shared_glob_across_platforms_rides_through_each_archive() {
+        // A glob listed identically under every platform declares common
+        // content with a shared install path; the matched files must
+        // appear in every per-platform archive.
+        let dir = TempDir::new().unwrap();
+        create_test_package(dir.path());
+        fs::create_dir_all(dir.path().join("resolver/houdini21")).unwrap();
+        fs::write(
+            dir.path().join("resolver/houdini21/foo.dll"),
+            b"shared-binary",
+        )
+        .unwrap();
+
+        let mut platform_files = indexmap::IndexMap::new();
+        for plat in ["linux-x86_64", "macos-universal", "windows-x86_64"] {
+            platform_files.insert(
+                plat.to_string(),
+                hpm_package::manifest::NativePlatformFiles {
+                    files: vec!["resolver/houdini*/**/*".to_string()],
+                },
+            );
+        }
+        let native_config = hpm_package::manifest::NativeConfig {
+            platforms: vec![
+                "linux-x86_64".to_string(),
+                "macos-universal".to_string(),
+                "windows-x86_64".to_string(),
+            ],
+            platform_files,
+        };
+
+        for platform in [
+            hpm_package::platform::Platform::LinuxX86_64,
+            hpm_package::platform::Platform::MacosUniversal,
+            hpm_package::platform::Platform::WindowsX86_64,
+        ] {
+            let output_dir = TempDir::new().unwrap();
+            let result = pack(
+                dir.path(),
+                "test-pkg",
+                "1.0.0",
+                output_dir.path(),
+                None,
+                Some(&platform),
+                Some(&native_config),
+                &[],
+            )
+            .unwrap();
+
+            let file = fs::File::open(&result.archive_path).unwrap();
+            let mut zip = zip::ZipArchive::new(file).unwrap();
+            let names: Vec<String> = (0..zip.len())
+                .map(|i| zip.by_index(i).unwrap().name().to_string())
+                .collect();
+
+            assert!(
+                names.contains(&"resolver/houdini21/foo.dll".to_string()),
+                "shared resolver binary missing from {} archive: {:?}",
+                platform,
+                names
+            );
+        }
+    }
+
+    #[test]
+    fn target_glob_overrides_other_platform_match() {
+        // A path claimed by the target wins over an exclude from another
+        // platform's glob.
+        let dir = TempDir::new().unwrap();
+        create_test_package(dir.path());
+        fs::create_dir_all(dir.path().join("shared")).unwrap();
+        fs::write(dir.path().join("shared/binary.so"), b"data").unwrap();
+
+        let mut platform_files = indexmap::IndexMap::new();
+        platform_files.insert(
+            "linux-x86_64".to_string(),
+            hpm_package::manifest::NativePlatformFiles {
+                files: vec!["shared/*".to_string()],
+            },
+        );
+        platform_files.insert(
+            "macos-universal".to_string(),
+            hpm_package::manifest::NativePlatformFiles {
+                files: vec!["shared/*".to_string(), "lib/macos-universal/*".to_string()],
+            },
+        );
+        let native_config = hpm_package::manifest::NativeConfig {
+            platforms: vec!["linux-x86_64".to_string(), "macos-universal".to_string()],
+            platform_files,
+        };
+
+        let output_dir = TempDir::new().unwrap();
+        let result = pack(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            output_dir.path(),
+            None,
+            Some(&hpm_package::platform::Platform::LinuxX86_64),
+            Some(&native_config),
+            &[],
+        )
+        .unwrap();
+
+        let file = fs::File::open(&result.archive_path).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let names: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .collect();
+
+        assert!(names.contains(&"shared/binary.so".to_string()));
     }
 
     #[test]

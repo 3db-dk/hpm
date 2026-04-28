@@ -573,6 +573,18 @@ Valid platform identifiers: `linux-x86_64`, `macos-universal`, `windows-x86_64`.
 `files` uses glob patterns relative to the package root. `hpm pack`
 auto-detects the host platform; pass `--platform <id>` to target a different one.
 
+**Per-platform filter semantics.** When packing for `--platform <X>`:
+
+- A path matched by `[native.X].files` is included.
+- A path matched only by `[native.Y].files` (some `Y != X`) is excluded.
+- A path matched by both `[native.X].files` and some `[native.Y].files` is
+  included — the target's claim wins.
+- A path matched by no `[native.*].files` glob is included as common content.
+
+This means listing the same glob under every platform is a valid way to
+declare "this content ships in every per-platform archive" (e.g. a shared
+install path that all platforms use).
+
 ### `[[registries]]` <a id="registries-array"></a>
 
 Per-project registries. Same shape as the global version in `~/.hpm/config.toml`:

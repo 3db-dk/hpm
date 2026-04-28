@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `hpm pack --platform <X>` no longer drops files that are listed under
+  multiple platforms in `[native.<plat>].files`. The per-platform filter
+  previously assembled an exclude set from every other platform's globs
+  without consulting the target's own globs, so a glob listed identically
+  under all platforms (e.g. a shared install path used by every binary
+  flavour) was excluded from every archive. The filter now treats the
+  target's globs as an inclusion override: a path matched by both the
+  target and another platform is kept in the target's archive. Distinct
+  per-platform globs continue to behave as before.
+
 ## [0.9.0] - 2026-04-27
 
 ### Added
