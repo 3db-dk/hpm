@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-04-28
+
 ### Fixed
 - `hpm pack --platform <X>` no longer drops files that are listed under
   multiple platforms in `[native.<plat>].files`. The per-platform filter
