@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-04-29
+
 ### Fixed
 - `ArchiveFetcher` now extracts both ZIP and gzipped tar archives, dispatching
   on the file's leading magic bytes (`50 4B 03 04` → ZIP, `1F 8B` → tar.gz)
