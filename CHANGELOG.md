@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-04-29
+
 ### Added
 - `RegistryEntry.created_at: Option<String>` (ISO 8601). Populated by API registries that emit it; git registries deserialize to `None`. Lets clients surface per-version publish timestamps.
 
