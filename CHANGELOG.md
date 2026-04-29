@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `ArchiveFetcher` now extracts both ZIP and gzipped tar archives, dispatching
+  on the file's leading magic bytes (`50 4B 03 04` → ZIP, `1F 8B` → tar.gz)
+  rather than assuming ZIP. Previously every fetched archive was unconditionally
+  read as ZIP, so a registry entry whose URL pointed at a `.tar.gz` (e.g.
+  produced by `tar -czf` in package CI) failed extraction with a misleading
+  "Could not find EOCD" error and blocked the entire project install. The
+  download cache key no longer carries a `.zip` extension since format is
+  determined by content. Path-traversal validation runs in both extractors.
+
 ## [0.9.1] - 2026-04-28
 
 ### Fixed

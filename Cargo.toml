@@ -82,6 +82,8 @@ tokio-test = "0.4"
 semver = "1.0"
 indexmap = { version = "2.0", features = ["serde"] }
 zip = "8.4"
+tar = "0.4"
+flate2 = "1.0"
 
 [profile.release]
 lto = true

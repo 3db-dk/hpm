@@ -471,7 +471,7 @@ one of four shapes:
 "studio/material-library" = { version = "2.0.0", optional = true }
 "studio/internal-tool" = { version = "1.0.0", registry = "studio" }
 
-# 3. Direct URL (pre-built archive)
+# 3. Direct URL (pre-built archive — ZIP or gzipped tar both accepted)
 "studio/prebuilt" = { url = "https://pkg.example.com/prebuilt-1.0.0.zip", version = "1.0.0" }
 
 # 4. Local path (development)
