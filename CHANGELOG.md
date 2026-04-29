@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `RegistryEntry.created_at: Option<String>` (ISO 8601). Populated by API registries that emit it; git registries deserialize to `None`. Lets clients surface per-version publish timestamps.
+
+### Removed
+- `RegistryEntry.license`. The field was unused by hpm-core and never populated by any registry implementation.
+
 ## [0.9.2] - 2026-04-29
 
 ### Fixed

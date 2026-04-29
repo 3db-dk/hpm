@@ -45,9 +45,10 @@ pub struct RegistryEntry {
     /// Package author(s) (optional, mainly for search results)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
-    /// Package license (optional)
+    /// Publish timestamp of this version (ISO 8601). Populated by API
+    /// registries; git registries may omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub license: Option<String>,
+    pub created_at: Option<String>,
 }
 
 /// A dependency listed in a registry entry.
