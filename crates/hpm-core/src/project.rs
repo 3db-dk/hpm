@@ -322,10 +322,14 @@ impl ProjectManager {
         registry_set: &Option<crate::registry::RegistrySet>,
         all_installed: &[InstalledPackage],
     ) -> Result<InstalledPackage, ProjectError> {
-        // Check if already in global storage
+        // Check if already in global storage. The dependency `name` from a
+        // project manifest is typically scoped (`creator/slug`); the CAS keys
+        // installed packages by bare slug. `matches_spec_name` bridges both
+        // forms — comparing `p.name == name` directly here would miss every
+        // scoped match and trigger a redundant fetch + remove-and-reinstall.
         if let Some(pkg) = all_installed
             .iter()
-            .find(|p| p.name == name && p.version == version)
+            .find(|p| Self::matches_spec_name(p, name) && p.version == version)
         {
             info!("Package {}@{} already installed", name, version);
             return Ok(pkg.clone());
@@ -359,7 +363,7 @@ impl ProjectManager {
     ) -> Result<InstalledPackage, ProjectError> {
         if let Some(pkg) = all_installed
             .iter()
-            .find(|p| p.name == name && p.version == version)
+            .find(|p| Self::matches_spec_name(p, name) && p.version == version)
         {
             info!("Package {}@{} already installed", name, version);
             return Ok(pkg.clone());
@@ -1153,5 +1157,58 @@ mod tests {
         assert!(ProjectManager::matches_spec_name(&pkg, "claudini2"));
         assert!(!ProjectManager::matches_spec_name(&pkg, "other/claudini2"));
         assert!(!ProjectManager::matches_spec_name(&pkg, "unrelated"));
+    }
+
+    /// Regression: when a project's hpm.toml lists a scoped dependency name
+    /// (`creator/slug`), but the installed-packages cache stores the bare slug
+    /// in `InstalledPackage.name`, the short-circuit must still fire. Otherwise
+    /// every `sync_dependencies` re-fetches and re-installs every dep, and on
+    /// Windows the remove-and-recopy can fail with os error 5 when another
+    /// Houdini holds the package dir open.
+    #[tokio::test]
+    async fn ensure_installed_short_circuits_on_scoped_name() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = hpm_config::StorageConfig {
+            home_dir: temp_dir.path().join(".hpm"),
+            cache_dir: temp_dir.path().join(".hpm").join("cache"),
+            packages_dir: temp_dir.path().join(".hpm").join("packages"),
+            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
+        };
+        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
+
+        let manifest = hpm_package::PackageManifest::new(
+            "tumblehead/tumblepipe".to_string(),
+            "Tumblepipe".to_string(),
+            "1.1.20".to_string(),
+            None,
+            None,
+            None,
+        );
+        let installed = InstalledPackage {
+            name: "tumblepipe".to_string(),
+            version: "1.1.20".to_string(),
+            manifest,
+            install_path: temp_dir.path().join("tumblepipe@1.1.20"),
+            installed_at: std::time::SystemTime::now(),
+        };
+
+        // registry_set: None — if the short-circuit misses, the function would
+        // panic on `expect("registry set built above")`. Reaching that panic
+        // is exactly the bug.
+        let result = project_manager
+            .ensure_installed(
+                "tumblehead/tumblepipe",
+                "1.1.20",
+                &None,
+                std::slice::from_ref(&installed),
+            )
+            .await
+            .expect("scoped lookup must short-circuit on the bare-slug InstalledPackage");
+
+        assert_eq!(result.name, "tumblepipe");
+        assert_eq!(result.version, "1.1.20");
     }
 }

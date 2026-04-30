@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Project sync no longer redundantly re-fetches and re-installs every
+  registry dependency. The `ensure_installed` short-circuit compared the
+  scoped dependency name from `hpm.toml` (e.g. `creator/slug`) against
+  `InstalledPackage.name`, which only carries the bare slug, so the lookup
+  never matched and every sync fell through to remove-and-recopy the CAS
+  entry. Both `ensure_installed` and `ensure_installed_from_url` now route
+  through `matches_spec_name`, which bridges scoped and bare forms. On
+  Windows this also prevents `os error 5` aborts when a running Houdini
+  process held open handles into a package directory that another project
+  was about to redundantly reinstall.
+
 ## [0.9.3] - 2026-04-29
 
 ### Added
