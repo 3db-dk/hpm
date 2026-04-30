@@ -233,7 +233,21 @@ impl StorageManager {
                 "Package {}@{} already exists, removing old version",
                 name, version
             );
-            std::fs::remove_dir_all(&target_dir).map_err(StorageError::DirectoryRemoval)?;
+            std::fs::remove_dir_all(&target_dir).map_err(|e| {
+                // On Windows, a running Houdini process holds open handles to
+                // files inside the package dir, so removal fails with
+                // ERROR_ACCESS_DENIED (os error 5 → PermissionDenied). Map it
+                // to an actionable error instead of leaking a raw OS code.
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    StorageError::PackageInUse {
+                        name: name.to_string(),
+                        version: version.to_string(),
+                        source: e,
+                    }
+                } else {
+                    StorageError::DirectoryRemoval(e)
+                }
+            })?;
         }
 
         // Copy the package directory
@@ -610,6 +624,17 @@ pub enum StorageError {
 
     #[error("Python cleanup failed: {0}")]
     PythonCleanup(String),
+
+    #[error(
+        "Package {name}@{version} is in use by another process; close any \
+         running Houdini that depends on it and try again ({source})"
+    )]
+    PackageInUse {
+        name: String,
+        version: String,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 #[cfg(test)]

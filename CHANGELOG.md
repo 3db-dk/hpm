@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Windows this also prevents `os error 5` aborts when a running Houdini
   process held open handles into a package directory that another project
   was about to redundantly reinstall.
+- `StorageManager::install_from_path` now maps `PermissionDenied` from the
+  pre-install removal step into a dedicated `StorageError::PackageInUse`
+  variant with an actionable message ("close any running Houdini that
+  depends on it and try again") instead of leaking a raw `os error 5`.
 
 ## [0.9.3] - 2026-04-29
 
