@@ -259,10 +259,7 @@ pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output> {
     // Suppress the brief console window flash that UV (a CLI tool) would
     // otherwise show when spawned from a GUI parent on Windows.
     #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
 
     let output = cmd.output().await?;
 
