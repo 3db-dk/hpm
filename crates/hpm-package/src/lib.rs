@@ -113,8 +113,9 @@ mod proptest_helpers;
 pub use dependency::DependencySpec;
 pub use houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 pub use manifest::{
-    EnvMethod, HoudiniConfig, ManifestEnvEntry, NativeConfig, NativePlatformFiles, PackageInfo,
-    PackageManifest, PackageScripts, PlatformScripts, RegistryConfig, RegistryType,
+    EnvMethod, HoudiniConfig, ManifestEnvEntry, ManifestLoadError, NativeConfig,
+    NativePlatformFiles, PackageInfo, PackageManifest, PackageScripts, PlatformScripts,
+    RegistryConfig, RegistryType,
 };
 pub use platform::Platform;
 pub use python::PythonDependencySpec;

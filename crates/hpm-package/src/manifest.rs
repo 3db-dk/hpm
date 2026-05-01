@@ -6,11 +6,37 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use crate::dependency::DependencySpec;
 use crate::houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 use crate::platform::Platform;
 use crate::python::PythonDependencySpec;
+
+/// Errors that can occur while loading a [`PackageManifest`] from disk.
+///
+/// Each variant carries the source path so error messages stay actionable
+/// when manifest loading is buried inside multi-package operations
+/// (`list_installed`, registry installs, project sync).
+#[derive(Debug, thiserror::Error)]
+pub enum ManifestLoadError {
+    #[error("manifest not found: {}", .path.display())]
+    NotFound { path: PathBuf },
+
+    #[error("failed to read manifest at {}: {source}", .path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse manifest at {}: {source}", .path.display())]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+}
 
 /// The type of registry backend.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -217,6 +243,28 @@ impl ManifestEnvEntry {
 }
 
 impl PackageManifest {
+    /// Load and parse a package manifest from `hpm.toml` at the given path.
+    ///
+    /// Returns [`ManifestLoadError::NotFound`] if the file is missing —
+    /// callers that want to treat absence as "no project here" should match
+    /// that variant explicitly. I/O and parse errors carry the source path
+    /// so users can locate the bad file.
+    pub fn from_path(path: &Path) -> Result<Self, ManifestLoadError> {
+        if !path.exists() {
+            return Err(ManifestLoadError::NotFound {
+                path: path.to_path_buf(),
+            });
+        }
+        let content = std::fs::read_to_string(path).map_err(|source| ManifestLoadError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        toml::from_str(&content).map_err(|source| ManifestLoadError::Parse {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
+
     /// Create a new package manifest with default values
     pub fn new(
         path: String,
