@@ -2,7 +2,7 @@ use crate::archive_fetcher::ArchiveFetcher;
 use crate::package_source::PackageSource;
 use crate::storage::{InstalledPackage, PackageSpec, StorageManager};
 use hpm_config::ProjectConfig;
-use hpm_package::{HoudiniPackage, ManifestEnvEntry, PackageManifest};
+use hpm_package::{HoudiniPackage, ManifestEnvEntry, ManifestLoadError, PackageManifest};
 use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -68,17 +68,11 @@ impl ProjectManager {
     }
 
     pub fn load_project_manifest(&self) -> Result<Option<PackageManifest>, ProjectError> {
-        if !self.project_config.manifest_file.exists() {
-            return Ok(None);
+        match PackageManifest::from_path(&self.project_config.manifest_file) {
+            Ok(manifest) => Ok(Some(manifest)),
+            Err(ManifestLoadError::NotFound { .. }) => Ok(None),
+            Err(e) => Err(ProjectError::Manifest(e)),
         }
-
-        let manifest_content = std::fs::read_to_string(&self.project_config.manifest_file)
-            .map_err(|e| ProjectError::ManifestRead(e.to_string()))?;
-
-        let manifest: PackageManifest = toml::from_str(&manifest_content)
-            .map_err(|e| ProjectError::ManifestParse(e.to_string()))?;
-
-        Ok(Some(manifest))
     }
 
     pub async fn add_dependency(&self, spec: &PackageSpec) -> Result<(), ProjectError> {
@@ -656,19 +650,22 @@ impl ProjectManager {
         let manifest_path = &self.project_config.manifest_file;
 
         let content = if manifest_path.exists() {
-            std::fs::read_to_string(manifest_path)
-                .map_err(|e| ProjectError::ManifestRead(e.to_string()))?
+            std::fs::read_to_string(manifest_path).map_err(|e| {
+                ProjectError::ManifestRead(format!("{}: {}", manifest_path.display(), e))
+            })?
         } else {
             // Return error if no manifest exists - user should run `hpm init` first
-            return Err(ProjectError::ManifestRead(
-                "No hpm.toml found. Run 'hpm init' to create a package first.".to_string(),
-            ));
+            return Err(ProjectError::ManifestRead(format!(
+                "No hpm.toml found at {}. Run 'hpm init' to create a package first.",
+                manifest_path.display()
+            )));
         };
 
         // Parse as editable TOML document
-        let mut doc: toml_edit::DocumentMut = content
-            .parse()
-            .map_err(|e: toml_edit::TomlError| ProjectError::ManifestParse(e.to_string()))?;
+        let mut doc: toml_edit::DocumentMut =
+            content.parse().map_err(|e: toml_edit::TomlError| {
+                ProjectError::ManifestParse(format!("{}: {}", manifest_path.display(), e))
+            })?;
 
         // Ensure [dependencies] table exists
         if !doc.contains_key("dependencies") {
@@ -677,7 +674,10 @@ impl ProjectManager {
 
         // Add or update the dependency
         let deps_table = doc["dependencies"].as_table_mut().ok_or_else(|| {
-            ProjectError::ManifestParse("[dependencies] is not a table".to_string())
+            ProjectError::ManifestParse(format!(
+                "{}: [dependencies] is not a table",
+                manifest_path.display()
+            ))
         })?;
 
         let version_str = spec.version_req.as_str();
@@ -719,13 +719,15 @@ impl ProjectManager {
             return Ok(()); // Nothing to remove
         }
 
-        let content = std::fs::read_to_string(manifest_path)
-            .map_err(|e| ProjectError::ManifestRead(e.to_string()))?;
+        let content = std::fs::read_to_string(manifest_path).map_err(|e| {
+            ProjectError::ManifestRead(format!("{}: {}", manifest_path.display(), e))
+        })?;
 
         // Parse as editable TOML document
-        let mut doc: toml_edit::DocumentMut = content
-            .parse()
-            .map_err(|e: toml_edit::TomlError| ProjectError::ManifestParse(e.to_string()))?;
+        let mut doc: toml_edit::DocumentMut =
+            content.parse().map_err(|e: toml_edit::TomlError| {
+                ProjectError::ManifestParse(format!("{}: {}", manifest_path.display(), e))
+            })?;
 
         // Remove from [dependencies] if it exists
         if let Some(deps) = doc.get_mut("dependencies") {
@@ -823,6 +825,13 @@ pub enum ProjectError {
     #[error("Directory read failed: {0}")]
     DirectoryRead(String),
 
+    #[error(transparent)]
+    Manifest(#[from] ManifestLoadError),
+
+    // Used by the toml_edit-based edit paths (`update_project_manifest`,
+    // `remove_from_project_manifest`) — those work with `toml_edit::DocumentMut`
+    // and can't share `ManifestLoadError`'s `toml::de::Error` variant. The
+    // string already includes the manifest path at each call site.
     #[error("Manifest read failed: {0}")]
     ManifestRead(String),
 

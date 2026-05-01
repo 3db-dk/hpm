@@ -1,7 +1,7 @@
 use crate::dependency::{DependencyResolver, PackageId};
 use crate::discovery::ProjectDiscovery;
 use hpm_config::{ProjectsConfig, StorageConfig};
-use hpm_package::PackageManifest;
+use hpm_package::{ManifestLoadError, PackageManifest};
 use hpm_python::cleanup::{CleanupResult, PythonCleanupAnalyzer};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -159,15 +159,13 @@ impl StorageManager {
         }
 
         let manifest_path = package_dir.join("hpm.toml");
-        if !manifest_path.exists() {
-            return Ok(None);
-        }
-
-        let manifest_content = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| StorageError::ManifestRead(e.to_string()))?;
-
-        let manifest: PackageManifest =
-            toml::from_str(&manifest_content).map_err(StorageError::ManifestParse)?;
+        let manifest = match PackageManifest::from_path(&manifest_path) {
+            Ok(m) => m,
+            // Directory without a manifest is not a package — skip silently
+            // to keep `list_installed` resilient to stray scaffolding.
+            Err(ManifestLoadError::NotFound { .. }) => return Ok(None),
+            Err(e) => return Err(StorageError::Manifest(e)),
+        };
 
         let metadata = std::fs::metadata(&package_dir).map_err(StorageError::MetadataRead)?;
 
@@ -196,18 +194,7 @@ impl StorageManager {
 
         // Read and parse the manifest
         let manifest_path = source_path.join("hpm.toml");
-        if !manifest_path.exists() {
-            return Err(StorageError::ManifestRead(format!(
-                "No hpm.toml found in {}",
-                source_path.display()
-            )));
-        }
-
-        let manifest_content = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| StorageError::ManifestRead(e.to_string()))?;
-
-        let manifest: PackageManifest =
-            toml::from_str(&manifest_content).map_err(StorageError::ManifestParse)?;
+        let manifest = PackageManifest::from_path(&manifest_path)?;
 
         let name = manifest
             .package
@@ -601,11 +588,8 @@ pub enum StorageError {
     #[error("Directory removal failed: {0}")]
     DirectoryRemoval(#[source] std::io::Error),
 
-    #[error("Manifest read failed: {0}")]
-    ManifestRead(String),
-
-    #[error("Manifest parse failed: {0}")]
-    ManifestParse(#[source] toml::de::Error),
+    #[error(transparent)]
+    Manifest(#[from] ManifestLoadError),
 
     #[error("Metadata read failed: {0}")]
     MetadataRead(#[source] std::io::Error),
@@ -768,8 +752,10 @@ min_version = "20.5"
         let result = storage_manager.list_installed();
         assert!(result.is_err());
         match result {
-            Err(StorageError::ManifestParse(_)) => {}
-            _ => panic!("Expected ManifestParse error"),
+            Err(StorageError::Manifest(ManifestLoadError::Parse { path, .. })) => {
+                assert!(path.ends_with("hpm.toml"));
+            }
+            other => panic!("Expected Manifest::Parse error, got: {:?}", other),
         }
     }
 
@@ -889,10 +875,10 @@ min_version = "20.5"
         let result = storage_manager.install_from_path(&source_dir).await;
         assert!(result.is_err());
         match result {
-            Err(StorageError::ManifestRead(msg)) => {
-                assert!(msg.contains("hpm.toml"));
+            Err(StorageError::Manifest(ManifestLoadError::NotFound { path })) => {
+                assert!(path.ends_with("hpm.toml"));
             }
-            _ => panic!("Expected ManifestRead error"),
+            other => panic!("Expected Manifest::NotFound error, got: {:?}", other),
         }
     }
 }

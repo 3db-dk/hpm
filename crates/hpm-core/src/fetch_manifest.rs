@@ -14,7 +14,7 @@ use crate::archive_fetcher::{ArchiveFetcher, FetchError};
 use crate::package_source::PackageSource;
 use crate::registry::{RegistryError, RegistrySet};
 use crate::storage::{StorageError, StorageManager};
-use hpm_package::PackageManifest;
+use hpm_package::{ManifestLoadError, PackageManifest};
 use std::path::Path;
 use thiserror::Error;
 use tracing::{debug, info};
@@ -31,11 +31,8 @@ pub enum FetchManifestError {
     #[error("fetch error: {0}")]
     Fetch(#[from] FetchError),
 
-    #[error("manifest read failed: {0}")]
-    ManifestRead(String),
-
-    #[error("manifest parse failed: {0}")]
-    ManifestParse(#[source] toml::de::Error),
+    #[error(transparent)]
+    Manifest(#[from] ManifestLoadError),
 
     #[error("no versions available for package '{0}'")]
     NoVersionsAvailable(String),
@@ -126,10 +123,7 @@ fn read_cached_manifest(
     version: &str,
 ) -> Result<PackageManifest, FetchManifestError> {
     let manifest_path = storage.get_package_path(name, version).join("hpm.toml");
-    let content = std::fs::read_to_string(&manifest_path).map_err(|e| {
-        FetchManifestError::ManifestRead(format!("{}: {}", manifest_path.display(), e))
-    })?;
-    toml::from_str(&content).map_err(FetchManifestError::ManifestParse)
+    Ok(PackageManifest::from_path(&manifest_path)?)
 }
 
 /// Build a transient [`ArchiveFetcher`] using the same scratch directory
