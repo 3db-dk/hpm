@@ -223,6 +223,7 @@
 pub mod archive_fetcher;
 pub mod dependency;
 pub mod discovery;
+pub mod fetch_manifest;
 pub mod lock;
 pub mod package_source;
 pub mod packer;
@@ -235,6 +236,7 @@ pub use dependency::{
     DependencyError, DependencyGraph, DependencyResolver, PackageId, PackageNode,
 };
 pub use discovery::{DiscoveredProject, DiscoveryError, ProjectDiscovery};
+pub use fetch_manifest::{FetchManifestError, fetch_manifest};
 pub use lock::{
     LockError, LockFile, LockMetadata, LockPackageInfo, LockedDependency, LockedPythonDependency,
 };

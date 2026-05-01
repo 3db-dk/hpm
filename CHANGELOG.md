@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `hpm_core::fetch_manifest(name, version, registry_set, storage)` — fetch a
+  parsed `PackageManifest` by `(name, version)` without project context. Reads
+  from CAS when the package is already installed; otherwise resolves via
+  `RegistrySet`, downloads via `ArchiveFetcher`, and installs into CAS as a
+  side effect. Pass `""` or `"latest"` as the version to resolve the highest
+  semver across configured registries. The companion `FetchManifestError`
+  wraps `StorageError`/`RegistryError`/`FetchError` and is re-exported from
+  `hpm-core`. Intended for tools that need to inspect a package's `[env]`,
+  `[scripts]`, or `[houdini]` sections before the user installs it into a
+  project.
+
 ## [0.9.4] - 2026-04-30
 
 ### Fixed
