@@ -47,6 +47,7 @@ Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
 | `Registry` (async trait) | Registry abstraction. `ApiRegistry` and `GitRegistry` implement it. |
 | `RegistrySet` | Composite that fans requests out to every configured registry. |
 | `ArchiveFetcher` | Downloads and extracts registry-hosted archives. |
+| `fetch_manifest` | Free function: returns the parsed `PackageManifest` for `(name, version)` without project context. CAS hit reads from disk; CAS miss resolves+fetches+installs. Pass `""` or `"latest"` to pick the highest semver. |
 | `packer` | Produces signed/unsigned `.zip` archives for `hpm pack`. |
 
 ### hpm-package
