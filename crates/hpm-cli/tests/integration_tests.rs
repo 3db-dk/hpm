@@ -12,6 +12,22 @@ fn hpm_binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_hpm"))
 }
 
+/// Helper that returns a CLI invocation isolated from the developer's
+/// `~/.hpm/config.toml`. The returned `TempDir` must outlive the spawned
+/// process — drop it after the assertions.
+///
+/// Without this, every `hpm_binary()` test inherits `$HOME` and reads the
+/// real user config, which means tests that assert on default config
+/// behavior (e.g. "no registries configured") fail for any developer who
+/// has registries set up locally.
+fn hpm_binary_isolated() -> (Command, TempDir) {
+    let temp = TempDir::new().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hpm"));
+    cmd.env("HOME", temp.path());
+    cmd.env("USERPROFILE", temp.path());
+    (cmd, temp)
+}
+
 /// Test that the CLI binary can be executed and shows help
 #[test]
 fn test_cli_help() {
@@ -117,7 +133,8 @@ fn test_init_bare_workflow() {
 #[test]
 fn test_deprecated_commands() {
     // Test search command (no registries configured)
-    let search_output = hpm_binary()
+    let (mut search_cmd, _search_home) = hpm_binary_isolated();
+    let search_output = search_cmd
         .args(["search", "test"])
         .output()
         .expect("Failed to execute hpm search");
@@ -131,7 +148,8 @@ fn test_deprecated_commands() {
     );
 
     // Test publish command (registry-based)
-    let publish_output = hpm_binary()
+    let (mut publish_cmd, _publish_home) = hpm_binary_isolated();
+    let publish_output = publish_cmd
         .args(["publish"])
         .output()
         .expect("Failed to execute hpm publish");
