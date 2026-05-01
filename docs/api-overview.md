@@ -54,7 +54,8 @@ Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
 
 | Type | Purpose |
 |------|---------|
-| `PackageManifest` | Parsed `hpm.toml` (every section). |
+| `PackageManifest` | Parsed `hpm.toml` (every section). `PackageManifest::from_path` reads + parses, returning `ManifestLoadError` with the offending path. |
+| `ManifestLoadError` | `NotFound { path }` / `Read { path, source }` / `Parse { path, source }`. Re-exported by `hpm-core`'s `StorageError`, `ProjectError`, and `FetchManifestError`. |
 | `PackageInfo` | Contents of `[package]`. |
 | `HoudiniConfig` | Contents of `[houdini]`. |
 | `DependencySpec` | Untagged enum: `Simple(String) \| Url {..} \| Path {..} \| Registry {..}`. |

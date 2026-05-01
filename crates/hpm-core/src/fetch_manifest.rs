@@ -59,7 +59,10 @@ pub async fn fetch_manifest(
 
     if storage.package_exists(name, &resolved_version) {
         debug!("fetch_manifest: CAS hit for {}@{}", name, resolved_version);
-        return read_cached_manifest(storage, name, &resolved_version);
+        let manifest_path = storage
+            .get_package_path(name, &resolved_version)
+            .join("hpm.toml");
+        return Ok(PackageManifest::from_path(&manifest_path)?);
     }
 
     debug!(
@@ -115,15 +118,6 @@ async fn resolve_version(
         })
         .expect("entries is non-empty");
     Ok(best.version.clone())
-}
-
-fn read_cached_manifest(
-    storage: &StorageManager,
-    name: &str,
-    version: &str,
-) -> Result<PackageManifest, FetchManifestError> {
-    let manifest_path = storage.get_package_path(name, version).join("hpm.toml");
-    Ok(PackageManifest::from_path(&manifest_path)?)
 }
 
 /// Build a transient [`ArchiveFetcher`] using the same scratch directory

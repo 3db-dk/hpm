@@ -18,6 +18,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hpm-core`. Intended for tools that need to inspect a package's `[env]`,
   `[scripts]`, or `[houdini]` sections before the user installs it into a
   project.
+- `hpm_package::PackageManifest::from_path(path)` constructor and a
+  `ManifestLoadError` enum with `NotFound`/`Read`/`Parse` variants. Each
+  variant carries the offending `PathBuf`, so a corrupted or missing
+  manifest is now reported with its source path instead of a bare TOML
+  diagnostic. Replaces four duplicated `read_to_string` + `toml::from_str`
+  sites in `hpm-core`.
+
+### Changed
+- **Breaking (library API):** `StorageError::ManifestRead(String)` and
+  `StorageError::ManifestParse(toml::de::Error)` are replaced by a single
+  `StorageError::Manifest(ManifestLoadError)` variant. Same change for
+  `FetchManifestError`. Match arms on the old variants need to migrate to
+  `Manifest(ManifestLoadError::{NotFound, Read, Parse} { path, .. })`.
+  `ProjectError` keeps its existing `ManifestRead`/`ManifestParse` string
+  variants (still used by the `toml_edit`-based edit paths in
+  `update_project_manifest` and `remove_from_project_manifest`) and adds
+  a `Manifest(ManifestLoadError)` variant for the typed-parse path.
+
+### Fixed
+- `test_deprecated_commands` in `hpm-cli` no longer inherits the
+  developer's `$HOME` and read the real `~/.hpm/config.toml`. The test
+  now overrides `HOME`/`USERPROFILE` to a `TempDir` via a new
+  `hpm_binary_isolated()` helper, so it passes regardless of whether the
+  developer has registries configured locally.
 
 ## [0.9.4] - 2026-04-30
 
