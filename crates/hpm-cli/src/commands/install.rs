@@ -475,21 +475,20 @@ async fn install_hpm_dependencies(
     Ok(results)
 }
 
-/// Load manifest from an installed package directory
+/// Load manifest from an installed package directory. Returns `Ok(None)`
+/// when the directory has no `hpm.toml` (e.g. a legacy or non-HPM package
+/// dropped into the symlink dir); read/parse errors propagate via
+/// [`ManifestLoadError`].
 fn load_package_manifest(package_path: &Path) -> Result<Option<PackageManifest>> {
     let manifest_path = package_path.join("hpm.toml");
-    if !manifest_path.exists() {
-        debug!("No hpm.toml found in package: {}", package_path.display());
-        return Ok(None);
+    match PackageManifest::from_path(&manifest_path) {
+        Ok(manifest) => Ok(Some(manifest)),
+        Err(hpm_package::ManifestLoadError::NotFound { .. }) => {
+            debug!("No hpm.toml found in package: {}", package_path.display());
+            Ok(None)
+        }
+        Err(e) => Err(e.into()),
     }
-
-    let content = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("Failed to read manifest: {}", manifest_path.display()))?;
-
-    let manifest: PackageManifest = toml::from_str(&content)
-        .with_context(|| format!("Failed to parse manifest: {}", manifest_path.display()))?;
-
-    Ok(Some(manifest))
 }
 
 /// Install Python dependencies using the hpm-python crate.
@@ -913,7 +912,10 @@ mod tests {
         let result = load_manifest(&manifest_path);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Failed to parse manifest file"));
+        assert!(
+            error_msg.contains("failed to parse manifest at"),
+            "expected ManifestLoadError::Parse text, got: {error_msg}"
+        );
     }
 
     #[test]

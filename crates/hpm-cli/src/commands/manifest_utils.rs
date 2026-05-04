@@ -109,7 +109,9 @@ pub fn determine_manifest_path(provided_path: Option<PathBuf>) -> Result<PathBuf
 /// println!("Package: {} v{}", manifest.package.name, manifest.package.version);
 /// ```
 pub fn load_manifest(manifest_path: &Path) -> Result<PackageManifest> {
-    // Security check: verify manifest file size to prevent DoS
+    // Security check: verify manifest file size to prevent DoS. Done before
+    // PackageManifest::from_path so an attacker can't slip a 1 GB hpm.toml
+    // past us via the typed loader.
     let metadata = std::fs::metadata(manifest_path).with_context(|| {
         format!(
             "Failed to read manifest metadata: {}",
@@ -125,13 +127,8 @@ pub fn load_manifest(manifest_path: &Path) -> Result<PackageManifest> {
         );
     }
 
-    let content = std::fs::read_to_string(manifest_path)
-        .with_context(|| format!("Failed to read manifest file: {}", manifest_path.display()))?;
+    let manifest = PackageManifest::from_path(manifest_path)?;
 
-    let manifest: PackageManifest = toml::from_str(&content)
-        .with_context(|| format!("Failed to parse manifest file: {}", manifest_path.display()))?;
-
-    // Validate manifest
     manifest
         .validate()
         .map_err(|e| anyhow::anyhow!("Manifest validation failed: {}", e))

@@ -76,6 +76,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   symlink, or `.hpmref` left over from a previous install kept loading
   the orphan dep on Houdini launch. Files with unrecognised extensions
   (e.g. user-authored README.md) are left alone.
+- Four call sites now use `PackageManifest::from_path` instead of
+  hand-rolled `read_to_string` + `toml::from_str`:
+  `discovery.rs::check_project_path`,
+  `manifest_utils.rs::load_manifest`,
+  `install.rs::load_package_manifest`, and `pack.rs`. They get the
+  same path-attached `ManifestLoadError` already used by
+  `ProjectError`/`StorageError`, and `discovery.rs` drops its
+  parallel `DiscoveryError::ManifestRead/ManifestParse(PathBuf, String)`
+  variants in favour of `Manifest(ManifestLoadError)`.
 - `LockFile::verify_checksums` now actually verifies. The previous
   implementation looked for `<packages_dir>/<name>@<version>` while
   `ArchiveFetcher` extracts to `<packages_dir>/<safe_name>-<version>`

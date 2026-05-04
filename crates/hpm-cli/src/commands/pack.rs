@@ -24,8 +24,7 @@ pub async fn execute(
 
     // Read manifest to get name and version
     let manifest_path = package_dir.join("hpm.toml");
-    let content = std::fs::read_to_string(&manifest_path).context("Failed to read hpm.toml")?;
-    let manifest: PackageManifest = toml::from_str(&content).context("Failed to parse hpm.toml")?;
+    let manifest = PackageManifest::from_path(&manifest_path)?;
 
     let name = &manifest.package.name;
     let version = &manifest.package.version;

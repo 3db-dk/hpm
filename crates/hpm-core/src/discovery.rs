@@ -1,5 +1,5 @@
 use hpm_config::ProjectsConfig;
-use hpm_package::PackageManifest;
+use hpm_package::{ManifestLoadError, PackageManifest};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
@@ -48,23 +48,20 @@ impl ProjectDiscovery {
     fn check_project_path(&self, path: &Path) -> Result<Option<DiscoveredProject>, DiscoveryError> {
         let manifest_path = path.join("hpm.toml");
 
-        if !manifest_path.exists() {
-            debug!("No hpm.toml found at {}", path.display());
-            return Ok(None);
+        match PackageManifest::from_path(&manifest_path) {
+            Ok(manifest) => {
+                debug!("Found HPM project at {}", path.display());
+                Ok(Some(DiscoveredProject {
+                    path: path.to_path_buf(),
+                    manifest,
+                }))
+            }
+            Err(ManifestLoadError::NotFound { .. }) => {
+                debug!("No hpm.toml found at {}", path.display());
+                Ok(None)
+            }
+            Err(e) => Err(DiscoveryError::Manifest(e)),
         }
-
-        debug!("Found HPM project at {}", path.display());
-
-        let manifest_content = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| DiscoveryError::ManifestRead(manifest_path.clone(), e.to_string()))?;
-
-        let manifest: PackageManifest = toml::from_str(&manifest_content)
-            .map_err(|e| DiscoveryError::ManifestParse(manifest_path.clone(), e.to_string()))?;
-
-        Ok(Some(DiscoveredProject {
-            path: path.to_path_buf(),
-            manifest,
-        }))
     }
 
     fn scan_directory(
@@ -152,11 +149,8 @@ pub enum DiscoveryError {
     #[error("Failed to read directory {0}: {1}")]
     DirectoryRead(PathBuf, String),
 
-    #[error("Failed to read manifest {0}: {1}")]
-    ManifestRead(PathBuf, String),
-
-    #[error("Failed to parse manifest {0}: {1}")]
-    ManifestParse(PathBuf, String),
+    #[error(transparent)]
+    Manifest(#[from] ManifestLoadError),
 }
 
 #[cfg(test)]
