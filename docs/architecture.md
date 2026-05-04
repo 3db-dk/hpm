@@ -371,6 +371,13 @@ Global packages are shared across projects; each project holds only the
 per-dependency Houdini manifest and a lockfile. This keeps disk usage sane
 across a studio's worth of projects.
 
+`sync_dependencies` sweeps stale per-package manifests at the end of every
+sync: any `<slug>.json` in `<project>/.hpm/packages/` whose slug is no longer
+in the resolved dependency set is removed. Without this, a manifest written
+by a previous sync (e.g. for a path dependency that has since been removed)
+would keep loading the package on Houdini launch even though `hpm.toml` no
+longer asks for it.
+
 ## Python integration
 
 The Python layer runs on three ideas, in descending order of importance:

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `ProjectManager::sync_dependencies` now sweeps stale per-package Houdini
+  manifests in `<project>/.hpm/packages/`. Previously, a `<slug>.json`
+  written by a prior sync was left on disk after its slug dropped out of
+  the dependency set (path-dep override removed, registry yank, manual
+  edit), and Houdini kept loading the orphaned package on launch. Non-
+  `.json` entries in the directory are not touched.
+
 ## [0.9.5] - 2026-05-01
 
 ### Added

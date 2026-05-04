@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 #[derive(Debug)]
 pub struct ProjectManager {
@@ -304,7 +304,69 @@ impl ProjectManager {
             )?;
         }
 
+        // Sweep stale per-package manifests left over from previous syncs.
+        // Houdini reads every <slug>.json file in `packages_dir` on launch, so a
+        // manifest whose slug has dropped out of the dependency set (dev override
+        // removed, registry yank, manual edit) keeps loading the package even
+        // though hpm.toml no longer asks for it.
+        self.sweep_stale_houdini_manifests(&installed_packages)?;
+
         info!("Successfully synced project dependencies");
+        Ok(())
+    }
+
+    /// Remove `<slug>.json` files in the project's packages dir whose slug is
+    /// not in `installed_packages`. Only the per-package manifests we own are
+    /// considered — non-`.json` entries and any unknown files are left alone.
+    fn sweep_stale_houdini_manifests(
+        &self,
+        installed_packages: &[InstalledPackage],
+    ) -> Result<(), ProjectError> {
+        let packages_dir = &self.project_config.packages_dir;
+        if !packages_dir.exists() {
+            return Ok(());
+        }
+
+        let valid_slugs: std::collections::HashSet<&str> = installed_packages
+            .iter()
+            .map(|pkg| pkg.name.as_str())
+            .collect();
+
+        let entries = std::fs::read_dir(packages_dir)
+            .map_err(|e| ProjectError::DirectoryRead(e.to_string()))?;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name,
+                None => continue,
+            };
+            let slug = match file_name.strip_suffix(".json") {
+                Some(slug) => slug,
+                None => continue,
+            };
+            if valid_slugs.contains(slug) {
+                continue;
+            }
+
+            match std::fs::remove_file(&path) {
+                Ok(()) => debug!("Removed stale Houdini manifest: {}", path.display()),
+                Err(e) => {
+                    // Don't fail the whole sync if one stale manifest can't be
+                    // removed (e.g. Houdini holds it open on Windows). Surface
+                    // it so the user can act.
+                    warn!(
+                        "Failed to remove stale Houdini manifest {}: {}",
+                        path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1219,5 +1281,88 @@ mod tests {
 
         assert_eq!(result.name, "tumblepipe");
         assert_eq!(result.version, "1.1.20");
+    }
+
+    /// Regression: a Houdini manifest left over from a previous sync (e.g. a
+    /// dev override that has since been removed) must be swept when its slug
+    /// no longer appears in the dependency set. Otherwise Houdini keeps
+    /// loading the stale package on launch.
+    #[test]
+    fn sweep_stale_houdini_manifests_removes_orphaned_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = hpm_config::StorageConfig {
+            home_dir: temp_dir.path().join(".hpm"),
+            cache_dir: temp_dir.path().join(".hpm").join("cache"),
+            packages_dir: temp_dir.path().join(".hpm").join("packages"),
+            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
+        };
+        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
+
+        // Simulate the prior sync's output: foo.json (current dep) and
+        // stale.json (dep that left the set).
+        let pkg_dir = &project_manager.project_config.packages_dir;
+        let foo_json = pkg_dir.join("foo.json");
+        let stale_json = pkg_dir.join("stale.json");
+        let unrelated = pkg_dir.join("README.md");
+        std::fs::write(&foo_json, b"{}").unwrap();
+        std::fs::write(&stale_json, b"{}").unwrap();
+        std::fs::write(&unrelated, b"hello").unwrap();
+
+        let manifest = hpm_package::PackageManifest::new(
+            "creator/foo".to_string(),
+            "Foo".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
+        let installed = InstalledPackage {
+            name: "foo".to_string(),
+            version: "1.0.0".to_string(),
+            manifest,
+            install_path: temp_dir.path().join("foo@1.0.0"),
+            installed_at: std::time::SystemTime::now(),
+        };
+
+        project_manager
+            .sweep_stale_houdini_manifests(std::slice::from_ref(&installed))
+            .unwrap();
+
+        assert!(foo_json.exists(), "current dep manifest must be kept");
+        assert!(!stale_json.exists(), "stale dep manifest must be swept");
+        assert!(unrelated.exists(), "non-json files must be left alone");
+    }
+
+    /// An empty dependency set must still sweep prior `<slug>.json` files.
+    /// This is the dev-override-removed-and-package-disappeared case: the
+    /// project resolves zero deps, so nothing iterates the json-write loop,
+    /// and only the sweep can clear the stale manifest.
+    #[test]
+    fn sweep_stale_houdini_manifests_empty_set_clears_all_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = hpm_config::StorageConfig {
+            home_dir: temp_dir.path().join(".hpm"),
+            cache_dir: temp_dir.path().join(".hpm").join("cache"),
+            packages_dir: temp_dir.path().join(".hpm").join("packages"),
+            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
+        };
+        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
+
+        let pkg_dir = &project_manager.project_config.packages_dir;
+        let dev_only = pkg_dir.join("dev-only.json");
+        std::fs::write(&dev_only, b"{}").unwrap();
+
+        project_manager.sweep_stale_houdini_manifests(&[]).unwrap();
+
+        assert!(
+            !dev_only.exists(),
+            "stale manifest must be swept even when the dep set is empty"
+        );
     }
 }
