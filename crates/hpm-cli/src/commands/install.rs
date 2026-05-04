@@ -212,6 +212,14 @@ pub async fn install_dependencies(
     .await
     .context("Failed to generate Houdini package manifests")?;
 
+    // Sweep stale entries (manifests, symlinks, Windows ref files) for deps
+    // that have left the set since the previous install. Houdini reads every
+    // <name>.json on launch and follows every symlink in the dir, so leaving
+    // them behind keeps removed deps live in the project.
+    sweep_stale_install_entries(&hpm_dir, &install_results)
+        .await
+        .context("Failed to sweep stale install entries")?;
+
     // Generate or update lock file (skip in frozen lockfile mode)
     if frozen_lockfile {
         info!("Skipping lock file update (--frozen-lockfile)");
@@ -529,6 +537,85 @@ async fn install_python_dependencies(manifests: &[PackageManifest]) -> Result<Op
         &venv_path,
         &resolved_deps.python_version,
     )))
+}
+
+/// Remove install entries in `<project>/.hpm/packages/` whose dep name is no
+/// longer in `install_results`. Three entry shapes are recognised:
+///
+/// - `<name>.json`   — the Houdini manifest written by `write_houdini_manifests`
+/// - `<name>`        — the Unix/Windows symlink to the global package dir
+/// - `<name>.hpmref` — the Windows fallback reference file
+///
+/// Anything that doesn't match those shapes (e.g. a user-authored
+/// `.gitignore`) is left alone. A failure to remove a single entry is logged
+/// but doesn't abort the install — Houdini may hold a manifest open on
+/// Windows, and we'd rather warn and finish than fail late.
+async fn sweep_stale_install_entries(
+    hpm_dir: &Path,
+    install_results: &HashMap<String, PackageInstallResult>,
+) -> Result<()> {
+    let packages_dir = hpm_dir.join("packages");
+    if !packages_dir.exists() {
+        return Ok(());
+    }
+
+    let valid: std::collections::HashSet<&str> =
+        install_results.keys().map(|s| s.as_str()).collect();
+
+    let mut entries = tokio::fs::read_dir(&packages_dir)
+        .await
+        .with_context(|| format!("Failed to read {}", packages_dir.display()))?;
+
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .with_context(|| format!("Failed to enumerate {}", packages_dir.display()))?
+    {
+        let path = entry.path();
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => continue,
+        };
+
+        // Only sweep entry shapes we ourselves write: `<name>.json`,
+        // `<name>.hpmref`, and `<name>` (no extension). Anything else
+        // (e.g. a user-authored README.md) is left alone.
+        let dep_name = if let Some(stem) = file_name.strip_suffix(".json") {
+            stem
+        } else if let Some(stem) = file_name.strip_suffix(".hpmref") {
+            stem
+        } else if !file_name.contains('.') {
+            file_name
+        } else {
+            continue;
+        };
+
+        if valid.contains(dep_name) {
+            continue;
+        }
+
+        // symlink_metadata so we don't follow the symlink when classifying.
+        let meta = match tokio::fs::symlink_metadata(&path).await {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("Failed to stat stale entry {}: {}", path.display(), e);
+                continue;
+            }
+        };
+
+        let result = if meta.file_type().is_dir() {
+            tokio::fs::remove_dir_all(&path).await
+        } else {
+            tokio::fs::remove_file(&path).await
+        };
+
+        match result {
+            Ok(()) => debug!("Removed stale install entry: {}", path.display()),
+            Err(e) => warn!("Failed to remove stale entry {}: {}", path.display(), e),
+        }
+    }
+
+    Ok(())
 }
 
 /// Write a Houdini package.json per installed dependency into `.hpm/packages/`.
@@ -942,5 +1029,104 @@ description = "Test custom manifest path"
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("does not exist"));
+    }
+
+    /// Build a fake `PackageInstallResult` for sweep tests. The path and
+    /// checksum content don't matter — the sweep only consults the keys.
+    fn fake_install_result(path: &Path) -> PackageInstallResult {
+        PackageInstallResult {
+            checksum: "deadbeef".to_string(),
+            package_path: path.to_path_buf(),
+            resolved_source: PackageSource::Path { path: path.into() },
+        }
+    }
+
+    /// Regression: a `<name>.json` left over from the previous install must
+    /// be removed when `<name>` drops out of the dep set, otherwise Houdini
+    /// keeps loading the orphan package.
+    #[tokio::test]
+    async fn sweep_removes_stale_houdini_manifest() {
+        let temp_dir = TempDir::new().unwrap();
+        let hpm_dir = temp_dir.path().join(".hpm");
+        let pkgs = hpm_dir.join("packages");
+        tokio::fs::create_dir_all(&pkgs).await.unwrap();
+
+        let foo_json = pkgs.join("foo.json");
+        let stale_json = pkgs.join("stale.json");
+        let unrelated = pkgs.join("README.md");
+        tokio::fs::write(&foo_json, b"{}").await.unwrap();
+        tokio::fs::write(&stale_json, b"{}").await.unwrap();
+        tokio::fs::write(&unrelated, b"hi").await.unwrap();
+
+        let mut results = HashMap::new();
+        results.insert("foo".to_string(), fake_install_result(temp_dir.path()));
+
+        sweep_stale_install_entries(&hpm_dir, &results)
+            .await
+            .unwrap();
+
+        assert!(foo_json.exists(), "current dep manifest must be kept");
+        assert!(!stale_json.exists(), "stale dep manifest must be swept");
+        assert!(unrelated.exists(), "non-dep entries must be left alone");
+    }
+
+    /// Regression: the `<name>` symlink/dir created by `install_hpm_dependencies`
+    /// also leaks when the dep leaves the set. The sweep must remove that too,
+    /// otherwise Houdini sees a directory entry that still contains a package.
+    #[tokio::test]
+    async fn sweep_removes_stale_symlink_or_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let hpm_dir = temp_dir.path().join(".hpm");
+        let pkgs = hpm_dir.join("packages");
+        tokio::fs::create_dir_all(&pkgs).await.unwrap();
+
+        // Simulate an old dep's directory entry. A real install would write
+        // this as a symlink to the global package dir, but the sweep treats
+        // dir/file/symlink uniformly; a regular dir is the simplest fixture.
+        let stale_pkg = pkgs.join("old-pkg");
+        tokio::fs::create_dir_all(&stale_pkg).await.unwrap();
+        tokio::fs::write(stale_pkg.join("dummy"), b"x")
+            .await
+            .unwrap();
+
+        // And the Windows-fallback ref file shape.
+        let stale_ref = pkgs.join("old-pkg.hpmref");
+        tokio::fs::write(&stale_ref, b"/some/path").await.unwrap();
+
+        // Empty install set: every entry is stale.
+        sweep_stale_install_entries(&hpm_dir, &HashMap::new())
+            .await
+            .unwrap();
+
+        assert!(
+            !stale_pkg.exists(),
+            "stale package dir/symlink must be swept"
+        );
+        assert!(!stale_ref.exists(), "stale .hpmref must be swept");
+    }
+
+    /// `.hpmref` files keyed off a dep that *is* still in the set must be kept.
+    /// The sweep strips the `.hpmref` suffix to derive the dep name.
+    #[tokio::test]
+    async fn sweep_keeps_active_hpmref() {
+        let temp_dir = TempDir::new().unwrap();
+        let hpm_dir = temp_dir.path().join(".hpm");
+        let pkgs = hpm_dir.join("packages");
+        tokio::fs::create_dir_all(&pkgs).await.unwrap();
+
+        let active_ref = pkgs.join("foo.hpmref");
+        tokio::fs::write(&active_ref, b"/some/path").await.unwrap();
+
+        let mut results = HashMap::new();
+        results.insert("foo".to_string(), fake_install_result(temp_dir.path()));
+
+        sweep_stale_install_entries(&hpm_dir, &results)
+            .await
+            .unwrap();
+
+        assert!(
+            active_ref.exists(),
+            "active dep .hpmref must be kept (suffix-stripped name match)"
+        );
     }
 }

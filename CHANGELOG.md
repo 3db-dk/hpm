@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   registry can no longer be silently served the dev content. The Path
   arm of `sync_dependencies` is the only caller; registry/URL installs
   continue to use `install_from_path`.
+- `hpm install` now sweeps stale entries in `<project>/.hpm/packages/`
+  after writing manifests. The CLI command duplicates much of
+  `sync_dependencies` and was missing the same sweep — a `<name>.json`,
+  symlink, or `.hpmref` left over from a previous install kept loading
+  the orphan dep on Houdini launch. Files with unrecognised extensions
+  (e.g. user-authored README.md) are left alone.
 
 ## [0.9.5] - 2026-05-01
 
