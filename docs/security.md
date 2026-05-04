@@ -191,9 +191,10 @@ HPM stores everything under `~/.hpm/` on every supported platform:
 | Path | Contents |
 |------|----------|
 | `~/.hpm/config.toml` | Global configuration (including `[[registries]]`, `[signing].key_path`). |
-| `~/.hpm/packages/` | Extracted package tree, keyed by `creator/slug@version/`. |
+| `~/.hpm/packages/` | Canonical CAS, keyed by `<slug>@<version>/`. Path-installed packages live under the `_dev/` subtree, never substituted for a registry hit. |
+| `~/.hpm/fetch/` | `ArchiveFetcher` staging. Archives are extracted here before being copied into the canonical CAS. |
 | `~/.hpm/venvs/` | Content-addressable Python venvs, keyed by resolved-set hash. |
-| `~/.hpm/cache/` | Download cache. |
+| `~/.hpm/cache/` | Download archive cache. |
 | `~/.hpm/registry/` | Per-registry index caches. |
 | `~/.hpm/uv-cache/` | Isolated `uv` cache — never shared with system `uv`. |
 

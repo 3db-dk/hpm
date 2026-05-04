@@ -152,7 +152,7 @@ pub struct LockFile {
 pub struct LockedDependency {
     pub version: String,
     pub checksum: Option<String>,    // "sha256:<hex>"
-    pub source: PackageSource,
+    pub source: LockedSource,        // Url { url, version } | Path { path }
     pub dependencies: Vec<String>,   // transitive names
 }
 
@@ -255,18 +255,23 @@ HPM manifest values accept the usual semver constraint operators:
  ├──────────────────────────────────────────────────────────────────────┤
  │  1. Load hpm.toml                                                    │
  │  2. If hpm.lock exists:                                              │
- │       verify cached packages against stored checksums               │
- │       warn if metadata.generated_at > 90 days                       │
+ │       verify cached packages against stored checksums                │
+ │       warn if metadata.generated_at > 90 days                        │
  │  3. Resolve HPM dependencies                                         │
  │       query configured registries                                    │
  │       backtrack on conflict                                          │
- │  4. Download and extract missing packages into ~/.hpm/packages/      │
+ │  4. Fetch + install in parallel (one task per dep):                  │
+ │       URL/registry → ArchiveFetcher → ~/.hpm/fetch/                  │
+ │                    → install_from_path → ~/.hpm/packages/<slug>@<v>/ │
+ │       Path         → install_from_path_dev                           │
+ │                    → ~/.hpm/packages/_dev/<slug>@<v>/                │
  │  5. Merge [python_dependencies] from root + every dep manifest       │
- │  6. Resolve with bundled uv, hash the resolved set, pick or         │
+ │  6. Resolve with bundled uv, hash the resolved set, pick or          │
  │     rebuild ~/.hpm/venvs/<hash>/                                     │
  │  7. uv pip install --python <venv>/bin/python                        │
- │  8. Write <project>/.hpm/packages/{name}.json per dep               │
- │  9. Write hpm.lock                                                   │
+ │  8. Write <project>/.hpm/packages/{name}.json per dep                │
+ │  9. Sweep stale <project>/.hpm/packages/ entries                     │
+ │ 10. Write hpm.lock                                                   │
  └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -333,29 +338,38 @@ layout is content-addressable where it helps:
 ```text
 ~/.hpm/
 ├── config.toml
-├── packages/
-│   ├── creator/
-│   │   └── slug@1.0.0/
-│   │       ├── hpm.toml
-│   │       ├── (package sources)
-│   │       └── … (Houdini convention subdirs)
+├── packages/                       # canonical CAS — written by StorageManager
+│   ├── slug@1.0.0/                 # registry / URL installs
+│   │   ├── hpm.toml
+│   │   ├── (package sources)
+│   │   └── … (Houdini convention subdirs)
 │   └── _dev/                       # path-installed (dev) packages
 │       └── slug@1.0.0/             # never substituted for a registry hit
 │           └── …                   # at the same (slug, version)
+├── fetch/                          # ArchiveFetcher staging — extracted
+│   └── creator-slug-1.0.0/         # archives live here briefly before
+│                                   # install_from_path copies into packages/
 ├── venvs/
-│   └── <12-char hash>/           # hash of resolved set + Python version
+│   └── <12-char hash>/             # hash of resolved set + Python version
 │       ├── pyvenv.cfg
-│       ├── bin/                  # or Scripts/ on Windows
+│       ├── bin/                    # or Scripts/ on Windows
 │       ├── lib/pythonX.Y/site-packages/
 │       └── metadata.json
-├── cache/                        # download cache
-├── registry/                     # one subdir per registry
+├── cache/                          # download archive cache
+├── registry/                       # one subdir per registry
 │   └── <registry name>/
-├── tools/                        # bundled uv binary
-├── uv-cache/                     # isolated uv cache
+├── tools/                          # bundled uv binary
+├── uv-cache/                       # isolated uv cache
 ├── uv-config/
 └── logs/
 ```
+
+Both `hpm install` and `hpm sync` route URL/registry deps through the same
+two-step flow: `ArchiveFetcher` downloads + extracts into `~/.hpm/fetch/`,
+then `StorageManager::install_from_path` copies into the canonical CAS at
+`~/.hpm/packages/<slug>@<version>/`. Path deps skip the fetcher entirely
+and go straight to `~/.hpm/packages/_dev/<slug>@<version>/` via
+`install_from_path_dev`.
 
 Per-project:
 
@@ -364,15 +378,17 @@ Per-project:
 ├── hpm.toml
 ├── hpm.lock
 └── .hpm/
-    ├── config.toml               # optional
+    ├── config.toml                 # optional
     └── packages/
-        ├── utility-nodes.json    # generated Houdini manifests
-        └── material-library.json
+        ├── utility-nodes.json      # generated Houdini manifests, one per dep
+        └── material-library.json   # absolute paths into the global CAS
 ```
 
 Global packages are shared across projects; each project holds only the
 per-dependency Houdini manifest and a lockfile. This keeps disk usage sane
-across a studio's worth of projects.
+across a studio's worth of projects. The Houdini JSON manifests carry
+absolute CAS paths, so the project tree contains no symlinks pointing into
+the global storage.
 
 `sync_dependencies` sweeps stale per-package manifests at the end of every
 sync: any `<slug>.json` in `<project>/.hpm/packages/` whose slug is no longer
@@ -382,7 +398,7 @@ would keep loading the package on Houdini launch even though `hpm.toml` no
 longer asks for it.
 
 Path dependencies install into `~/.hpm/packages/_dev/<slug>@<version>/`
-rather than the registry CAS at `~/.hpm/packages/<scope>/<slug>@<version>/`.
+rather than the registry CAS at `~/.hpm/packages/<slug>@<version>/`.
 The `_dev` subtree is invisible to `list_installed`, so a dev install of
 `foo@1.0.0` cannot be served as the cached install for a registry
 resolution at the same coordinate from a different project.
@@ -462,7 +478,7 @@ OS-specific joiner. Generator lives in
 ### Performance
 
 - **Concurrent downloads**: registry-fronted installs run in parallel, bounded by `[install].parallel_downloads` (default 8).
-- **Content-addressable dedup**: both HPM packages (keyed by `creator/slug@version`) and Python venvs (keyed by resolved-set hash) are deduplicated globally.
+- **Content-addressable dedup**: both HPM packages (keyed by `slug@version` in the global CAS) and Python venvs (keyed by resolved-set hash) are deduplicated globally.
 - **Cache hits**: `uv`'s cache eliminates wheel re-downloads across projects; HPM's venv cache eliminates install work when a matching set is found.
 - **Atomic filesystem ops**: packages are extracted to a temp directory and renamed into place to avoid partial states.
 

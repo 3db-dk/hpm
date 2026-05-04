@@ -43,7 +43,11 @@ Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
 | `ProjectDiscovery` | Scans `[projects]` paths to enumerate active HPM projects. |
 | `GlobalDependencyGraph` | Reachability-based orphan detection for `hpm clean`. |
 | `LockFile`, `LockedDependency`, `LockedPythonDependency`, `LockMetadata` | `hpm.lock` types. |
-| `PackageSource` | Discriminated union of registry, URL, and path sources. |
+| `LockedSource` | Origin recorded in the lockfile for each dep — `Url { url, version }` or `Path { path }`. |
+| `LockError` | `Read`/`Parse`/`Write`/`Serialize` plus `ChecksumMismatch`, `PackageMissing { package, expected_dir }`, and `UnsupportedVersion`. |
+| `PackageSource` | URL-only struct `{ url, version }` — what `ArchiveFetcher` downloads. Path deps bypass the fetcher and use `LockedSource::Path` in the lockfile. |
+| `cas_install_dir(packages_dir, name, version)` | Canonical install path `<packages_dir>/<slug>@<version>` for a lockfile dep name. Used by `LockFile::verify_checksums` and any consumer that needs to find an installed package off the lockfile alone. |
+| `fetcher_install_dir(packages_dir, name, version)` | Staging path `<packages_dir>/<safe_name>-<version>` used by `ArchiveFetcher` while extracting; the result is then copied into the canonical CAS via `install_from_path`. |
 | `Registry` (async trait) | Registry abstraction. `ApiRegistry` and `GitRegistry` implement it. |
 | `RegistrySet` | Composite that fans requests out to every configured registry. |
 | `ArchiveFetcher` | Downloads and extracts registry-hosted archives. |
@@ -55,8 +59,9 @@ Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
 | Type | Purpose |
 |------|---------|
 | `PackageManifest` | Parsed `hpm.toml` (every section). `PackageManifest::from_path` reads + parses, returning `ManifestLoadError` with the offending path. |
-| `ManifestLoadError` | `NotFound { path }` / `Read { path, source }` / `Parse { path, source }`. Re-exported by `hpm-core`'s `StorageError`, `ProjectError`, and `FetchManifestError`. |
-| `PackageInfo` | Contents of `[package]`. |
+| `ManifestLoadError` | `NotFound { path }` / `Read { path, source }` / `Parse { path, source }`. Re-exported by `hpm-core`'s `StorageError`, `ProjectError`, `DiscoveryError`, and `FetchManifestError`. |
+| `PackagePath`, `PackagePathError` | Validated `creator/slug` newtype. Kebab-case enforced at deserialization, so `creator()` and `slug()` return `&str` — no `Option`. |
+| `PackageInfo` | Contents of `[package]`. `path: PackagePath` is the canonical identifier; `name`, `version`, etc. are user-facing metadata. |
 | `HoudiniConfig` | Contents of `[houdini]`. |
 | `DependencySpec` | Untagged enum: `Simple(String) \| Url {..} \| Path {..} \| Registry {..}`. |
 | `PythonDependencySpec` | Untagged enum: `Simple(String) \| Detailed {..}`. |
@@ -117,6 +122,6 @@ Exit codes used by `hpm-cli`:
 
 - **Minimal coupling.** Each crate owns one concern; no upward dependencies.
 - **Async by default.** Everything I/O-bound runs on Tokio.
-- **Content-addressable storage.** Both HPM packages (`creator/slug@version`) and Python venvs (SHA-256 over the resolved set) deduplicate globally.
+- **Content-addressable storage.** Both HPM packages (`<slug>@<version>` under `~/.hpm/packages/`, with path-installed packages isolated in `_dev/`) and Python venvs (SHA-256 over the resolved set) deduplicate globally.
 - **Safety by construction.** Cleanup never removes a package an active project needs; lock file checksums are verified before every install; signing is opt-in but standard when used.
 - **TOML-first configuration.** Every persistent config — manifest, lock file, global config — is TOML and hand-editable.
