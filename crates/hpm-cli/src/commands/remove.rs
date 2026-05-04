@@ -125,7 +125,7 @@ pub async fn remove_package(package_name: String, manifest_path: Option<PathBuf>
 mod tests {
     use super::*;
     use crate::commands::test_fixtures::{CwdGuard, TestManifestOpts, write_test_manifest};
-    use hpm_package::DependencySpec;
+    use hpm_package::{DependencySpec, PackagePath};
     use indexmap::IndexMap;
     use tempfile::TempDir;
 
@@ -158,7 +158,7 @@ mod tests {
 
         // Create manifest with dependencies
         let mut manifest = hpm_package::PackageManifest::new(
-            "studio/test-package".to_string(),
+            PackagePath::new("studio/test-package").unwrap(),
             "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("Test description".to_string()),

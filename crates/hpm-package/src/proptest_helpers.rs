@@ -8,6 +8,7 @@ use proptest::prelude::*;
 use crate::dependency::DependencySpec;
 use crate::houdini::HoudiniEnvValue;
 use crate::manifest::{HoudiniConfig, PackageInfo, PackageManifest};
+use crate::package_path::PackagePath;
 use crate::python::PythonDependencySpec;
 
 /// Strategy to generate valid slug segments (kebab-case)
@@ -19,9 +20,14 @@ pub fn slug_strategy() -> impl Strategy<Value = String> {
         })
 }
 
-/// Strategy to generate valid package paths (creator/slug)
-pub fn package_path_strategy() -> impl Strategy<Value = String> {
-    (slug_strategy(), slug_strategy()).prop_map(|(creator, slug)| format!("{}/{}", creator, slug))
+/// Strategy to generate valid package paths (creator/slug). Returns the
+/// validated [`PackagePath`] directly so consumers can drop it straight
+/// into a [`PackageInfo`].
+pub fn package_path_strategy() -> impl Strategy<Value = PackagePath> {
+    (slug_strategy(), slug_strategy()).prop_map(|(creator, slug)| {
+        PackagePath::new(format!("{}/{}", creator, slug))
+            .expect("slug_strategy yields kebab-case segments")
+    })
 }
 
 /// Strategy to generate freeform display names
@@ -349,35 +355,10 @@ proptest! {
         prop_assert!(has_script_path);
     }
 
-    /// Test that package path validation works correctly
-    #[test]
-    fn prop_package_path_validation(
-        valid_path in package_path_strategy(),
-        malformed_path in malformed_package_path_strategy()
-    ) {
-        // Valid paths should pass validation
-        let valid_manifest = PackageManifest::new(
-            valid_path,
-            "Test Package".to_string(),
-            "1.0.0".to_string(),
-            None,
-            None,
-            None,
-        );
-        prop_assert!(valid_manifest.validate().is_ok());
-
-        // Malformed paths should fail validation
-        let invalid_manifest = PackageManifest::new(
-            malformed_path.clone(),
-            "Test Package".to_string(),
-            "1.0.0".to_string(),
-            None,
-            None,
-            None,
-        );
-        prop_assert!(invalid_manifest.validate().is_err(),
-            "Malformed path '{}' should fail validation", malformed_path);
-    }
+    // prop_package_path_validation removed: PackagePath::new enforces
+    // validity at construction, so the field type makes this property
+    // structurally true. Malformed-path rejection is covered directly by
+    // PackagePath's unit tests in package_path.rs.
 
     /// Test that semver validation works correctly
     #[test]
@@ -387,7 +368,7 @@ proptest! {
     ) {
         // Valid semver should pass validation
         let valid_manifest = PackageManifest::new(
-            "studio/test-package".to_string(),
+            PackagePath::new("studio/test-package").unwrap(),
             "Test Package".to_string(),
             valid_version,
             None,
@@ -398,7 +379,7 @@ proptest! {
 
         // Invalid versions should fail (unless they accidentally match semver)
         let invalid_manifest = PackageManifest::new(
-            "studio/test-package".to_string(),
+            PackagePath::new("studio/test-package").unwrap(),
             "Test Package".to_string(),
             invalid_version.clone(),
             None,
@@ -413,28 +394,20 @@ proptest! {
         }
     }
 
-    /// Test that malformed package paths are rejected consistently
+    /// Test that malformed package paths are rejected at the type
+    /// boundary, not deep inside `PackageManifest::validate`.
     #[test]
     fn prop_malformed_package_paths_rejected(malformed_path in malformed_package_path_strategy()) {
-        let manifest = PackageManifest::new(
-            malformed_path.clone(),
-            "Test".to_string(),
-            "1.0.0".to_string(),
-            None,
-            None,
-            None,
-        );
-
-        let result = manifest.validate();
+        let result = PackagePath::new(malformed_path.clone());
         prop_assert!(result.is_err(),
-            "Malformed package path '{}' should fail validation", malformed_path);
+            "Malformed package path '{}' should be rejected", malformed_path);
     }
 
     /// Test that malformed versions are rejected consistently
     #[test]
     fn prop_malformed_versions_rejected(malformed_version in malformed_version_strategy()) {
         let manifest = PackageManifest::new(
-            "studio/test-package".to_string(),
+            PackagePath::new("studio/test-package").unwrap(),
             "Test Package".to_string(),
             malformed_version.clone(),
             None,
@@ -507,10 +480,13 @@ proptest! {
         prop_assert!(path_json.is_ok(), "Path spec serialization should always work");
     }
 
-    /// Test that Houdini package generation handles missing/invalid data
+    /// Test that Houdini package generation handles missing/invalid data.
+    /// `path` is always a valid `PackagePath` because the field type
+    /// enforces it; the malformed-version branch still exercises the
+    /// generator's tolerance for non-semver versions.
     #[test]
     fn prop_houdini_package_generation_robustness(
-        path in prop_oneof![package_path_strategy(), malformed_package_path_strategy()],
+        path in package_path_strategy(),
         name in package_name_strategy(),
         version in prop_oneof![version_strategy(), malformed_version_strategy()],
         min_version in prop::option::of(houdini_version_strategy()),
@@ -603,7 +579,7 @@ proptest! {
         };
 
         let manifest = PackageManifest::new(
-            "studio/test-package".to_string(),
+            PackagePath::new("studio/test-package").unwrap(),
             "Test Package".to_string(),
             "1.0.0".to_string(),
             None,

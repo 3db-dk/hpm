@@ -2,9 +2,11 @@ use hpm_package::PackageManifest;
 use semver::{Version, VersionReq as SemverVersionReq};
 use std::path::PathBuf;
 
+/// A package present in the global CAS. The bare slug and full path live on
+/// `manifest.package.path` — call `.slug()` / `.identifier()` rather than
+/// duplicating them on the wrapper type.
 #[derive(Debug, Clone)]
 pub struct InstalledPackage {
-    pub name: String,
     pub version: String,
     pub manifest: PackageManifest,
     pub install_path: PathBuf,
@@ -96,8 +98,13 @@ impl PackageSpec {
 }
 
 impl InstalledPackage {
+    /// Bare slug — the kebab segment after the `/` in the package path.
+    pub fn slug(&self) -> &str {
+        self.manifest.package.slug()
+    }
+
     pub fn identifier(&self) -> String {
-        format!("{}@{}", self.name, self.version)
+        format!("{}@{}", self.slug(), self.version)
     }
 
     /// Check if this installed package satisfies a version requirement
@@ -194,7 +201,7 @@ mod tests {
             path in file_path_strategy()
         ) {
             let manifest = hpm_package::PackageManifest::new(
-                format!("studio/{}", name),
+                hpm_package::PackagePath::new(format!("studio/{}", name)).unwrap(),
                 "Test Package".to_string(),
                 version.clone(),
                 None,
@@ -203,12 +210,12 @@ mod tests {
             );
 
             let package = InstalledPackage {
-                name: name.clone(),
                 version: version.clone(),
                 manifest,
                 install_path: path,
             };
 
+            // Identifier uses the slug from the package path: `studio/<name>` → `<name>`.
             let expected_identifier = format!("{}@{}", name, version);
             prop_assert_eq!(package.identifier(), expected_identifier);
         }
@@ -222,7 +229,7 @@ mod tests {
             path in file_path_strategy()
         ) {
             let manifest = hpm_package::PackageManifest::new(
-                format!("studio/{}", name),
+                hpm_package::PackagePath::new(format!("studio/{}", name)).unwrap(),
                 "Test Package".to_string(),
                 package_version.clone(),
                 None,
@@ -230,8 +237,8 @@ mod tests {
                 None,
             );
 
+            let _ = name; // kept by package_name_strategy for path construction above
             let package = InstalledPackage {
-                name,
                 version: package_version.clone(),
                 manifest,
                 install_path: path,
@@ -312,7 +319,7 @@ mod tests {
     #[test]
     fn version_compatibility_edge_cases() {
         let manifest = hpm_package::PackageManifest::new(
-            "studio/test".to_string(),
+            hpm_package::PackagePath::new("studio/test").unwrap(),
             "Test Package".to_string(),
             "1.0.0".to_string(),
             None,
@@ -321,7 +328,6 @@ mod tests {
         );
 
         let package = InstalledPackage {
-            name: "test".to_string(),
             version: "1.0.0".to_string(),
             manifest,
             install_path: PathBuf::from("/path"),

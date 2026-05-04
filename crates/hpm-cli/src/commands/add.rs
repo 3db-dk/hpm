@@ -195,7 +195,7 @@ pub async fn add_packages(
 mod tests {
     use super::*;
     use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
-    use hpm_package::PackageManifest;
+    use hpm_package::{PackageManifest, PackagePath};
     use proptest::prelude::*;
     use tempfile::TempDir;
 
@@ -357,7 +357,7 @@ mod tests {
 
             // Create a valid manifest
             let manifest = PackageManifest::new(
-                format!("studio/{}", package_name),
+                PackagePath::new(format!("studio/{}", package_name)).unwrap(),
                 package_name.clone(),
                 "1.0.0".to_string(),
                 Some("Test package".to_string()),
@@ -473,7 +473,7 @@ mod tests {
             let manifest_path = temp_dir.path().join("hpm.toml");
 
             let manifest = PackageManifest::new(
-                format!("studio/{}", package_name),
+                PackagePath::new(format!("studio/{}", package_name)).unwrap(),
                 package_name.clone(),
                 version.clone(),
                 Some("Test package".to_string()),

@@ -153,7 +153,7 @@ fn map_houdini_to_python_version(houdini_version: &str) -> Result<PythonVersion>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hpm_package::{HoudiniConfig, PackageInfo};
+    use hpm_package::{HoudiniConfig, PackageInfo, PackagePath};
     use indexmap::IndexMap;
 
     #[tokio::test]
@@ -181,7 +181,7 @@ mod tests {
 
         let manifest = PackageManifest {
             package: PackageInfo {
-                path: "studio/test-package".to_string(),
+                path: PackagePath::new("studio/test-package").unwrap(),
                 name: "Test Package".to_string(),
                 version: "1.0.0".to_string(),
                 description: None,

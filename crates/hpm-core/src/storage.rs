@@ -183,11 +183,6 @@ impl StorageManager {
         };
 
         Ok(Some(InstalledPackage {
-            name: manifest
-                .package
-                .slug()
-                .unwrap_or(&manifest.package.path)
-                .to_string(),
             version: manifest.package.version.clone(),
             manifest,
             install_path: package_dir,
@@ -239,11 +234,7 @@ impl StorageManager {
         let manifest_path = source_path.join("hpm.toml");
         let manifest = PackageManifest::from_path(&manifest_path)?;
 
-        let name = manifest
-            .package
-            .slug()
-            .unwrap_or(&manifest.package.path)
-            .to_string();
+        let name = manifest.package.slug().to_string();
         let name = &name;
         let version = &manifest.package.version;
 
@@ -292,7 +283,6 @@ impl StorageManager {
         info!("Successfully installed {kind}{}@{}", name, version);
 
         Ok(InstalledPackage {
-            name: name.clone(),
             version: version.clone(),
             manifest,
             install_path: target_dir,
@@ -339,7 +329,9 @@ impl StorageManager {
         let installed = self.list_installed().ok()?;
         installed
             .into_iter()
-            .filter(|pkg| pkg.name == name && pkg.is_compatible_with(version_req))
+            .filter(|pkg| {
+                pkg.manifest.package.slug() == name && pkg.is_compatible_with(version_req)
+            })
             .max_by(|a, b| {
                 // Compare versions - prefer higher versions
                 match (
@@ -536,7 +528,7 @@ impl StorageManager {
         let remaining_packages: Vec<String> = all_installed
             .into_iter()
             .filter_map(|p| {
-                let id = format!("{}@{}", p.name, p.version);
+                let id = format!("{}@{}", p.manifest.package.slug(), p.version);
                 (!removed_packages.contains(&id)).then_some(id)
             })
             .collect();
@@ -588,7 +580,7 @@ impl StorageManager {
             .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
         let active_package_names: Vec<String> = active_packages
             .into_iter()
-            .map(|p| format!("{}@{}", p.name, p.version))
+            .map(|p| format!("{}@{}", p.manifest.package.slug(), p.version))
             .collect();
 
         // Find orphaned virtual environments
@@ -745,7 +737,7 @@ min_version = "20.5"
 
         let packages = storage_manager.list_installed().unwrap();
         assert_eq!(packages.len(), 1);
-        assert_eq!(packages[0].name, "test-package");
+        assert_eq!(packages[0].slug(), "test-package");
         assert_eq!(packages[0].version, "1.0.0");
     }
 
@@ -892,11 +884,17 @@ min_version = "20.5"
         assert_eq!(packages.len(), 2);
 
         // Find the scoped package
-        let fire_fx = packages.iter().find(|p| p.name == "fire-fx").unwrap();
+        let fire_fx = packages
+            .iter()
+            .find(|p| p.manifest.package.slug() == "fire-fx")
+            .unwrap();
         assert_eq!(fire_fx.version, "1.0.0");
 
         // Find the non-scoped package
-        let old_pkg = packages.iter().find(|p| p.name == "old-pkg").unwrap();
+        let old_pkg = packages
+            .iter()
+            .find(|p| p.manifest.package.slug() == "old-pkg")
+            .unwrap();
         assert_eq!(old_pkg.version, "2.0.0");
     }
 
@@ -1017,7 +1015,7 @@ min_version = "20.5"
             .unwrap();
 
         let listed = storage_manager.list_installed().unwrap();
-        let names: Vec<_> = listed.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = listed.iter().map(|p| p.manifest.package.slug()).collect();
         assert!(
             !names.contains(&"foo"),
             "list_installed must hide dev installs; got {:?}",

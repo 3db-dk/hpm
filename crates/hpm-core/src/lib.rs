@@ -118,7 +118,7 @@
 //! // List all installed packages
 //! let packages = storage.list_installed()?;
 //! for package in packages {
-//!     println!("Installed: {} v{}", package.name, package.version);
+//!     println!("Installed: {} v{}", package.slug(), package.version);
 //! }
 //! # Ok(())
 //! # }

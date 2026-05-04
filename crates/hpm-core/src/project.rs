@@ -103,11 +103,11 @@ impl ProjectManager {
     }
 
     /// Match an installed package against a spec name, handling both scoped
-    /// (`creator/slug`) and bare (`slug`) names. The package's canonical
-    /// identifier is `manifest.package.path`; `InstalledPackage.name` only
-    /// holds the slug.
+    /// (`creator/slug`) and bare (`slug`) forms. The canonical identifier
+    /// is `manifest.package.path`; the slug is the kebab segment after `/`.
     fn matches_spec_name(pkg: &InstalledPackage, spec_name: &str) -> bool {
-        pkg.manifest.package.path == spec_name || pkg.name == spec_name
+        let path = &pkg.manifest.package.path;
+        path.as_str() == spec_name || path.slug() == spec_name
     }
 
     /// Resolve a package spec against configured registries and install it.
@@ -335,7 +335,7 @@ impl ProjectManager {
 
         let valid_slugs: std::collections::HashSet<&str> = installed_packages
             .iter()
-            .map(|pkg| pkg.name.as_str())
+            .map(|pkg| pkg.manifest.package.slug())
             .collect();
 
         let entries = std::fs::read_dir(packages_dir)
@@ -487,7 +487,7 @@ impl ProjectManager {
         )?;
         let manifest_path = self
             .project_config
-            .package_manifest_path(&installed_package.name);
+            .package_manifest_path(installed_package.manifest.package.slug());
 
         // Atomic write: stage to <path>.tmp then rename. Houdini reads
         // these manifests on launch; a crash or interrupt mid-write leaves
@@ -524,7 +524,10 @@ impl ProjectManager {
             source,
         })?;
 
-        debug!("Generated Houdini manifest for {}", installed_package.name);
+        debug!(
+            "Generated Houdini manifest for {}",
+            installed_package.manifest.package.slug()
+        );
         Ok(())
     }
 
@@ -669,7 +672,7 @@ impl ProjectManager {
                 let raw_value = effective_entry.value.as_ref().ok_or_else(|| {
                     ProjectError::MissingRequiredEnv {
                         var: key.clone(),
-                        package: installed_package.name.clone(),
+                        package: installed_package.manifest.package.slug().to_string(),
                     }
                 })?;
 
@@ -855,7 +858,7 @@ impl ProjectManager {
                         // Find corresponding installed package
                         let installed_package = installed_packages
                             .iter()
-                            .find(|p| p.name == package_name)
+                            .find(|p| p.manifest.package.slug() == package_name)
                             .cloned();
 
                         let version = installed_package
@@ -968,6 +971,7 @@ pub enum ProjectError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hpm_package::PackagePath;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -1024,7 +1028,7 @@ mod tests {
         let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
 
         let manifest = hpm_package::PackageManifest::new(
-            "studio/test-package".to_string(),
+            PackagePath::new("studio/test-package").unwrap(),
             "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("A test package".to_string()),
@@ -1037,7 +1041,6 @@ mod tests {
         std::fs::create_dir_all(package_path.join("otls")).unwrap();
 
         let installed_package = InstalledPackage {
-            name: "test-package".to_string(),
             version: "1.0.0".to_string(),
             manifest,
             install_path: package_path.clone(),
@@ -1071,7 +1074,7 @@ mod tests {
 
         // Create a manifest with an env var
         let mut manifest = hpm_package::PackageManifest::new(
-            "studio/test-package".to_string(),
+            PackagePath::new("studio/test-package").unwrap(),
             "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("A test package".to_string()),
@@ -1093,7 +1096,6 @@ mod tests {
         std::fs::create_dir_all(&package_path).unwrap();
 
         let installed_package = InstalledPackage {
-            name: "test-package".to_string(),
             version: "1.0.0".to_string(),
             manifest,
             install_path: package_path.clone(),
@@ -1162,7 +1164,7 @@ mod tests {
         let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
 
         let mut manifest = hpm_package::PackageManifest::new(
-            "studio/needs-config".to_string(),
+            PackagePath::new("studio/needs-config").unwrap(),
             "Needs Config".to_string(),
             "1.0.0".to_string(),
             None,
@@ -1184,7 +1186,6 @@ mod tests {
         std::fs::create_dir_all(&package_path).unwrap();
 
         let installed_package = InstalledPackage {
-            name: "needs-config".to_string(),
             version: "1.0.0".to_string(),
             manifest,
             install_path: package_path,
@@ -1234,7 +1235,7 @@ mod tests {
     #[test]
     fn matches_spec_name_handles_scoped_and_bare() {
         let manifest = hpm_package::PackageManifest::new(
-            "tumblehead/claudini2".to_string(),
+            PackagePath::new("tumblehead/claudini2").unwrap(),
             "Claudini 2".to_string(),
             "0.4.0".to_string(),
             None,
@@ -1242,7 +1243,6 @@ mod tests {
             None,
         );
         let pkg = InstalledPackage {
-            name: "claudini2".to_string(),
             version: "0.4.0".to_string(),
             manifest,
             install_path: PathBuf::from("/tmp/claudini2@0.4.0"),
@@ -1278,7 +1278,7 @@ mod tests {
         let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
 
         let manifest = hpm_package::PackageManifest::new(
-            "tumblehead/tumblepipe".to_string(),
+            PackagePath::new("tumblehead/tumblepipe").unwrap(),
             "Tumblepipe".to_string(),
             "1.1.20".to_string(),
             None,
@@ -1286,7 +1286,6 @@ mod tests {
             None,
         );
         let installed = InstalledPackage {
-            name: "tumblepipe".to_string(),
             version: "1.1.20".to_string(),
             manifest,
             install_path: temp_dir.path().join("tumblepipe@1.1.20"),
@@ -1305,7 +1304,7 @@ mod tests {
             .await
             .expect("scoped lookup must short-circuit on the bare-slug InstalledPackage");
 
-        assert_eq!(result.name, "tumblepipe");
+        assert_eq!(result.slug(), "tumblepipe");
         assert_eq!(result.version, "1.1.20");
     }
 
@@ -1338,7 +1337,7 @@ mod tests {
         std::fs::write(&unrelated, b"hello").unwrap();
 
         let manifest = hpm_package::PackageManifest::new(
-            "creator/foo".to_string(),
+            PackagePath::new("creator/foo").unwrap(),
             "Foo".to_string(),
             "1.0.0".to_string(),
             None,
@@ -1346,7 +1345,6 @@ mod tests {
             None,
         );
         let installed = InstalledPackage {
-            name: "foo".to_string(),
             version: "1.0.0".to_string(),
             manifest,
             install_path: temp_dir.path().join("foo@1.0.0"),

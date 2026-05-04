@@ -174,7 +174,7 @@ pub fn save_manifest(manifest: &PackageManifest, manifest_path: &Path) -> Result
 mod tests {
     use super::*;
     use crate::commands::test_fixtures::{CwdGuard, TestManifestOpts, write_test_manifest};
-    use hpm_package::DependencySpec;
+    use hpm_package::{DependencySpec, PackagePath};
     use indexmap::IndexMap;
     use tempfile::TempDir;
 
@@ -256,7 +256,7 @@ mod tests {
 
         // Create initial manifest
         let mut manifest = PackageManifest::new(
-            "studio/test-package".to_string(),
+            PackagePath::new("studio/test-package").unwrap(),
             "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("Test description".to_string()),

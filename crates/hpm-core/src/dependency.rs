@@ -23,7 +23,10 @@ impl PackageId {
 
 impl From<&InstalledPackage> for PackageId {
     fn from(package: &InstalledPackage) -> Self {
-        Self::new(package.name.clone(), package.version.clone())
+        Self::new(
+            package.manifest.package.slug().to_string(),
+            package.version.clone(),
+        )
     }
 }
 
@@ -178,7 +181,7 @@ impl DependencyResolver {
         // Use &str keys to avoid cloning package names
         let installed_map: HashMap<&str, &InstalledPackage> = installed_packages
             .iter()
-            .map(|pkg| (pkg.name.as_str(), pkg))
+            .map(|pkg| (pkg.manifest.package.slug(), pkg))
             .collect();
 
         // Process each project

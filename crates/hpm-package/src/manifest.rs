@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::dependency::DependencySpec;
 use crate::houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
+use crate::package_path::PackagePath;
 use crate::platform::Platform;
 use crate::python::PythonDependencySpec;
 
@@ -182,8 +183,9 @@ pub struct PackageManifest {
 /// Package metadata information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageInfo {
-    /// Scoped package path: `creator-slug/package-slug` (e.g. `tumblehead/tumble-rig`)
-    pub path: String,
+    /// Scoped package path: `creator-slug/package-slug` (e.g. `tumblehead/tumble-rig`).
+    /// Validated kebab-case at deserialization — see [`PackagePath`].
+    pub path: PackagePath,
     /// Freeform display name (e.g. `TumbleRig`)
     pub name: String,
     pub version: String,
@@ -199,19 +201,19 @@ pub struct PackageInfo {
 }
 
 impl PackageInfo {
-    /// Returns the scoped path (the canonical identifier)
+    /// Returns the scoped path (the canonical identifier).
     pub fn identifier(&self) -> &str {
-        &self.path
+        self.path.as_str()
     }
 
-    /// Returns the creator slug from the path (e.g. `tumblehead` from `tumblehead/tumble-rig`)
-    pub fn creator(&self) -> Option<&str> {
-        self.path.split_once('/').map(|(creator, _)| creator)
+    /// Returns the creator segment, e.g. `tumblehead`.
+    pub fn creator(&self) -> &str {
+        self.path.creator()
     }
 
-    /// Returns the package slug from the path (e.g. `tumble-rig` from `tumblehead/tumble-rig`)
-    pub fn slug(&self) -> Option<&str> {
-        self.path.split_once('/').map(|(_, slug)| slug)
+    /// Returns the slug segment, e.g. `tumble-rig`.
+    pub fn slug(&self) -> &str {
+        self.path.slug()
     }
 }
 
@@ -265,9 +267,13 @@ impl PackageManifest {
         })
     }
 
-    /// Create a new package manifest with default values
+    /// Create a new package manifest with default values.
+    ///
+    /// Takes a validated [`PackagePath`] — callers can use
+    /// `PackagePath::new("creator/slug").unwrap()` for static identifiers
+    /// in tests, or propagate the parse error in production code.
     pub fn new(
-        path: String,
+        path: PackagePath,
         name: String,
         version: String,
         description: Option<String>,
@@ -347,12 +353,11 @@ impl PackageManifest {
         scripts.commands.get(name).cloned()
     }
 
-    /// Validate the package manifest for common errors
+    /// Validate the package manifest for common errors.
+    ///
+    /// Note: `package.path` is a [`PackagePath`] and was already validated
+    /// at deserialization, so it isn't checked again here.
     pub fn validate(&self) -> Result<(), String> {
-        if self.package.path.is_empty() {
-            return Err("Package path cannot be empty".to_string());
-        }
-
         if self.package.name.is_empty() {
             return Err("Package name cannot be empty".to_string());
         }
@@ -364,11 +369,6 @@ impl PackageManifest {
         // Basic semver validation
         if !self.is_valid_semver(&self.package.version) {
             return Err("Package version must be valid semantic version".to_string());
-        }
-
-        // Validate package path (creator-slug/package-slug)
-        if !Self::is_valid_package_path(&self.package.path) {
-            return Err("Package path must be creator/slug format (lowercase kebab-case segments separated by /)".to_string());
         }
 
         // Validate [native] section
@@ -504,11 +504,7 @@ impl PackageManifest {
     pub fn generate_houdini_native_package(
         &self,
     ) -> Result<(String, HoudiniNativePackage), String> {
-        let slug = self
-            .package
-            .slug()
-            .ok_or("Package path must be in creator/slug format")?
-            .to_string();
+        let slug = self.package.slug().to_string();
 
         let pkg_root = format!("$HOUDINI_PACKAGE_PATH/{}", slug);
 
@@ -599,25 +595,6 @@ impl PackageManifest {
 
         parts.iter().all(|part| part.parse::<u32>().is_ok())
     }
-
-    /// Validate a package path in `creator/slug` format.
-    /// Both segments must be kebab-case (lowercase alphanumeric + hyphens).
-    pub fn is_valid_package_path(path: &str) -> bool {
-        match path.split_once('/') {
-            Some((creator, slug)) => Self::is_valid_slug(creator) && Self::is_valid_slug(slug),
-            None => false,
-        }
-    }
-
-    /// Validate a single slug segment (kebab-case).
-    pub fn is_valid_slug(slug: &str) -> bool {
-        !slug.is_empty()
-            && slug
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c == '-' || c.is_ascii_digit())
-            && !slug.starts_with('-')
-            && !slug.ends_with('-')
-    }
 }
 
 #[cfg(test)]
@@ -632,7 +609,7 @@ mod tests {
     fn houdini_package_no_version_constraints() {
         // Edge case: Houdini package generation without version constraints
         let mut manifest = PackageManifest::new(
-            "studio/test".to_string(),
+            PackagePath::new("studio/test").unwrap(),
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
@@ -745,7 +722,7 @@ LEAKED = { method = "set" }
     #[test]
     fn generate_houdini_package_skips_required_placeholders() {
         let mut manifest = PackageManifest::new(
-            "studio/test".to_string(),
+            PackagePath::new("studio/test").unwrap(),
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
@@ -812,7 +789,7 @@ version = "0.1.0"
     #[test]
     fn generate_houdini_package_includes_user_env() {
         let mut manifest = PackageManifest::new(
-            "studio/test".to_string(),
+            PackagePath::new("studio/test").unwrap(),
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
@@ -892,7 +869,7 @@ version = "0.1.0"
     #[test]
     fn native_validation_unknown_platform() {
         let mut manifest = PackageManifest::new(
-            "studio/test".to_string(),
+            PackagePath::new("studio/test").unwrap(),
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
@@ -909,7 +886,7 @@ version = "0.1.0"
     #[test]
     fn native_validation_missing_files_section() {
         let mut manifest = PackageManifest::new(
-            "studio/test".to_string(),
+            PackagePath::new("studio/test").unwrap(),
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
@@ -927,7 +904,7 @@ version = "0.1.0"
     #[test]
     fn native_validation_empty_files() {
         let mut manifest = PackageManifest::new(
-            "studio/test".to_string(),
+            PackagePath::new("studio/test").unwrap(),
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
@@ -950,7 +927,7 @@ version = "0.1.0"
     #[test]
     fn native_validation_extra_platform_files() {
         let mut manifest = PackageManifest::new(
-            "studio/test".to_string(),
+            PackagePath::new("studio/test").unwrap(),
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
@@ -972,32 +949,13 @@ version = "0.1.0"
         assert!(err.contains("not listed in native.platforms"));
     }
 
-    #[test]
-    fn valid_package_path() {
-        assert!(PackageManifest::is_valid_package_path(
-            "tumblehead/tumble-rig"
-        ));
-        assert!(PackageManifest::is_valid_package_path("studio/fire-fx"));
-        assert!(PackageManifest::is_valid_package_path("a/b"));
-        assert!(PackageManifest::is_valid_package_path("creator123/pkg456"));
-    }
-
-    #[test]
-    fn invalid_package_path() {
-        assert!(!PackageManifest::is_valid_package_path("flat-name"));
-        assert!(!PackageManifest::is_valid_package_path(""));
-        assert!(!PackageManifest::is_valid_package_path("a/b/c"));
-        assert!(!PackageManifest::is_valid_package_path("Upper/case"));
-        assert!(!PackageManifest::is_valid_package_path("creator/"));
-        assert!(!PackageManifest::is_valid_package_path("/slug"));
-        assert!(!PackageManifest::is_valid_package_path("-bad/slug"));
-        assert!(!PackageManifest::is_valid_package_path("creator/-bad"));
-    }
+    // Path-format validation lives in `package_path.rs` — see
+    // `PackagePath`'s tests for the well-formed/malformed cases.
 
     #[test]
     fn package_info_helpers() {
         let info = PackageInfo {
-            path: "tumblehead/tumble-rig".to_string(),
+            path: PackagePath::new("tumblehead/tumble-rig").unwrap(),
             name: "TumbleRig".to_string(),
             version: "1.0.0".to_string(),
             description: None,
@@ -1011,14 +969,14 @@ version = "0.1.0"
             categories: None,
         };
         assert_eq!(info.identifier(), "tumblehead/tumble-rig");
-        assert_eq!(info.creator(), Some("tumblehead"));
-        assert_eq!(info.slug(), Some("tumble-rig"));
+        assert_eq!(info.creator(), "tumblehead");
+        assert_eq!(info.slug(), "tumble-rig");
     }
 
     #[test]
     fn manifest_toml_roundtrip_with_path() {
         let manifest = PackageManifest::new(
-            "tumblehead/tumble-rig".to_string(),
+            PackagePath::new("tumblehead/tumble-rig").unwrap(),
             "TumbleRig".to_string(),
             "1.0.0".to_string(),
             Some("A rig tool".to_string()),
@@ -1275,7 +1233,7 @@ register = "linux-register"
     #[test]
     fn scripts_toml_roundtrip_preserves_platform_table() {
         let mut manifest = PackageManifest::new(
-            "studio/tool".to_string(),
+            PackagePath::new("studio/tool").unwrap(),
             "Tool".to_string(),
             "1.0.0".to_string(),
             None,
@@ -1310,7 +1268,7 @@ register = "linux-register"
     #[test]
     fn generate_houdini_native_package_env_root_replacement() {
         let mut manifest = PackageManifest::new(
-            "studio/test-pkg".to_string(),
+            PackagePath::new("studio/test-pkg").unwrap(),
             "Test".to_string(),
             "1.0.0".to_string(),
             None,

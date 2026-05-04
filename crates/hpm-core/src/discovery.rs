@@ -163,6 +163,7 @@ pub enum DiscoveryError {
 mod tests {
     use super::*;
     use hpm_config::ProjectsConfig;
+    use hpm_package::PackagePath;
     use tempfile::TempDir;
 
     #[test]
@@ -243,13 +244,13 @@ description = "Test project {}"
 
         assert_eq!(projects.len(), 3);
 
-        let project_paths: Vec<_> = projects
+        let project_paths: Vec<&str> = projects
             .iter()
-            .map(|p| p.manifest.package.path.clone())
+            .map(|p| p.manifest.package.path.as_str())
             .collect();
-        assert!(project_paths.contains(&"studio/project-1".to_string()));
-        assert!(project_paths.contains(&"studio/project-2".to_string()));
-        assert!(project_paths.contains(&"studio/project-3".to_string()));
+        assert!(project_paths.contains(&"studio/project-1"));
+        assert!(project_paths.contains(&"studio/project-2"));
+        assert!(project_paths.contains(&"studio/project-3"));
     }
 
     #[test]
@@ -295,7 +296,7 @@ description = "Test project {}"
         let temp_dir = TempDir::new().unwrap();
 
         let manifest1 = hpm_package::PackageManifest::new(
-            "studio/project-1".to_string(),
+            PackagePath::new("studio/project-1").unwrap(),
             "Project 1".to_string(),
             "1.0.0".to_string(),
             None,
@@ -304,7 +305,7 @@ description = "Test project {}"
         );
 
         let mut manifest2 = hpm_package::PackageManifest::new(
-            "studio/project-2".to_string(),
+            PackagePath::new("studio/project-2").unwrap(),
             "Project 2".to_string(),
             "1.0.0".to_string(),
             None,

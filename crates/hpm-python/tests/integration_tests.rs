@@ -1,6 +1,6 @@
 //! Integration tests for Python dependency management system
 
-use hpm_package::{HoudiniConfig, PackageInfo, PackageManifest, PythonDependencySpec};
+use hpm_package::{HoudiniConfig, PackageInfo, PackageManifest, PackagePath, PythonDependencySpec};
 use hpm_python::{cleanup, dependency, types, venv};
 use indexmap::IndexMap;
 
@@ -30,7 +30,7 @@ async fn test_end_to_end_python_workflow() {
 
     let manifest_a = PackageManifest {
         package: PackageInfo {
-            path: "studio/package-a".to_string(),
+            path: PackagePath::new("studio/package-a").unwrap(),
             name: "Package A".to_string(),
             version: "1.0.0".to_string(),
             description: Some("Package A with Python deps".to_string()),
@@ -71,7 +71,7 @@ async fn test_end_to_end_python_workflow() {
 
     let manifest_b = PackageManifest {
         package: PackageInfo {
-            path: "studio/package-b".to_string(),
+            path: PackagePath::new("studio/package-b").unwrap(),
             name: "Package B".to_string(),
             version: "2.0.0".to_string(),
             description: Some("Package B with Python deps".to_string()),
@@ -262,12 +262,12 @@ async fn test_virtual_environment_sharing() {
 async fn test_houdini_python_version_mapping_edge_cases() {
     // Unparseable or unmapped Houdini versions must hard-fail rather than
     // silently install a wrong Python version into the venv.
-    use hpm_package::{HoudiniConfig, PackageInfo};
+    use hpm_package::{HoudiniConfig, PackageInfo, PackagePath};
     use indexmap::IndexMap;
 
     let make_manifest = |version: &str| PackageManifest {
         package: PackageInfo {
-            path: "studio/test-package".to_string(),
+            path: PackagePath::new("studio/test-package").unwrap(),
             name: "Test Package".to_string(),
             version: "1.0.0".to_string(),
             description: None,

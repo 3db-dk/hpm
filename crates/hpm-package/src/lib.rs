@@ -27,11 +27,11 @@
 //! ## Quick Start
 //!
 //! ```rust
-//! use hpm_package::{PackageManifest, DependencySpec};
+//! use hpm_package::{PackageManifest, PackagePath, DependencySpec};
 //!
 //! // Create a new package manifest
 //! let manifest = PackageManifest::new(
-//!     "studio/geometry-tools".to_string(),
+//!     PackagePath::new("studio/geometry-tools").unwrap(),
 //!     "Geometry Tools".to_string(),
 //!     "2.1.0".to_string(),
 //!     Some("Advanced geometry tools for Houdini".to_string()),
@@ -49,11 +49,11 @@
 //! ## Adding Dependencies
 //!
 //! ```rust
-//! use hpm_package::{PackageManifest, DependencySpec, PythonDependencySpec};
+//! use hpm_package::{PackageManifest, PackagePath, DependencySpec, PythonDependencySpec};
 //! use indexmap::IndexMap;
 //!
 //! let mut manifest = PackageManifest::new(
-//!     "studio/my-package".to_string(),
+//!     PackagePath::new("studio/my-package").unwrap(),
 //!     "My Package".to_string(),
 //!     "1.0.0".to_string(),
 //!     None, None, None,
@@ -82,10 +82,10 @@
 //! ## Generating Houdini package.json
 //!
 //! ```rust
-//! use hpm_package::PackageManifest;
+//! use hpm_package::{PackageManifest, PackagePath};
 //!
 //! let manifest = PackageManifest::new(
-//!     "studio/my-package".to_string(),
+//!     PackagePath::new("studio/my-package").unwrap(),
 //!     "My Package".to_string(),
 //!     "1.0.0".to_string(),
 //!     None, None, None,
@@ -102,6 +102,7 @@
 pub mod dependency;
 pub mod houdini;
 pub mod manifest;
+pub mod package_path;
 pub mod platform;
 pub mod python;
 pub mod template;
@@ -117,6 +118,7 @@ pub use manifest::{
     NativePlatformFiles, PackageInfo, PackageManifest, PackageScripts, PlatformScripts,
     RegistryConfig, RegistryType,
 };
+pub use package_path::{PackagePath, PackagePathError};
 pub use platform::Platform;
 pub use python::PythonDependencySpec;
 pub use template::PackageTemplate;

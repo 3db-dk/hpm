@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use console::style;
-use hpm_package::{PackageManifest, PackageTemplate};
+use hpm_package::{PackageManifest, PackagePath, PackageTemplate};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -57,7 +57,8 @@ pub async fn init_package(options: InitOptions) -> Result<String> {
     };
 
     // Create package manifest
-    let package_path = format!("local/{}", package_name);
+    let package_path = PackagePath::new(format!("local/{}", package_name))
+        .with_context(|| format!("Invalid package name '{package_name}'"))?;
     let mut manifest = PackageManifest::new(
         package_path,
         package_name.clone(),

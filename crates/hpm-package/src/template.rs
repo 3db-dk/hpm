@@ -267,13 +267,13 @@ __version__ = "1.0.0"
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PackageManifest;
+    use crate::{PackageManifest, PackagePath};
     use tempfile::TempDir;
 
     #[test]
     fn test_standard_template() {
         let manifest = PackageManifest::new(
-            "studio/test-package".to_string(),
+            PackagePath::new("studio/test-package").unwrap(),
             "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("Test package".to_string()),
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn test_bare_template() {
         let manifest = PackageManifest::new(
-            "studio/test-bare".to_string(),
+            PackagePath::new("studio/test-bare").unwrap(),
             "Test Bare".to_string(),
             "1.0.0".to_string(),
             Some("Test bare package".to_string()),
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn test_bare_template_filesystem_creation() {
         let manifest = PackageManifest::new(
-            "studio/test-bare-pkg".to_string(),
+            PackagePath::new("studio/test-bare-pkg").unwrap(),
             "Test Bare Pkg".to_string(),
             "1.0.0".to_string(),
             Some("A test bare package".to_string()),
@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn test_standard_template_filesystem_creation() {
         let manifest = PackageManifest::new(
-            "studio/test-standard-pkg".to_string(),
+            PackagePath::new("studio/test-standard-pkg").unwrap(),
             "Test Standard Pkg".to_string(),
             "2.0.0".to_string(),
             Some("A comprehensive test package".to_string()),
