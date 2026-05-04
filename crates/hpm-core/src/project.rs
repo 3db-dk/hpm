@@ -198,8 +198,11 @@ impl ProjectManager {
         // 2. Remove Houdini package manifest from project
         let manifest_path = self.project_config.package_manifest_path(name);
         if manifest_path.exists() {
-            std::fs::remove_file(&manifest_path)
-                .map_err(|e| ProjectError::ManifestRemoval(e.to_string()))?;
+            std::fs::remove_file(&manifest_path).map_err(|source| ProjectError::ManifestIo {
+                op: "remove",
+                path: manifest_path.clone(),
+                source,
+            })?;
             debug!("Removed Houdini manifest: {:?}", manifest_path);
         }
 
@@ -494,19 +497,32 @@ impl ProjectManager {
         let tmp_path = PathBuf::from(tmp_path);
 
         {
-            let file = std::fs::File::create(&tmp_path)
-                .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
+            let file =
+                std::fs::File::create(&tmp_path).map_err(|source| ProjectError::ManifestIo {
+                    op: "create",
+                    path: tmp_path.clone(),
+                    source,
+                })?;
             let mut writer = std::io::BufWriter::new(file);
-            serde_json::to_writer_pretty(&mut writer, &houdini_package)
-                .map_err(|e| ProjectError::JsonSerialization(e.to_string()))?;
+            serde_json::to_writer_pretty(&mut writer, &houdini_package).map_err(|source| {
+                ProjectError::HoudiniManifestSerialize {
+                    path: tmp_path.clone(),
+                    source,
+                }
+            })?;
             use std::io::Write;
-            writer
-                .flush()
-                .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
+            writer.flush().map_err(|source| ProjectError::ManifestIo {
+                op: "flush",
+                path: tmp_path.clone(),
+                source,
+            })?;
         }
 
-        std::fs::rename(&tmp_path, &manifest_path)
-            .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
+        std::fs::rename(&tmp_path, &manifest_path).map_err(|source| ProjectError::ManifestIo {
+            op: "rename",
+            path: manifest_path.clone(),
+            source,
+        })?;
 
         debug!("Generated Houdini manifest for {}", installed_package.name);
         Ok(())
@@ -706,65 +722,87 @@ impl ProjectManager {
         })
     }
 
-    fn update_project_manifest(&self, spec: &PackageSpec) -> Result<(), ProjectError> {
-        // Read existing manifest or create new one
-        let manifest_path = &self.project_config.manifest_file;
+    /// Read hpm.toml, parse as a `toml_edit::DocumentMut`, hand it to `f`,
+    /// then write back. The caller is responsible for any pre-condition
+    /// check (e.g. existence) — this helper assumes the manifest is there.
+    fn with_manifest_edit<F>(&self, f: F) -> Result<(), ProjectError>
+    where
+        F: FnOnce(&mut toml_edit::DocumentMut) -> Result<(), ProjectError>,
+    {
+        let path = self.project_config.manifest_file.clone();
 
-        let content = if manifest_path.exists() {
-            std::fs::read_to_string(manifest_path).map_err(|e| {
-                ProjectError::ManifestRead(format!("{}: {}", manifest_path.display(), e))
-            })?
-        } else {
-            // Return error if no manifest exists - user should run `hpm init` first
-            return Err(ProjectError::ManifestRead(format!(
-                "No hpm.toml found at {}. Run 'hpm init' to create a package first.",
-                manifest_path.display()
-            )));
-        };
-
-        // Parse as editable TOML document
-        let mut doc: toml_edit::DocumentMut =
-            content.parse().map_err(|e: toml_edit::TomlError| {
-                ProjectError::ManifestParse(format!("{}: {}", manifest_path.display(), e))
-            })?;
-
-        // Ensure [dependencies] table exists
-        if !doc.contains_key("dependencies") {
-            doc["dependencies"] = toml_edit::Item::Table(toml_edit::Table::new());
-        }
-
-        // Add or update the dependency
-        let deps_table = doc["dependencies"].as_table_mut().ok_or_else(|| {
-            ProjectError::ManifestParse(format!(
-                "{}: [dependencies] is not a table",
-                manifest_path.display()
-            ))
+        let content = std::fs::read_to_string(&path).map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                ProjectError::Manifest(ManifestLoadError::NotFound { path: path.clone() })
+            } else {
+                ProjectError::ManifestIo {
+                    op: "read",
+                    path: path.clone(),
+                    source,
+                }
+            }
         })?;
 
-        let version_str = spec.version_req.as_str();
+        let mut doc: toml_edit::DocumentMut =
+            content
+                .parse()
+                .map_err(|source: toml_edit::TomlError| ProjectError::ManifestEdit {
+                    path: path.clone(),
+                    source,
+                })?;
 
-        // Use simple string format for simple version specs, inline table for complex ones
-        if version_str == "*"
-            || version_str.starts_with('^')
-            || version_str.starts_with('~')
-            || version_str.starts_with('>')
-            || version_str.starts_with('<')
-            || version_str
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit())
-        {
-            deps_table[&spec.name] = toml_edit::value(version_str);
-        } else {
-            // For complex specs, use inline table
-            let mut inline = toml_edit::InlineTable::new();
-            inline.insert("version", version_str.into());
-            deps_table[&spec.name] = toml_edit::Item::Value(toml_edit::Value::InlineTable(inline));
+        f(&mut doc)?;
+
+        std::fs::write(&path, doc.to_string()).map_err(|source| ProjectError::ManifestIo {
+            op: "write",
+            path,
+            source,
+        })
+    }
+
+    fn update_project_manifest(&self, spec: &PackageSpec) -> Result<(), ProjectError> {
+        let manifest_path = self.project_config.manifest_file.clone();
+        if !manifest_path.exists() {
+            return Err(ProjectError::Manifest(ManifestLoadError::NotFound {
+                path: manifest_path,
+            }));
         }
 
-        // Write back to file
-        std::fs::write(manifest_path, doc.to_string())
-            .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
+        let version_str = spec.version_req.as_str().to_string();
+        let name = spec.name.clone();
+
+        self.with_manifest_edit(|doc| {
+            if !doc.contains_key("dependencies") {
+                doc["dependencies"] = toml_edit::Item::Table(toml_edit::Table::new());
+            }
+
+            let deps_table = doc["dependencies"].as_table_mut().ok_or_else(|| {
+                ProjectError::ManifestStructure {
+                    path: manifest_path.clone(),
+                    message: "[dependencies] is not a table".to_string(),
+                }
+            })?;
+
+            // Simple string form for ^/~/>/< prefixes, exact, and "*";
+            // anything else (e.g. registry-named specs) goes through an
+            // inline table so toml_edit picks the right shape.
+            let bare_form = version_str == "*"
+                || version_str.starts_with(['^', '~', '>', '<'])
+                || version_str
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit());
+
+            if bare_form {
+                deps_table[&name] = toml_edit::value(&version_str);
+            } else {
+                let mut inline = toml_edit::InlineTable::new();
+                inline.insert("version", version_str.as_str().into());
+                deps_table[&name] = toml_edit::Item::Value(toml_edit::Value::InlineTable(inline));
+            }
+
+            Ok(())
+        })?;
 
         info!(
             "Updated hpm.toml with dependency: {} = \"{}\"",
@@ -774,47 +812,23 @@ impl ProjectManager {
     }
 
     fn remove_from_project_manifest(&self, name: &str) -> Result<(), ProjectError> {
-        let manifest_path = &self.project_config.manifest_file;
-
-        if !manifest_path.exists() {
+        if !self.project_config.manifest_file.exists() {
             return Ok(()); // Nothing to remove
         }
 
-        let content = std::fs::read_to_string(manifest_path).map_err(|e| {
-            ProjectError::ManifestRead(format!("{}: {}", manifest_path.display(), e))
-        })?;
-
-        // Parse as editable TOML document
-        let mut doc: toml_edit::DocumentMut =
-            content.parse().map_err(|e: toml_edit::TomlError| {
-                ProjectError::ManifestParse(format!("{}: {}", manifest_path.display(), e))
-            })?;
-
-        // Remove from [dependencies] if it exists
-        if let Some(deps) = doc.get_mut("dependencies") {
-            if let Some(table) = deps.as_table_mut() {
-                if table.contains_key(name) {
-                    table.remove(name);
-                    info!("Removed {} from [dependencies]", name);
+        let dep_name = name.to_string();
+        self.with_manifest_edit(|doc| {
+            for section in ["dependencies", "dev-dependencies"] {
+                if let Some(deps) = doc.get_mut(section)
+                    && let Some(table) = deps.as_table_mut()
+                    && table.contains_key(&dep_name)
+                {
+                    table.remove(&dep_name);
+                    info!("Removed {} from [{}]", dep_name, section);
                 }
             }
-        }
-
-        // Also check [dev-dependencies]
-        if let Some(deps) = doc.get_mut("dev-dependencies") {
-            if let Some(table) = deps.as_table_mut() {
-                if table.contains_key(name) {
-                    table.remove(name);
-                    info!("Removed {} from [dev-dependencies]", name);
-                }
-            }
-        }
-
-        // Write back to file
-        std::fs::write(manifest_path, doc.to_string())
-            .map_err(|e| ProjectError::ManifestWrite(e.to_string()))?;
-
-        Ok(())
+            Ok(())
+        })
     }
 
     pub fn list_dependencies(&self) -> Result<Vec<ProjectDependency>, ProjectError> {
@@ -889,24 +903,42 @@ pub enum ProjectError {
     #[error(transparent)]
     Manifest(#[from] ManifestLoadError),
 
-    // Used by the toml_edit-based edit paths (`update_project_manifest`,
-    // `remove_from_project_manifest`) — those work with `toml_edit::DocumentMut`
-    // and can't share `ManifestLoadError`'s `toml::de::Error` variant. The
-    // string already includes the manifest path at each call site.
-    #[error("Manifest read failed: {0}")]
-    ManifestRead(String),
+    /// I/O failure on a manifest file we own (hpm.toml or a per-package
+    /// Houdini JSON). `op` is a verb like "read", "write", or "remove".
+    #[error("Failed to {op} {}", path.display())]
+    ManifestIo {
+        op: &'static str,
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
-    #[error("Manifest parse failed: {0}")]
-    ManifestParse(String),
+    /// hpm.toml could not be parsed as an editable TOML document. Distinct
+    /// from `Manifest(ManifestLoadError::Parse)` because the edit paths
+    /// (`update_project_manifest`, `remove_from_project_manifest`) use
+    /// `toml_edit::DocumentMut`, which carries its own error type.
+    #[error("Failed to parse {} as editable TOML", path.display())]
+    ManifestEdit {
+        path: std::path::PathBuf,
+        #[source]
+        source: toml_edit::TomlError,
+    },
 
-    #[error("Manifest write failed: {0}")]
-    ManifestWrite(String),
+    /// hpm.toml has the wrong structure for the operation (e.g.
+    /// `[dependencies]` exists but is not a table).
+    #[error("{}: {message}", path.display())]
+    ManifestStructure {
+        path: std::path::PathBuf,
+        message: String,
+    },
 
-    #[error("Manifest removal failed: {0}")]
-    ManifestRemoval(String),
-
-    #[error("JSON serialization failed: {0}")]
-    JsonSerialization(String),
+    /// Failed to serialise a Houdini package.json.
+    #[error("Failed to serialise Houdini manifest at {}", path.display())]
+    HoudiniManifestSerialize {
+        path: std::path::PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
 
     #[error("Package installation failed: {0}")]
     PackageInstallation(String),
