@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-04
+
 ### Added
 - **`[env]` values can now be conditional on Houdini version, OS, or
   Python.** A `value` may be either a flat string (today's case, unchanged)
