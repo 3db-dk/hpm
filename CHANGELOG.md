@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`<packages_dir>/<slug>@<version>`) for a lockfile dependency name.
   `LockFile::verify_checksums` now uses it; the existing
   `fetcher_install_dir` helper documents itself as the staging path.
+- **Breaking (library API):** `PackageSource` is no longer an enum
+  with `Url` and `Path` variants — it's a URL-only struct
+  `{ url, version }` consumed exclusively by `ArchiveFetcher`. Path
+  dependencies bypass the fetcher entirely now and don't need a
+  `PackageSource`. The previous `PackageSource::path`,
+  `PackageSource::is_url`/`is_path`/`local_path`, the `cache_key()`
+  helper, and `seahash_simple` are gone. `FetchError::PathNotFound`
+  is removed (no longer constructible) and `ArchiveFetcher::fetch`
+  no longer takes a path branch.
+  - The lockfile retains both shapes via a new
+    `hpm_core::LockedSource` enum (`Url { url, version }` /
+    `Path { path }`), used by `LockedDependency.source`. Same TOML
+    wire format (`type = "url"` / `type = "path"`) — existing
+    lockfiles continue to deserialise.
 
 ### Added
 - `hpm_package::PackagePath` — validated newtype for the canonical

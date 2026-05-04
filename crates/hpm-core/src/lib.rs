@@ -239,6 +239,7 @@ pub use discovery::{DiscoveredProject, DiscoveryError, ProjectDiscovery};
 pub use fetch_manifest::{FetchManifestError, fetch_manifest};
 pub use lock::{
     LockError, LockFile, LockMetadata, LockPackageInfo, LockedDependency, LockedPythonDependency,
+    LockedSource,
 };
 pub use package_source::{PackageSource, PackageSourceError};
 pub use packer::{PackError, PackResult};

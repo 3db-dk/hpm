@@ -381,9 +381,6 @@ pub enum FetchError {
     #[error("Invalid package source: {0}")]
     InvalidSource(#[from] PackageSourceError),
 
-    #[error("Path source not found: {0}")]
-    PathNotFound(PathBuf),
-
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
@@ -439,25 +436,18 @@ impl ArchiveFetcher {
         })
     }
 
-    /// Fetch a package from the given source.
+    /// Fetch a package archive — download to the URL-keyed cache file,
+    /// extract into the staging dir, and report the on-disk checksum.
     ///
-    /// For Git sources, downloads and extracts the archive.
-    /// For path sources, validates the path exists.
-    ///
-    /// # Arguments
-    /// * `source` - The package source
-    /// * `package_name` - Name of the package (for directory naming)
+    /// Path dependencies don't go through here; they're copied straight
+    /// into the dev CAS via `StorageManager::install_from_path_dev`.
     pub async fn fetch(
         &self,
         source: &PackageSource,
         package_name: &str,
     ) -> Result<FetchResult, FetchError> {
-        match source {
-            PackageSource::Url { url, version } => {
-                self.fetch_direct_url(url, version, package_name).await
-            }
-            PackageSource::Path { path } => self.fetch_from_path(path, package_name).await,
-        }
+        self.fetch_direct_url(&source.url, &source.version, package_name)
+            .await
     }
 
     /// Fetch a package from a direct URL.
@@ -528,33 +518,6 @@ impl ArchiveFetcher {
         })
     }
 
-    /// Fetch a package from a local path.
-    async fn fetch_from_path(
-        &self,
-        path: &Path,
-        _package_name: &str,
-    ) -> Result<FetchResult, FetchError> {
-        if !tokio::fs::try_exists(path).await.unwrap_or(false) {
-            return Err(FetchError::PathNotFound(path.to_path_buf()));
-        }
-
-        // For path dependencies, we use the path directly without copying
-        // Note: We don't cache checksums for path dependencies since the source
-        // may change without our knowledge (it's a local directory)
-        let path_for_checksum = path.to_path_buf();
-        let checksum = tokio::task::spawn_blocking(move || {
-            compute_directory_checksum_sync(&path_for_checksum)
-        })
-        .await
-        .map_err(|e| FetchError::ExtractionError(format!("Checksum task join error: {}", e)))??;
-
-        Ok(FetchResult {
-            package_path: path.to_path_buf(),
-            checksum,
-            from_cache: true, // Path dependencies are always "cached"
-        })
-    }
-
     /// Download an archive from a URL.
     ///
     /// The cache file has no extension — format is sniffed from magic bytes
@@ -592,46 +555,30 @@ impl ArchiveFetcher {
         Ok(archive_path)
     }
 
-    /// Check if a package is already cached.
+    /// Check if a package is already extracted in the staging dir.
     pub fn is_cached(&self, source: &PackageSource, package_name: &str) -> bool {
-        match source {
-            PackageSource::Url { version, .. } => {
-                fetcher_install_dir(&self.packages_dir, package_name, version).exists()
-            }
-            PackageSource::Path { path } => path.exists(),
-        }
+        fetcher_install_dir(&self.packages_dir, package_name, &source.version).exists()
     }
 
-    /// Get the cache path for a package.
+    /// Get the staging path for a package, if it's already been extracted.
     pub fn cache_path(&self, source: &PackageSource, package_name: &str) -> Option<PathBuf> {
-        match source {
-            PackageSource::Url { version, .. } => {
-                let path = fetcher_install_dir(&self.packages_dir, package_name, version);
-                if path.exists() { Some(path) } else { None }
-            }
-            PackageSource::Path { path } => {
-                if path.exists() {
-                    Some(path.clone())
-                } else {
-                    None
-                }
-            }
-        }
+        let path = fetcher_install_dir(&self.packages_dir, package_name, &source.version);
+        path.exists().then_some(path)
     }
 
-    /// Remove a cached package.
+    /// Remove a staged package, returning whether anything was removed.
     pub fn remove_cached(
         &self,
         source: &PackageSource,
         package_name: &str,
     ) -> Result<bool, FetchError> {
-        if let Some(path) = self.cache_path(source, package_name) {
-            if matches!(source, PackageSource::Url { .. }) {
+        match self.cache_path(source, package_name) {
+            Some(path) => {
                 std::fs::remove_dir_all(&path)?;
-                return Ok(true);
+                Ok(true)
             }
+            None => Ok(false),
         }
-        Ok(false)
     }
 }
 
@@ -684,66 +631,9 @@ mod tests {
         assert!(fetcher.is_ok());
     }
 
-    #[tokio::test]
-    async fn test_path_source_validation() {
-        let temp_dir = TempDir::new().unwrap();
-        let fetcher = ArchiveFetcher::new(
-            temp_dir.path().join("cache"),
-            temp_dir.path().join("packages"),
-        )
-        .unwrap();
-
-        // Create a test package directory
-        let pkg_dir = temp_dir.path().join("my-package");
-        std::fs::create_dir_all(&pkg_dir).unwrap();
-        std::fs::write(
-            pkg_dir.join("hpm.toml"),
-            "[package]\npath = \"studio/test\"\nname = \"Test\"\nversion = \"1.0.0\"",
-        )
-        .unwrap();
-
-        let source = PackageSource::path(&pkg_dir);
-        let result = fetcher.fetch(&source, "my-package").await;
-        assert!(result.is_ok());
-
-        let fetch_result = result.unwrap();
-        assert_eq!(fetch_result.package_path, pkg_dir);
-        assert!(fetch_result.from_cache);
-    }
-
-    #[tokio::test]
-    async fn test_nonexistent_path_source() {
-        let temp_dir = TempDir::new().unwrap();
-        let fetcher = ArchiveFetcher::new(
-            temp_dir.path().join("cache"),
-            temp_dir.path().join("packages"),
-        )
-        .unwrap();
-
-        let source = PackageSource::path("/nonexistent/path");
-        let result = fetcher.fetch(&source, "my-package").await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_fetch_returns_path_not_found_error() {
-        let temp_dir = TempDir::new().unwrap();
-        let fetcher = ArchiveFetcher::new(
-            temp_dir.path().join("cache"),
-            temp_dir.path().join("packages"),
-        )
-        .unwrap();
-
-        let source = PackageSource::path("/definitely/does/not/exist/anywhere");
-        let result = fetcher.fetch(&source, "test-pkg").await;
-
-        match result {
-            Err(FetchError::PathNotFound(path)) => {
-                assert!(path.to_string_lossy().contains("definitely"));
-            }
-            _ => panic!("Expected PathNotFound error"),
-        }
-    }
+    // Path-source tests removed: path dependencies bypass the fetcher
+    // entirely and copy straight into the dev CAS via
+    // `StorageManager::install_from_path_dev`.
 
     // Unit tests for PackageSource git/version validation removed -
     // covered by prop_release_asset_url_structure, prop_cache_key_uniqueness,

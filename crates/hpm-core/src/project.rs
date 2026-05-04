@@ -130,15 +130,11 @@ impl ProjectManager {
         }
 
         let entry = self.resolve_registry_entry(&registry_set, spec).await?;
-        self.fetch_and_install_pkg(
-            &spec.name,
-            &entry.version.clone(),
-            PackageSource::Url {
-                url: entry.dl,
-                version: entry.version,
-            },
-        )
-        .await
+        let version = entry.version.clone();
+        let source = PackageSource::url(entry.dl, entry.version)
+            .map_err(|e| ProjectError::PackageInstallation(format!("Invalid registry URL: {e}")))?;
+        self.fetch_and_install_pkg(&spec.name, &version, source)
+            .await
     }
 
     /// Resolve a `PackageSpec` to a concrete `RegistryEntry`. If the spec's
@@ -404,15 +400,9 @@ impl ProjectManager {
                 name, version, e
             ))
         })?;
-        self.fetch_and_install_pkg(
-            name,
-            version,
-            PackageSource::Url {
-                url: entry.dl,
-                version: version.to_string(),
-            },
-        )
-        .await
+        let source = PackageSource::url(entry.dl, version)
+            .map_err(|e| ProjectError::InvalidDependency(format!("Invalid registry URL: {e}")))?;
+        self.fetch_and_install_pkg(name, version, source).await
     }
 
     /// Ensure a URL dependency is installed, returning the InstalledPackage.
@@ -431,15 +421,9 @@ impl ProjectManager {
             return Ok(pkg.clone());
         }
 
-        self.fetch_and_install_pkg(
-            name,
-            version,
-            PackageSource::Url {
-                url: url.to_string(),
-                version: version.to_string(),
-            },
-        )
-        .await
+        let source = PackageSource::url(url, version)
+            .map_err(|e| ProjectError::InvalidDependency(format!("Invalid URL: {e}")))?;
+        self.fetch_and_install_pkg(name, version, source).await
     }
 
     /// Fetch a remote package and install it to global storage, returning the InstalledPackage.

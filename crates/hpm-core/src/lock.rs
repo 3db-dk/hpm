@@ -5,7 +5,6 @@
 //! across different machines and time.
 
 use crate::archive_fetcher::cas_install_dir;
-use crate::package_source::PackageSource;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -41,7 +40,7 @@ pub struct LockPackageInfo {
     pub version: String,
 }
 
-/// A locked HPM dependency with exact version and verification data
+/// A locked HPM dependency with exact version and verification data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockedDependency {
     /// Exact resolved version
@@ -51,12 +50,44 @@ pub struct LockedDependency {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checksum: Option<String>,
 
-    /// Source information
-    pub source: PackageSource,
+    /// Where the package came from at install time. URL deps record the
+    /// resolved download URL; path deps record the local source directory.
+    /// Distinct from [`PackageSource`] (which is URL-only and feeds the
+    /// fetcher) so the lockfile can faithfully reproduce both flavours.
+    pub source: LockedSource,
 
     /// Transitive dependencies (just names, versions are in the main dependencies map)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<String>,
+}
+
+/// Origin of a locked dependency. Used only by the lockfile schema —
+/// path deps don't go through `ArchiveFetcher`/`PackageSource`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum LockedSource {
+    /// Resolved download URL plus the version it was fetched at.
+    Url { url: String, version: String },
+    /// Local path the user pointed `path = "..."` at.
+    Path { path: std::path::PathBuf },
+}
+
+impl LockedSource {
+    pub fn url(url: impl Into<String>, version: impl Into<String>) -> Self {
+        Self::Url {
+            url: url.into(),
+            version: version.into(),
+        }
+    }
+    pub fn path(path: impl Into<std::path::PathBuf>) -> Self {
+        Self::Path { path: path.into() }
+    }
+    pub fn is_url(&self) -> bool {
+        matches!(self, Self::Url { .. })
+    }
+    pub fn is_path(&self) -> bool {
+        matches!(self, Self::Path { .. })
+    }
 }
 
 /// A locked Python dependency
@@ -389,7 +420,7 @@ impl LockedDependency {
         Self {
             version: version.clone(),
             checksum,
-            source: PackageSource::Url { url, version },
+            source: LockedSource::url(url, version),
             dependencies: Vec::new(),
         }
     }
@@ -408,7 +439,7 @@ impl LockedDependency {
         Self {
             version,
             checksum,
-            source: PackageSource::Path { path: path.into() },
+            source: LockedSource::path(path),
             dependencies: Vec::new(),
         }
     }
@@ -617,10 +648,7 @@ mod tests {
             LockedDependency {
                 version: "1.0.0".to_string(),
                 checksum: Some("0".repeat(64)),
-                source: PackageSource::Url {
-                    url: "https://example.com/foo.zip".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                source: LockedSource::url("https://example.com/foo.zip", "1.0.0"),
                 dependencies: Vec::new(),
             },
         );
@@ -654,10 +682,7 @@ mod tests {
             LockedDependency {
                 version: "1.0.0".to_string(),
                 checksum: Some(actual),
-                source: PackageSource::Url {
-                    url: "https://example.com/foo.zip".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                source: LockedSource::url("https://example.com/foo.zip", "1.0.0"),
                 dependencies: Vec::new(),
             },
         );
@@ -680,10 +705,7 @@ mod tests {
             LockedDependency {
                 version: "1.0.0".to_string(),
                 checksum: Some("0".repeat(64)),
-                source: PackageSource::Url {
-                    url: "https://example.com/foo.zip".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                source: LockedSource::url("https://example.com/foo.zip", "1.0.0"),
                 dependencies: Vec::new(),
             },
         );

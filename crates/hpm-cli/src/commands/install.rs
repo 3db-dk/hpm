@@ -2,8 +2,8 @@ use super::manifest_utils::{determine_manifest_path, load_manifest};
 use crate::progress::OperationProgress;
 use anyhow::{Context, Result};
 use hpm_core::{
-    ArchiveFetcher, LockFile, LockedDependency, LockedPythonDependency, PackageSource,
-    StorageManager,
+    ArchiveFetcher, LockFile, LockedDependency, LockedPythonDependency, LockedSource,
+    PackageSource, StorageManager,
 };
 use hpm_package::{EnvMethod, HoudiniEnvValue, HoudiniPackage, ManifestEnvEntry, PackageManifest};
 use indexmap::IndexMap;
@@ -270,8 +270,8 @@ struct PackageInstallResult {
     checksum: String,
     /// Path to the installed package directory.
     package_path: PathBuf,
-    /// The resolved package source (URL or path) used for the lock file.
-    resolved_source: PackageSource,
+    /// The resolved source recorded in the lock file (URL or path).
+    resolved_source: LockedSource,
 }
 
 /// Install HPM package dependencies.
@@ -428,7 +428,7 @@ async fn fetch_and_install(
     Ok(PackageInstallResult {
         checksum: fetch_result.checksum,
         package_path: installed.install_path,
-        resolved_source: source,
+        resolved_source: LockedSource::url(source.url, source.version),
     })
 }
 
@@ -441,14 +441,13 @@ async fn install_path_dep(storage: &StorageManager, path: &str) -> Result<Packag
         .install_from_path_dev(source_path)
         .await
         .with_context(|| format!("Failed to install path dep at {}", path))?;
-    let resolved_source = PackageSource::path(source_path);
     Ok(PackageInstallResult {
         // Path deps don't carry a meaningful network checksum; the lockfile
         // records the source-tree hash via verify_checksums on the install
         // dir, which is enough to detect tampering after the copy.
         checksum: String::new(),
         package_path: installed.install_path,
-        resolved_source,
+        resolved_source: LockedSource::path(source_path),
     })
 }
 
@@ -787,10 +786,7 @@ async fn generate_lock_file(
                     let source = install_results
                         .get(name)
                         .map(|r| r.resolved_source.clone())
-                        .unwrap_or_else(|| PackageSource::Url {
-                            url: "unresolved".to_string(),
-                            version: version.clone(),
-                        });
+                        .unwrap_or_else(|| LockedSource::url("unresolved", version.clone()));
                     LockedDependency {
                         version,
                         checksum,
@@ -801,10 +797,7 @@ async fn generate_lock_file(
                 hpm_package::DependencySpec::Url { url, version, .. } => LockedDependency {
                     version: version.clone(),
                     checksum,
-                    source: PackageSource::Url {
-                        url: url.clone(),
-                        version: version.clone(),
-                    },
+                    source: LockedSource::url(url.clone(), version.clone()),
                     dependencies: Vec::new(),
                 },
                 hpm_package::DependencySpec::Path { path, .. } => {
@@ -1013,7 +1006,7 @@ description = "Test custom manifest path"
         PackageInstallResult {
             checksum: "deadbeef".to_string(),
             package_path: path.to_path_buf(),
-            resolved_source: PackageSource::Path { path: path.into() },
+            resolved_source: LockedSource::path(path),
         }
     }
 
