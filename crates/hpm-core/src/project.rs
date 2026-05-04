@@ -280,12 +280,15 @@ impl ProjectManager {
                         installed_packages.push(pkg);
                     }
                     hpm_package::DependencySpec::Path { path, .. } => {
+                        // Path deps install into the dev-only subtree so they
+                        // don't poison the shared registry CAS — see
+                        // `install_from_path_dev`.
                         let source_path = std::path::Path::new(path);
-                        let installed =
-                            self.storage_manager
-                                .install_from_path(source_path)
-                                .await
-                                .map_err(|e| ProjectError::PackageInstallation(e.to_string()))?;
+                        let installed = self
+                            .storage_manager
+                            .install_from_path_dev(source_path)
+                            .await
+                            .map_err(|e| ProjectError::PackageInstallation(e.to_string()))?;
                         installed_packages.push(installed);
                     }
                 }

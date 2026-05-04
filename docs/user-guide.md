@@ -198,7 +198,7 @@ or `name@version`. `name` uses the `creator/slug` form.
 
 | Flag | Description |
 |------|-------------|
-| `--path <dir>` | Add as a local path dependency (only valid with a single package). |
+| `--path <dir>` | Add as a local path dependency (only valid with a single package). Path dependencies install into a `_dev/` subtree of the global packages dir so they never overwrite a registry install at the same `(slug, version)`. |
 | `-p, --package <path>` | Path to the manifest to modify (`hpm.toml` or containing dir). Defaults to cwd. |
 | `--optional` | Mark all added dependencies as optional. |
 

@@ -334,11 +334,14 @@ layout is content-addressable where it helps:
 ~/.hpm/
 ├── config.toml
 ├── packages/
-│   └── creator/
-│       └── slug@1.0.0/
-│           ├── hpm.toml
-│           ├── (package sources)
-│           └── … (Houdini convention subdirs)
+│   ├── creator/
+│   │   └── slug@1.0.0/
+│   │       ├── hpm.toml
+│   │       ├── (package sources)
+│   │       └── … (Houdini convention subdirs)
+│   └── _dev/                       # path-installed (dev) packages
+│       └── slug@1.0.0/             # never substituted for a registry hit
+│           └── …                   # at the same (slug, version)
 ├── venvs/
 │   └── <12-char hash>/           # hash of resolved set + Python version
 │       ├── pyvenv.cfg
@@ -377,6 +380,12 @@ in the resolved dependency set is removed. Without this, a manifest written
 by a previous sync (e.g. for a path dependency that has since been removed)
 would keep loading the package on Houdini launch even though `hpm.toml` no
 longer asks for it.
+
+Path dependencies install into `~/.hpm/packages/_dev/<slug>@<version>/`
+rather than the registry CAS at `~/.hpm/packages/<scope>/<slug>@<version>/`.
+The `_dev` subtree is invisible to `list_installed`, so a dev install of
+`foo@1.0.0` cannot be served as the cached install for a registry
+resolution at the same coordinate from a different project.
 
 ## Python integration
 

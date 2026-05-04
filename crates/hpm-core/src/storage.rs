@@ -12,6 +12,12 @@ use tracing::{debug, info, warn};
 pub mod types;
 pub use types::{InstalledPackage, PackageSpec, VersionReq};
 
+/// Subdirectory of `packages_dir` reserved for path-installed (dev) packages.
+/// Kept out of the registry CAS namespace so a dev install of `foo@1.0.0`
+/// can coexist with — and is never substituted for — a registry install at
+/// the same coordinate.
+const DEV_INSTALL_DIR: &str = "_dev";
+
 /// Result of comprehensive cleanup including both packages and Python environments
 #[derive(Debug)]
 pub struct ComprehensiveCleanupResult {
@@ -117,6 +123,12 @@ impl StorageManager {
     /// `~/.hpm/packages/creator/slug@version/`. Directories without `@` in
     /// their name are treated as scope directories and are walked one level
     /// deeper. Directories with `@` are treated as package directories.
+    ///
+    /// The `_dev` subtree is reserved for path-installed packages
+    /// (`install_from_path_dev`) and is intentionally invisible to
+    /// `list_installed`. Otherwise an `ensure_installed` cache lookup that
+    /// matches on `(name, version)` could return dev content for a registry
+    /// resolution at the same coordinate — see the CAS-poisoning bug.
     fn collect_installed_packages(
         &self,
         dir: &std::path::Path,
@@ -135,6 +147,10 @@ impl StorageManager {
                 Some(name) => name.to_string(),
                 None => continue,
             };
+
+            if dir_name == DEV_INSTALL_DIR {
+                continue;
+            }
 
             if dir_name.contains('@') {
                 // This is a package directory (e.g. `slug@1.0.0` or `fire-fx@2.0.0`)
@@ -184,13 +200,46 @@ impl StorageManager {
         }))
     }
 
-    /// Install a package from a local directory path.
+    /// Install a package from a local directory path into the registry CAS.
     /// The directory must contain a valid hpm.toml manifest.
+    ///
+    /// Used for content that arrived through the registry/URL fetch pipeline.
+    /// For user-authored path dependencies, use [`install_from_path_dev`]
+    /// instead — that keeps dev content out of the registry CAS so a dev
+    /// install of `foo@1.0.0` doesn't get served to a different project that
+    /// resolves the same coordinate from a registry.
+    ///
+    /// [`install_from_path_dev`]: Self::install_from_path_dev
     pub async fn install_from_path(
         &self,
         source_path: &std::path::Path,
     ) -> Result<InstalledPackage, StorageError> {
-        info!("Installing package from path: {}", source_path.display());
+        self.install_from_path_inner(source_path, false).await
+    }
+
+    /// Install a path-dependency into the dev subtree
+    /// (`<packages_dir>/_dev/<slug>@<version>/`).
+    ///
+    /// Dev installs live in their own namespace because they share `(slug,
+    /// version)` keys with registry packages but carry user-authored content
+    /// that must not be cached as the canonical install for that coordinate.
+    pub async fn install_from_path_dev(
+        &self,
+        source_path: &std::path::Path,
+    ) -> Result<InstalledPackage, StorageError> {
+        self.install_from_path_inner(source_path, true).await
+    }
+
+    async fn install_from_path_inner(
+        &self,
+        source_path: &std::path::Path,
+        is_dev: bool,
+    ) -> Result<InstalledPackage, StorageError> {
+        let kind = if is_dev { "dev " } else { "" };
+        info!(
+            "Installing {kind}package from path: {}",
+            source_path.display()
+        );
 
         // Read and parse the manifest
         let manifest_path = source_path.join("hpm.toml");
@@ -205,19 +254,25 @@ impl StorageManager {
         let version = &manifest.package.version;
 
         info!(
-            "Installing {}@{} from {}",
+            "Installing {kind}{}@{} from {}",
             name,
             version,
             source_path.display()
         );
 
-        // Create the target directory
-        let target_dir = self.config.package_dir(name, version);
+        let target_dir = if is_dev {
+            self.config
+                .packages_dir
+                .join(DEV_INSTALL_DIR)
+                .join(format!("{}@{}", name, version))
+        } else {
+            self.config.package_dir(name, version)
+        };
 
         // Check if already installed
         if target_dir.exists() {
             warn!(
-                "Package {}@{} already exists, removing old version",
+                "{kind}package {}@{} already exists, removing old version",
                 name, version
             );
             std::fs::remove_dir_all(&target_dir).map_err(|e| {
@@ -240,7 +295,7 @@ impl StorageManager {
         // Copy the package directory
         self.copy_directory(source_path, &target_dir)?;
 
-        info!("Successfully installed {}@{}", name, version);
+        info!("Successfully installed {kind}{}@{}", name, version);
 
         // Return the installed package info
         let metadata = std::fs::metadata(&target_dir).map_err(StorageError::MetadataRead)?;
@@ -880,5 +935,156 @@ min_version = "20.5"
             }
             other => panic!("Expected Manifest::NotFound error, got: {:?}", other),
         }
+    }
+
+    /// Build a minimal source package directory at `dir` with the given
+    /// scoped path, version, and a marker file recording who created it.
+    /// The marker lets a test distinguish dev content from registry content
+    /// after it lands in the CAS.
+    fn write_source_package(
+        dir: &std::path::Path,
+        package_path: &str,
+        version: &str,
+        marker: &str,
+    ) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("hpm.toml"),
+            format!(
+                "[package]\npath = \"{package_path}\"\nname = \"{package_path}\"\nversion = \"{version}\"\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("MARKER"), marker).unwrap();
+    }
+
+    /// Regression: a dev install must land in the `_dev` subtree, not in the
+    /// registry CAS. Otherwise a registry resolution at the same `(slug,
+    /// version)` would pick up the dev content via the CAS short-circuit.
+    #[tokio::test]
+    async fn install_from_path_dev_targets_dev_subtree() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        let source = temp_dir.path().join("dev-source");
+        write_source_package(&source, "creator/foo", "1.0.0", "from-dev-source");
+
+        let installed = storage_manager
+            .install_from_path_dev(&source)
+            .await
+            .unwrap();
+
+        let expected = temp_dir
+            .path()
+            .join("packages")
+            .join("_dev")
+            .join("foo@1.0.0");
+        assert_eq!(installed.install_path, expected);
+        assert!(expected.join("MARKER").exists());
+
+        // The registry CAS path must remain empty.
+        let registry_cas = temp_dir.path().join("packages").join("foo@1.0.0");
+        assert!(
+            !registry_cas.exists(),
+            "dev install must not touch the registry CAS path"
+        );
+    }
+
+    /// Regression: `list_installed` is the cache the project's
+    /// `ensure_installed`/`ensure_installed_from_url` short-circuits consult.
+    /// If a dev install showed up there, a different project resolving the
+    /// same coordinate from a registry would skip the fetch and silently
+    /// hand out dev content. Skipping the `_dev` subtree closes that path.
+    #[tokio::test]
+    async fn list_installed_skips_dev_subtree() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        // Dev install of foo@1.0.0
+        let dev_source = temp_dir.path().join("dev-source");
+        write_source_package(&dev_source, "creator/foo", "1.0.0", "dev");
+        storage_manager
+            .install_from_path_dev(&dev_source)
+            .await
+            .unwrap();
+
+        // Independent registry-style install of bar@2.0.0
+        let reg_source = temp_dir.path().join("reg-source");
+        write_source_package(&reg_source, "creator/bar", "2.0.0", "registry");
+        storage_manager
+            .install_from_path(&reg_source)
+            .await
+            .unwrap();
+
+        let listed = storage_manager.list_installed().unwrap();
+        let names: Vec<_> = listed.iter().map(|p| p.name.as_str()).collect();
+        assert!(
+            !names.contains(&"foo"),
+            "list_installed must hide dev installs; got {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"bar"),
+            "list_installed must surface registry installs; got {:?}",
+            names
+        );
+    }
+
+    /// Regression: a dev install at `foo@1.0.0` must coexist with a registry
+    /// install at `foo@1.0.0`. Each lives in its own subtree, so neither
+    /// install's content overwrites the other when both are present.
+    #[tokio::test]
+    async fn dev_and_registry_installs_coexist_at_same_coordinate() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        let dev_source = temp_dir.path().join("dev-source");
+        write_source_package(&dev_source, "creator/foo", "1.0.0", "dev-content");
+        storage_manager
+            .install_from_path_dev(&dev_source)
+            .await
+            .unwrap();
+
+        let reg_source = temp_dir.path().join("reg-source");
+        write_source_package(&reg_source, "creator/foo", "1.0.0", "registry-content");
+        storage_manager
+            .install_from_path(&reg_source)
+            .await
+            .unwrap();
+
+        let dev_marker = temp_dir
+            .path()
+            .join("packages")
+            .join("_dev")
+            .join("foo@1.0.0")
+            .join("MARKER");
+        let reg_marker = temp_dir
+            .path()
+            .join("packages")
+            .join("foo@1.0.0")
+            .join("MARKER");
+        assert_eq!(std::fs::read_to_string(&dev_marker).unwrap(), "dev-content");
+        assert_eq!(
+            std::fs::read_to_string(&reg_marker).unwrap(),
+            "registry-content"
+        );
     }
 }

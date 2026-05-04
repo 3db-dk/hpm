@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the dependency set (path-dep override removed, registry yank, manual
   edit), and Houdini kept loading the orphaned package on launch. Non-
   `.json` entries in the directory are not touched.
+- `StorageManager::install_from_path_dev` now isolates path-installed
+  ("dev") packages under `~/.hpm/packages/_dev/<slug>@<version>/` instead
+  of clobbering the shared registry CAS at the same `(slug, version)`.
+  `list_installed` skips the `_dev` subtree, so an `ensure_installed`
+  cache lookup from another project resolving the coordinate from a
+  registry can no longer be silently served the dev content. The Path
+  arm of `sync_dependencies` is the only caller; registry/URL installs
+  continue to use `install_from_path`.
 
 ## [0.9.5] - 2026-05-01
 
