@@ -6,7 +6,6 @@ use hpm_python::cleanup::{CleanupResult, PythonCleanupAnalyzer};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
 use tracing::{debug, info, warn};
 
 pub mod types;
@@ -183,10 +182,6 @@ impl StorageManager {
             Err(e) => return Err(StorageError::Manifest(e)),
         };
 
-        let metadata = std::fs::metadata(&package_dir).map_err(StorageError::MetadataRead)?;
-
-        let installed_at = metadata.created().unwrap_or_else(|_| SystemTime::now());
-
         Ok(Some(InstalledPackage {
             name: manifest
                 .package
@@ -196,7 +191,6 @@ impl StorageManager {
             version: manifest.package.version.clone(),
             manifest,
             install_path: package_dir,
-            installed_at,
         }))
     }
 
@@ -297,17 +291,11 @@ impl StorageManager {
 
         info!("Successfully installed {kind}{}@{}", name, version);
 
-        // Return the installed package info
-        let metadata = std::fs::metadata(&target_dir).map_err(StorageError::MetadataRead)?;
-
         Ok(InstalledPackage {
             name: name.clone(),
             version: version.clone(),
             manifest,
             install_path: target_dir,
-            installed_at: metadata
-                .created()
-                .unwrap_or_else(|_| std::time::SystemTime::now()),
         })
     }
 

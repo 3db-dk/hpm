@@ -14,7 +14,7 @@ use tracing::{debug, info, warn};
 pub struct ProjectManager {
     project_config: ProjectConfig,
     storage_manager: Arc<StorageManager>,
-    fetcher: Option<ArchiveFetcher>,
+    fetcher: ArchiveFetcher,
 }
 
 #[derive(Debug, Clone)]
@@ -52,7 +52,7 @@ impl ProjectManager {
         let manager = Self {
             project_config,
             storage_manager,
-            fetcher: Some(fetcher),
+            fetcher,
         };
 
         manager.ensure_directories()?;
@@ -446,13 +446,9 @@ impl ProjectManager {
         version: &str,
         source: PackageSource,
     ) -> Result<InstalledPackage, ProjectError> {
-        let fetcher = self
-            .fetcher
-            .as_ref()
-            .ok_or_else(|| ProjectError::PackageInstallation("No fetcher available".to_string()))?;
-
         // Fetch (download + extract) the package
-        let fetch_result = fetcher
+        let fetch_result = self
+            .fetcher
             .fetch(&source, name)
             .await
             .map_err(|e| ProjectError::PackageInstallation(e.to_string()))?;
@@ -1013,7 +1009,6 @@ mod tests {
             version: "1.0.0".to_string(),
             manifest,
             install_path: package_path.clone(),
-            installed_at: std::time::SystemTime::now(),
         };
 
         let houdini_package = project_manager
@@ -1070,7 +1065,6 @@ mod tests {
             version: "1.0.0".to_string(),
             manifest,
             install_path: package_path.clone(),
-            installed_at: std::time::SystemTime::now(),
         };
 
         // Without override: should use package default
@@ -1162,7 +1156,6 @@ mod tests {
             version: "1.0.0".to_string(),
             manifest,
             install_path: package_path,
-            installed_at: std::time::SystemTime::now(),
         };
 
         // No project override: required placeholder must trigger MissingRequiredEnv.
@@ -1221,7 +1214,6 @@ mod tests {
             version: "0.4.0".to_string(),
             manifest,
             install_path: PathBuf::from("/tmp/claudini2@0.4.0"),
-            installed_at: std::time::SystemTime::now(),
         };
 
         assert!(ProjectManager::matches_spec_name(
@@ -1266,7 +1258,6 @@ mod tests {
             version: "1.1.20".to_string(),
             manifest,
             install_path: temp_dir.path().join("tumblepipe@1.1.20"),
-            installed_at: std::time::SystemTime::now(),
         };
 
         // registry_set: None — if the short-circuit misses, the function would
@@ -1327,7 +1318,6 @@ mod tests {
             version: "1.0.0".to_string(),
             manifest,
             install_path: temp_dir.path().join("foo@1.0.0"),
-            installed_at: std::time::SystemTime::now(),
         };
 
         project_manager

@@ -1,7 +1,6 @@
 use hpm_package::PackageManifest;
 use semver::{Version, VersionReq as SemverVersionReq};
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
 pub struct InstalledPackage {
@@ -9,14 +8,12 @@ pub struct InstalledPackage {
     pub version: String,
     pub manifest: PackageManifest,
     pub install_path: PathBuf,
-    pub installed_at: SystemTime,
 }
 
 #[derive(Debug, Clone)]
 pub struct PackageSpec {
     pub name: String,
     pub version_req: VersionReq,
-    pub registry: Option<String>,
 }
 
 /// Version requirement with proper semantic versioning support.
@@ -86,19 +83,7 @@ impl std::fmt::Display for VersionReq {
 
 impl PackageSpec {
     pub fn new(name: String, version_req: VersionReq) -> Self {
-        Self {
-            name,
-            version_req,
-            registry: None,
-        }
-    }
-
-    pub fn with_registry(name: String, version_req: VersionReq, registry: String) -> Self {
-        Self {
-            name,
-            version_req,
-            registry: Some(registry),
-        }
+        Self { name, version_req }
     }
 
     pub fn parse(spec: &str) -> Result<Self, String> {
@@ -140,7 +125,6 @@ impl InstalledPackage {
 mod tests {
     use super::*;
     use proptest::prelude::*;
-    use std::time::SystemTime;
 
     // Custom strategies for generating test data
 
@@ -168,15 +152,6 @@ mod tests {
             version_strategy().prop_map(|v| format!("^{}", v)),
             version_strategy().prop_map(|v| format!("~{}", v)),
             version_strategy().prop_map(|v| format!(">={}", v)),
-        ]
-    }
-
-    /// Strategy to generate registry URLs
-    fn registry_url_strategy() -> impl Strategy<Value = String> {
-        prop_oneof![
-            Just("https://packages.houdini.org".to_string()),
-            Just("https://custom-registry.example.com".to_string()),
-            Just("https://internal.registry".to_string()),
         ]
     }
 
@@ -224,22 +199,6 @@ mod tests {
             let spec = PackageSpec::parse(&spec_str).unwrap();
             prop_assert_eq!(spec.name, name);
             prop_assert_eq!(spec.version_req.as_str(), version);
-            prop_assert!(spec.registry.is_none());
-        }
-
-        /// Test that package specs with registry URLs are handled correctly
-        #[test]
-        fn prop_package_spec_with_registry(
-            name in package_name_strategy(),
-            version in version_req_strategy(),
-            registry in registry_url_strategy()
-        ) {
-            let version_req = VersionReq::new(&version).unwrap();
-            let spec = PackageSpec::with_registry(name.clone(), version_req, registry.clone());
-
-            prop_assert_eq!(spec.name, name);
-            prop_assert_eq!(spec.version_req.as_str(), version);
-            prop_assert_eq!(spec.registry, Some(registry));
         }
 
         /// Test that installed packages maintain identity consistency
@@ -263,7 +222,6 @@ mod tests {
                 version: version.clone(),
                 manifest,
                 install_path: path,
-                installed_at: SystemTime::now(),
             };
 
             let expected_identifier = format!("{}@{}", name, version);
@@ -292,7 +250,6 @@ mod tests {
                 version: package_version.clone(),
                 manifest,
                 install_path: path,
-                installed_at: SystemTime::now(),
             };
 
             let version_req = VersionReq::new(&req_version).unwrap();
@@ -384,7 +341,6 @@ mod tests {
             version: "1.0.0".to_string(),
             manifest,
             install_path: PathBuf::from("/path"),
-            installed_at: SystemTime::now(),
         };
 
         // Test specific edge cases that property tests might miss
