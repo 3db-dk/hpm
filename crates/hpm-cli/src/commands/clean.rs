@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::Args;
 use hpm_config::Config;
 use hpm_core::StorageManager;
@@ -30,11 +31,7 @@ pub struct CleanArgs {
 pub async fn execute_clean(args: &CleanArgs) -> anyhow::Result<()> {
     info!("Starting package cleanup");
 
-    // Load configuration from config files (falls back to defaults if no config exists)
-    let config = Config::load().unwrap_or_else(|e| {
-        tracing::warn!("Failed to load config file, using defaults: {}", e);
-        Config::default()
-    });
+    let config = Config::load().context("Failed to load HPM configuration")?;
 
     // Initialize storage manager
     let storage_manager = StorageManager::new(config.storage.clone())?;

@@ -233,11 +233,7 @@ struct PackageUpdate {
 pub async fn update_packages(options: UpdateOptions) -> Result<()> {
     log_info!("Starting package update process");
 
-    // Load configuration from config files (falls back to defaults if no config exists)
-    let config = Config::load().unwrap_or_else(|e| {
-        tracing::warn!("Failed to load config file, using defaults: {}", e);
-        Config::default()
-    });
+    let config = Config::load().context("Failed to load HPM configuration")?;
 
     // Determine manifest path
     let manifest_path = determine_manifest_path(options.package.clone())?;

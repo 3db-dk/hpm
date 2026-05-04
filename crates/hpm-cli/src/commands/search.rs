@@ -3,7 +3,7 @@
 //! Searches configured registries for packages matching a query.
 
 use super::registry::build_registry_set;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use console::style;
 use hpm_config::Config;
 
@@ -12,7 +12,7 @@ use hpm_config::Config;
 /// Searches all configured registries for packages matching the query.
 /// Falls back to a helpful message if no registries are configured.
 pub async fn search_packages(query: String, _limit: Option<u32>, json_output: bool) -> Result<()> {
-    let config = Config::load().unwrap_or_default();
+    let config = Config::load().context("Failed to load HPM configuration")?;
 
     if config.registries.is_empty() {
         println!(
