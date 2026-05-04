@@ -76,6 +76,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   symlink, or `.hpmref` left over from a previous install kept loading
   the orphan dep on Houdini launch. Files with unrecognised extensions
   (e.g. user-authored README.md) are left alone.
+- `LockFile::verify_checksums` now actually verifies. The previous
+  implementation looked for `<packages_dir>/<name>@<version>` while
+  `ArchiveFetcher` extracts to `<packages_dir>/<safe_name>-<version>`
+  (where `safe_name` replaces `/` with `-`), so the inner branch
+  never ran and every install / `hpm audit` reported "Package
+  checksums verified" without comparing a single byte. The path
+  computation now flows through a shared `fetcher_install_dir`
+  helper, and a missing package surfaces as the new
+  `LockError::PackageMissing` variant rather than a silent skip.
 
 ## [0.9.5] - 2026-05-01
 

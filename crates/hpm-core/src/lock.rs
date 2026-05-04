@@ -4,11 +4,12 @@
 //! dependencies resolved during installation. This ensures reproducible builds
 //! across different machines and time.
 
+use crate::archive_fetcher::fetcher_install_dir;
 use crate::package_source::PackageSource;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The lock file structure, representing resolved dependencies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +190,18 @@ pub enum LockError {
         actual: String,
     },
 
+    /// Lock file claims a package is installed at `expected_dir`, but the
+    /// directory doesn't exist. Distinct from `ChecksumMismatch` so callers
+    /// can choose to repair (re-fetch) vs. fail loudly.
+    #[error(
+        "Package {package} is recorded in the lock file but is not installed at {}",
+        expected_dir.display()
+    )]
+    PackageMissing {
+        package: String,
+        expected_dir: PathBuf,
+    },
+
     #[error("Lock file version {version} is not supported (max: {max_supported})")]
     UnsupportedVersion { version: u32, max_supported: u32 },
 }
@@ -297,21 +310,38 @@ impl LockFile {
         self.dependencies.is_empty() && self.python_dependencies.is_empty()
     }
 
-    /// Verify all checksums in the lock file against installed packages
+    /// Verify all checksums in the lock file against installed packages.
+    ///
+    /// `packages_dir` is the `ArchiveFetcher` extraction root (typically
+    /// `config.storage.packages_dir`). For each locked dependency that
+    /// carries a checksum:
+    ///
+    /// - if the package directory is missing, returns
+    ///   [`LockError::PackageMissing`] — the prior implementation hand-
+    ///   rolled `format!("{name}@{version}")` (the `StorageManager` scoped
+    ///   layout, never used by `hpm install`) and silently skipped every
+    ///   dep, so verification was a no-op for every existing user.
+    /// - if the directory is present but its checksum diverges, returns
+    ///   [`LockError::ChecksumMismatch`].
     pub fn verify_checksums(&self, packages_dir: &Path) -> Result<(), LockError> {
         for (name, dep) in &self.dependencies {
-            if let Some(expected_checksum) = &dep.checksum {
-                let package_dir = packages_dir.join(format!("{}@{}", name, dep.version));
-                if package_dir.exists() {
-                    let actual_checksum = compute_directory_checksum(&package_dir)?;
-                    if &actual_checksum != expected_checksum {
-                        return Err(LockError::ChecksumMismatch {
-                            package: name.clone(),
-                            expected: expected_checksum.clone(),
-                            actual: actual_checksum,
-                        });
-                    }
-                }
+            let Some(expected_checksum) = &dep.checksum else {
+                continue;
+            };
+            let package_dir = fetcher_install_dir(packages_dir, name, &dep.version);
+            if !package_dir.exists() {
+                return Err(LockError::PackageMissing {
+                    package: name.clone(),
+                    expected_dir: package_dir,
+                });
+            }
+            let actual_checksum = compute_directory_checksum(&package_dir)?;
+            if &actual_checksum != expected_checksum {
+                return Err(LockError::ChecksumMismatch {
+                    package: name.clone(),
+                    expected: expected_checksum.clone(),
+                    actual: actual_checksum,
+                });
             }
         }
         Ok(())
@@ -556,6 +586,116 @@ mod tests {
         // Should contain OS and arch
         assert!(platform.contains('-'));
         assert!(!platform.is_empty());
+    }
+
+    /// Build a fake fetched package directory for verify_checksums tests:
+    /// `packages_dir/<safe(name)>-<version>/<file>` with given content.
+    /// Returns the per-package directory path.
+    fn write_fake_package(
+        packages_dir: &Path,
+        name: &str,
+        version: &str,
+        content: &[u8],
+    ) -> PathBuf {
+        let dir = fetcher_install_dir(packages_dir, name, version);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("file.txt"), content).unwrap();
+        dir
+    }
+
+    /// Regression: `verify_checksums` used to compute `<name>@<version>`
+    /// and silently pass because the path never existed. Now a missing
+    /// install must error explicitly so the next layout drift is loud.
+    #[test]
+    fn verify_checksums_errors_when_package_missing() {
+        let temp_dir = TempDir::new().unwrap();
+        let packages_dir = temp_dir.path();
+
+        let mut lock = LockFile::new("root/pkg".to_string(), "1.0.0".to_string());
+        lock.add_dependency(
+            "creator/foo".to_string(),
+            LockedDependency {
+                version: "1.0.0".to_string(),
+                checksum: Some("0".repeat(64)),
+                source: PackageSource::Url {
+                    url: "https://example.com/foo.zip".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                dependencies: Vec::new(),
+            },
+        );
+
+        match lock.verify_checksums(packages_dir).unwrap_err() {
+            LockError::PackageMissing {
+                package,
+                expected_dir,
+            } => {
+                assert_eq!(package, "creator/foo");
+                assert!(expected_dir.ends_with("creator-foo-1.0.0"));
+            }
+            other => panic!("Expected PackageMissing, got {:?}", other),
+        }
+    }
+
+    /// Verify the matching-checksum path: package present, recorded
+    /// checksum matches the on-disk hash, returns Ok.
+    #[test]
+    fn verify_checksums_passes_when_checksums_match() {
+        let temp_dir = TempDir::new().unwrap();
+        let packages_dir = temp_dir.path();
+
+        let dir = write_fake_package(packages_dir, "creator/foo", "1.0.0", b"hello");
+        let actual = compute_directory_checksum(&dir).unwrap();
+
+        let mut lock = LockFile::new("root/pkg".to_string(), "1.0.0".to_string());
+        lock.add_dependency(
+            "creator/foo".to_string(),
+            LockedDependency {
+                version: "1.0.0".to_string(),
+                checksum: Some(actual),
+                source: PackageSource::Url {
+                    url: "https://example.com/foo.zip".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                dependencies: Vec::new(),
+            },
+        );
+
+        lock.verify_checksums(packages_dir)
+            .expect("matching checksum must verify");
+    }
+
+    /// Verify the mismatched-checksum path: package present, hash differs.
+    #[test]
+    fn verify_checksums_errors_on_mismatch() {
+        let temp_dir = TempDir::new().unwrap();
+        let packages_dir = temp_dir.path();
+
+        write_fake_package(packages_dir, "creator/foo", "1.0.0", b"hello");
+
+        let mut lock = LockFile::new("root/pkg".to_string(), "1.0.0".to_string());
+        lock.add_dependency(
+            "creator/foo".to_string(),
+            LockedDependency {
+                version: "1.0.0".to_string(),
+                checksum: Some("0".repeat(64)),
+                source: PackageSource::Url {
+                    url: "https://example.com/foo.zip".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+                dependencies: Vec::new(),
+            },
+        );
+
+        match lock.verify_checksums(packages_dir).unwrap_err() {
+            LockError::ChecksumMismatch {
+                package, expected, ..
+            } => {
+                assert_eq!(package, "creator/foo");
+                assert_eq!(expected, "0".repeat(64));
+            }
+            other => panic!("Expected ChecksumMismatch, got {:?}", other),
+        }
     }
 
     /// `LockFile::save` stages to `<path>.tmp` and renames. Verify that a

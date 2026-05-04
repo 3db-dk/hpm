@@ -15,6 +15,21 @@ use tracing::{debug, info, warn};
 /// Name of the checksum cache file stored in package directories.
 const CHECKSUM_CACHE_FILE: &str = ".hpm-checksum";
 
+/// Compute the on-disk directory where `ArchiveFetcher` extracts a fetched
+/// package keyed by `(name, version)`. Slashes in `name` (e.g. scoped
+/// `creator/slug`) are replaced with `-` so the result is a single
+/// directory name.
+///
+/// **Don't reinvent this formula** — `lock.rs::verify_checksums` and any
+/// other consumer that needs to read a fetched package off disk must call
+/// through here. The original verify_checksums hand-rolled
+/// `format!("{name}@{version}")` instead and silently no-op'd because the
+/// path it computed never existed.
+pub fn fetcher_install_dir(packages_dir: &Path, name: &str, version: &str) -> PathBuf {
+    let safe_name = name.replace('/', "-");
+    packages_dir.join(format!("{}-{}", safe_name, version))
+}
+
 /// Detected archive container format.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum ArchiveFormat {
@@ -440,10 +455,14 @@ impl ArchiveFetcher {
         version: &str,
         package_name: &str,
     ) -> Result<FetchResult, FetchError> {
-        // Replace `/` with `-` in package name for flat cache key filenames
-        let safe_name = package_name.replace('/', "-");
-        let cache_key = format!("{}-{}", safe_name, version);
-        let package_dir = self.packages_dir.join(&cache_key);
+        let package_dir = fetcher_install_dir(&self.packages_dir, package_name, version);
+        // The download cache file (a sibling, with the archive bytes) is
+        // keyed off the same dir name minus the parent.
+        let cache_key = package_dir
+            .file_name()
+            .expect("fetcher_install_dir always yields a filename")
+            .to_string_lossy()
+            .into_owned();
 
         // Check if already extracted
         if tokio::fs::try_exists(&package_dir).await.unwrap_or(false) {
@@ -563,11 +582,9 @@ impl ArchiveFetcher {
 
     /// Check if a package is already cached.
     pub fn is_cached(&self, source: &PackageSource, package_name: &str) -> bool {
-        let safe_name = package_name.replace('/', "-");
         match source {
             PackageSource::Url { version, .. } => {
-                let cache_key = format!("{}-{}", safe_name, version);
-                self.packages_dir.join(cache_key).exists()
+                fetcher_install_dir(&self.packages_dir, package_name, version).exists()
             }
             PackageSource::Path { path } => path.exists(),
         }
@@ -575,11 +592,9 @@ impl ArchiveFetcher {
 
     /// Get the cache path for a package.
     pub fn cache_path(&self, source: &PackageSource, package_name: &str) -> Option<PathBuf> {
-        let safe_name = package_name.replace('/', "-");
         match source {
             PackageSource::Url { version, .. } => {
-                let cache_key = format!("{}-{}", safe_name, version);
-                let path = self.packages_dir.join(cache_key);
+                let path = fetcher_install_dir(&self.packages_dir, package_name, version);
                 if path.exists() { Some(path) } else { None }
             }
             PackageSource::Path { path } => {
