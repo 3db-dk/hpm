@@ -549,6 +549,49 @@ is a hard placeholder.
 A consuming project can also override any package-declared env var by
 re-declaring the same key in its own `[env]` — the project's entry wins.
 
+#### Conditional values (per Houdini version / OS / Python)
+
+For env vars whose value depends on which Houdini is loading the package —
+typically per-major asset paths inside a single shipped archive — `value`
+accepts an ordered list of `{ when, set }` variants instead of a flat
+string. hpm lowers each branch into the conditional-object array shape that
+Houdini's `package.json` documents (see
+<https://www.sidefx.com/docs/houdini/ref/plugins.html>); Houdini evaluates
+the expressions at startup and applies the first match.
+
+```toml
+[env.PXR_PLUGINPATH_NAME]
+method = "prepend"
+value = [
+  { when = { houdini = "^21" }, set = "$HPM_PACKAGE_ROOT/resolver/houdini21/r" },
+  { when = { houdini = "^22" }, set = "$HPM_PACKAGE_ROOT/resolver/houdini22/r" },
+]
+```
+
+The selector axes are independent and combine with `and` when more than one
+is present in the same `when`:
+
+| Field | Form | Lowers to |
+|-------|------|-----------|
+| `houdini` | Cargo-style req: `"^21"`, `"~21.5"`, `">=21, <22.5"`, `"21"` (alias for `^21`) | `houdini_version >= 'X' and houdini_version < 'Y'` |
+| `os` | `"linux"`, `"macos"`, `"windows"` | `houdini_os == '<os>'` |
+| `python` | `"3.11"`, `"python3.10"`, etc. | `houdini_python == 'python<v>'` |
+
+```toml
+# AND across axes:
+{ when = { houdini = "^22", os = "linux" }, set = "..." }
+# → houdini_version >= '22' and houdini_version < '23' and houdini_os == 'linux'
+```
+
+To express OR, write multiple variants. Order matters — Houdini picks the
+first matching branch. An empty `when = {}` is the always-true fallback and
+should appear last. `$HPM_PACKAGE_ROOT` is substituted in each branch, just
+like in flat values; any other `$VAR` (e.g. `$HOUDINI_MAJOR_RELEASE`) passes
+through verbatim so Houdini's own variable expansion handles it.
+
+Malformed selectors fail at manifest validation time, so authors find them
+before publish, not at install.
+
 ### `[native]`
 
 Declare that this package ships per-platform binaries (HDK plugins, shared

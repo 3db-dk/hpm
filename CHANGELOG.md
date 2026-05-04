@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`[env]` values can now be conditional on Houdini version, OS, or
+  Python.** A `value` may be either a flat string (today's case, unchanged)
+  or an ordered list of `{ when, set }` variants. hpm lowers each branch
+  into the expression-object array form that Houdini's `package.json`
+  documents, so a single archive can ship per-major resolver builds —
+  e.g. `resolver/houdini21/`, `resolver/houdini22/` — and Houdini picks
+  the matching one at startup. `when` accepts `houdini` (Cargo-style req:
+  `^21`, `~21.5`, `>=21,<22`, bare-major shorthand), `os` (`linux`/
+  `macos`/`windows`), and `python` (`3.11`, etc.); axes combine with
+  `and` and unknown keys are rejected. `$HPM_PACKAGE_ROOT` is
+  substituted in each branch; any other `$VAR` passes through verbatim
+  for Houdini's own expansion. Malformed selectors fail at manifest
+  validation time. New types in `hpm-package`: `EnvValueSpec`,
+  `EnvValueVariant`, `WhenSelector`, plus `ManifestEnvEntry::lower` as
+  the single substitution-and-emit path.
+
 ### Changed
 - **`hpm install` now writes to the same canonical CAS as
   `hpm sync`/`ProjectManager::sync_dependencies`.** Previously the two
