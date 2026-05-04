@@ -239,11 +239,7 @@ pub async fn update_packages(options: UpdateOptions) -> Result<()> {
     let manifest_path = determine_manifest_path(options.package.clone())?;
 
     // Load current manifest
-    let content = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("Failed to read manifest file: {}", manifest_path.display()))?;
-
-    let manifest: PackageManifest = toml::from_str(&content)
-        .with_context(|| format!("Failed to parse manifest file: {}", manifest_path.display()))?;
+    let manifest = PackageManifest::from_path(&manifest_path)?;
 
     console::info(format!(
         "Updating dependencies for {}",

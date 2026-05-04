@@ -56,6 +56,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors.
 
 ### Fixed
+- `hpm update` now uses `PackageManifest::from_path` (one of the four
+  spots collapsed in this release) instead of its own
+  `read_to_string` + `toml::from_str` boilerplate.
+- `PackageManifest::is_valid_semver` now delegates to
+  `semver::Version::parse`. The prior hand-rolled split-on-`.` +
+  parse-as-`u32` check rejected valid pre-release identifiers like
+  `1.0.0-alpha.1` and build metadata like `1.0.0+build.5`, so
+  `manifest.validate()` would fail on perfectly legitimate package
+  versions. The version field on `PackageInfo` is still a `String`
+  on the wire (matching what's in `hpm.toml`); this only changes
+  what `validate()` accepts.
 - `ProjectManager::sync_dependencies` now sweeps stale per-package Houdini
   manifests in `<project>/.hpm/packages/`. Previously, a `<slug>.json`
   written by a prior sync was left on disk after its slug dropped out of

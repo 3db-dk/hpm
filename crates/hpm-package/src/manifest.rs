@@ -587,13 +587,10 @@ impl PackageManifest {
     }
 
     fn is_valid_semver(&self, version: &str) -> bool {
-        // Basic semver pattern: major.minor.patch
-        let parts: Vec<&str> = version.split('.').collect();
-        if parts.len() != 3 {
-            return false;
-        }
-
-        parts.iter().all(|part| part.parse::<u32>().is_ok())
+        // Delegate to the semver crate so we accept pre-release and build
+        // metadata (`1.0.0-alpha.1`, `1.0.0+build.5`) — the prior hand-
+        // rolled `major.minor.patch` u32 split rejected both.
+        semver::Version::parse(version).is_ok()
     }
 }
 
