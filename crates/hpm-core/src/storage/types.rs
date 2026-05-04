@@ -21,26 +21,23 @@ pub struct PackageSpec {
 #[derive(Debug, Clone)]
 pub struct VersionReq {
     requirement: String,
-    parsed: Option<SemverVersionReq>,
+    parsed: SemverVersionReq,
 }
 
 impl VersionReq {
+    /// Parse a version requirement. Returns `Err` for empty/whitespace input
+    /// or any string `semver::VersionReq::parse` rejects — there is no silent
+    /// fallback to string equality, so a malformed requirement in `hpm.toml`
+    /// fails loudly at load time instead of matching an equally malformed
+    /// version later.
     pub fn new(requirement: &str) -> Result<Self, String> {
         let trimmed = requirement.trim();
         if trimmed.is_empty() {
             return Err("Version requirement cannot be empty or whitespace-only".to_string());
         }
 
-        // Handle wildcard
-        if trimmed == "*" {
-            return Ok(Self {
-                requirement: trimmed.to_string(),
-                parsed: Some(SemverVersionReq::STAR),
-            });
-        }
-
-        // Try to parse as semver requirement
-        let parsed = SemverVersionReq::parse(trimmed).ok();
+        let parsed = SemverVersionReq::parse(trimmed)
+            .map_err(|e| format!("Invalid version requirement '{}': {}", trimmed, e))?;
 
         Ok(Self {
             requirement: trimmed.to_string(),
@@ -48,30 +45,18 @@ impl VersionReq {
         })
     }
 
-    pub fn parse(input: &str) -> Result<Self, String> {
-        Self::new(input)
-    }
-
     pub fn as_str(&self) -> &str {
         &self.requirement
     }
 
-    /// Check if a version string matches this requirement
+    /// Check if a `version` string matches this requirement. Returns `false`
+    /// for unparseable `version` input — a malformed version is not a match
+    /// against any well-formed requirement.
     pub fn matches(&self, version: &str) -> bool {
-        // Wildcard matches everything
-        if self.requirement == "*" {
-            return true;
+        match Version::parse(version) {
+            Ok(ver) => self.parsed.matches(&ver),
+            Err(_) => false,
         }
-
-        // Try to parse the version and check against semver requirement
-        if let Some(ref req) = self.parsed {
-            if let Ok(ver) = Version::parse(version) {
-                return req.matches(&ver);
-            }
-        }
-
-        // Fallback to exact string match
-        self.requirement == version
     }
 }
 
@@ -298,13 +283,12 @@ mod tests {
 
     #[test]
     fn package_spec_multiple_at_signs_uses_last() {
-        // With rfind('@'), "package@1.0.0@extra" splits into name="package@1.0.0" and version="extra"
+        // With rfind('@'), "package@1.0.0@extra" splits into name="package@1.0.0"
+        // and version="extra" — rejected because "extra" is not a valid version
+        // requirement. (Earlier behavior silently accepted any string and
+        // matched it via fallback equality, hiding malformed inputs.)
         let result = PackageSpec::parse("package@1.0.0@extra");
-        // "extra" is not a valid semver but VersionReq falls back to exact match, so it parses
-        assert!(result.is_ok());
-        let spec = result.unwrap();
-        assert_eq!(spec.name, "package@1.0.0");
-        assert_eq!(spec.version_req.as_str(), "extra");
+        assert!(result.is_err(), "non-semver version segment must error");
     }
 
     #[test]
