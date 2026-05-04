@@ -5,7 +5,7 @@ use hpm_core::{
     ArchiveFetcher, LockFile, LockedDependency, LockedPythonDependency, LockedSource,
     PackageSource, StorageManager,
 };
-use hpm_package::{EnvMethod, HoudiniEnvValue, HoudiniPackage, ManifestEnvEntry, PackageManifest};
+use hpm_package::{HoudiniEnvValue, HoudiniPackage, ManifestEnvEntry, PackageManifest};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -706,27 +706,33 @@ fn build_houdini_package_for_install(
     // User-declared [env] entries from the package's hpm.toml. Project-level
     // [env] in the consuming project's hpm.toml overrides per key. A
     // `required = true` placeholder with no value (and no override) is a hard
-    // error — the package wouldn't be launchable without it.
+    // error — the package wouldn't be launchable without it. Conditional
+    // values lower to Houdini's expression-object array via ManifestEnvEntry::lower.
     if let Some(user_env) = &manifest.env {
         for (key, entry) in user_env {
             let override_entry = project_env_overrides.and_then(|o| o.get(key));
             let effective_entry = override_entry.unwrap_or(entry);
 
-            let raw_value = effective_entry.value.as_ref().ok_or_else(|| {
-                anyhow::anyhow!(
+            if effective_entry.value.is_none() {
+                return Err(anyhow::anyhow!(
                     "Required env var '{}' for package '{}' has no value. \
                      Set it in this project's [env] section in hpm.toml.",
                     key,
                     package_name
-                )
-            })?;
+                ));
+            }
 
-            let value = raw_value.replace("$HPM_PACKAGE_ROOT", &package_path_str);
-            let houdini_value = match effective_entry.method {
-                EnvMethod::Set => HoudiniEnvValue::set(value),
-                EnvMethod::Prepend => HoudiniEnvValue::prepend(value),
-                EnvMethod::Append => HoudiniEnvValue::append(value),
-            };
+            let houdini_value = effective_entry
+                .lower(&[("$HPM_PACKAGE_ROOT", &package_path_str)])
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Invalid conditional value for env var '{}' in '{}': {}",
+                        key,
+                        package_name,
+                        e
+                    )
+                })?
+                .expect("lower returns Some when value is set");
             let mut map = HashMap::new();
             map.insert(key.clone(), houdini_value);
             env.push(map);

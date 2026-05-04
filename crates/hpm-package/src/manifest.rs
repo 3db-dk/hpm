@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::dependency::DependencySpec;
+use crate::env_value::{EnvValueSpec, ExpressionError, lower_conditional};
 use crate::houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 use crate::package_path::PackagePath;
 use crate::platform::Platform;
@@ -62,11 +63,16 @@ pub enum EnvMethod {
 /// project's `[env]` must override; otherwise the package fails to install.
 /// `required = true` alongside a `value` is allowed (the value acts as a
 /// default) and behaves the same as a non-required entry with that value.
+///
+/// `value` accepts either a flat string (today's case) or a list of
+/// `{ when, set }` variants — see [`EnvValueSpec`]. The conditional form
+/// lowers to Houdini's expression-object array per
+/// <https://www.sidefx.com/docs/houdini/ref/plugins.html>.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestEnvEntry {
     pub method: EnvMethod,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
+    pub value: Option<EnvValueSpec>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub required: bool,
 }
@@ -230,17 +236,63 @@ impl ManifestEnvEntry {
     /// Returns `None` for required-but-unsupplied placeholders; callers
     /// that have no override source (publish/scaffold paths) skip these,
     /// while project-sync paths surface a hard error instead.
+    ///
+    /// No substitution is applied — the returned value reflects the manifest
+    /// verbatim, so `$HPM_PACKAGE_ROOT` is preserved. Use [`Self::lower`] when
+    /// you have a concrete package path to substitute in.
+    ///
+    /// Conditional values with a malformed `when` selector are dropped
+    /// silently; [`PackageManifest::validate`] catches those before this
+    /// method is reached on any well-formed manifest.
     pub fn to_houdini_env_value(&self) -> Option<HoudiniEnvValue> {
-        let value = self.value.clone()?;
-        let method = match self.method {
+        self.lower(&[]).ok().flatten()
+    }
+
+    /// Lower this entry into a Houdini env value, applying the supplied
+    /// substitutions to each value branch.
+    ///
+    /// Returns `Ok(None)` when there is no value (a required-but-unsupplied
+    /// placeholder); callers in publish/scaffold paths skip those, while
+    /// project-sync paths convert that to a hard error themselves.
+    pub fn lower(
+        &self,
+        substitutions: &[(&str, &str)],
+    ) -> Result<Option<HoudiniEnvValue>, ExpressionError> {
+        let Some(value) = self.value.as_ref() else {
+            return Ok(None);
+        };
+        let method = self.method.as_str();
+        let lowered = match value {
+            EnvValueSpec::Flat(s) => {
+                let mut out = s.clone();
+                for (from, to) in substitutions {
+                    out = out.replace(from, to);
+                }
+                HoudiniEnvValue::Detailed {
+                    method: method.to_string(),
+                    value: out,
+                }
+            }
+            EnvValueSpec::Conditional(variants) => {
+                let lowered = lower_conditional(variants, substitutions)?;
+                HoudiniEnvValue::DetailedConditional {
+                    method: method.to_string(),
+                    value: lowered,
+                }
+            }
+        };
+        Ok(Some(lowered))
+    }
+}
+
+impl EnvMethod {
+    /// String form used in Houdini's package.json (`"set"`, `"prepend"`, `"append"`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
             EnvMethod::Set => "set",
             EnvMethod::Prepend => "prepend",
             EnvMethod::Append => "append",
-        };
-        Some(HoudiniEnvValue::Detailed {
-            method: method.to_string(),
-            value,
-        })
+        }
     }
 }
 
@@ -405,14 +457,34 @@ impl PackageManifest {
         }
 
         // Validate [env] entries: a missing value is only legal as a
-        // required-placeholder for project-level [env] to fill in.
+        // required-placeholder for project-level [env] to fill in. Conditional
+        // values (the variant list shape) get every branch's `when` selector
+        // compiled here so malformed expressions surface at manifest load
+        // time, not at install/emit time.
         if let Some(env) = &self.env {
             for (key, entry) in env {
-                if entry.value.is_none() && !entry.required {
-                    return Err(format!(
-                        "env var '{}' has no value and is not marked required = true",
-                        key
-                    ));
+                match &entry.value {
+                    None => {
+                        if !entry.required {
+                            return Err(format!(
+                                "env var '{}' has no value and is not marked required = true",
+                                key
+                            ));
+                        }
+                    }
+                    Some(EnvValueSpec::Flat(_)) => {}
+                    Some(EnvValueSpec::Conditional(variants)) => {
+                        if variants.is_empty() {
+                            return Err(format!(
+                                "env var '{}' has an empty conditional value list",
+                                key
+                            ));
+                        }
+                        for variant in variants {
+                            crate::env_value::compile_when(&variant.when)
+                                .map_err(|e| format!("env var '{}': {}", key, e))?;
+                        }
+                    }
                 }
             }
         }
@@ -520,16 +592,15 @@ impl PackageManifest {
 
         // User-defined env vars with $HPM_PACKAGE_ROOT replaced. Required-
         // but-unsupplied placeholders are skipped (see generate_houdini_package).
+        // Conditional value branches each get the same substitution applied
+        // before the conditional-object array is emitted.
         if let Some(user_env) = &self.env {
             for (key, entry) in user_env {
-                let Some(raw_value) = entry.value.as_ref() else {
+                let Some(houdini_value) = entry
+                    .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)])
+                    .map_err(|e| e.to_string())?
+                else {
                     continue;
-                };
-                let value = raw_value.replace("$HPM_PACKAGE_ROOT", &pkg_root);
-                let houdini_value = match entry.method {
-                    EnvMethod::Set => HoudiniEnvValue::set(value),
-                    EnvMethod::Prepend => HoudiniEnvValue::prepend(value),
-                    EnvMethod::Append => HoudiniEnvValue::append(value),
                 };
                 let mut env_map = HashMap::new();
                 env_map.insert(key.clone(), houdini_value);
@@ -670,7 +741,10 @@ HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar"
         assert_eq!(env.len(), 2);
         assert_eq!(env["MY_PLUGIN_ROOT"].method, EnvMethod::Set);
         assert_eq!(
-            env["MY_PLUGIN_ROOT"].value.as_deref(),
+            env["MY_PLUGIN_ROOT"]
+                .value
+                .as_ref()
+                .and_then(EnvValueSpec::as_flat),
             Some("$HPM_PACKAGE_ROOT/config")
         );
         assert!(!env["MY_PLUGIN_ROOT"].required);
@@ -739,7 +813,7 @@ LEAKED = { method = "set" }
             "WITH_VALUE".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Set,
-                value: Some("/somewhere".to_string()),
+                value: Some("/somewhere".into()),
                 required: false,
             },
         );
@@ -799,7 +873,7 @@ version = "0.1.0"
             "MY_VAR".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Set,
-                value: Some("$HPM_PACKAGE_ROOT/data".to_string()),
+                value: Some("$HPM_PACKAGE_ROOT/data".into()),
                 required: false,
             },
         );
@@ -1277,7 +1351,7 @@ register = "linux-register"
             "PATH_A".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Set,
-                value: Some("$HPM_PACKAGE_ROOT/a".to_string()),
+                value: Some("$HPM_PACKAGE_ROOT/a".into()),
                 required: false,
             },
         );
@@ -1285,7 +1359,7 @@ register = "linux-register"
             "PATH_B".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Append,
-                value: Some("$HPM_PACKAGE_ROOT/b:$HPM_PACKAGE_ROOT/c".to_string()),
+                value: Some("$HPM_PACKAGE_ROOT/b:$HPM_PACKAGE_ROOT/c".into()),
                 required: false,
             },
         );
@@ -1310,6 +1384,192 @@ register = "linux-register"
                 assert_eq!(method, "append");
             }
             _ => panic!("Expected Detailed"),
+        }
+    }
+
+    #[test]
+    fn env_conditional_value_parses_from_toml() {
+        let toml_str = r#"
+[package]
+path = "studio/multi-houdini"
+name = "Multi Houdini"
+version = "0.1.0"
+
+[env.PXR_PLUGINPATH_NAME]
+method = "prepend"
+value = [
+  { when = { houdini = "^21" }, set = "$HPM_PACKAGE_ROOT/resolver/houdini21/r" },
+  { when = { houdini = "^22" }, set = "$HPM_PACKAGE_ROOT/resolver/houdini22/r" },
+]
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        manifest.validate().unwrap();
+        let entry = manifest
+            .env
+            .as_ref()
+            .unwrap()
+            .get("PXR_PLUGINPATH_NAME")
+            .unwrap();
+        assert_eq!(entry.method, EnvMethod::Prepend);
+        match entry.value.as_ref().unwrap() {
+            EnvValueSpec::Conditional(v) => {
+                assert_eq!(v.len(), 2);
+                assert_eq!(v[0].when.houdini.as_deref(), Some("^21"));
+                assert_eq!(v[1].when.houdini.as_deref(), Some("^22"));
+            }
+            EnvValueSpec::Flat(_) => panic!("expected conditional"),
+        }
+    }
+
+    #[test]
+    fn env_conditional_value_lowers_to_houdini_array() {
+        let toml_str = r#"
+[package]
+path = "studio/multi"
+name = "Multi"
+version = "0.1.0"
+
+[env.PXR_PLUGINPATH_NAME]
+method = "prepend"
+value = [
+  { when = { houdini = "^21" }, set = "$HPM_PACKAGE_ROOT/h21/r" },
+  { when = { houdini = "^22", os = "linux" }, set = "$HPM_PACKAGE_ROOT/h22/r" },
+]
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let entry = manifest
+            .env
+            .as_ref()
+            .unwrap()
+            .get("PXR_PLUGINPATH_NAME")
+            .unwrap();
+        let lowered = entry
+            .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")])
+            .unwrap()
+            .unwrap();
+        match lowered {
+            HoudiniEnvValue::DetailedConditional { method, value } => {
+                assert_eq!(method, "prepend");
+                assert_eq!(value.len(), 2);
+                let first = &value[0];
+                let key = first.keys().next().unwrap();
+                assert_eq!(key, "houdini_version >= '21' and houdini_version < '22'");
+                assert_eq!(first[key], "/abs/pkg/h21/r");
+                let second = &value[1];
+                let key2 = second.keys().next().unwrap();
+                assert_eq!(
+                    key2,
+                    "houdini_version >= '22' and houdini_version < '23' and houdini_os == 'linux'"
+                );
+                assert_eq!(second[key2], "/abs/pkg/h22/r");
+            }
+            _ => panic!("expected DetailedConditional"),
+        }
+    }
+
+    #[test]
+    fn env_conditional_value_serializes_in_native_package() {
+        let toml_str = r#"
+[package]
+path = "studio/multi-pkg"
+name = "Multi"
+version = "0.1.0"
+
+[env.PXR_PLUGINPATH_NAME]
+method = "prepend"
+value = [
+  { when = { houdini = "^21" }, set = "$HPM_PACKAGE_ROOT/h21/r" },
+]
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let (_, pkg) = manifest.generate_houdini_native_package().unwrap();
+        let json = serde_json::to_string(&pkg).unwrap();
+        // The conditional-object array form must round-trip into JSON with
+        // method, value, and the embedded expression as the inner object key.
+        assert!(json.contains("\"method\":\"prepend\""));
+        assert!(json.contains("houdini_version >= '21' and houdini_version < '22'"));
+        assert!(json.contains("$HOUDINI_PACKAGE_PATH/multi-pkg/h21/r"));
+    }
+
+    #[test]
+    fn env_conditional_value_with_invalid_req_fails_validate() {
+        let toml_str = r#"
+[package]
+path = "studio/bad"
+name = "Bad"
+version = "0.1.0"
+
+[env.X]
+method = "set"
+value = [
+  { when = { houdini = "garbage" }, set = "x" },
+]
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let err = manifest.validate().unwrap_err();
+        assert!(err.contains("X"));
+        assert!(err.contains("garbage"));
+    }
+
+    #[test]
+    fn env_conditional_value_empty_list_fails_validate() {
+        // An empty conditional list is meaningless — flag it at validate()
+        // rather than emitting an empty Houdini env entry.
+        let toml_str = r#"
+[package]
+path = "studio/bad"
+name = "Bad"
+version = "0.1.0"
+
+[env.X]
+method = "set"
+value = []
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let err = manifest.validate().unwrap_err();
+        assert!(err.contains("empty conditional"));
+    }
+
+    #[test]
+    fn env_pass_through_preserves_houdini_vars_in_flat_value() {
+        // Regression: hpm only substitutes $HPM_PACKAGE_ROOT. Anything else
+        // (notably $HOUDINI_MAJOR_RELEASE, $HFS, $HOUDINI_USER_PREF_DIR) must
+        // pass through verbatim into the emitted package.json so Houdini's
+        // own variable expansion does the work at startup.
+        let mut manifest = PackageManifest::new(
+            PackagePath::new("studio/passthrough").unwrap(),
+            "Passthrough".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
+        let mut env = IndexMap::new();
+        env.insert(
+            "PXR_PLUGINPATH_NAME".to_string(),
+            ManifestEnvEntry {
+                method: EnvMethod::Prepend,
+                value: Some("$HPM_PACKAGE_ROOT/resolver/houdini$HOUDINI_MAJOR_RELEASE/r".into()),
+                required: false,
+            },
+        );
+        manifest.env = Some(env);
+
+        let pkg = manifest.generate_houdini_package();
+        let env_list = pkg.env.unwrap();
+        let entry = env_list
+            .iter()
+            .find_map(|m| m.get("PXR_PLUGINPATH_NAME"))
+            .unwrap();
+        match entry {
+            HoudiniEnvValue::Detailed { value, .. } => {
+                assert!(
+                    value.contains("$HOUDINI_MAJOR_RELEASE"),
+                    "Houdini var must pass through verbatim, got: {}",
+                    value
+                );
+            }
+            _ => panic!("expected Detailed flat value"),
         }
     }
 }

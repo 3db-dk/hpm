@@ -539,6 +539,13 @@ proptest! {
                             prop_assert!(!method.is_empty(), "Env method should not be empty");
                             prop_assert!(!value.is_empty(), "Detailed env value should not be empty");
                         }
+                        HoudiniEnvValue::DetailedConditional { method, value } => {
+                            prop_assert!(!method.is_empty(), "Env method should not be empty");
+                            prop_assert!(
+                                !value.is_empty(),
+                                "Conditional env value list should not be empty"
+                            );
+                        }
                     }
                 }
             }

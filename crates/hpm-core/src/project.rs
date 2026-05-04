@@ -646,35 +646,32 @@ impl ProjectManager {
         // A package entry with `required = true` and no value is a placeholder
         // that the project's [env] must override; otherwise we hard-error so
         // the package is not silently launched without a value it depends on.
+        // Conditional value branches lower to Houdini's expression-object form.
         if let Some(user_env) = &installed_package.manifest.env {
+            let pkg_root = package_path.to_string_lossy().into_owned();
             for (key, entry) in user_env {
                 let override_entry = project_env_overrides
                     .as_ref()
                     .and_then(|overrides| overrides.get(key));
                 let effective_entry = override_entry.unwrap_or(entry);
 
-                let raw_value = effective_entry.value.as_ref().ok_or_else(|| {
-                    ProjectError::MissingRequiredEnv {
+                if effective_entry.value.is_none() {
+                    return Err(ProjectError::MissingRequiredEnv {
                         var: key.clone(),
                         package: installed_package.manifest.package.slug().to_string(),
-                    }
-                })?;
+                    });
+                }
 
-                let resolved_value =
-                    raw_value.replace("$HPM_PACKAGE_ROOT", &package_path.to_string_lossy());
+                let houdini_value = effective_entry
+                    .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)])
+                    .map_err(|e| ProjectError::InvalidEnvExpression {
+                        var: key.clone(),
+                        package: installed_package.manifest.package.slug().to_string(),
+                        message: e.to_string(),
+                    })?
+                    .expect("lower returns Some when value is set");
                 let mut env_map = HashMap::new();
-                env_map.insert(
-                    key.clone(),
-                    hpm_package::HoudiniEnvValue::Detailed {
-                        method: match effective_entry.method {
-                            hpm_package::EnvMethod::Set => "set",
-                            hpm_package::EnvMethod::Prepend => "prepend",
-                            hpm_package::EnvMethod::Append => "append",
-                        }
-                        .to_string(),
-                        value: resolved_value,
-                    },
-                );
+                env_map.insert(key.clone(), houdini_value);
                 env.push(env_map);
             }
         }
@@ -950,6 +947,13 @@ pub enum ProjectError {
          Set it in this project's [env] section in hpm.toml."
     )]
     MissingRequiredEnv { var: String, package: String },
+
+    #[error("Invalid conditional value for env var '{var}' in package '{package}': {message}")]
+    InvalidEnvExpression {
+        var: String,
+        package: String,
+        message: String,
+    },
 }
 
 #[cfg(test)]
@@ -1070,7 +1074,7 @@ mod tests {
             "MY_CONFIG".to_string(),
             ManifestEnvEntry {
                 method: hpm_package::EnvMethod::Set,
-                value: Some("$HPM_PACKAGE_ROOT/default-config".to_string()),
+                value: Some("$HPM_PACKAGE_ROOT/default-config".into()),
                 required: false,
             },
         );
@@ -1111,7 +1115,7 @@ mod tests {
             "MY_CONFIG".to_string(),
             ManifestEnvEntry {
                 method: hpm_package::EnvMethod::Set,
-                value: Some("/custom/config/path".to_string()),
+                value: Some("/custom/config/path".into()),
                 required: false,
             },
         );
@@ -1193,7 +1197,7 @@ mod tests {
             "PROJECT_ROOT".to_string(),
             ManifestEnvEntry {
                 method: hpm_package::EnvMethod::Set,
-                value: Some("/work/project".to_string()),
+                value: Some("/work/project".into()),
                 required: false,
             },
         );

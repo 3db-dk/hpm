@@ -100,6 +100,7 @@
 
 // Module declarations
 pub mod dependency;
+pub mod env_value;
 pub mod houdini;
 pub mod manifest;
 pub mod package_path;
@@ -112,6 +113,9 @@ mod proptest_helpers;
 
 // Re-exports for convenient access
 pub use dependency::DependencySpec;
+pub use env_value::{
+    EnvValueSpec, EnvValueVariant, ExpressionError, WhenSelector, compile_when, lower_conditional,
+};
 pub use houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 pub use manifest::{
     EnvMethod, HoudiniConfig, ManifestEnvEntry, ManifestLoadError, NativeConfig,

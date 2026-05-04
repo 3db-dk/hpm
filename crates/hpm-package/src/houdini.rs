@@ -38,9 +38,11 @@ pub struct HoudiniPackage {
 
 /// Environment variable value in Houdini package.json
 ///
-/// Supports two formats:
-/// - Simple: Direct string value
-/// - Detailed: Method (prepend/append/set) with value
+/// Supports three formats:
+/// - Simple: direct string value
+/// - Detailed: method (prepend/append/set) with a flat string value
+/// - DetailedConditional: method plus an ordered list of `{ "<expr>": "<v>" }`
+///   maps; Houdini picks the first whose expression matches.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum HoudiniEnvValue {
@@ -52,6 +54,13 @@ pub enum HoudiniEnvValue {
         method: String,
         /// The value to apply
         value: String,
+    },
+    /// Detailed value where the value is a Houdini conditional-object array.
+    /// Each map has a single entry `"<houdini-expression>": "<value>"`;
+    /// Houdini evaluates the expressions in order and applies the first match.
+    DetailedConditional {
+        method: String,
+        value: Vec<HashMap<String, String>>,
     },
 }
 
@@ -82,6 +91,14 @@ impl HoudiniEnvValue {
         HoudiniEnvValue::Detailed {
             method: "set".to_string(),
             value: value.into(),
+        }
+    }
+
+    /// Create a conditional environment value with the given method.
+    pub fn conditional(method: &str, value: Vec<HashMap<String, String>>) -> Self {
+        HoudiniEnvValue::DetailedConditional {
+            method: method.to_string(),
+            value,
         }
     }
 }
