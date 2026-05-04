@@ -4,7 +4,7 @@
 //! dependencies resolved during installation. This ensures reproducible builds
 //! across different machines and time.
 
-use crate::archive_fetcher::fetcher_install_dir;
+use crate::archive_fetcher::cas_install_dir;
 use crate::package_source::PackageSource;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -312,23 +312,23 @@ impl LockFile {
 
     /// Verify all checksums in the lock file against installed packages.
     ///
-    /// `packages_dir` is the `ArchiveFetcher` extraction root (typically
+    /// `packages_dir` is the canonical `StorageManager` CAS root (typically
     /// `config.storage.packages_dir`). For each locked dependency that
     /// carries a checksum:
     ///
     /// - if the package directory is missing, returns
-    ///   [`LockError::PackageMissing`] — the prior implementation hand-
-    ///   rolled `format!("{name}@{version}")` (the `StorageManager` scoped
-    ///   layout, never used by `hpm install`) and silently skipped every
-    ///   dep, so verification was a no-op for every existing user.
+    ///   [`LockError::PackageMissing`].
     /// - if the directory is present but its checksum diverges, returns
     ///   [`LockError::ChecksumMismatch`].
+    ///
+    /// The lookup is by **bare slug** — scoped names like `creator/foo`
+    /// reduce to `foo` so the lookup matches `install_from_path`'s layout.
     pub fn verify_checksums(&self, packages_dir: &Path) -> Result<(), LockError> {
         for (name, dep) in &self.dependencies {
             let Some(expected_checksum) = &dep.checksum else {
                 continue;
             };
-            let package_dir = fetcher_install_dir(packages_dir, name, &dep.version);
+            let package_dir = cas_install_dir(packages_dir, name, &dep.version);
             if !package_dir.exists() {
                 return Err(LockError::PackageMissing {
                     package: name.clone(),
@@ -597,7 +597,7 @@ mod tests {
         version: &str,
         content: &[u8],
     ) -> PathBuf {
-        let dir = fetcher_install_dir(packages_dir, name, version);
+        let dir = cas_install_dir(packages_dir, name, version);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("file.txt"), content).unwrap();
         dir
@@ -631,7 +631,8 @@ mod tests {
                 expected_dir,
             } => {
                 assert_eq!(package, "creator/foo");
-                assert!(expected_dir.ends_with("creator-foo-1.0.0"));
+                // Canonical CAS layout: <packages_dir>/<slug>@<version>/.
+                assert!(expected_dir.ends_with("foo@1.0.0"));
             }
             other => panic!("Expected PackageMissing, got {:?}", other),
         }

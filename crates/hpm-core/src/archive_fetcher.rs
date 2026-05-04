@@ -20,14 +20,26 @@ const CHECKSUM_CACHE_FILE: &str = ".hpm-checksum";
 /// `creator/slug`) are replaced with `-` so the result is a single
 /// directory name.
 ///
-/// **Don't reinvent this formula** — `lock.rs::verify_checksums` and any
-/// other consumer that needs to read a fetched package off disk must call
-/// through here. The original verify_checksums hand-rolled
-/// `format!("{name}@{version}")` instead and silently no-op'd because the
-/// path it computed never existed.
+/// This is the **staging** path — `hpm install` and friends fetch into
+/// `<.hpm>/fetch/<safe_name>-<version>/`, then copy into the canonical
+/// `StorageManager` CAS via `install_from_path`. To find a package's
+/// canonical install location instead, see [`cas_install_dir`].
 pub fn fetcher_install_dir(packages_dir: &Path, name: &str, version: &str) -> PathBuf {
     let safe_name = name.replace('/', "-");
     packages_dir.join(format!("{}-{}", safe_name, version))
+}
+
+/// Compute the canonical `StorageManager` CAS path for a dependency
+/// referenced by `name` (the dependency key, possibly scoped as
+/// `creator/slug`) and `version`. The CAS keys by **bare slug**: scoped
+/// names are reduced to their last `/`-segment so the layout matches
+/// what `StorageManager::install_from_path` writes.
+///
+/// Used by `LockFile::verify_checksums` and any consumer that needs to
+/// locate an installed package off the lockfile alone.
+pub fn cas_install_dir(packages_dir: &Path, name: &str, version: &str) -> PathBuf {
+    let slug = name.rsplit('/').next().unwrap_or(name);
+    packages_dir.join(format!("{}@{}", slug, version))
 }
 
 /// Detected archive container format.

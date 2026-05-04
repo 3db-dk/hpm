@@ -1,11 +1,15 @@
 use super::manifest_utils::{determine_manifest_path, load_manifest};
 use crate::progress::OperationProgress;
 use anyhow::{Context, Result};
-use hpm_core::{ArchiveFetcher, LockFile, LockedDependency, LockedPythonDependency, PackageSource};
+use hpm_core::{
+    ArchiveFetcher, LockFile, LockedDependency, LockedPythonDependency, PackageSource,
+    StorageManager,
+};
 use hpm_package::{EnvMethod, HoudiniEnvValue, HoudiniPackage, ManifestEnvEntry, PackageManifest};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
@@ -129,7 +133,7 @@ pub async fn install_dependencies(
                 dependencies.len()
             ));
             info!("Installing {} HPM dependencies", dependencies.len());
-            install_hpm_dependencies(dependencies, &hpm_dir)
+            install_hpm_dependencies(dependencies)
                 .await
                 .context("Failed to install HPM dependencies")?
         } else {
@@ -270,91 +274,86 @@ struct PackageInstallResult {
     resolved_source: PackageSource,
 }
 
-/// Install HPM package dependencies
+/// Install HPM package dependencies.
 ///
-/// This function fetches all dependencies in parallel for improved performance,
-/// then creates symlinks/references sequentially to avoid race conditions.
+/// Fetches URL/registry deps in parallel via `ArchiveFetcher` (downloading +
+/// extracting into a fetch staging dir), then copies each into the global
+/// `StorageManager` CAS via `install_from_path` — the same content-
+/// addressable layout `ProjectManager::sync_dependencies` uses, so both
+/// commands now write to one canonical location at
+/// `<packages_dir>/<slug>@<version>/`. Path deps skip the fetcher entirely
+/// and go through `install_from_path_dev`, landing under
+/// `<packages_dir>/_dev/<slug>@<version>/` (registry/URL deps can't be
+/// poisoned by a dev install at the same coordinate).
+///
+/// No project-side symlinks are created. The Houdini JSON manifests
+/// written downstream embed absolute paths into the CAS.
 async fn install_hpm_dependencies(
     dependencies: &indexmap::IndexMap<String, hpm_package::DependencySpec>,
-    hpm_dir: &Path,
 ) -> Result<HashMap<String, PackageInstallResult>> {
     info!("Installing HPM dependencies...");
 
-    // Get global storage directories from config
     let config = hpm_config::Config::load()
         .map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
-    let cache_dir = config.storage.cache_dir.clone();
-    let packages_dir = config.storage.packages_dir.clone();
 
-    // Create the archive fetcher (Clone is cheap - reqwest::Client is internally Arc-ed)
-    let fetcher = ArchiveFetcher::new(cache_dir, packages_dir.clone())
+    // Fetcher staging dir lives next to the canonical CAS (not inside it),
+    // so a half-extracted archive on `/tmp` filling the disk doesn't trash
+    // a successful previous install.
+    let cache_dir = config.storage.cache_dir.clone();
+    let staging_dir = config
+        .storage
+        .packages_dir
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("fetch");
+    let fetcher = ArchiveFetcher::new(cache_dir, staging_dir)
         .context("Failed to initialize archive fetcher")?;
+
+    let storage_manager = Arc::new(
+        StorageManager::new(config.storage.clone())
+            .context("Failed to initialize storage manager")?,
+    );
 
     // Build registry set for any registry-resolved deps (shared across tasks)
     let registry_set = {
         let has_registry_deps = dependencies.values().any(|spec| spec.is_registry());
         if has_registry_deps {
-            Some(std::sync::Arc::new(super::registry::build_registry_set(
-                &config,
-            )))
+            Some(Arc::new(super::registry::build_registry_set(&config)))
         } else {
             None
         }
     };
 
-    // Project packages directory (for symlinks/references)
-    let project_packages_dir = hpm_dir.join("packages");
-    tokio::fs::create_dir_all(&project_packages_dir)
-        .await
-        .context("Failed to create project packages directory")?;
-
-    // Phase 1 + 2: Spawn all fetches in parallel via a JoinSet.
-    let mut fetch_tasks: JoinSet<anyhow::Result<(String, _, PackageSource)>> = JoinSet::new();
+    // Phase 1: spawn all installs in parallel via a JoinSet. Each task
+    // handles its own (resolve → fetch → copy-into-CAS) chain so the
+    // expensive network and extraction steps overlap across deps.
+    let mut tasks: JoinSet<anyhow::Result<(String, PackageInstallResult)>> = JoinSet::new();
     for (name, spec) in dependencies.iter() {
         let fetcher = fetcher.clone();
+        let storage = storage_manager.clone();
         let name = name.clone();
         let spec = spec.clone();
         let registry_set = registry_set.clone();
 
-        fetch_tasks.spawn(async move {
+        tasks.spawn(async move {
             info!("Processing dependency: {}", name);
 
-            // Convert dependency spec to package source
-            let source = match &spec {
-                hpm_package::DependencySpec::Simple(version) => {
+            let result = match spec {
+                hpm_package::DependencySpec::Simple(version)
+                | hpm_package::DependencySpec::Registry { version, .. } => {
                     info!("  {} - Registry @ {}", name, version);
                     let rs = registry_set
                         .as_ref()
                         .expect("registry set built for registry deps");
-                    let entry = rs.get_version(&name, version).await.with_context(|| {
+                    let entry = rs.get_version(&name, &version).await.with_context(|| {
                         format!("Failed to resolve {}@{} from registry", name, version)
                     })?;
-                    let src = PackageSource::url(&entry.dl, version)
+                    let source = PackageSource::url(&entry.dl, &version)
                         .context("Invalid URL from registry")?;
-                    if let Some(warning) = src.security_warning() {
+                    if let Some(warning) = source.security_warning() {
                         warn!("Security: {} - {}", name, warning);
                     }
-                    src
-                }
-                hpm_package::DependencySpec::Registry {
-                    version, optional, ..
-                } => {
-                    info!("  {} - Registry @ {}", name, version);
-                    if *optional {
-                        debug!("  {} is optional", name);
-                    }
-                    let rs = registry_set
-                        .as_ref()
-                        .expect("registry set built for registry deps");
-                    let entry = rs.get_version(&name, version).await.with_context(|| {
-                        format!("Failed to resolve {}@{} from registry", name, version)
-                    })?;
-                    let src = PackageSource::url(&entry.dl, version)
-                        .context("Invalid URL from registry")?;
-                    if let Some(warning) = src.security_warning() {
-                        warn!("Security: {} - {}", name, warning);
-                    }
-                    src
+                    fetch_and_install(&fetcher, &storage, &name, source).await?
                 }
                 hpm_package::DependencySpec::Url {
                     url,
@@ -362,117 +361,95 @@ async fn install_hpm_dependencies(
                     optional,
                 } => {
                     info!("  {} - Url: {} @ {}", name, url, version);
-                    if *optional {
+                    if optional {
                         debug!("  {} is optional", name);
                     }
-                    let src = PackageSource::url(url, version).context("Invalid URL")?;
-
-                    // Security warning for HTTP URLs
-                    if let Some(warning) = src.security_warning() {
+                    let source = PackageSource::url(&url, &version).context("Invalid URL")?;
+                    if let Some(warning) = source.security_warning() {
                         warn!("Security: {} - {}", name, warning);
                     }
-
-                    src
+                    fetch_and_install(&fetcher, &storage, &name, source).await?
                 }
                 hpm_package::DependencySpec::Path { path, optional } => {
                     info!("  {} - Path: {}", name, path);
-                    if *optional {
+                    if optional {
                         debug!("  {} is optional", name);
                     }
-                    PackageSource::path(path)
+                    install_path_dep(&storage, &path).await?
                 }
             };
 
-            // Fetch the package (this is the expensive network/disk operation)
-            let fetch_result = fetcher
-                .fetch(&source, &name)
-                .await
-                .with_context(|| format!("Failed to fetch package: {}", name))?;
-
-            if fetch_result.from_cache {
-                info!("  {} found in cache", name);
-            } else {
-                info!("  {} downloaded and extracted", name);
-            }
-
-            debug!(
-                "  {} checksum: {}",
-                name,
-                &fetch_result.checksum[..fetch_result.checksum.len().min(16)]
-            );
-
-            Ok::<_, anyhow::Error>((name, fetch_result, source))
+            Ok::<_, anyhow::Error>((name, result))
         });
     }
 
-    // Phase 3: Process results and create symlinks sequentially
-    info!("Fetching {} packages in parallel...", fetch_tasks.len());
+    info!("Installing {} packages in parallel...", tasks.len());
     let mut results = HashMap::new();
-
-    while let Some(joined) = fetch_tasks.join_next().await {
-        let (name, fetch_result, resolved_source) = joined.context("Fetch task panicked")??;
-
-        // Create reference in project packages directory
-        let project_pkg_link = project_packages_dir.join(&name);
-
-        // Remove existing link/directory if it exists
-        if project_pkg_link.exists() {
-            if project_pkg_link.is_symlink() || project_pkg_link.is_file() {
-                tokio::fs::remove_file(&project_pkg_link).await.ok();
-            } else if project_pkg_link.is_dir() {
-                tokio::fs::remove_dir_all(&project_pkg_link).await.ok();
-            }
-        }
-
-        // Create symlink to the global package directory
-        #[cfg(unix)]
-        {
-            tokio::fs::symlink(&fetch_result.package_path, &project_pkg_link)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to create symlink for {}: {:?} -> {:?}",
-                        name, project_pkg_link, fetch_result.package_path
-                    )
-                })?;
-        }
-
-        #[cfg(windows)]
-        {
-            // On Windows, use directory junction or regular symlink
-            // Note: symlinks may require elevated privileges on some Windows configurations
-            if let Err(e) =
-                tokio::fs::symlink_dir(&fetch_result.package_path, &project_pkg_link).await
-            {
-                // Fall back to writing a reference file
-                warn!(
-                    "  Could not create symlink ({}), creating reference file",
-                    e
-                );
-                let ref_file = project_packages_dir.join(format!("{}.hpmref", &name));
-                tokio::fs::write(
-                    &ref_file,
-                    fetch_result.package_path.to_string_lossy().as_bytes(),
-                )
-                .await
-                .with_context(|| format!("Failed to create reference file for {}", name))?;
-            }
-        }
-
-        results.insert(
-            name.clone(),
-            PackageInstallResult {
-                checksum: fetch_result.checksum,
-                package_path: fetch_result.package_path,
-                resolved_source,
-            },
-        );
-
+    while let Some(joined) = tasks.join_next().await {
+        let (name, result) = joined.context("Install task panicked")??;
         info!("  {} installed successfully", name);
+        results.insert(name, result);
     }
 
     info!("Installed {} HPM packages", results.len());
     Ok(results)
+}
+
+/// Fetch a registry/URL package via `ArchiveFetcher` (download + extract
+/// into the staging dir) and then copy from staging into the canonical
+/// `StorageManager` CAS at `<packages_dir>/<slug>@<version>/`.
+async fn fetch_and_install(
+    fetcher: &ArchiveFetcher,
+    storage: &StorageManager,
+    name: &str,
+    source: PackageSource,
+) -> Result<PackageInstallResult> {
+    let fetch_result = fetcher
+        .fetch(&source, name)
+        .await
+        .with_context(|| format!("Failed to fetch package: {}", name))?;
+
+    if fetch_result.from_cache {
+        info!("  {} found in cache", name);
+    } else {
+        info!("  {} downloaded and extracted", name);
+    }
+    debug!(
+        "  {} checksum: {}",
+        name,
+        &fetch_result.checksum[..fetch_result.checksum.len().min(16)]
+    );
+
+    let installed = storage
+        .install_from_path(&fetch_result.package_path)
+        .await
+        .with_context(|| format!("Failed to install {} into the global CAS", name))?;
+
+    Ok(PackageInstallResult {
+        checksum: fetch_result.checksum,
+        package_path: installed.install_path,
+        resolved_source: source,
+    })
+}
+
+/// Install a path-dependency. Bypasses the fetcher entirely — the source
+/// directory is copied to `<packages_dir>/_dev/<slug>@<version>/` so dev
+/// content can never substitute for a registry coordinate.
+async fn install_path_dep(storage: &StorageManager, path: &str) -> Result<PackageInstallResult> {
+    let source_path = Path::new(path);
+    let installed = storage
+        .install_from_path_dev(source_path)
+        .await
+        .with_context(|| format!("Failed to install path dep at {}", path))?;
+    let resolved_source = PackageSource::path(source_path);
+    Ok(PackageInstallResult {
+        // Path deps don't carry a meaningful network checksum; the lockfile
+        // records the source-tree hash via verify_checksums on the install
+        // dir, which is enough to detect tampering after the copy.
+        checksum: String::new(),
+        package_path: installed.install_path,
+        resolved_source,
+    })
 }
 
 /// Load manifest from an installed package directory. Returns `Ok(None)`
@@ -538,17 +515,15 @@ async fn install_python_dependencies(manifests: &[PackageManifest]) -> Result<Op
     )))
 }
 
-/// Remove install entries in `<project>/.hpm/packages/` whose dep name is no
-/// longer in `install_results`. Three entry shapes are recognised:
+/// Remove `<name>.json` Houdini manifests in `<project>/.hpm/packages/`
+/// for deps that have left the dependency set. Houdini reads every JSON
+/// in this dir on launch, so an orphan manifest keeps loading the dropped
+/// package; only entries we ourselves write (`.json`) are touched.
 ///
-/// - `<name>.json`   — the Houdini manifest written by `write_houdini_manifests`
-/// - `<name>`        — the Unix/Windows symlink to the global package dir
-/// - `<name>.hpmref` — the Windows fallback reference file
-///
-/// Anything that doesn't match those shapes (e.g. a user-authored
-/// `.gitignore`) is left alone. A failure to remove a single entry is logged
-/// but doesn't abort the install — Houdini may hold a manifest open on
-/// Windows, and we'd rather warn and finish than fail late.
+/// Earlier installs also created `<name>` symlinks and `<name>.hpmref`
+/// reference files; both are gone now that JSON manifests embed absolute
+/// CAS paths directly. Any leftovers from older installs are swept here
+/// too, keyed off the bare-stem-matches-a-dep heuristic.
 async fn sweep_stale_install_entries(
     hpm_dir: &Path,
     install_results: &HashMap<String, PackageInstallResult>,
@@ -576,9 +551,9 @@ async fn sweep_stale_install_entries(
             None => continue,
         };
 
-        // Only sweep entry shapes we ourselves write: `<name>.json`,
-        // `<name>.hpmref`, and `<name>` (no extension). Anything else
-        // (e.g. a user-authored README.md) is left alone.
+        // Sweep our own entry shapes; anything else (README.md, .gitignore)
+        // is left alone. The `<name>` and `<name>.hpmref` cases are kept so
+        // upgrades from the previous symlink-based install layout clean up.
         let dep_name = if let Some(stem) = file_name.strip_suffix(".json") {
             stem
         } else if let Some(stem) = file_name.strip_suffix(".hpmref") {
@@ -593,7 +568,6 @@ async fn sweep_stale_install_entries(
             continue;
         }
 
-        // symlink_metadata so we don't follow the symlink when classifying.
         let meta = match tokio::fs::symlink_metadata(&path).await {
             Ok(m) => m,
             Err(e) => {

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`hpm install` now writes to the same canonical CAS as
+  `hpm sync`/`ProjectManager::sync_dependencies`.** Previously the two
+  commands maintained parallel storage layouts in `~/.hpm/packages/`
+  — `<safe_name>-<version>/` (install) vs `<slug>@<version>/` (sync) —
+  and several latent bugs lived in the divergence. After this change:
+  - `ArchiveFetcher` extracts into a staging dir at `~/.hpm/fetch/`,
+    not the CAS.
+  - URL/registry deps copy into `~/.hpm/packages/<slug>@<version>/` via
+    `StorageManager::install_from_path`.
+  - Path deps bypass the fetcher and go straight to
+    `~/.hpm/packages/_dev/<slug>@<version>/` via `install_from_path_dev`,
+    matching `sync_dependencies`' isolation guarantees.
+  - The per-project `<.hpm>/packages/<name>` symlinks (Unix) and
+    `<name>.hpmref` reference files (Windows fallback) are gone —
+    Houdini JSON manifests already carry absolute CAS paths. The sweep
+    introduced earlier still cleans up these legacy entries on upgrade.
+- **Breaking (library API):** new `hpm_core::cas_install_dir(packages_dir,
+  name, version)` returns the canonical install path
+  (`<packages_dir>/<slug>@<version>`) for a lockfile dependency name.
+  `LockFile::verify_checksums` now uses it; the existing
+  `fetcher_install_dir` helper documents itself as the staging path.
+
 ### Added
 - `hpm_package::PackagePath` — validated newtype for the canonical
   `creator/slug` package identifier. Validates kebab-case at
