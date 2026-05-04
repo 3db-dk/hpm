@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `hpm_package::PackagePath` — validated newtype for the canonical
+  `creator/slug` package identifier. Validates kebab-case at
+  deserialization, so `creator()` and `slug()` return `&str` (no
+  `Option`) and downstream consumers can stop defending against
+  malformed paths.
+
+### Changed
+- **Breaking (library API):** `PackageInfo.path` is now
+  `PackagePath` instead of `String`. `PackageManifest::new` takes
+  `PackagePath`; callers can use
+  `PackagePath::new("creator/slug").unwrap()` for static identifiers
+  in tests, or propagate the parse error in production code.
+  `PackageInfo::creator()` and `slug()` no longer return `Option`.
+  The `is_valid_package_path` and `is_valid_slug` helpers on
+  `PackageManifest` are gone — validation lives on `PackagePath`.
+- **Breaking:** `InstalledPackage` drops three fields:
+  - `name: String` (the bare-slug shadow of `manifest.package.path`).
+    Use `installed.slug()` or `installed.manifest.package.slug()`.
+  - `installed_at: SystemTime`. Field was set on every construction
+    and read nowhere; the `metadata.created().unwrap_or_else(now)`
+    fallback that masked filesystem-level errors is also gone.
+  - With `name` and `installed_at` removed, the struct is now just
+    `{ version, manifest, install_path }`.
+- **Breaking:** `PackageSpec` drops `registry: Option<String>` and
+  `PackageSpec::with_registry`. Both were only set/read in tests.
+- **Breaking:** `VersionReq::new` returns `Err` for any input
+  `semver::VersionReq::parse` rejects (instead of silently storing
+  `parsed: None` and falling back to literal string equality in
+  `matches`). `VersionReq::parse` (the alias for `new`) is removed.
+- **Breaking:** Five string-typed `ProjectError` variants
+  (`ManifestRead`, `ManifestParse`, `ManifestWrite`, `ManifestRemoval`,
+  `JsonSerialization`) replaced with typed siblings:
+  `ManifestIo { op, path, source }`, `ManifestEdit { path, source }`,
+  `ManifestStructure { path, message }`, and
+  `HoudiniManifestSerialize { path, source }`. The "no hpm.toml"
+  pre-edit case in `update_project_manifest` now reuses
+  `ManifestLoadError::NotFound`.
+- `ProjectManager.fetcher` is no longer `Option<ArchiveFetcher>`.
+  The "No fetcher available" arm of `ProjectError::PackageInstallation`
+  is gone (it was unreachable — `fetcher` was set to `Some(...)` at
+  construction).
+- CLI commands `hpm search`, `hpm clean`, and `hpm update` no longer
+  silently fall back to `Config::default()` when `Config::load`
+  fails. `Config::load` already handles malformed user-config
+  internally; these wrappers were swallowing project-config parse
+  errors.
+
 ### Fixed
 - `ProjectManager::sync_dependencies` now sweeps stale per-package Houdini
   manifests in `<project>/.hpm/packages/`. Previously, a `<slug>.json`
