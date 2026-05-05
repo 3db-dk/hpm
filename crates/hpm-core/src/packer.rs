@@ -4,9 +4,9 @@
 //! checksum and optional Ed25519 signature.
 
 use base64::Engine;
+pub use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{Signer, VerifyingKey};
-pub use ed25519_dalek::SigningKey;
 use glob::Pattern;
 use hpm_package::manifest::NativeConfig;
 use hpm_package::platform::Platform;
