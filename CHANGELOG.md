@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`hpm-core::packer` exposes byte-based checksum and signing helpers.**
+  `compute_bytes_checksum(&[u8]) -> String` and
+  `sign_bytes(&[u8], &SigningKey) -> (String, String)` join the existing
+  path-based `compute_archive_checksum` / `sign_archive` (which now call
+  through to the byte versions). `SigningKey` is re-exported from
+  `hpm_core::packer` so downstream callers don't need a direct
+  `ed25519-dalek` dependency. Lets tooling that mutates archive bytes
+  after pack — e.g. `tumbletrove-desktop`'s SideFX upload flow, which
+  reshapes the flat `hpm pack` archive into hpackage's expected
+  `{slug}.json`-at-root + content-under-`{slug}/` layout — recompute
+  the SHA-256 and re-sign without round-tripping through disk.
+
 ## [0.10.0] - 2026-05-04
 
 ### Added
