@@ -5,7 +5,8 @@
 
 use base64::Engine;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signer, VerifyingKey};
+pub use ed25519_dalek::SigningKey;
 use glob::Pattern;
 use hpm_package::manifest::NativeConfig;
 use hpm_package::platform::Platform;
@@ -209,8 +210,15 @@ pub fn create_archive(
 /// Compute SHA-256 checksum of a file, returning hex-encoded string.
 pub fn compute_archive_checksum(path: &Path) -> Result<String, PackError> {
     let bytes = fs::read(path)?;
-    let hash = Sha256::digest(&bytes);
-    Ok(hex::encode(hash))
+    Ok(compute_bytes_checksum(&bytes))
+}
+
+/// Compute SHA-256 checksum of an in-memory byte slice. Use when you already
+/// hold the archive bytes (e.g. after re-shaping for a third-party hosting
+/// target) and don't want a disk round-trip.
+pub fn compute_bytes_checksum(bytes: &[u8]) -> String {
+    let hash = Sha256::digest(bytes);
+    hex::encode(hash)
 }
 
 /// Hex encoding without external dep (sha2 re-exports what we need, but let's
@@ -245,15 +253,21 @@ pub fn load_signing_key_from_pem(pem: &str) -> Result<SigningKey, PackError> {
 /// Sign an archive file, returning (base64 signature, hex key_id).
 pub fn sign_archive(path: &Path, signing_key: &SigningKey) -> Result<(String, String), PackError> {
     let bytes = fs::read(path)?;
-    let signature = signing_key.sign(&bytes);
+    Ok(sign_bytes(&bytes, signing_key))
+}
 
+/// Sign an in-memory byte slice with the given Ed25519 key, returning
+/// (base64 signature, hex key_id). Use when re-signing after the archive
+/// has been mutated post-pack (e.g. third-party hosting layout reshapes).
+pub fn sign_bytes(bytes: &[u8], signing_key: &SigningKey) -> (String, String) {
+    let signature = signing_key.sign(bytes);
     let sig_b64 = base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
 
     let verifying_key: VerifyingKey = signing_key.verifying_key();
     let pub_bytes = verifying_key.to_bytes();
     let key_id = hex::encode(&pub_bytes[..8]);
 
-    Ok((sig_b64, key_id))
+    (sig_b64, key_id)
 }
 
 /// Pack a package directory into a signed, checksummed archive.
