@@ -373,7 +373,13 @@ async fn update_python_packages(
     if updates.iter().any(|u| u.requires_venv_update) {
         console::info("Resolving updated Python dependencies...");
 
-        let deps = collect_python_dependencies(std::slice::from_ref(manifest)).await?;
+        let project_houdini_version = manifest
+            .houdini
+            .as_ref()
+            .and_then(|h| h.min_version.as_deref());
+        let deps =
+            collect_python_dependencies(project_houdini_version, std::slice::from_ref(manifest))
+                .await?;
         if deps.dependencies.is_empty() {
             return Ok(updated);
         }

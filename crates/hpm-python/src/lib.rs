@@ -101,9 +101,10 @@
 //! // 1. Initialize the Python dependency system
 //! initialize().await?;
 //!
-//! // 2. Collect dependencies from package manifests
+//! // 2. Collect dependencies from package manifests. The first arg is the
+//! //    project's `[houdini].min_version` — authoritative for Python ABI.
 //! let packages: Vec<PackageManifest> = vec![]; // Your package manifests
-//! let collected_deps = collect_python_dependencies(&packages).await?;
+//! let collected_deps = collect_python_dependencies(Some("22.0.307"), &packages).await?;
 //!
 //! // 3. Resolve to exact versions with conflict detection
 //! let resolved_sets = resolve_dependencies(&collected_deps).await?;

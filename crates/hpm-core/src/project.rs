@@ -535,12 +535,24 @@ impl ProjectManager {
             .await
             .map_err(|e| ProjectError::PythonResolution(format!("{:#}", e)))?;
 
-        // Collect python dependencies from all package manifests
+        // Collect python dependencies from all package manifests. The project
+        // manifest's own Houdini version is the source of truth for which
+        // CPython we target — Houdini ships a fixed embedded interpreter
+        // (20.5→3.10, 21→3.11, 22→3.13), and per-package `min_version`
+        // declarations only describe compatibility floors, not the runtime
+        // ABI. Without this override the venv could end up pinned to a
+        // package's older Python and crash on import inside the launched
+        // Houdini.
         let manifests: Vec<PackageManifest> = installed_packages
             .iter()
             .map(|p| p.manifest.clone())
             .collect();
-        let collected = collect_python_dependencies(&manifests)
+        let project_houdini_version = self
+            .load_project_manifest()
+            .ok()
+            .flatten()
+            .and_then(|m| m.houdini.and_then(|h| h.min_version));
+        let collected = collect_python_dependencies(project_houdini_version.as_deref(), &manifests)
             .await
             .map_err(|e| ProjectError::PythonResolution(format!("{:#}", e)))?;
 

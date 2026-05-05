@@ -473,6 +473,10 @@ fn load_package_manifest(package_path: &Path) -> Result<Option<PackageManifest>>
 /// package dependencies, then resolves and installs them into a shared,
 /// content-addressable virtual environment. Returns the venv's site-packages
 /// path so the caller can wire it into Houdini package manifests.
+///
+/// Caller passes the root manifest first; its `[houdini].min_version` is
+/// authoritative for Python version selection (Houdini's embedded CPython is
+/// the runtime ABI, not whatever a transitive package says it tolerates).
 async fn install_python_dependencies(manifests: &[PackageManifest]) -> Result<Option<PathBuf>> {
     info!("Installing Python dependencies...");
 
@@ -480,7 +484,12 @@ async fn install_python_dependencies(manifests: &[PackageManifest]) -> Result<Op
         .await
         .context("Failed to initialize Python dependency management")?;
 
-    let python_deps = hpm_python::collect_python_dependencies(manifests)
+    let project_houdini_version = manifests
+        .first()
+        .and_then(|m| m.houdini.as_ref())
+        .and_then(|h| h.min_version.as_deref());
+
+    let python_deps = hpm_python::collect_python_dependencies(project_houdini_version, manifests)
         .await
         .context("Failed to collect Python dependencies")?;
 
