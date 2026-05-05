@@ -266,12 +266,15 @@ HPM manifest values accept the usual semver constraint operators:
  │       Path         → install_from_path_dev                           │
  │                    → ~/.hpm/packages/_dev/<slug>@<v>/                │
  │  5. Merge [python_dependencies] from root + every dep manifest       │
- │  6. Resolve with bundled uv, hash the resolved set, pick or          │
+ │     Python ABI = root manifest's [houdini].min_version (NOT per-dep) │
+ │  6. Ensure managed CPython installed under ~/.hpm/uv-python/         │
+ │     (uv python install <ver>) — auto-downloads on clean machines     │
+ │  7. Resolve with bundled uv, hash the resolved set, pick or          │
  │     rebuild ~/.hpm/venvs/<hash>/                                     │
- │  7. uv pip install --python <venv>/bin/python                        │
- │  8. Write <project>/.hpm/packages/{name}.json per dep                │
- │  9. Sweep stale <project>/.hpm/packages/ entries                     │
- │ 10. Write hpm.lock                                                   │
+ │  8. uv pip install --python <venv>/bin/python                        │
+ │  9. Write <project>/.hpm/packages/{name}.json per dep                │
+ │ 10. Sweep stale <project>/.hpm/packages/ entries                     │
+ │ 11. Write hpm.lock                                                   │
  └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -361,6 +364,7 @@ layout is content-addressable where it helps:
 ├── tools/                          # bundled uv binary
 ├── uv-cache/                       # isolated uv cache
 ├── uv-config/
+├── uv-python/                      # managed CPython installs (UV_PYTHON_INSTALL_DIR)
 └── logs/
 ```
 
@@ -405,11 +409,12 @@ resolution at the same coordinate from a different project.
 
 ## Python integration
 
-The Python layer runs on three ideas, in descending order of importance:
+The Python layer runs on four ideas, in descending order of importance:
 
 1. **Content-addressable venvs.** Hash the resolved dependency set, use it as the venv directory name. Same hash → same venv → shared across packages.
-2. **Bundled uv.** A copy of `uv` ships with HPM and lives at `~/.hpm/tools/uv`. Its cache (`~/.hpm/uv-cache/`) and config (`~/.hpm/uv-config/`) are isolated from any system `uv` so HPM never perturbs your other Python work.
-3. **Houdini manifest generation.** For each HPM package that declares Python dependencies, HPM writes `<project>/.hpm/packages/{name}.json` with `PYTHONPATH` prepended at the shared venv's `site-packages`.
+2. **Bundled uv.** A copy of `uv` ships with HPM and lives at `~/.hpm/tools/uv`. Its cache (`~/.hpm/uv-cache/`), config (`~/.hpm/uv-config/`), and managed CPython installs (`~/.hpm/uv-python/`, pinned via `UV_PYTHON_INSTALL_DIR`) are isolated from any system `uv` so HPM never perturbs your other Python work.
+3. **Self-bootstrapping Python.** `uv pip compile` and `uv venv` need an interpreter. Before invoking either, HPM runs `uv python install <ver>` to ensure a managed CPython matching the project's Houdini ABI exists. This is what makes a clean Windows install (no system Python anywhere) Just Work — without it `pip compile` errors with `No interpreter found in virtual environments, managed installations, search path, or registry`. The ensure step is process-cached, so it costs one fast filesystem probe per resolution.
+4. **Houdini manifest generation.** For each HPM package that declares Python dependencies, HPM writes `<project>/.hpm/packages/{name}.json` with `PYTHONPATH` prepended at the shared venv's `site-packages`.
 
 ### Hash function
 
@@ -438,6 +443,13 @@ pub fn content_hash(resolved: &ResolvedDependencies) -> String {
 | 20.5+ | 3.10 |
 | 21.x | 3.11 |
 | 22.x | 3.13 |
+
+The mapping is sourced from the **root** manifest's `[houdini].min_version`
+— the project's Houdini build is what determines the embedded CPython ABI
+that wheels in the venv must match. A dependency package's own
+`[houdini].min_version` is a compatibility floor (the oldest Houdini it
+runs on) and is **not** consulted for ABI selection: a `min_version =
+"21.0"` package consumed by a Houdini-22 project still gets a 3.13 venv.
 
 Unsupported versions return an error. No silent fallback — an ABI-mismatched
 venv would break C-extension imports at Houdini launch instead of surfacing

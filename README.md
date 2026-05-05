@@ -58,7 +58,7 @@ authors = ["Name <name@example.com>"]
 license = "MIT"
 
 [houdini]
-min_version = "20.5"              # maps to Python 3.10
+min_version = "20.5"              # compatibility floor for this package
 max_version = "21.0"              # optional upper bound
 
 [dependencies]

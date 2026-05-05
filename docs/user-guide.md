@@ -238,7 +238,7 @@ Install does the following:
 1. Loads `hpm.toml`.
 2. If `hpm.lock` exists, verifies cached packages against stored checksums and warns if the lock is older than 90 days.
 3. Resolves HPM dependencies through configured registries and downloads anything missing to `~/.hpm/packages/`.
-4. Collects Python dependencies from the root manifest and every installed dependency's manifest, resolves them with the bundled `uv`, and installs them into a content-addressable venv in `~/.hpm/venvs/<hash>/`.
+4. Collects Python dependencies from the root manifest and every installed dependency's manifest, downloads a managed CPython matching the root manifest's `[houdini].min_version` to `~/.hpm/uv-python/` (no-op if already present), resolves them with the bundled `uv`, and installs them into a content-addressable venv in `~/.hpm/venvs/<hash>/`.
 5. Writes one Houdini manifest per installed dependency to `<project>/.hpm/packages/{name}.json`.
 6. Writes or updates `hpm.lock`.
 
@@ -454,7 +454,9 @@ max_version = "21.0"   # optional
 ```
 
 Both fields accept `"major"` (e.g. `"21"`) or `"major.minor"` (e.g. `"21.0"`).
-`min_version` drives the bundled Python version — see [Python guide](python-guide.md).
+The **root** manifest's `min_version` drives the bundled Python version — a
+dependency package's `min_version` is a compatibility floor only and does
+not influence the venv ABI. See [Python guide](python-guide.md).
 
 ### `[dependencies]`
 
@@ -760,6 +762,7 @@ HPM stores everything under `~/.hpm/` on every supported platform. Use
 ├── tools/                           # bundled uv binary
 ├── uv-cache/                        # isolated uv cache (never touches your system uv)
 ├── uv-config/                       # isolated uv config
+├── uv-python/                       # managed CPython installs (downloaded by uv on first launch)
 └── logs/                            # operational logs
 ```
 

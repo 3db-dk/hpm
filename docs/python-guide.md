@@ -80,7 +80,8 @@ have pinned, defeating the lock file's reproducibility guarantee.
 
 ## Houdini to Python version mapping
 
-HPM reads `[houdini].min_version` from the manifest and maps it to the Python
+HPM reads `[houdini].min_version` from the **project's** root manifest (the
+`hpm.toml` of the project being installed/launched) and maps it to the Python
 version Houdini ships that interpreter with:
 
 | Houdini version    | Python version |
@@ -90,6 +91,13 @@ version Houdini ships that interpreter with:
 | 22.x               | 3.13           |
 
 Both `"21"` and `"21.0"` are accepted — bare majors are treated as `major.0`.
+
+The project's Houdini version is **authoritative** for venv ABI selection.
+A dependency package's own `[houdini].min_version` describes its
+compatibility floor (the oldest Houdini it supports) — it does not influence
+which CPython the venv targets. If it did, a project on Houdini 22 (Python
+3.13) consuming a `min_version = "21.0"` package would silently get a 3.11
+venv whose C-extension wheels would crash on import inside Houdini 22.
 
 ### Unsupported: Houdini 19.x and 20.0 – 20.4
 
@@ -244,8 +252,9 @@ Symptom: `hpm install` errors out before any packages install.
 
 Likely causes and fixes:
 
-- **Python interpreter unavailable for the target version.** `uv` downloads interpreters on demand; a network failure at that step surfaces here. Retry, or clear the cache with `rm -rf ~/.hpm/uv-cache/` and retry.
-- **Disk space.** Each venv is tens to hundreds of MB; check `df`.
+- **`No interpreter found in virtual environments, managed installations, search path, or registry`.** HPM auto-installs a managed CPython matching the project's Houdini ABI on first launch. If the auto-install was interrupted (e.g. offline at the time), retry with a connection — `uv python install <ver>` will resume into `~/.hpm/uv-python/`. If you've upgraded from HPM ≤0.10.1 and previously hit this error, just retrying on the new version fixes it.
+- **Python interpreter unavailable for the target version.** `uv` downloads interpreters on demand; a network failure at that step surfaces here. Retry, or clear the cache with `rm -rf ~/.hpm/uv-cache/ ~/.hpm/uv-python/` and retry.
+- **Disk space.** Each venv is tens to hundreds of MB, plus ~50 MB for each managed CPython under `~/.hpm/uv-python/`; check `df`.
 - **Permissions.** Ensure `~/.hpm/` is writable by your user.
 
 ```sh
@@ -283,6 +292,7 @@ du -sh ~/.hpm/venvs/* | sort -h  # find the largest
 │   └── uv                            # bundled uv binary
 ├── uv-cache/                         # isolated uv cache
 ├── uv-config/                        # isolated uv config
+├── uv-python/                        # managed CPython installs (UV_PYTHON_INSTALL_DIR)
 └── cache/
 ```
 
@@ -313,7 +323,7 @@ on the same 12-character prefix.
 ### Install flow
 
 1. Collect `[python_dependencies]` from the root manifest and every installed HPM dependency's manifest.
-2. Read `[houdini].min_version` from the root manifest, map it to a Python version.
+2. Read `[houdini].min_version` from the **root** manifest, map it to a Python version. Per-package `min_version` is ignored for ABI selection.
 3. Resolve the merged dependency set with `uv` (lockfile-aware).
 4. Hash the resolved set + Python version → venv directory name.
 5. If that directory exists and its `site-packages/` has a `dist-info/` for each resolved package, reuse it. Otherwise, delete and rebuild.
