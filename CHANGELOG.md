@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-05-05
+
+### Fixed
+- **Project Houdini version now drives Python venv ABI.** Previously HPM
+  derived the target Python from each dependency package's
+  `[houdini].min_version`, so a project pinned to Houdini 22 (Python 3.13)
+  consuming a `min_version = "21.0"` package would silently get a 3.11
+  venv — wheels resolved against 3.11 then crashed on import inside
+  Houdini 22's interpreter. The project's own root-manifest
+  `[houdini].min_version` is now authoritative; per-package values
+  describe compatibility floors only. Two or more dependency packages
+  declaring conflicting `min_version` values (e.g. 21 + 22) used to fail
+  resolution outright; with a project context they now resolve cleanly
+  against the project's Houdini.
+- **Python resolution no longer hard-fails on machines without any
+  Python installed.** `uv pip compile` requires an interpreter, and on a
+  clean Windows install (no system Python, no managed CPython yet) it
+  errored with `No interpreter found in virtual environments, managed
+  installations, search path, or registry`. HPM now invokes
+  `uv python install <version>` ahead of resolution and venv creation,
+  pins `UV_PYTHON_DOWNLOADS=automatic`, and routes managed CPython
+  installs into `~/.hpm/uv-python/` to keep them inside HPM's tree.
+
+### Changed
+- **`hpm_python::collect_python_dependencies` signature now takes
+  `project_houdini_version: Option<&str>` as its first argument.** Pass
+  the project's `[houdini].min_version` to override per-package mapping
+  (recommended); pass `None` to keep the legacy per-package behaviour.
+
 ## [0.10.1] - 2026-05-05
 
 ### Added
