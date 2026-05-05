@@ -5,7 +5,9 @@
 //! back to a system UV.
 
 use anyhow::{Context, Result};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tokio::fs;
 use tracing::{debug, info};
 
@@ -67,13 +69,22 @@ fn uv_binary_name() -> &'static str {
 
 /// Env vars every UV invocation must run under so that UV never touches
 /// system caches or configuration.
-fn uv_env() -> [(&'static str, PathBuf); 4] {
+fn uv_env() -> [(&'static str, PathBuf); 6] {
     let hpm = hpm_dir();
     [
         ("UV_CACHE_DIR", hpm.join("uv-cache")),
         ("UV_CONFIG_FILE", hpm.join("uv-config/uv.toml")),
         ("UV_NO_SYNC", PathBuf::from("1")),
         ("UV_SYSTEM_PYTHON", PathBuf::from("0")),
+        // Keep managed CPython downloads inside HPM's tree instead of UV's
+        // default per-user data dir, so cleanup/uninstall stays contained.
+        ("UV_PYTHON_INSTALL_DIR", hpm.join("uv-python")),
+        // Allow UV to download a managed CPython on demand. This is the
+        // upstream default in 0.5.x but pinning it here means a future UV
+        // upgrade or a stray system config can't disable it under us — and
+        // without it, `pip compile` hard-fails on machines with no Python
+        // anywhere (clean Windows installs).
+        ("UV_PYTHON_DOWNLOADS", PathBuf::from("automatic")),
     ]
 }
 
@@ -244,6 +255,46 @@ cache-dir = "{cache_dir_str}"
     Ok(())
 }
 
+/// In-process cache of Python versions we've already asked UV to install.
+/// `uv python install` is idempotent but does its own filesystem probing,
+/// which costs ~100ms per call — pointless when we hit it twice for every
+/// resolution + venv create.
+fn installed_python_versions() -> &'static Mutex<HashSet<String>> {
+    static CACHE: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Ensure a managed CPython matching `version` is installed under
+/// `UV_PYTHON_INSTALL_DIR`.
+///
+/// `uv pip compile` and `uv venv --python <ver>` both require an
+/// interpreter, and on a fresh Windows install with no system Python they
+/// fail with `No interpreter found in virtual environments, managed
+/// installations, search path, or registry`. Running `uv python install`
+/// up front makes that environment work the same as a developer Mac
+/// without forcing every command to go via `--python-preference managed`
+/// (which would also force-download Python on Linux/macOS dev boxes that
+/// already have a working interpreter).
+pub async fn ensure_managed_python(version: &str) -> Result<()> {
+    {
+        let cache = installed_python_versions().lock().unwrap();
+        if cache.contains(version) {
+            return Ok(());
+        }
+    }
+
+    debug!("Ensuring managed Python {} is available", version);
+    run_uv_command(&["python", "install", version])
+        .await
+        .with_context(|| format!("Failed to install managed Python {}", version))?;
+
+    installed_python_versions()
+        .lock()
+        .unwrap()
+        .insert(version.to_string());
+    Ok(())
+}
+
 /// Run UV with HPM's isolated cache and config applied per-invocation.
 pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output> {
     let uv_path = ensure_uv_binary().await?;
@@ -301,6 +352,8 @@ mod tests {
         assert!(keys.contains(&"UV_CONFIG_FILE"));
         assert!(keys.contains(&"UV_NO_SYNC"));
         assert!(keys.contains(&"UV_SYSTEM_PYTHON"));
+        assert!(keys.contains(&"UV_PYTHON_INSTALL_DIR"));
+        assert!(keys.contains(&"UV_PYTHON_DOWNLOADS"));
     }
 
     #[test]

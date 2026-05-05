@@ -1,6 +1,6 @@
 //! Python dependency resolution using UV
 
-use crate::bundled::run_uv_command;
+use crate::bundled::{ensure_managed_python, run_uv_command};
 use crate::types::{PythonDependencies, PythonVersion, ResolvedDependencySet};
 use anyhow::{Context, Result};
 use std::io::Write;
@@ -73,13 +73,20 @@ pub async fn resolve_dependencies(
     let req_file =
         create_requirements_file(dependencies).context("Failed to create requirements file")?;
 
+    // `pip compile` needs an interpreter, and on a clean machine UV won't
+    // implicitly download one for this command — install the managed
+    // CPython up front so resolution doesn't fail with "No interpreter
+    // found" when nothing's on PATH.
+    let py_str = python_version.to_string();
+    ensure_managed_python(&py_str).await?;
+
     // Run UV to resolve dependencies
     let output = run_uv_command(&[
         "pip",
         "compile",
         req_file.path().to_str().unwrap(),
         "--python-version",
-        &python_version.to_string(),
+        &py_str,
     ])
     .await
     .context("Failed to run UV dependency resolution")?;

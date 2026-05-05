@@ -1,6 +1,6 @@
 //! Virtual environment management
 
-use crate::bundled::run_uv_command;
+use crate::bundled::{ensure_managed_python, run_uv_command};
 use crate::get_venvs_dir;
 use crate::types::{OrphanedVenv, PythonVersion, ResolvedDependencySet, VenvMetadata};
 use anyhow::{Context, Result};
@@ -188,6 +188,11 @@ impl VenvManager {
 
         // Create virtual environment using UV
         let python_version = resolved_deps.python_version.to_string();
+        // `uv venv --python <ver>` historically auto-downloads managed
+        // CPython, but make it explicit so a clean Windows box (no system
+        // Python, no managed install) doesn't trip the same "No interpreter
+        // found" failure mode that `pip compile` does.
+        ensure_managed_python(&python_version).await?;
         run_uv_command(&[
             "venv",
             venv_path.to_str().unwrap(),
