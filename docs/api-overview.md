@@ -52,7 +52,7 @@ Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
 | `RegistrySet` | Composite that fans requests out to every configured registry. |
 | `ArchiveFetcher` | Downloads and extracts registry-hosted archives. |
 | `fetch_manifest` | Free function: returns the parsed `PackageManifest` for `(name, version)` without project context. CAS hit reads from disk; CAS miss resolves+fetches+installs. Pass `""` or `"latest"` to pick the highest semver. |
-| `packer` | Produces signed/unsigned `.zip` archives for `hpm pack`. |
+| `packer` | Produces signed/unsigned `.zip` archives for `hpm pack`. Public helpers: `pack`, `create_archive`, `compute_archive_checksum`/`compute_bytes_checksum` (SHA-256), `sign_archive`/`sign_bytes` (Ed25519, returns `(base64_signature, hex_key_id)`), `load_signing_key` / `load_signing_key_from_pem`. The byte-based variants are for tooling that mutates archive bytes after pack (e.g. third-party hosting that requires reshaping) and needs to recompute the hash + re-sign without round-tripping through disk. `SigningKey` is re-exported so callers don't need a direct `ed25519-dalek` dep. |
 
 ### hpm-package
 
