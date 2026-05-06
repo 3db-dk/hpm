@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-06
+
 ### Added
 - **`hpm run <script> [args...]` executes `[scripts]` entries.** Sets
   `HPM_PACKAGE_ROOT` to the manifest directory, honours
