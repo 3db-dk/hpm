@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`hpm run <script> [args...]` executes `[scripts]` entries.** Sets
+  `HPM_PACKAGE_ROOT` to the manifest directory, honours
+  `[scripts.platform.<os>]` overrides, and forwards trailing arguments
+  to the script. Replaces the previous placeholder that printed
+  "not yet implemented".
+- **Per-script Python venvs.** `[scripts]` entries can opt into a
+  uv-managed virtual environment by switching to the table form with
+  `cmd`, optional `python`, and optional `requirements`:
+
+  ```toml
+  [scripts.tt_setup]
+  cmd          = "python scripts/tt_setup.py"
+  python       = "3.11"
+  requirements = ["PySide6>=6.6"]
+  ```
+
+  `hpm run` resolves `requirements` through the same uv pipeline that
+  backs `[python_dependencies]`, materializes a content-addressable
+  venv at `~/.hpm/venvs/<hash>/`, and prepends its `bin/` (or
+  `Scripts/` on Windows) to `PATH` so `python` in the command resolves
+  to the pinned interpreter. Two scripts whose `python` +
+  `requirements` resolve to the same closure share one venv. Plain
+  string entries keep their prior behaviour. Resolves [#2].
+
+### Changed
+- **`PackageScripts.commands` and `PlatformScripts.{linux,macos,windows}`
+  are now `IndexMap<String, ScriptEntry>` (was `IndexMap<String, String>`).**
+  `ScriptEntry` is an untagged enum: a bare string keeps the shorthand
+  form, the table form carries the new `python` / `requirements`
+  hints. `PackageManifest::resolved_scripts` and `script_for` return
+  `ScriptEntry` values; use `.cmd()` to get the command string. Plain
+  manifests are wire-compatible.
+
 ## [0.10.2] - 2026-05-05
 
 ### Fixed

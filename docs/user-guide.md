@@ -650,8 +650,9 @@ Project registries are additive to global registries.
 
 ### `[scripts]`
 
-Named scripts for the package. Reserved for a future `hpm run` command —
-currently parsed and validated by `hpm check` but not executed.
+Named scripts for the package. Run them with `hpm run <name> [args...]`,
+which sets `HPM_PACKAGE_ROOT` to the manifest directory and forwards
+trailing arguments to the script.
 
 ```toml
 [scripts]
@@ -678,11 +679,42 @@ unregister = "\"$HPM_PACKAGE_ROOT/plugin/bin/tool.exe\" unregister"
 register = "\"$HPM_PACKAGE_ROOT/plugin/bin/tool\" register"
 ```
 
+#### Per-script Python environments
+
+A script that needs a pinned Python interpreter or extra packages can opt
+into a uv-managed virtual environment by switching from the shorthand string
+to the table form:
+
+```toml
+[scripts.tt_setup]
+cmd          = "python scripts/tt_setup.py"
+python       = "3.11"
+requirements = ["PySide6>=6.6"]
+```
+
+`hpm run tt_setup` then resolves `requirements` through the same uv pipeline
+that backs `[python_dependencies]`, materializes a venv at
+`~/.hpm/venvs/<hash>/`, prepends its `bin/` (or `Scripts/` on Windows) to
+`PATH`, and sets `VIRTUAL_ENV` so `python` in the command resolves to the
+pinned interpreter. Two scripts whose `python` + `requirements` resolve to
+the same closure share one venv on disk. Plain-string entries keep their
+prior behaviour and execute against whatever `python` is on `PATH`.
+
+The table form also accepts plain inline-table syntax:
+
+```toml
+[scripts]
+tt_setup = { cmd = "python scripts/tt_setup.py", python = "3.11", requirements = ["PySide6>=6.6"] }
+```
+
+Both `python` and `requirements` are optional in the table form; omitting
+both yields a regular script with no venv overhead.
+
 Consumers resolve scripts through `PackageManifest::resolved_scripts(platform)`
 (all entries for the given host, merged) or `script_for(name, platform)`
-(single lookup). A script that is only defined under `[scripts.platform.*]`
-is simply absent on OSes without an entry — UIs can use this to hide
-menu items rather than fail at runtime.
+(single lookup), each returning [`ScriptEntry`] values. A script that is
+only defined under `[scripts.platform.*]` is simply absent on OSes without
+an entry — UIs can use this to hide menu items rather than fail at runtime.
 
 ## Global configuration
 
