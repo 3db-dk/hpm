@@ -323,14 +323,14 @@ async fn validate_best_practices(
         }
         result.add_info(format!("[OK] Package defines {} script(s)", total));
 
-        let mut check_entry = |label: String, cmd: &str| {
-            if cmd.trim().is_empty() {
+        let mut check_entry = |label: String, entry: &hpm_package::ScriptEntry| {
+            if entry.cmd().trim().is_empty() {
                 result.add_warning(format!("Script '{}' has empty command", label));
             }
         };
 
-        for (name, cmd) in &scripts.commands {
-            check_entry(name.clone(), cmd);
+        for (name, entry) in &scripts.commands {
+            check_entry(name.clone(), entry);
         }
         if let Some(platform) = &scripts.platform {
             for (os, entries) in [
@@ -339,8 +339,8 @@ async fn validate_best_practices(
                 ("windows", &platform.windows),
             ] {
                 if let Some(entries) = entries {
-                    for (name, cmd) in entries {
-                        check_entry(format!("{}:{}", os, name), cmd);
+                    for (name, entry) in entries {
+                        check_entry(format!("{}:{}", os, name), entry);
                     }
                 }
             }

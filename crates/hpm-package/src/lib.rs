@@ -120,7 +120,7 @@ pub use houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, Hpackag
 pub use manifest::{
     EnvMethod, HoudiniConfig, ManifestEnvEntry, ManifestLoadError, NativeConfig,
     NativePlatformFiles, PackageInfo, PackageManifest, PackageScripts, PlatformScripts,
-    RegistryConfig, RegistryType,
+    RegistryConfig, RegistryType, ScriptEntry, ScriptEnv,
 };
 pub use package_path::{PackagePath, PackagePathError};
 pub use platform::Platform;

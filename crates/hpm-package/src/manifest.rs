@@ -81,24 +81,100 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// A single `[scripts]` entry.
+///
+/// The shorthand form is a bare command string. The table form opts the
+/// script into a uv-managed Python environment scoped to that script:
+///
+/// ```toml
+/// [scripts.tt_setup]
+/// cmd = "python scripts/tt_setup.py"
+/// python = "3.11"
+/// requirements = ["PySide6>=6.6"]
+/// ```
+///
+/// `python` and `requirements` are both optional; when either is set, hpm
+/// resolves them through the same uv pipeline that backs `[python_dependencies]`
+/// and runs `cmd` with the resolved interpreter on PATH. When both are absent,
+/// the table form behaves identically to the shorthand.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ScriptEntry {
+    Plain(String),
+    WithEnv(ScriptEnv),
+}
+
+/// The table form of [`ScriptEntry`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptEnv {
+    pub cmd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requirements: Vec<String>,
+}
+
+impl ScriptEntry {
+    /// The raw shell command for this script.
+    pub fn cmd(&self) -> &str {
+        match self {
+            ScriptEntry::Plain(s) => s,
+            ScriptEntry::WithEnv(env) => &env.cmd,
+        }
+    }
+
+    /// Pinned Python version (e.g. `"3.11"`), if the entry requested one.
+    pub fn python(&self) -> Option<&str> {
+        match self {
+            ScriptEntry::Plain(_) => None,
+            ScriptEntry::WithEnv(env) => env.python.as_deref(),
+        }
+    }
+
+    /// Inline requirement specifiers (e.g. `"PySide6>=6.6"`), if any.
+    pub fn requirements(&self) -> &[String] {
+        match self {
+            ScriptEntry::Plain(_) => &[],
+            ScriptEntry::WithEnv(env) => &env.requirements,
+        }
+    }
+
+    /// True when this script needs a uv-managed environment.
+    pub fn needs_venv(&self) -> bool {
+        self.python().is_some() || !self.requirements().is_empty()
+    }
+}
+
+impl From<String> for ScriptEntry {
+    fn from(s: String) -> Self {
+        ScriptEntry::Plain(s)
+    }
+}
+
+impl From<&str> for ScriptEntry {
+    fn from(s: &str) -> Self {
+        ScriptEntry::Plain(s.to_string())
+    }
+}
+
 /// Platform-scoped script overrides.
 ///
 /// Deserialized from `[scripts.platform.<os>]` sub-tables. Each entry is a map
-/// of script name → shell command that overrides the top-level `[scripts]`
+/// of script name → [`ScriptEntry`] that overrides the top-level `[scripts]`
 /// entry for the matching OS.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlatformScripts {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub linux: Option<IndexMap<String, String>>,
+    pub linux: Option<IndexMap<String, ScriptEntry>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub macos: Option<IndexMap<String, String>>,
+    pub macos: Option<IndexMap<String, ScriptEntry>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub windows: Option<IndexMap<String, String>>,
+    pub windows: Option<IndexMap<String, ScriptEntry>>,
 }
 
 impl PlatformScripts {
     /// Entries for the given OS key (`"linux"`, `"macos"`, `"windows"`).
-    pub fn for_os(&self, os: &str) -> Option<&IndexMap<String, String>> {
+    pub fn for_os(&self, os: &str) -> Option<&IndexMap<String, ScriptEntry>> {
         match os {
             "linux" => self.linux.as_ref(),
             "macos" => self.macos.as_ref(),
@@ -127,7 +203,7 @@ pub struct PackageScripts {
     #[serde(default, skip_serializing_if = "platform_scripts_is_none_or_empty")]
     pub platform: Option<PlatformScripts>,
     #[serde(flatten)]
-    pub commands: IndexMap<String, String>,
+    pub commands: IndexMap<String, ScriptEntry>,
 }
 
 impl PackageScripts {
@@ -370,7 +446,7 @@ impl PackageManifest {
     ///
     /// Passing `None` (e.g. when the host platform cannot be identified)
     /// yields only the top-level commands.
-    pub fn resolved_scripts(&self, platform: Option<Platform>) -> IndexMap<String, String> {
+    pub fn resolved_scripts(&self, platform: Option<Platform>) -> IndexMap<String, ScriptEntry> {
         let Some(scripts) = &self.scripts else {
             return IndexMap::new();
         };
@@ -380,26 +456,26 @@ impl PackageManifest {
         if let (Some(platform), Some(platform_scripts)) = (platform, &scripts.platform)
             && let Some(entries) = platform_scripts.for_os(platform.os_key())
         {
-            for (name, cmd) in entries {
-                out.insert(name.clone(), cmd.clone());
+            for (name, entry) in entries {
+                out.insert(name.clone(), entry.clone());
             }
         }
 
         out
     }
 
-    /// Resolve a single script command for the given platform.
+    /// Resolve a single script entry for the given platform.
     ///
     /// Same precedence rule as [`resolved_scripts`](Self::resolved_scripts):
     /// platform override wins over the top-level entry.
-    pub fn script_for(&self, name: &str, platform: Option<Platform>) -> Option<String> {
+    pub fn script_for(&self, name: &str, platform: Option<Platform>) -> Option<ScriptEntry> {
         let scripts = self.scripts.as_ref()?;
 
         if let (Some(platform), Some(platform_scripts)) = (platform, &scripts.platform)
             && let Some(entries) = platform_scripts.for_os(platform.os_key())
-            && let Some(cmd) = entries.get(name)
+            && let Some(entry) = entries.get(name)
         {
-            return Some(cmd.clone());
+            return Some(entry.clone());
         }
 
         scripts.commands.get(name).cloned()
@@ -1156,9 +1232,12 @@ test = "cargo test"
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         let scripts = manifest.scripts.as_ref().unwrap();
         assert_eq!(scripts.commands.len(), 2);
-        assert_eq!(scripts.commands["build"], "cargo build");
-        assert_eq!(scripts.commands["test"], "cargo test");
+        assert_eq!(scripts.commands["build"].cmd(), "cargo build");
+        assert_eq!(scripts.commands["test"].cmd(), "cargo test");
         assert!(scripts.platform.is_none());
+
+        // Plain entries don't carry venv hints.
+        assert!(!scripts.commands["build"].needs_venv());
 
         // Preserves declaration order in the flattened commands map.
         let names: Vec<&String> = scripts.commands.keys().collect();
@@ -1184,15 +1263,15 @@ register = "\"$HPM_PACKAGE_ROOT/plugin/bin/claudini2\" register"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         let scripts = manifest.scripts.as_ref().unwrap();
-        assert_eq!(scripts.commands["build"], "cargo build");
+        assert_eq!(scripts.commands["build"].cmd(), "cargo build");
 
         let platform = scripts.platform.as_ref().unwrap();
         assert!(platform.linux.is_none());
         let win = platform.windows.as_ref().unwrap();
-        assert!(win["register"].contains("claudini2.exe"));
+        assert!(win["register"].cmd().contains("claudini2.exe"));
         let mac = platform.macos.as_ref().unwrap();
         assert_eq!(
-            mac["register"],
+            mac["register"].cmd(),
             "\"$HPM_PACKAGE_ROOT/plugin/bin/claudini2\" register"
         );
     }
@@ -1216,19 +1295,19 @@ unregister = "windows-only"
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
 
         let resolved = manifest.resolved_scripts(Some(Platform::WindowsX86_64));
-        assert_eq!(resolved["build"], "cargo build");
-        assert_eq!(resolved["register"], "windows-specific");
-        assert_eq!(resolved["unregister"], "windows-only");
+        assert_eq!(resolved["build"].cmd(), "cargo build");
+        assert_eq!(resolved["register"].cmd(), "windows-specific");
+        assert_eq!(resolved["unregister"].cmd(), "windows-only");
 
         // macOS has no platform entry — falls back to the flat map.
         let resolved_mac = manifest.resolved_scripts(Some(Platform::MacosUniversal));
-        assert_eq!(resolved_mac["register"], "fallback");
+        assert_eq!(resolved_mac["register"].cmd(), "fallback");
         assert!(!resolved_mac.contains_key("unregister"));
 
         // Unknown platform returns flat-only.
         let resolved_none = manifest.resolved_scripts(None);
         assert_eq!(resolved_none.len(), 2);
-        assert_eq!(resolved_none["register"], "fallback");
+        assert_eq!(resolved_none["register"].cmd(), "fallback");
     }
 
     #[test]
@@ -1248,17 +1327,121 @@ register = "linux-specific"
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
 
         assert_eq!(
-            manifest.script_for("register", Some(Platform::LinuxX86_64)),
+            manifest
+                .script_for("register", Some(Platform::LinuxX86_64))
+                .map(|e| e.cmd().to_string()),
             Some("linux-specific".to_string())
         );
         assert_eq!(
-            manifest.script_for("register", Some(Platform::MacosUniversal)),
+            manifest
+                .script_for("register", Some(Platform::MacosUniversal))
+                .map(|e| e.cmd().to_string()),
             Some("fallback".to_string())
         );
-        assert_eq!(
-            manifest.script_for("missing", Some(Platform::LinuxX86_64)),
-            None
+        assert!(
+            manifest
+                .script_for("missing", Some(Platform::LinuxX86_64))
+                .is_none()
         );
+    }
+
+    #[test]
+    fn scripts_table_form_with_python_and_requirements() {
+        let toml_str = r#"
+[package]
+path = "studio/tt"
+name = "TT"
+version = "1.0.0"
+
+[scripts]
+build = "cargo build"
+
+[scripts.tt_setup]
+cmd = "python scripts/tt_setup.py"
+python = "3.11"
+requirements = ["PySide6>=6.6"]
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let scripts = manifest.scripts.as_ref().unwrap();
+
+        // Plain shorthand still parses.
+        assert_eq!(scripts.commands["build"].cmd(), "cargo build");
+        assert!(!scripts.commands["build"].needs_venv());
+
+        // Table form carries the venv hints.
+        let setup = &scripts.commands["tt_setup"];
+        assert_eq!(setup.cmd(), "python scripts/tt_setup.py");
+        assert_eq!(setup.python(), Some("3.11"));
+        assert_eq!(setup.requirements(), &["PySide6>=6.6".to_string()]);
+        assert!(setup.needs_venv());
+    }
+
+    #[test]
+    fn scripts_table_form_inline_object() {
+        // Inline table should parse the same as a [scripts.<name>] sub-table.
+        let toml_str = r#"
+[package]
+path = "studio/tt"
+name = "TT"
+version = "1.0.0"
+
+[scripts]
+tt_setup = { cmd = "python scripts/tt_setup.py", python = "3.11", requirements = ["PySide6>=6.6"] }
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let setup = &manifest.scripts.as_ref().unwrap().commands["tt_setup"];
+        assert_eq!(setup.cmd(), "python scripts/tt_setup.py");
+        assert_eq!(setup.python(), Some("3.11"));
+        assert_eq!(setup.requirements(), &["PySide6>=6.6".to_string()]);
+    }
+
+    #[test]
+    fn scripts_table_form_without_venv_hints_is_legal() {
+        // A table form with just `cmd` and no python/requirements behaves
+        // like the shorthand — no venv work needed.
+        let toml_str = r#"
+[package]
+path = "studio/tt"
+name = "TT"
+version = "1.0.0"
+
+[scripts.lint]
+cmd = "ruff ."
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let lint = &manifest.scripts.as_ref().unwrap().commands["lint"];
+        assert_eq!(lint.cmd(), "ruff .");
+        assert!(!lint.needs_venv());
+    }
+
+    #[test]
+    fn scripts_table_form_in_platform_overrides() {
+        let toml_str = r#"
+[package]
+path = "studio/tt"
+name = "TT"
+version = "1.0.0"
+
+[scripts.platform.linux]
+tt_setup = { cmd = "python scripts/tt_setup.py", python = "3.11", requirements = ["PySide6>=6.6"] }
+
+[scripts.platform.windows]
+tt_setup = "py -3 scripts\\tt_setup.py"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+
+        let linux = manifest
+            .script_for("tt_setup", Some(Platform::LinuxX86_64))
+            .unwrap();
+        assert!(linux.needs_venv());
+        assert_eq!(linux.python(), Some("3.11"));
+
+        // Windows entry stays plain — different OSes can mix forms.
+        let win = manifest
+            .script_for("tt_setup", Some(Platform::WindowsX86_64))
+            .unwrap();
+        assert!(!win.needs_venv());
+        assert_eq!(win.cmd(), "py -3 scripts\\tt_setup.py");
     }
 
     #[test]
@@ -1276,7 +1459,7 @@ version = "0.1.0"
                 .resolved_scripts(Some(Platform::LinuxX86_64))
                 .is_empty()
         );
-        assert_eq!(manifest.script_for("anything", None), None);
+        assert!(manifest.script_for("anything", None).is_none());
     }
 
     #[test]
@@ -1296,7 +1479,7 @@ register = "linux-register"
         assert!(scripts.platform.as_ref().unwrap().linux.is_some());
 
         let resolved = manifest.resolved_scripts(Some(Platform::LinuxX86_64));
-        assert_eq!(resolved["register"], "linux-register");
+        assert_eq!(resolved["register"].cmd(), "linux-register");
         let resolved_mac = manifest.resolved_scripts(Some(Platform::MacosUniversal));
         assert!(resolved_mac.is_empty());
     }
@@ -1312,10 +1495,13 @@ register = "linux-register"
             None,
         );
         let mut commands = IndexMap::new();
-        commands.insert("build".to_string(), "cargo build".to_string());
+        commands.insert("build".to_string(), ScriptEntry::from("cargo build"));
 
         let mut win = IndexMap::new();
-        win.insert("register".to_string(), "tool.exe register".to_string());
+        win.insert(
+            "register".to_string(),
+            ScriptEntry::from("tool.exe register"),
+        );
 
         manifest.scripts = Some(PackageScripts {
             commands,
@@ -1329,9 +1515,9 @@ register = "linux-register"
         let toml_str = toml::to_string(&manifest).unwrap();
         let roundtripped: PackageManifest = toml::from_str(&toml_str).unwrap();
         let scripts = roundtripped.scripts.unwrap();
-        assert_eq!(scripts.commands["build"], "cargo build");
+        assert_eq!(scripts.commands["build"].cmd(), "cargo build");
         assert_eq!(
-            scripts.platform.unwrap().windows.unwrap()["register"],
+            scripts.platform.unwrap().windows.unwrap()["register"].cmd(),
             "tool.exe register"
         );
     }
