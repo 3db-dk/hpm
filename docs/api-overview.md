@@ -67,6 +67,8 @@ Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
 | `PythonDependencySpec` | Untagged enum: `Simple(String) \| Detailed {..}`. |
 | `ManifestEnvEntry`, `EnvMethod` | `[env]` entries (method, optional value, `required` flag) and methods (`set`/`prepend`/`append`). `value` is `Option<EnvValueSpec>` — flat string or ordered variant list. `lower(substitutions)` is the single emit path. |
 | `EnvValueSpec`, `EnvValueVariant`, `WhenSelector` | Conditional `[env]` value support. Variants compile to Houdini's expression-object array via `compile_when` / `lower_conditional`. Axes: `houdini` (Cargo-style req), `os`, `python`. |
+| `PackageScripts`, `PlatformScripts` | `[scripts]` table and per-OS overrides. Both store `IndexMap<String, ScriptEntry>`. |
+| `ScriptEntry`, `ScriptEnv` | Untagged enum: `Plain(String)` for the shorthand form, `WithEnv { cmd, python?, requirements? }` for the table form. Accessors `cmd()`, `python()`, `requirements()`, `needs_venv()` work on both arms. |
 | `NativeConfig`, `NativePlatformFiles` | `[native]` and per-platform file globs. |
 | `Platform` | Canonical platform enum: `LinuxX86_64`, `MacosUniversal`, `WindowsX86_64`. |
 | `RegistryConfig`, `RegistryType` | `[[registries]]` entries in manifests. |
@@ -81,6 +83,9 @@ Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
 | `PythonVersion` | Houdini-to-Python version value. |
 | `ResolvedDependencies`, `ResolvedDependencySet`, `ResolvedPackage` | UV-resolved dependency sets with content hash. |
 | `PythonCleanupAnalyzer` | Detects orphan venvs for `hpm clean --python-only`. |
+| `ensure_script_venv(python, requirements)` | Free function for the table form of `[scripts]`. Resolves raw PEP-508 requirement strings via `uv pip compile` and defers to `VenvManager`, returning the venv root. |
+| `venv_bin_dir(path)` | Returns the executable directory inside a uv-created venv (`bin/` on Unix, `Scripts/` on Windows). Pre-pend to `PATH` before spawning the script. |
+| `DEFAULT_SCRIPT_PYTHON` | `"3.11"`. The Python version `ensure_script_venv` uses when a script omits `python`. |
 
 ### hpm-resolver
 
