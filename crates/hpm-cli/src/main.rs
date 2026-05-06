@@ -116,12 +116,21 @@
 //!   - Dry-run mode with detailed preview
 //!   - Interactive confirmation for safety
 //!
+//! ### Script Execution Commands
+//! Commands for running package-defined workflows:
+//!
+//! - **`run`** - Execute a `[scripts]` entry from `hpm.toml`
+//!   - Forwards trailing arguments to the script
+//!   - Sets `HPM_PACKAGE_ROOT` to the manifest directory
+//!   - Honours `[scripts.platform.<os>]` overrides
+//!   - Materializes a uv-managed venv on demand for table-form entries
+//!     with `python` / `requirements` set
+//!
 //! ### Future Commands (Planned)
 //! Commands planned for future releases:
 //!
 //! - **`search`** - Search registry for packages with filtering
 //! - **`publish`** - Publish packages to registry with validation
-//! - **`run`** - Execute package scripts and workflows
 //!
 //! ## Error Handling Philosophy
 //!
@@ -464,12 +473,11 @@ enum Commands {
     },
     /// Publish a package
     Publish,
-    /// Execute package scripts
-    #[command(hide = true)]
+    /// Execute a package script defined in `[scripts]`
     Run {
         /// Script name to execute
         script: String,
-        /// Additional arguments to pass to the script
+        /// Additional arguments forwarded to the script
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
@@ -767,12 +775,21 @@ async fn run_command(
             println!("Users can then add your package with:");
             println!("  hpm add <package>@<version>");
         }
-        Commands::Run { script, args: _ } => {
-            console.warn("Run command not yet implemented");
-            console.info(format!(
-                "Script '{}' execution is planned for a future release",
-                script
-            ));
+        Commands::Run { script, args } => {
+            let exit_code = commands::run::run_script(script, args, directory.clone(), console)
+                .await
+                .map_err(|e| {
+                    CliError::package(
+                        e,
+                        Some("Use 'hpm run --help' for usage information".to_string()),
+                    )
+                })?;
+            return Ok(if exit_code == 0 {
+                ExitStatus::Success
+            } else {
+                let truncated: u8 = exit_code.try_into().unwrap_or(1);
+                ExitStatus::External(truncated)
+            });
         }
         Commands::Install {
             manifest,
