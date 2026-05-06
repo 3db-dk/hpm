@@ -87,6 +87,7 @@
 //! - [`venv`] - Virtual environment creation, management, and sharing
 //! - [`dependency`] - Dependency collection and conflict detection
 //! - [`resolver`] - UV-powered dependency resolution
+//! - [`script_env`] - Per-script venvs for table-form `[scripts]` entries
 //! - [`integration`] - Houdini package.json generation and PYTHONPATH setup
 //! - [`cleanup`] - Orphaned virtual environment detection and cleanup
 //! - [`types`] - Core types for Python versions, dependencies, and metadata
@@ -161,6 +162,7 @@ pub mod bundled;
 pub mod cleanup;
 pub mod dependency;
 pub mod resolver;
+pub mod script_env;
 pub mod types;
 pub mod venv;
 
@@ -192,6 +194,9 @@ pub use types::{
 
 // Virtual environment management
 pub use venv::VenvManager;
+
+// Per-script venvs (table-form `[scripts]` entries with python/requirements)
+pub use script_env::{DEFAULT_SCRIPT_PYTHON, ensure_script_venv, venv_bin_dir};
 
 use anyhow::Result;
 use std::path::PathBuf;
