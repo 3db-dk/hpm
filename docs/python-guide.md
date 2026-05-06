@@ -147,6 +147,19 @@ new hash and therefore a new venv.
 The per-venv `metadata.json` records which HPM packages are using the venv,
 which `hpm clean --python-only` uses to detect orphans.
 
+### Per-script venvs
+
+`[scripts]` entries can opt into the same venv machinery for out-of-process
+hooks (Houdini setup wizards, lifecycle scripts, anything that runs *before*
+or *outside* Houdini's embedded Python). The table form takes a `python`
+version and inline `requirements`; `hpm run` resolves them through uv,
+materializes a venv under `~/.hpm/venvs/<hash>/`, and prepends its `bin/`
+(or `Scripts/`) to `PATH` for the script process. See
+[`[scripts]`](user-guide.md#scripts) in the user guide for syntax. Two
+scripts whose resolved closures match share storage with each other and,
+where the resolved set happens to coincide, with `[python_dependencies]`
+venvs.
+
 ## Houdini integration
 
 Once `hpm install` has produced the venv, it writes a Houdini manifest per
