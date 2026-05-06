@@ -304,6 +304,39 @@ Check runs:
 
 Check is advisory — warnings do not fail the command.
 
+### `hpm run`
+
+Execute a script defined in the manifest's [`[scripts]`](#scripts) table.
+
+```
+hpm run <SCRIPT> [-- ARGS...]
+```
+
+| Argument | Description |
+|----------|-------------|
+| `<SCRIPT>` | Name of the entry under `[scripts]` (or `[scripts.platform.<os>]`). |
+| `ARGS...` | Trailing arguments forwarded to the script verbatim, after shell-quoting. |
+
+Behaviour:
+
+- Looks up the script for the host platform; `[scripts.platform.<os>]` overrides win over `[scripts]` on matching hosts.
+- Sets `HPM_PACKAGE_ROOT` to the manifest directory and runs the command from that directory through the host shell (`sh -c` on Unix, `cmd /C` on Windows).
+- For [table-form entries](#per-script-python-environments) with `python` or `requirements`, materializes a uv-managed venv at `~/.hpm/venvs/<hash>/`, prepends its `bin/` (or `Scripts/` on Windows) to `PATH`, and sets `VIRTUAL_ENV`. Two scripts whose `python` + `requirements` resolve to the same closure share one venv on disk.
+- The script's exit code becomes `hpm`'s exit code, so `hpm run` is safe to chain in CI or wrap in a Houdini hook.
+
+**Example**
+
+```toml
+[scripts.tt_setup]
+cmd          = "python scripts/tt_setup.py"
+python       = "3.11"
+requirements = ["PySide6>=6.6"]
+```
+
+```sh
+hpm run tt_setup --project /path/to/project
+```
+
 ### `hpm search`
 
 Search every configured registry for packages matching a query.
@@ -432,7 +465,7 @@ All sections, in the order they appear in practice:
 |-------|----------|-------------|
 | `path` | yes | Scoped identifier, `creator/slug`. Both segments must be kebab-case (lowercase letters, digits, hyphens). Example: `tumblehead/tumble-rig`. |
 | `name` | yes | Freeform display name. |
-| `version` | yes | Semantic version, `major.minor.patch`. |
+| `version` | yes | Semantic version per [semver.org](https://semver.org/). `major.minor.patch` is required; pre-release identifiers (`1.0.0-alpha.1`, `1.0.0-rc.2`) and build metadata (`1.0.0+build.5`) are accepted. |
 | `description` | no | Short description. |
 | `authors` | no | List of `"Name <email>"` strings. |
 | `license` | no | License identifier (e.g. `MIT`, `Apache-2.0`). |
