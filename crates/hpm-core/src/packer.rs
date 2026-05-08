@@ -188,9 +188,9 @@ pub fn create_archive(
 
     for path in &entries {
         let relative = path.strip_prefix(package_dir).unwrap_or(path);
-        let name = relative.to_string_lossy();
+        let name = zip_entry_name(relative);
 
-        zip.start_file(name.as_ref(), options)?;
+        zip.start_file(&name, options)?;
         let mut f = fs::File::open(path)?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
@@ -205,6 +205,21 @@ pub fn create_archive(
 
     zip.finish()?;
     Ok(archive_path)
+}
+
+/// Build a ZIP entry name from a relative path using `/` separators, as
+/// required by the ZIP spec (APPNOTE 4.4.17.1). On Windows `to_string_lossy`
+/// would emit backslashes, which strict consumers (e.g. SideFX hpackage)
+/// reject outright.
+fn zip_entry_name(relative: &Path) -> String {
+    relative
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Compute SHA-256 checksum of a file, returning hex-encoded string.
@@ -321,6 +336,18 @@ pub fn pack(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn zip_entry_name_uses_forward_slashes() {
+        let p: PathBuf = ["config", ".gitkeep"].iter().collect();
+        assert_eq!(zip_entry_name(&p), "config/.gitkeep");
+
+        let nested: PathBuf = ["lib", "windows-x86_64", "foo.dll"].iter().collect();
+        assert_eq!(zip_entry_name(&nested), "lib/windows-x86_64/foo.dll");
+
+        let flat = PathBuf::from("hpm.toml");
+        assert_eq!(zip_entry_name(&flat), "hpm.toml");
+    }
 
     fn create_test_package(dir: &Path) {
         fs::write(

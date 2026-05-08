@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`hpm pack` on Windows now writes ZIP entry names with `/` separators**,
+  as required by the ZIP spec (APPNOTE 4.4.17.1). Previously the entry
+  name went through `Path::to_string_lossy()`, which uses the OS
+  separator — so packs produced on Windows contained entries like
+  `config\.gitkeep`. Most consumers tolerated this, but strict ones
+  (e.g. SideFX hpackage upload) rejected the archive outright. Packs
+  produced on Linux/macOS were already correct.
+
 ## [0.11.0] - 2026-05-06
 
 ### Added
