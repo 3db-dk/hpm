@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `config\.gitkeep`. Most consumers tolerated this, but strict ones
   (e.g. SideFX hpackage upload) rejected the archive outright. Packs
   produced on Linux/macOS were already correct.
+- **`hpm pack` on Windows now correctly excludes other-platform files
+  from `[native]` packages.** The platform filter compared manifest
+  globs (e.g. `lib/windows-x86_64/*`) against `Path::to_string_lossy()`,
+  which on Windows produced backslash-separated strings the globs could
+  not match — so platform-specific archives ended up bundling files
+  from every platform. Packs produced on Linux/macOS were already
+  correct.
 
 ## [0.11.0] - 2026-05-06
 

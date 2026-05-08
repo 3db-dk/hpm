@@ -168,9 +168,12 @@ pub fn create_archive(
             continue;
         }
 
-        // Filter out files belonging to other platforms
+        // Filter out files belonging to other platforms.
+        // Manifest globs (e.g. `lib/windows-x86_64/*`) use `/`, so the
+        // input must too — `to_string_lossy()` would emit backslashes on
+        // Windows and silently fail to match.
         if let Some(filter) = platform_filter {
-            let rel_str = relative.to_string_lossy();
+            let rel_str = relative_path_to_forward_slash(relative);
             if filter.should_exclude(&rel_str) {
                 continue;
             }
@@ -188,7 +191,7 @@ pub fn create_archive(
 
     for path in &entries {
         let relative = path.strip_prefix(package_dir).unwrap_or(path);
-        let name = zip_entry_name(relative);
+        let name = relative_path_to_forward_slash(relative);
 
         zip.start_file(&name, options)?;
         let mut f = fs::File::open(path)?;
@@ -207,11 +210,14 @@ pub fn create_archive(
     Ok(archive_path)
 }
 
-/// Build a ZIP entry name from a relative path using `/` separators, as
-/// required by the ZIP spec (APPNOTE 4.4.17.1). On Windows `to_string_lossy`
-/// would emit backslashes, which strict consumers (e.g. SideFX hpackage)
-/// reject outright.
-fn zip_entry_name(relative: &Path) -> String {
+/// Render a relative path with `/` separators, regardless of host OS.
+///
+/// Used wherever a path string is consumed by something that expects
+/// POSIX-style separators: ZIP entry names (APPNOTE 4.4.17.1 mandates `/`),
+/// glob patterns from manifests, and content hashes that should match
+/// across platforms. On Unix the result matches `to_string_lossy()`; on
+/// Windows it normalizes `\` to `/`.
+pub(crate) fn relative_path_to_forward_slash(relative: &Path) -> String {
     relative
         .components()
         .filter_map(|c| match c {
@@ -338,15 +344,18 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn zip_entry_name_uses_forward_slashes() {
+    fn relative_path_to_forward_slash_normalizes_separators() {
         let p: PathBuf = ["config", ".gitkeep"].iter().collect();
-        assert_eq!(zip_entry_name(&p), "config/.gitkeep");
+        assert_eq!(relative_path_to_forward_slash(&p), "config/.gitkeep");
 
         let nested: PathBuf = ["lib", "windows-x86_64", "foo.dll"].iter().collect();
-        assert_eq!(zip_entry_name(&nested), "lib/windows-x86_64/foo.dll");
+        assert_eq!(
+            relative_path_to_forward_slash(&nested),
+            "lib/windows-x86_64/foo.dll"
+        );
 
         let flat = PathBuf::from("hpm.toml");
-        assert_eq!(zip_entry_name(&flat), "hpm.toml");
+        assert_eq!(relative_path_to_forward_slash(&flat), "hpm.toml");
     }
 
     fn create_test_package(dir: &Path) {
