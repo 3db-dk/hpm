@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not match — so platform-specific archives ended up bundling files
   from every platform. Packs produced on Linux/macOS were already
   correct.
+- **Cached directory checksum is now host-OS-independent.** The
+  per-package digest used by `ArchiveFetcher`'s on-disk checksum cache
+  hashed `Path::to_string_lossy()` of each relative entry, producing
+  different digests on Windows vs. Unix for the same tree. Now
+  normalized to `/`. Existing Windows caches are recomputed once on
+  first access; Unix caches are unaffected.
 
 ## [0.11.0] - 2026-05-06
 

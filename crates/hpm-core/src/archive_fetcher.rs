@@ -4,6 +4,7 @@
 //! direct URLs provided by the registry.
 
 use crate::package_source::{PackageSource, PackageSourceError};
+use crate::packer::relative_path_to_forward_slash;
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -337,9 +338,11 @@ fn compute_directory_checksum_sync(dir: &Path) -> Result<String, FetchError> {
     entries.sort_by(|a, b| a.path().cmp(b.path()));
 
     for entry in entries {
-        // Include relative path in hash
+        // Include relative path in hash. Normalize to `/` so the digest
+        // is identical for the same tree on Unix and Windows (otherwise
+        // the cache key diverges by host OS for no good reason).
         let relative_path = entry.path().strip_prefix(dir).unwrap_or(entry.path());
-        hasher.update(relative_path.to_string_lossy().as_bytes());
+        hasher.update(relative_path_to_forward_slash(relative_path).as_bytes());
 
         // Include file contents in hash
         let mut file = std::fs::File::open(entry.path())?;
