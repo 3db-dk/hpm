@@ -5,6 +5,7 @@
 //! across different machines and time.
 
 use crate::archive_fetcher::cas_install_dir;
+use crate::path_util::relative_path_to_forward_slash;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -506,12 +507,9 @@ fn compute_directory_checksum(dir: &Path) -> Result<String, LockError> {
     entries.sort();
 
     for path in entries {
-        // Include relative path in hash for structure integrity
-        let relative_path = path
-            .strip_prefix(dir)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/"); // Normalize path separators
+        // Include relative path in hash for structure integrity. Normalized
+        // to `/` so the digest is identical for the same tree on any host.
+        let relative_path = relative_path_to_forward_slash(path.strip_prefix(dir).unwrap_or(&path));
         hasher.update(relative_path.as_bytes());
 
         // Hash file contents

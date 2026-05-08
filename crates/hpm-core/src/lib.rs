@@ -227,6 +227,7 @@ pub mod fetch_manifest;
 pub mod lock;
 pub mod package_source;
 pub mod packer;
+pub(crate) mod path_util;
 pub mod project;
 pub mod registry;
 pub mod storage;

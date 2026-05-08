@@ -3,6 +3,7 @@
 //! Produces a `{name}-{version}.zip` from a package directory, with SHA-256
 //! checksum and optional Ed25519 signature.
 
+use crate::path_util::relative_path_to_forward_slash;
 use base64::Engine;
 pub use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
@@ -210,24 +211,6 @@ pub fn create_archive(
     Ok(archive_path)
 }
 
-/// Render a relative path with `/` separators, regardless of host OS.
-///
-/// Used wherever a path string is consumed by something that expects
-/// POSIX-style separators: ZIP entry names (APPNOTE 4.4.17.1 mandates `/`),
-/// glob patterns from manifests, and content hashes that should match
-/// across platforms. On Unix the result matches `to_string_lossy()`; on
-/// Windows it normalizes `\` to `/`.
-pub(crate) fn relative_path_to_forward_slash(relative: &Path) -> String {
-    relative
-        .components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(s) => Some(s.to_string_lossy()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 /// Compute SHA-256 checksum of a file, returning hex-encoded string.
 pub fn compute_archive_checksum(path: &Path) -> Result<String, PackError> {
     let bytes = fs::read(path)?;
@@ -342,21 +325,6 @@ pub fn pack(
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
-    #[test]
-    fn relative_path_to_forward_slash_normalizes_separators() {
-        let p: PathBuf = ["config", ".gitkeep"].iter().collect();
-        assert_eq!(relative_path_to_forward_slash(&p), "config/.gitkeep");
-
-        let nested: PathBuf = ["lib", "windows-x86_64", "foo.dll"].iter().collect();
-        assert_eq!(
-            relative_path_to_forward_slash(&nested),
-            "lib/windows-x86_64/foo.dll"
-        );
-
-        let flat = PathBuf::from("hpm.toml");
-        assert_eq!(relative_path_to_forward_slash(&flat), "hpm.toml");
-    }
 
     fn create_test_package(dir: &Path) {
         fs::write(
