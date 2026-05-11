@@ -244,10 +244,10 @@ fn is_universal(platform: Option<&str>) -> bool {
 /// Pick the best build for the host: exact platform match first, then a
 /// universal entry. No silent positional fallback — if the registry
 /// annotates every build but none match the host, the caller should error.
-fn select_build<'a>(
-    builds: &'a [RegistryEntry],
+fn select_build(
+    builds: &[RegistryEntry],
     host: Option<hpm_package::Platform>,
-) -> Option<&'a RegistryEntry> {
+) -> Option<&RegistryEntry> {
     if let Some(host) = host
         && let Some(b) = builds.iter().find(|b| {
             b.platform
