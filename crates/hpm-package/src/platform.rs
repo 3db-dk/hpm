@@ -5,7 +5,7 @@ use std::fmt;
 use std::str::FromStr;
 
 /// Canonical platform identifiers recognized by HPM.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum Platform {
     LinuxX86_64,

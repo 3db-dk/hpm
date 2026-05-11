@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **API registry no longer installs the wrong-platform archive when the
+  registry returns non-canonical platform names.** `ApiRegistry::get_version`
+  previously compared `builds[].platform` against the canonical long form
+  (`"windows-x86_64"` / `"linux-x86_64"` / `"macos-universal"`) with strict
+  string equality, then fell through to `builds.first()` when no entry
+  matched. A registry that emitted the short OS form (e.g. `"WINDOWS"`,
+  `"LINUX"`) would silently get an arbitrary archive — on Windows hosts
+  installing multi-platform packages, the Linux `.so` build could be
+  unpacked instead of the Windows `.dll` build, with no error surfaced
+  until Houdini failed to load the plugins.
+
+  The selector now (1) accepts both the canonical long form and the short
+  OS form (`"windows"`/`"linux"`/`"macos"`, case-insensitive), (2) treats
+  a missing `platform` field or `"universal"` (case-insensitive) as a
+  universal fallback, and (3) returns a new `RegistryError::NoCompatibleBuild`
+  error when every build is platform-tagged and none match the host —
+  instead of silently picking the first one. Issue #3.
+
 ## [0.11.1] - 2026-05-08
 
 ### Fixed

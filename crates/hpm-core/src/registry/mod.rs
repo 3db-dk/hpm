@@ -27,6 +27,15 @@ pub enum RegistryError {
     #[error("Version '{version}' of package '{name}' not found in registry")]
     VersionNotFound { name: String, version: String },
 
+    #[error(
+        "Version '{version}' of package '{name}' has no build compatible with host platform '{host}'"
+    )]
+    NoCompatibleBuild {
+        name: String,
+        version: String,
+        host: String,
+    },
+
     #[error("Failed to connect to registry: {0}")]
     NetworkError(#[from] reqwest::Error),
 
