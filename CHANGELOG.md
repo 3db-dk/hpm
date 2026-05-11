@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.11.2] - 2026-05-11
+## [0.11.3] - 2026-05-11
 
 ### Fixed
 - **API registry no longer installs the wrong-platform archive when the
@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   universal fallback, and (3) returns a new `RegistryError::NoCompatibleBuild`
   error when every build is platform-tagged and none match the host —
   instead of silently picking the first one. Issue #3.
+
+## [0.11.2] - 2026-05-11
+
+Tagged but not released — the `check` workflow failed clippy on Rust 1.95
+(`needless_lifetimes` lint) before any platform binaries were built. The
+fix and the platform-selection change ship together in v0.11.3.
 
 ## [0.11.1] - 2026-05-08
 
