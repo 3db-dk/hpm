@@ -1,6 +1,7 @@
-use crate::archive_fetcher::ArchiveFetcher;
-use crate::package_source::PackageSource;
-use crate::storage::{InstalledPackage, PackageSpec, StorageManager};
+use crate::archive_fetcher::{ArchiveFetcher, FetchError};
+use crate::package_source::{PackageSource, PackageSourceError};
+use crate::registry::RegistryError;
+use crate::storage::{InstalledPackage, PackageSpec, StorageError, StorageManager};
 use hpm_config::{Config, ProjectConfig};
 use hpm_package::{HoudiniPackage, ManifestEnvEntry, ManifestLoadError, PackageManifest};
 use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
@@ -48,8 +49,7 @@ impl ProjectManager {
             .unwrap_or(std::path::Path::new("."));
         let cache_dir = storage_root.join("cache");
         let fetch_packages_dir = storage_root.join("fetch");
-        let fetcher = ArchiveFetcher::new(cache_dir, fetch_packages_dir)
-            .map_err(|e| ProjectError::DirectoryCreation(e.to_string()))?;
+        let fetcher = ArchiveFetcher::new(cache_dir, fetch_packages_dir)?;
 
         let manager = Self {
             config,
@@ -63,9 +63,15 @@ impl ProjectManager {
     }
 
     fn ensure_directories(&self) -> Result<(), ProjectError> {
-        self.project_config
-            .ensure_directories()
-            .map_err(|e| ProjectError::DirectoryCreation(e.to_string()))?;
+        // ProjectConfig::ensure_directories does mkdir -p on the well-known
+        // dirs; bubble io::Error along with the project root so the failure
+        // names a path the user can reason about.
+        self.project_config.ensure_directories().map_err(|source| {
+            ProjectError::DirectoryCreation {
+                path: self.project_config.packages_dir.clone(),
+                source,
+            }
+        })?;
         info!("Ensured project directories exist");
         Ok(())
     }
@@ -81,10 +87,7 @@ impl ProjectManager {
     pub async fn add_dependency(&self, spec: &PackageSpec) -> Result<(), ProjectError> {
         info!("Adding dependency: {} {}", spec.name, spec.version_req);
 
-        let installed_packages = self
-            .storage_manager
-            .list_installed()
-            .map_err(|e| ProjectError::StorageRead(e.to_string()))?;
+        let installed_packages = self.storage_manager.list_installed()?;
 
         let installed_package = if let Some(pkg) = installed_packages.iter().find(|p| {
             Self::matches_spec_name(p, &spec.name) && p.is_compatible_with(&spec.version_req)
@@ -118,22 +121,18 @@ impl ProjectManager {
         &self,
         spec: &PackageSpec,
     ) -> Result<InstalledPackage, ProjectError> {
-        let registry_set = crate::registry::RegistrySet::from_configs(
-            &self.config.registries,
-            &self.config.storage.registry_cache_dir,
-        );
+        let registry_set = crate::registry::RegistrySet::from_config(&self.config);
 
         if registry_set.is_empty() {
-            return Err(ProjectError::PackageInstallation(format!(
-                "Cannot install {} {}: no registries configured",
-                spec.name, spec.version_req
-            )));
+            return Err(ProjectError::NoRegistriesConfigured {
+                name: spec.name.clone(),
+                version_req: spec.version_req.as_str().to_string(),
+            });
         }
 
         let entry = self.resolve_registry_entry(&registry_set, spec).await?;
         let version = entry.version.clone();
-        let source = PackageSource::url(entry.dl, entry.version)
-            .map_err(|e| ProjectError::PackageInstallation(format!("Invalid registry URL: {e}")))?;
+        let source = PackageSource::url(entry.dl, entry.version)?;
         self.fetch_and_install_pkg(&spec.name, &version, source)
             .await
     }
@@ -149,23 +148,24 @@ impl ProjectManager {
         let req_str = spec.version_req.as_str();
 
         if semver::Version::parse(req_str).is_ok() {
-            return registry_set
-                .get_version(&spec.name, req_str)
-                .await
-                .map_err(|e| {
-                    ProjectError::PackageInstallation(format!(
-                        "Failed to resolve {}@{} from registry: {}",
-                        spec.name, req_str, e
-                    ))
-                });
+            return registry_set.get_version(&spec.name, req_str).await.map_err(
+                |source| ProjectError::RegistryResolution {
+                    name: spec.name.clone(),
+                    version_req: req_str.to_string(),
+                    source: Box::new(source),
+                },
+            );
         }
 
-        let mut versions = registry_set.get_versions(&spec.name).await.map_err(|e| {
-            ProjectError::PackageInstallation(format!(
-                "Failed to list versions for {}: {}",
-                spec.name, e
-            ))
-        })?;
+        let mut versions =
+            registry_set
+                .get_versions(&spec.name)
+                .await
+                .map_err(|source| ProjectError::RegistryResolution {
+                    name: spec.name.clone(),
+                    version_req: req_str.to_string(),
+                    source: Box::new(source),
+                })?;
 
         versions.retain(|v| !v.yanked && spec.version_req.matches(&v.version));
         versions.sort_by(|a, b| {
@@ -178,12 +178,13 @@ impl ProjectManager {
             }
         });
 
-        versions.into_iter().next().ok_or_else(|| {
-            ProjectError::PackageInstallation(format!(
-                "No version of {} matches requirement {}",
-                spec.name, req_str
-            ))
-        })
+        versions
+            .into_iter()
+            .next()
+            .ok_or_else(|| ProjectError::NoMatchingVersion {
+                name: spec.name.clone(),
+                version_req: req_str.to_string(),
+            })
     }
 
     pub async fn remove_dependency(&self, name: &str) -> Result<(), ProjectError> {
@@ -256,10 +257,7 @@ impl ProjectManager {
             };
 
             // Fetch list of globally installed packages once for lookups
-            let all_installed = self
-                .storage_manager
-                .list_installed()
-                .map_err(|e| ProjectError::StorageRead(e.to_string()))?;
+            let all_installed = self.storage_manager.list_installed()?;
 
             for (name, dep_spec) in dependencies {
                 // Build a PackageSource from the dependency spec and use fetcher for remote deps
@@ -285,8 +283,7 @@ impl ProjectManager {
                         let installed = self
                             .storage_manager
                             .install_from_path_dev(source_path)
-                            .await
-                            .map_err(|e| ProjectError::PackageInstallation(e.to_string()))?;
+                            .await?;
                         installed_packages.push(installed);
                     }
                 }
@@ -333,8 +330,12 @@ impl ProjectManager {
             .map(|pkg| pkg.manifest.package.slug())
             .collect();
 
-        let entries = std::fs::read_dir(packages_dir)
-            .map_err(|e| ProjectError::DirectoryRead(e.to_string()))?;
+        let entries = std::fs::read_dir(packages_dir).map_err(|source| {
+            ProjectError::DirectoryRead {
+                path: packages_dir.clone(),
+                source,
+            }
+        })?;
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -393,14 +394,14 @@ impl ProjectManager {
         }
 
         let rs = registry_set.as_ref().expect("registry set built above");
-        let entry = rs.get_version(name, version).await.map_err(|e| {
-            ProjectError::InvalidDependency(format!(
-                "Failed to resolve {}@{} from registry: {}",
-                name, version, e
-            ))
+        let entry = rs.get_version(name, version).await.map_err(|source| {
+            ProjectError::RegistryResolution {
+                name: name.to_string(),
+                version_req: version.to_string(),
+                source: Box::new(source),
+            }
         })?;
-        let source = PackageSource::url(entry.dl, version)
-            .map_err(|e| ProjectError::InvalidDependency(format!("Invalid registry URL: {e}")))?;
+        let source = PackageSource::url(entry.dl, version)?;
         self.fetch_and_install_pkg(name, version, source).await
     }
 
@@ -420,8 +421,7 @@ impl ProjectManager {
             return Ok(pkg.clone());
         }
 
-        let source = PackageSource::url(url, version)
-            .map_err(|e| ProjectError::InvalidDependency(format!("Invalid URL: {e}")))?;
+        let source = PackageSource::url(url, version)?;
         self.fetch_and_install_pkg(name, version, source).await
     }
 
@@ -433,18 +433,13 @@ impl ProjectManager {
         source: PackageSource,
     ) -> Result<InstalledPackage, ProjectError> {
         // Fetch (download + extract) the package
-        let fetch_result = self
-            .fetcher
-            .fetch(&source, name)
-            .await
-            .map_err(|e| ProjectError::PackageInstallation(e.to_string()))?;
+        let fetch_result = self.fetcher.fetch(&source, name).await?;
 
         // Install from the extracted path into global storage
         let installed = self
             .storage_manager
             .install_from_path(&fetch_result.package_path)
-            .await
-            .map_err(|e| ProjectError::PackageInstallation(e.to_string()))?;
+            .await?;
 
         info!("Successfully fetched and installed {}@{}", name, version);
         Ok(installed)
@@ -532,7 +527,7 @@ impl ProjectManager {
         // Initialize UV binary (downloads on first use)
         hpm_python::initialize()
             .await
-            .map_err(|e| ProjectError::PythonResolution(format!("{:#}", e)))?;
+            .map_err(|e| ProjectError::PythonResolution(e.into()))?;
 
         // Collect python dependencies from all package manifests. The project
         // manifest's own Houdini version is the source of truth for which
@@ -553,7 +548,7 @@ impl ProjectManager {
             .and_then(|m| m.houdini.and_then(|h| h.min_version));
         let collected = collect_python_dependencies(project_houdini_version.as_deref(), &manifests)
             .await
-            .map_err(|e| ProjectError::PythonResolution(format!("{:#}", e)))?;
+            .map_err(|e| ProjectError::PythonResolution(e.into()))?;
 
         if collected.dependencies.is_empty() {
             return Ok(None);
@@ -567,7 +562,7 @@ impl ProjectManager {
         // Resolve to exact versions via UV pip compile
         let resolved = resolve_dependencies(&collected)
             .await
-            .map_err(|e| ProjectError::PythonResolution(format!("{:#}", e)))?;
+            .map_err(|e| ProjectError::PythonResolution(e.into()))?;
 
         info!(
             "Resolved {} Python packages (hash: {})",
@@ -580,7 +575,7 @@ impl ProjectManager {
         let venv_path = venv_manager
             .ensure_virtual_environment(&resolved)
             .await
-            .map_err(|e| ProjectError::PythonResolution(format!("{:#}", e)))?;
+            .map_err(|e| ProjectError::PythonResolution(e.into()))?;
 
         let site_packages =
             venv_manager.get_python_site_packages_path(&venv_path, &resolved.python_version);
@@ -833,13 +828,14 @@ impl ProjectManager {
             return Ok(dependencies);
         }
 
-        let entries = std::fs::read_dir(&self.project_config.packages_dir)
-            .map_err(|e| ProjectError::DirectoryRead(e.to_string()))?;
+        let entries = std::fs::read_dir(&self.project_config.packages_dir).map_err(|source| {
+            ProjectError::DirectoryRead {
+                path: self.project_config.packages_dir.clone(),
+                source,
+            }
+        })?;
 
-        let installed_packages = self
-            .storage_manager
-            .list_installed()
-            .map_err(|e| ProjectError::StorageRead(e.to_string()))?;
+        let installed_packages = self.storage_manager.list_installed()?;
 
         for entry in entries.flatten() {
             if let Some(file_name) = entry.path().file_name() {
@@ -889,11 +885,23 @@ impl ProjectManager {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
-    #[error("Directory creation failed: {0}")]
-    DirectoryCreation(String),
+    /// Failed to create a directory the project depends on (`.hpm/packages`,
+    /// fetcher cache, etc.). Carries the typed `io::Error` so callers can
+    /// match on `ErrorKind` (e.g. `PermissionDenied`).
+    #[error("Failed to create directory {}", path.display())]
+    DirectoryCreation {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
-    #[error("Directory read failed: {0}")]
-    DirectoryRead(String),
+    /// Failed to read a directory the project depends on.
+    #[error("Failed to read directory {}", path.display())]
+    DirectoryRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error(transparent)]
     Manifest(#[from] ManifestLoadError),
@@ -903,7 +911,7 @@ pub enum ProjectError {
     #[error("Failed to {op} {}", path.display())]
     ManifestIo {
         op: &'static str,
-        path: std::path::PathBuf,
+        path: PathBuf,
         #[source]
         source: std::io::Error,
     },
@@ -914,7 +922,7 @@ pub enum ProjectError {
     /// `toml_edit::DocumentMut`, which carries its own error type.
     #[error("Failed to parse {} as editable TOML", path.display())]
     ManifestEdit {
-        path: std::path::PathBuf,
+        path: PathBuf,
         #[source]
         source: toml_edit::TomlError,
     },
@@ -922,33 +930,54 @@ pub enum ProjectError {
     /// hpm.toml has the wrong structure for the operation (e.g.
     /// `[dependencies]` exists but is not a table).
     #[error("{}: {message}", path.display())]
-    ManifestStructure {
-        path: std::path::PathBuf,
-        message: String,
-    },
+    ManifestStructure { path: PathBuf, message: String },
 
     /// Failed to serialise a Houdini package.json.
     #[error("Failed to serialise Houdini manifest at {}", path.display())]
     HoudiniManifestSerialize {
-        path: std::path::PathBuf,
+        path: PathBuf,
         #[source]
         source: serde_json::Error,
     },
 
-    #[error("Package installation failed: {0}")]
-    PackageInstallation(String),
+    /// Global package storage CAS read/write failure. Boxed because
+    /// `StorageError` is large; keeps `ProjectError` itself small enough
+    /// that `Result<T, ProjectError>` stays cheap to return on the hot
+    /// success path.
+    #[error(transparent)]
+    Storage(Box<StorageError>),
 
-    #[error("Package not found: {0}")]
-    PackageNotFound(String),
+    /// Archive download / extract failure. Boxed; see `Storage`.
+    #[error(transparent)]
+    Fetch(Box<FetchError>),
 
-    #[error("Storage read failed: {0}")]
-    StorageRead(String),
+    /// A package source URL could not be parsed.
+    #[error(transparent)]
+    InvalidPackageSource(#[from] PackageSourceError),
 
-    #[error("Invalid dependency specification: {0}")]
-    InvalidDependency(String),
+    /// Dependency requested but no registries are configured.
+    #[error("Cannot install {name} {version_req}: no registries configured")]
+    NoRegistriesConfigured { name: String, version_req: String },
 
-    #[error("Python dependency resolution failed: {0}")]
-    PythonResolution(String),
+    /// Registry lookup failed for `name@version_req`. Source is boxed;
+    /// see `Storage`.
+    #[error("Failed to resolve {name} {version_req} from registry")]
+    RegistryResolution {
+        name: String,
+        version_req: String,
+        #[source]
+        source: Box<RegistryError>,
+    },
+
+    /// Registry returned versions, but none satisfied the requirement.
+    #[error("No version of {name} matches requirement {version_req}")]
+    NoMatchingVersion { name: String, version_req: String },
+
+    /// Python dependency collection / resolution / venv creation failed.
+    /// `hpm-python` returns `anyhow::Error`; we box the source rather than
+    /// pull in anyhow at this layer.
+    #[error("Python dependency resolution failed")]
+    PythonResolution(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     #[error(
         "Required env var '{var}' for package '{package}' has no value. \
@@ -962,6 +991,21 @@ pub enum ProjectError {
         package: String,
         message: String,
     },
+}
+
+// Hand-written so call sites can `?` from the unboxed source error types.
+// thiserror's `#[from]` would only generate `From<Box<X>>`; we want the
+// boxing to be invisible at the use site.
+impl From<StorageError> for ProjectError {
+    fn from(err: StorageError) -> Self {
+        Self::Storage(Box::new(err))
+    }
+}
+
+impl From<FetchError> for ProjectError {
+    fn from(err: FetchError) -> Self {
+        Self::Fetch(Box::new(err))
+    }
 }
 
 #[cfg(test)]
