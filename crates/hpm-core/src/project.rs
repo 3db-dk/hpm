@@ -1,4 +1,5 @@
 use crate::archive_fetcher::{ArchiveFetcher, FetchError};
+use crate::lock::LockedSource;
 use crate::package_source::{PackageSource, PackageSourceError};
 use crate::registry::RegistryError;
 use crate::storage::{InstalledPackage, PackageSpec, StorageError, StorageManager};
@@ -25,6 +26,25 @@ pub struct ProjectDependency {
     pub name: String,
     pub version: String,
     pub installed_package: Option<InstalledPackage>,
+}
+
+/// Per-dependency record returned from `sync_dependencies`, carrying the
+/// install path plus the metadata a lockfile needs.
+///
+/// `checksum` and `source` are `Option` because a sync that short-circuits
+/// on the CAS (already-installed package) doesn't re-fetch from the
+/// registry, so it has no fresh SHA-256 and (for `Simple`/`Registry` specs)
+/// no fresh URL to record. Callers wanting lockfile fidelity can backfill
+/// those `None` fields from a prior lockfile entry.
+#[derive(Debug, Clone)]
+pub struct InstallOutcome {
+    pub package: InstalledPackage,
+    /// SHA-256 of the archive — `Some` when the dep was freshly fetched,
+    /// `None` for path deps and short-circuited CAS hits.
+    pub checksum: Option<String>,
+    /// Lockfile source — `Some` when we know the URL (fresh fetch or `Url`
+    /// spec) or for path deps, `None` for `Simple`/`Registry` short-circuits.
+    pub source: Option<LockedSource>,
 }
 
 impl ProjectManager {
@@ -209,7 +229,7 @@ impl ProjectManager {
         Ok(())
     }
 
-    pub async fn sync_dependencies(&self) -> Result<Vec<InstalledPackage>, ProjectError> {
+    pub async fn sync_dependencies(&self) -> Result<Vec<(String, InstallOutcome)>, ProjectError> {
         info!("Syncing project dependencies");
 
         let project_manifest = match self.load_project_manifest()? {
@@ -260,7 +280,7 @@ impl ProjectManager {
         // Phase 1: spawn all installs in parallel via a JoinSet. Each task owns
         // a clone of (StorageManager, ArchiveFetcher, RegistrySet) and its dep
         // spec, so resolve→fetch→copy-into-CAS chains overlap across deps.
-        let mut tasks: JoinSet<Result<InstalledPackage, ProjectError>> = JoinSet::new();
+        let mut tasks: JoinSet<(String, Result<InstallOutcome, ProjectError>)> = JoinSet::new();
         for (name, spec) in dependencies {
             let storage = self.storage_manager.clone();
             let fetcher = self.fetcher.clone();
@@ -268,7 +288,7 @@ impl ProjectManager {
             let all_installed = all_installed.clone();
 
             tasks.spawn(async move {
-                install_one_dep(
+                let result = install_one_dep(
                     &storage,
                     &fetcher,
                     registry_set.as_deref(),
@@ -276,25 +296,30 @@ impl ProjectManager {
                     &name,
                     &spec,
                 )
-                .await
+                .await;
+                (name, result)
             });
         }
 
-        let mut installed_packages: Vec<InstalledPackage> = Vec::new();
+        let mut outcomes: Vec<(String, InstallOutcome)> = Vec::new();
         while let Some(joined) = tasks.join_next().await {
-            // A spawned-task panic leaks structural confusion; propagate as a
-            // synthetic Storage error chained through Box<dyn Error> would be
-            // wrong-shaped, so just re-throw the panic and let the runtime
-            // surface it.
-            let pkg = joined.expect("dependency install task panicked")?;
-            installed_packages.push(pkg);
+            // A spawned-task panic leaks structural confusion; let the runtime
+            // surface it rather than synthesising a typed ProjectError.
+            let (name, result) = joined.expect("dependency install task panicked");
+            outcomes.push((name, result?));
         }
 
+        // Snapshot the installed-package list once for downstream steps; the
+        // outcomes hang onto richer metadata for the lockfile, but Python
+        // resolution / manifest emission only need the InstalledPackage.
+        let installed: Vec<InstalledPackage> =
+            outcomes.iter().map(|(_, o)| o.package.clone()).collect();
+
         // Resolve Python pip dependencies and get venv site-packages path (if any)
-        let venv_site_packages = self.resolve_python_deps(&installed_packages).await?;
+        let venv_site_packages = self.resolve_python_deps(&installed).await?;
 
         // Generate Houdini JSON manifests for all packages
-        for pkg in &installed_packages {
+        for pkg in &installed {
             self.generate_houdini_manifest_with_python(
                 pkg,
                 venv_site_packages.as_deref(),
@@ -307,10 +332,10 @@ impl ProjectManager {
         // manifest whose slug has dropped out of the dependency set (dev override
         // removed, registry yank, manual edit) keeps loading the package even
         // though hpm.toml no longer asks for it.
-        self.sweep_stale_houdini_manifests(&installed_packages)?;
+        self.sweep_stale_houdini_manifests(&installed)?;
 
         info!("Successfully synced project dependencies");
-        Ok(installed_packages)
+        Ok(outcomes)
     }
 
     /// Remove `<slug>.json` files in the project's packages dir whose slug is
@@ -373,13 +398,17 @@ impl ProjectManager {
     }
 
     /// Fetch a remote package and install it to global storage, returning the InstalledPackage.
+    /// Used by single-package paths like `add_dependency` that don't need the checksum.
     async fn fetch_and_install_pkg(
         &self,
         name: &str,
         version: &str,
         source: PackageSource,
     ) -> Result<InstalledPackage, ProjectError> {
-        fetch_and_install_pkg(&self.storage_manager, &self.fetcher, name, version, source).await
+        let (package, _checksum) =
+            fetch_and_install_pkg(&self.storage_manager, &self.fetcher, name, version, source)
+                .await?;
+        Ok(package)
     }
 
     fn generate_houdini_manifest(
@@ -828,8 +857,14 @@ impl ProjectManager {
 /// captured before installs began; comparing against it avoids re-fetching
 /// packages that another concurrent task may also be racing to install
 /// (the CAS is idempotent under `install_from_path`, but skipping the
-/// network round-trip when a previous sync already landed the package is
-/// worth the shared snapshot).
+/// network round-trip and the remove-and-recopy that `install_from_path`
+/// performs is worth the shared snapshot — that recopy is the
+/// well-known Windows `os error 5` trigger when Houdini holds files open).
+///
+/// Returns `InstallOutcome` with `checksum` / `source` populated only when
+/// they're known: fresh fetches get both, `Url`-spec short-circuits get the
+/// URL only, `Simple`/`Registry` short-circuits get neither (the lockfile
+/// builder can backfill those from the prior lockfile).
 async fn install_one_dep(
     storage: &StorageManager,
     fetcher: &ArchiveFetcher,
@@ -837,7 +872,7 @@ async fn install_one_dep(
     all_installed: &[InstalledPackage],
     name: &str,
     spec: &hpm_package::DependencySpec,
-) -> Result<InstalledPackage, ProjectError> {
+) -> Result<InstallOutcome, ProjectError> {
     use hpm_package::DependencySpec;
     match spec {
         DependencySpec::Simple(version) | DependencySpec::Registry { version, .. } => {
@@ -846,7 +881,11 @@ async fn install_one_dep(
                 .find(|p| ProjectManager::matches_spec_name(p, name) && p.version == *version)
             {
                 info!("Package {}@{} already installed", name, version);
-                return Ok(pkg.clone());
+                return Ok(InstallOutcome {
+                    package: pkg.clone(),
+                    checksum: None,
+                    source: None,
+                });
             }
             let rs = registry_set.expect("registry set built when registry deps present");
             let entry = rs.get_version(name, version).await.map_err(|source| {
@@ -856,8 +895,15 @@ async fn install_one_dep(
                     source: Box::new(source),
                 }
             })?;
-            let source = PackageSource::url(entry.dl, version)?;
-            fetch_and_install_pkg(storage, fetcher, name, version, source).await
+            let url = entry.dl.clone();
+            let source = PackageSource::url(url.clone(), version)?;
+            let (package, checksum) =
+                fetch_and_install_pkg(storage, fetcher, name, version, source).await?;
+            Ok(InstallOutcome {
+                package,
+                checksum: Some(checksum),
+                source: Some(LockedSource::url(url, version.clone())),
+            })
         }
         DependencySpec::Url { url, version, .. } => {
             if let Some(pkg) = all_installed
@@ -865,30 +911,47 @@ async fn install_one_dep(
                 .find(|p| ProjectManager::matches_spec_name(p, name) && p.version == *version)
             {
                 info!("Package {}@{} already installed", name, version);
-                return Ok(pkg.clone());
+                return Ok(InstallOutcome {
+                    package: pkg.clone(),
+                    checksum: None,
+                    source: Some(LockedSource::url(url.clone(), version.clone())),
+                });
             }
             let source = PackageSource::url(url, version)?;
-            fetch_and_install_pkg(storage, fetcher, name, version, source).await
+            let (package, checksum) =
+                fetch_and_install_pkg(storage, fetcher, name, version, source).await?;
+            Ok(InstallOutcome {
+                package,
+                checksum: Some(checksum),
+                source: Some(LockedSource::url(url.clone(), version.clone())),
+            })
         }
         DependencySpec::Path { path, .. } => {
             let source_path = std::path::Path::new(path);
-            Ok(storage.install_from_path_dev(source_path).await?)
+            let package = storage.install_from_path_dev(source_path).await?;
+            Ok(InstallOutcome {
+                package,
+                checksum: None,
+                source: Some(LockedSource::path(source_path)),
+            })
         }
     }
 }
 
-/// Fetch a remote package and copy it into the global CAS.
+/// Fetch a remote package and copy it into the global CAS. Returns the
+/// installed package alongside the fetcher's SHA-256 of the archive.
 async fn fetch_and_install_pkg(
     storage: &StorageManager,
     fetcher: &ArchiveFetcher,
     name: &str,
     version: &str,
     source: PackageSource,
-) -> Result<InstalledPackage, ProjectError> {
+) -> Result<(InstalledPackage, String), ProjectError> {
     let fetch_result = fetcher.fetch(&source, name).await?;
+    let checksum = fetch_result.checksum.clone();
     let installed = storage.install_from_path(&fetch_result.package_path).await?;
     info!("Successfully fetched and installed {}@{}", name, version);
-    Ok(installed)
+    Ok((installed, checksum))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1323,7 +1386,7 @@ mod tests {
         // would panic on `expect("registry set built when registry deps
         // present")`. Reaching that panic is exactly the bug.
         let spec = hpm_package::DependencySpec::Simple("1.1.20".to_string());
-        let result = install_one_dep(
+        let outcome = install_one_dep(
             &storage_manager,
             &fetcher,
             None,
@@ -1334,8 +1397,11 @@ mod tests {
         .await
         .expect("scoped lookup must short-circuit on the bare-slug InstalledPackage");
 
-        assert_eq!(result.slug(), "tumblepipe");
-        assert_eq!(result.version, "1.1.20");
+        assert_eq!(outcome.package.slug(), "tumblepipe");
+        assert_eq!(outcome.package.version, "1.1.20");
+        // Short-circuited Simple/Registry: no fresh fetch -> no checksum / source.
+        assert!(outcome.checksum.is_none());
+        assert!(outcome.source.is_none());
     }
 
     /// Regression: a Houdini manifest left over from a previous sync (e.g. a
