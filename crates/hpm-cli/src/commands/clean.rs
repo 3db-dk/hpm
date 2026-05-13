@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use clap::Args;
 use hpm_config::Config;
 use hpm_core::StorageManager;
@@ -23,96 +24,73 @@ pub struct CleanArgs {
     pub comprehensive: bool,
 }
 
-pub async fn execute_clean(config: &Config, args: &CleanArgs) -> anyhow::Result<()> {
+/// Cleanup scope — packages, Python venvs, or both.
+#[derive(Copy, Clone)]
+enum Scope {
+    Packages,
+    Python,
+    Comprehensive,
+}
+
+/// How the cleanup interacts with the user.
+#[derive(Copy, Clone)]
+enum Mode {
+    /// Print what would be removed; never delete.
+    DryRun,
+    /// Delete without confirmation.
+    Automated,
+    /// Print findings, prompt, then delete (or cancel).
+    Interactive,
+}
+
+impl Mode {
+    fn from_flags(dry_run: bool, yes: bool) -> Self {
+        if dry_run {
+            Self::DryRun
+        } else if yes {
+            Self::Automated
+        } else {
+            Self::Interactive
+        }
+    }
+}
+
+pub async fn execute_clean(config: &Config, args: &CleanArgs) -> Result<()> {
     info!("Starting package cleanup");
 
-    // Initialize storage manager
-    let storage_manager = StorageManager::new(config.storage.clone())?;
+    let storage = StorageManager::new(config.storage.clone())?;
+    let mode = Mode::from_flags(args.dry_run, args.yes);
+    let scope = match (args.python_only, args.comprehensive) {
+        (true, true) => bail!("Cannot specify both --python-only and --comprehensive options"),
+        (true, false) => Scope::Python,
+        (false, true) => Scope::Comprehensive,
+        (false, false) => Scope::Packages,
+    };
 
-    // Handle different cleanup modes
-    match (args.python_only, args.comprehensive) {
-        (true, true) => Err(anyhow::anyhow!(
-            "Cannot specify both --python-only and --comprehensive options"
-        )),
-        (true, false) => {
-            // Python-only cleanup
-            execute_python_only_cleanup(&storage_manager, args.dry_run, args.yes).await
-        }
-        (false, true) => {
-            // Comprehensive cleanup (packages + Python)
-            execute_comprehensive_cleanup(&storage_manager, config, args.dry_run, args.yes).await
-        }
-        (false, false) => {
-            // Traditional package-only cleanup
-            if args.dry_run {
-                execute_dry_run_cleanup(&storage_manager, config).await
-            } else if args.yes {
-                execute_automated_cleanup(&storage_manager, config).await
-            } else {
-                execute_interactive_cleanup(&storage_manager, config).await
-            }
-        }
+    match scope {
+        Scope::Packages => cleanup_packages(&storage, config, mode).await,
+        Scope::Python => cleanup_python(&storage, mode).await,
+        Scope::Comprehensive => cleanup_comprehensive(&storage, config, mode).await,
     }
 }
 
-async fn execute_dry_run_cleanup(
-    storage_manager: &StorageManager,
-    config: &Config,
-) -> anyhow::Result<()> {
-    println!("Analyzing packages for cleanup (dry run)...");
-
-    let would_remove = storage_manager
-        .cleanup_unused_dry_run(&config.projects)
-        .await?;
-
-    if would_remove.is_empty() {
-        println!("No orphaned packages found - cleanup not needed");
-    } else {
-        println!(
-            "Found {} orphaned packages that would be removed:",
-            would_remove.len()
-        );
-        for package in &would_remove {
-            println!("  - {}", package);
-        }
-        println!();
-        println!("Run 'hpm clean' to remove these packages");
-        println!("Run 'hpm clean --yes' to remove without confirmation");
-    }
-
-    Ok(())
+/// Prompt the user with `[y/N]: <label>`. Returns true on `y`/`yes`.
+fn prompt_yes_no(label: &str) -> Result<bool> {
+    println!();
+    print!("{label} [y/N]: ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let response = input.trim().to_lowercase();
+    Ok(response == "y" || response == "yes")
 }
 
-async fn execute_automated_cleanup(
-    storage_manager: &StorageManager,
+async fn cleanup_packages(
+    storage: &StorageManager,
     config: &Config,
-) -> anyhow::Result<()> {
-    println!("Removing orphaned packages...");
-
-    let removed = storage_manager.cleanup_unused(&config.projects).await?;
-
-    if removed.is_empty() {
-        println!("No orphaned packages found - cleanup not needed");
-    } else {
-        println!("Successfully removed {} orphaned packages:", removed.len());
-        for package in &removed {
-            println!("  - {}", package);
-        }
-    }
-
-    Ok(())
-}
-
-async fn execute_interactive_cleanup(
-    storage_manager: &StorageManager,
-    config: &Config,
-) -> anyhow::Result<()> {
-    println!("Analyzing packages for cleanup...");
-
-    let would_remove = storage_manager
-        .cleanup_unused_dry_run(&config.projects)
-        .await?;
-
+    mode: Mode,
+) -> Result<()> {
+    let would_remove = storage.cleanup_unused_dry_run(&config.projects).await?;
     if would_remove.is_empty() {
         println!("No orphaned packages found - cleanup not needed");
         return Ok(());
@@ -120,264 +98,141 @@ async fn execute_interactive_cleanup(
 
     println!("Found {} orphaned packages:", would_remove.len());
     for package in &would_remove {
-        println!("  - {}", package);
+        println!("  - {package}");
     }
 
-    println!();
-    print!("Remove these packages? [y/N]: ");
-    io::stdout().flush()?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-
-    let response = input.trim().to_lowercase();
-    if response == "y" || response == "yes" {
-        println!("Removing packages...");
-
-        let removed = storage_manager.cleanup_unused(&config.projects).await?;
-
-        println!("Successfully removed {} packages:", removed.len());
-        for package in &removed {
-            println!("  - {}", package);
+    match mode {
+        Mode::DryRun => {
+            println!();
+            println!("Run 'hpm clean' to remove these packages");
+            println!("Run 'hpm clean --yes' to remove without confirmation");
+            Ok(())
         }
-    } else {
-        println!("Cleanup cancelled");
+        Mode::Interactive if !prompt_yes_no("Remove these packages?")? => {
+            println!("Cleanup cancelled");
+            Ok(())
+        }
+        Mode::Automated | Mode::Interactive => {
+            let removed = storage.cleanup_unused(&config.projects).await?;
+            println!("Successfully removed {} orphaned packages:", removed.len());
+            for package in &removed {
+                println!("  - {package}");
+            }
+            Ok(())
+        }
     }
-
-    Ok(())
 }
 
-/// Execute Python-only cleanup
-async fn execute_python_only_cleanup(
-    storage_manager: &StorageManager,
-    dry_run: bool,
-    automated: bool,
-) -> anyhow::Result<()> {
-    if dry_run {
-        println!("Analyzing Python virtual environments for cleanup (dry run)...");
-        let result = storage_manager.cleanup_python_only(true).await?;
+async fn cleanup_python(storage: &StorageManager, mode: Mode) -> Result<()> {
+    let analysis = storage.cleanup_python_only(true).await?;
+    if analysis.items_that_would_be_cleaned() == 0 {
+        println!("No orphaned Python virtual environments found - cleanup not needed");
+        return Ok(());
+    }
 
-        if result.items_that_would_be_cleaned() == 0 {
-            println!("No orphaned Python virtual environments found - cleanup not needed");
-        } else {
-            println!(
-                "Found {} orphaned virtual environments that would be removed:",
-                result.items_that_would_be_cleaned()
-            );
-            for venv_path in &result.would_remove {
-                println!("  - {:?}", venv_path);
-            }
-            println!(
-                "Would free approximately: {}",
-                result.format_space_that_would_be_freed()
-            );
+    println!(
+        "Found {} orphaned virtual environments:",
+        analysis.items_that_would_be_cleaned()
+    );
+    for venv in &analysis.would_remove {
+        println!("  - {}", venv.display());
+    }
+    println!(
+        "Would free approximately: {}",
+        analysis.format_space_that_would_be_freed()
+    );
+
+    match mode {
+        Mode::DryRun => {
             println!();
             println!("Run 'hpm clean --python-only' to remove these virtual environments");
             println!("Run 'hpm clean --python-only --yes' to remove without confirmation");
+            Ok(())
         }
-    } else if automated {
-        println!("Removing orphaned Python virtual environments...");
-        let result = storage_manager.cleanup_python_only(false).await?;
-
-        if result.items_cleaned() == 0 {
-            println!("No orphaned Python virtual environments found - cleanup not needed");
-        } else {
-            println!(
-                "Successfully removed {} orphaned virtual environments:",
-                result.items_cleaned()
-            );
-            for venv_path in &result.removed {
-                println!("  - {:?}", venv_path);
-            }
-            println!("Disk space freed: {}", result.format_space_freed());
+        Mode::Interactive if !prompt_yes_no("Remove these virtual environments?")? => {
+            println!("Cleanup cancelled");
+            Ok(())
         }
-    } else {
-        // Interactive cleanup
-        println!("Analyzing Python virtual environments for cleanup...");
-        let result = storage_manager.cleanup_python_only(true).await?;
-
-        if result.items_that_would_be_cleaned() == 0 {
-            println!("No orphaned Python virtual environments found - cleanup not needed");
-            return Ok(());
-        }
-
-        println!(
-            "Found {} orphaned virtual environments:",
-            result.items_that_would_be_cleaned()
-        );
-        for venv_path in &result.would_remove {
-            println!("  - {:?}", venv_path);
-        }
-        println!(
-            "Would free approximately: {}",
-            result.format_space_that_would_be_freed()
-        );
-
-        println!();
-        print!("Remove these virtual environments? [y/N]: ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-
-        let response = input.trim().to_lowercase();
-        if response == "y" || response == "yes" {
-            println!("Removing virtual environments...");
-            let result = storage_manager.cleanup_python_only(false).await?;
-
+        Mode::Automated | Mode::Interactive => {
+            let result = storage.cleanup_python_only(false).await?;
             println!(
                 "Successfully removed {} virtual environments:",
                 result.items_cleaned()
             );
-            for venv_path in &result.removed {
-                println!("  - {:?}", venv_path);
+            for venv in &result.removed {
+                println!("  - {}", venv.display());
             }
             println!("Disk space freed: {}", result.format_space_freed());
-        } else {
-            println!("Cleanup cancelled");
+            Ok(())
+        }
+    }
+}
+
+async fn cleanup_comprehensive(
+    storage: &StorageManager,
+    config: &Config,
+    mode: Mode,
+) -> Result<()> {
+    let analysis = storage.cleanup_comprehensive(&config.projects, true).await?;
+    if analysis.total_items_that_would_be_cleaned() == 0 {
+        println!("No orphaned packages or virtual environments found - cleanup not needed");
+        return Ok(());
+    }
+
+    if !analysis.removed_packages.is_empty() {
+        println!("Found {} orphaned packages:", analysis.removed_packages.len());
+        for package in &analysis.removed_packages {
+            println!("  - {package}");
+        }
+    }
+    if analysis.python_cleanup.items_that_would_be_cleaned() > 0 {
+        println!(
+            "Found {} orphaned virtual environments:",
+            analysis.python_cleanup.items_that_would_be_cleaned()
+        );
+        for venv in &analysis.python_cleanup.would_remove {
+            println!("  - {}", venv.display());
         }
     }
 
-    Ok(())
-}
-
-/// Execute comprehensive cleanup (packages + Python environments)
-async fn execute_comprehensive_cleanup(
-    storage_manager: &StorageManager,
-    config: &Config,
-    dry_run: bool,
-    automated: bool,
-) -> anyhow::Result<()> {
-    if dry_run {
-        println!("Analyzing packages and Python environments for cleanup (dry run)...");
-        let result = storage_manager
-            .cleanup_comprehensive(&config.projects, true)
-            .await?;
-
-        if result.total_items_that_would_be_cleaned() == 0 {
-            println!("No orphaned packages or virtual environments found - cleanup not needed");
-        } else {
-            if !result.removed_packages.is_empty() {
-                println!(
-                    "Found {} orphaned packages that would be removed:",
-                    result.removed_packages.len()
-                );
-                for package in &result.removed_packages {
-                    println!("  - {}", package);
-                }
-            }
-
-            if result.python_cleanup.items_that_would_be_cleaned() > 0 {
-                println!(
-                    "Found {} orphaned virtual environments that would be removed:",
-                    result.python_cleanup.items_that_would_be_cleaned()
-                );
-                for venv_path in &result.python_cleanup.would_remove {
-                    println!("  - {:?}", venv_path);
-                }
-            }
-
+    match mode {
+        Mode::DryRun => {
             println!();
             println!("Run 'hpm clean --comprehensive' to remove these items");
             println!("Run 'hpm clean --comprehensive --yes' to remove without confirmation");
+            Ok(())
         }
-    } else if automated {
-        println!("Performing comprehensive cleanup (packages + Python environments)...");
-        let result = storage_manager
-            .cleanup_comprehensive(&config.projects, false)
-            .await?;
-
-        if result.total_items_cleaned() == 0 {
-            println!("No orphaned packages or virtual environments found - cleanup not needed");
-        } else {
+        Mode::Interactive if !prompt_yes_no("Remove these items?")? => {
+            println!("Cleanup cancelled");
+            Ok(())
+        }
+        Mode::Automated | Mode::Interactive => {
+            let result = storage.cleanup_comprehensive(&config.projects, false).await?;
             if !result.removed_packages.is_empty() {
                 println!(
                     "Successfully removed {} orphaned packages:",
                     result.removed_packages.len()
                 );
                 for package in &result.removed_packages {
-                    println!("  - {}", package);
+                    println!("  - {package}");
                 }
             }
-
             if result.python_cleanup.items_cleaned() > 0 {
                 println!(
                     "Successfully removed {} orphaned virtual environments:",
                     result.python_cleanup.items_cleaned()
                 );
-                for venv_path in &result.python_cleanup.removed {
-                    println!("  - {:?}", venv_path);
+                for venv in &result.python_cleanup.removed {
+                    println!("  - {}", venv.display());
                 }
-            }
-        }
-    } else {
-        // Interactive cleanup
-        println!("Analyzing packages and Python environments for cleanup...");
-        let result = storage_manager
-            .cleanup_comprehensive(&config.projects, true)
-            .await?;
-
-        if result.total_items_that_would_be_cleaned() == 0 {
-            println!("No orphaned packages or virtual environments found - cleanup not needed");
-            return Ok(());
-        }
-
-        if !result.removed_packages.is_empty() {
-            println!("Found {} orphaned packages:", result.removed_packages.len());
-            for package in &result.removed_packages {
-                println!("  - {}", package);
-            }
-        }
-
-        if result.python_cleanup.items_that_would_be_cleaned() > 0 {
-            println!(
-                "Found {} orphaned virtual environments:",
-                result.python_cleanup.items_that_would_be_cleaned()
-            );
-            for venv_path in &result.python_cleanup.would_remove {
-                println!("  - {:?}", venv_path);
-            }
-        }
-
-        println!();
-        print!("Remove these items? [y/N]: ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-
-        let response = input.trim().to_lowercase();
-        if response == "y" || response == "yes" {
-            println!("Performing comprehensive cleanup...");
-            let result = storage_manager
-                .cleanup_comprehensive(&config.projects, false)
-                .await?;
-
-            println!(
-                "Successfully cleaned up {} total items:",
-                result.total_items_cleaned()
-            );
-            if !result.removed_packages.is_empty() {
-                println!("  Packages ({}): ", result.removed_packages.len());
-                for package in &result.removed_packages {
-                    println!("    - {}", package);
-                }
-            }
-            if result.python_cleanup.items_cleaned() > 0 {
                 println!(
-                    "  Virtual Environments ({}): ",
-                    result.python_cleanup.items_cleaned()
+                    "Disk space freed: {}",
+                    result.python_cleanup.format_space_freed()
                 );
-                for venv_path in &result.python_cleanup.removed {
-                    println!("    - {:?}", venv_path);
-                }
             }
-        } else {
-            println!("Cleanup cancelled");
+            Ok(())
         }
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -385,16 +240,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn clean_args_python_only_and_comprehensive_are_mutually_exclusive() {
-        // The parse layer is clap's job; this test fixes the mutual-exclusion
-        // semantics in execute_clean so a future refactor can't silently let
-        // both flags through.
-        let args = CleanArgs {
-            dry_run: false,
-            yes: true,
-            python_only: true,
-            comprehensive: true,
-        };
-        assert!(args.python_only && args.comprehensive);
+    fn mode_from_flags_picks_dry_run_first() {
+        assert!(matches!(Mode::from_flags(true, false), Mode::DryRun));
+        // dry_run wins even if --yes is also set — never delete in a dry run.
+        assert!(matches!(Mode::from_flags(true, true), Mode::DryRun));
+    }
+
+    #[test]
+    fn mode_from_flags_yes_implies_automated() {
+        assert!(matches!(Mode::from_flags(false, true), Mode::Automated));
+    }
+
+    #[test]
+    fn mode_from_flags_defaults_to_interactive() {
+        assert!(matches!(Mode::from_flags(false, false), Mode::Interactive));
     }
 }
