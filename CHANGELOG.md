@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`ProjectManager::new` now takes an `Arc<Config>` parameter** (breaking
+  change for library consumers, e.g. the TumbleTrove desktop). The constructor
+  used to call `Config::load()` internally, and `resolve_and_install_from_registry`
+  and `sync_dependencies` each loaded the user→project config chain again,
+  so a single embedded "install package" operation triggered three disk
+  reads of `~/.hpm/config.toml` plus the matching `[hpm_config] Loaded user
+  configuration from …` log lines, drowning out unrelated warnings in
+  desktop logs. Callers now load `Config` once at their top level and
+  share it via `Arc<Config>`; internal methods read from `self.config`.
+  `hpm-cli` was updated in lockstep: each command loads `Config` exactly
+  once via `load_cli_config()` and passes `&Config` down, eliminating the
+  redundant second load inside `install` and the third load triggered by
+  `hpm add` → `install`. `Config` is now re-exported from `hpm-core` so
+  library consumers don't need to depend on `hpm-config` directly.
+- **`Config::load` success path is now `debug!`, not `info!`.** Embedded
+  callers that legitimately load config once per operation no longer get
+  a user-visible `[hpm_config] Loaded user configuration from …` line per
+  call. The malformed-config `warn!` is unchanged — that's a real
+  user-visible problem and still surfaces at `WARN`.
+
+### Removed
+- `ProjectError::ConfigLoad` variant. It was only constructed by the now-
+  removed internal `Config::load()` calls in `ProjectManager`. Match arms
+  for this variant in downstream code can be deleted.
+
 ## [0.11.3] - 2026-05-11
 
 ### Fixed

@@ -1,6 +1,7 @@
 use super::manifest_utils::{determine_manifest_path, load_manifest};
 use crate::progress::OperationProgress;
 use anyhow::{Context, Result};
+use hpm_config::Config;
 use hpm_core::{
     ArchiveFetcher, LockFile, LockedDependency, LockedPythonDependency, LockedSource,
     PackageSource, StorageManager,
@@ -21,9 +22,11 @@ use tracing::{debug, info, warn};
 ///
 /// # Arguments
 ///
+/// * `config` - The already-loaded HPM configuration (shared with the caller)
 /// * `manifest_path` - Optional path to hpm.toml file
 /// * `frozen_lockfile` - If true, fail if lock file is missing or would change
 pub async fn install_dependencies(
+    config: &Config,
     manifest_path: Option<PathBuf>,
     frozen_lockfile: bool,
 ) -> Result<()> {
@@ -100,8 +103,6 @@ pub async fn install_dependencies(
     // Verify cached packages against lock file checksums
     if let Some(ref lock) = existing_lock {
         progress.set_message("Verifying cached packages");
-        let config = hpm_config::Config::load()
-            .map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
         let packages_dir = &config.storage.packages_dir;
 
         if let Err(e) = lock.verify_checksums(packages_dir) {
@@ -133,7 +134,7 @@ pub async fn install_dependencies(
                 dependencies.len()
             ));
             info!("Installing {} HPM dependencies", dependencies.len());
-            install_hpm_dependencies(dependencies)
+            install_hpm_dependencies(config, dependencies)
                 .await
                 .context("Failed to install HPM dependencies")?
         } else {
@@ -289,12 +290,10 @@ struct PackageInstallResult {
 /// No project-side symlinks are created. The Houdini JSON manifests
 /// written downstream embed absolute paths into the CAS.
 async fn install_hpm_dependencies(
+    config: &Config,
     dependencies: &indexmap::IndexMap<String, hpm_package::DependencySpec>,
 ) -> Result<HashMap<String, PackageInstallResult>> {
     info!("Installing HPM dependencies...");
-
-    let config = hpm_config::Config::load()
-        .map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
 
     // Fetcher staging dir lives next to the canonical CAS (not inside it),
     // so a half-extracted archive on `/tmp` filling the disk doesn't trash
@@ -318,7 +317,7 @@ async fn install_hpm_dependencies(
     let registry_set = {
         let has_registry_deps = dependencies.values().any(|spec| spec.is_registry());
         if has_registry_deps {
-            Some(Arc::new(super::registry::build_registry_set(&config)))
+            Some(Arc::new(super::registry::build_registry_set(config)))
         } else {
             None
         }
@@ -954,7 +953,8 @@ min_version = "20.5"
         let _cwd = CwdGuard::enter(temp_dir.path());
 
         // Install dependencies (no deps, so this tests directory setup and lock file creation)
-        let result = install_dependencies(None, false).await;
+        let config = Config::default();
+        let result = install_dependencies(&config, None, false).await;
 
         // The function should complete successfully for manifests without dependencies
         // This tests the manifest parsing and directory setup logic
@@ -989,7 +989,8 @@ description = "Test custom manifest path"
 "#;
         std::fs::write(&manifest_path, manifest_content).unwrap();
 
-        let result = install_dependencies(Some(manifest_path), false).await;
+        let config = Config::default();
+        let result = install_dependencies(&config, Some(manifest_path), false).await;
 
         assert!(result.is_ok());
 
@@ -1008,7 +1009,8 @@ description = "Test custom manifest path"
         let nonexistent_path = temp_dir.path().join("nonexistent.toml");
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(install_dependencies(Some(nonexistent_path), false));
+        let config = Config::default();
+        let result = rt.block_on(install_dependencies(&config, Some(nonexistent_path), false));
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();

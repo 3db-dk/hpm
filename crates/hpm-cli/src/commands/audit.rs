@@ -23,11 +23,12 @@
 use super::manifest_utils::{determine_manifest_path, load_manifest};
 use anyhow::Result;
 use console::style;
+use hpm_config::Config;
 use std::path::PathBuf;
 use tracing::info;
 
 /// Run security audit on a package and its dependencies
-pub async fn audit_packages(manifest_path: Option<PathBuf>) -> Result<()> {
+pub async fn audit_packages(config: &Config, manifest_path: Option<PathBuf>) -> Result<()> {
     info!("Running security audit");
 
     let manifest_path = determine_manifest_path(manifest_path)?;
@@ -87,12 +88,9 @@ pub async fn audit_packages(manifest_path: Option<PathBuf>) -> Result<()> {
                 }
 
                 // Check 4: Checksum verification
-                match hpm_config::Config::load() {
-                    Ok(config) => match lock.verify_checksums(&config.storage.packages_dir) {
-                        Ok(()) => passed.push("Package checksums verified"),
-                        Err(e) => warnings.push(format!("Checksum verification failed: {e}")),
-                    },
-                    Err(e) => warnings.push(format!("Failed to load HPM config: {e}")),
+                match lock.verify_checksums(&config.storage.packages_dir) {
+                    Ok(()) => passed.push("Package checksums verified"),
+                    Err(e) => warnings.push(format!("Checksum verification failed: {e}")),
                 }
             }
             Err(e) => {
@@ -148,7 +146,8 @@ mod tests {
         lock.save(&temp_dir.path().join("hpm.lock")).unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
-        let result = audit_packages(Some(manifest_path)).await;
+        let config = Config::default();
+        let result = audit_packages(&config, Some(manifest_path)).await;
 
         assert!(result.is_ok());
     }
@@ -170,7 +169,8 @@ mod tests {
         lock.save(&temp_dir.path().join("hpm.lock")).unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
-        let result = audit_packages(Some(manifest_path)).await;
+        let config = Config::default();
+        let result = audit_packages(&config, Some(manifest_path)).await;
 
         assert!(result.is_ok());
     }
@@ -188,7 +188,8 @@ mod tests {
         .unwrap();
 
         let manifest_path = temp_dir.path().join("hpm.toml");
-        let result = audit_packages(Some(manifest_path)).await;
+        let config = Config::default();
+        let result = audit_packages(&config, Some(manifest_path)).await;
 
         assert!(result.is_ok());
     }

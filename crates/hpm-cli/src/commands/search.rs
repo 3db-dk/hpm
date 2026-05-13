@@ -3,7 +3,7 @@
 //! Searches configured registries for packages matching a query.
 
 use super::registry::build_registry_set;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use console::style;
 use hpm_config::Config;
 
@@ -11,9 +11,12 @@ use hpm_config::Config;
 ///
 /// Searches all configured registries for packages matching the query.
 /// Falls back to a helpful message if no registries are configured.
-pub async fn search_packages(query: String, _limit: Option<u32>, json_output: bool) -> Result<()> {
-    let config = Config::load().context("Failed to load HPM configuration")?;
-
+pub async fn search_packages(
+    config: &Config,
+    query: String,
+    _limit: Option<u32>,
+    json_output: bool,
+) -> Result<()> {
     if config.registries.is_empty() {
         println!(
             "{} No registries configured.",
@@ -31,7 +34,7 @@ pub async fn search_packages(query: String, _limit: Option<u32>, json_output: bo
         return Ok(());
     }
 
-    let registry_set = build_registry_set(&config);
+    let registry_set = build_registry_set(config);
 
     let results = registry_set
         .search(&query)
@@ -89,7 +92,8 @@ mod tests {
     #[tokio::test]
     async fn test_search_no_registries() {
         // Should not panic when no registries are configured
-        let result = search_packages("test".to_string(), None, false).await;
+        let config = Config::default();
+        let result = search_packages(&config, "test".to_string(), None, false).await;
         assert!(result.is_ok());
     }
 }

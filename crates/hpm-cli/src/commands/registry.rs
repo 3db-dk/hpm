@@ -17,14 +17,15 @@ use hpm_core::registry::Registry;
 use tracing::info;
 
 /// Add a new registry.
+///
+/// `config` is taken by value because the registry add mutates it and then
+/// persists the result; the caller's copy is discarded on return.
 pub async fn add_registry(
+    mut config: Config,
     url: String,
     name: Option<String>,
     registry_type: Option<String>,
 ) -> Result<()> {
-    let mut config =
-        Config::load().map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
-
     // Infer registry type from URL if not specified
     let reg_type = match registry_type.as_deref() {
         Some("api") => RegistryType::Api,
@@ -80,10 +81,7 @@ pub async fn add_registry(
 }
 
 /// List configured registries.
-pub async fn list_registries() -> Result<()> {
-    let config =
-        Config::load().map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
-
+pub async fn list_registries(config: &Config) -> Result<()> {
     if config.registries.is_empty() {
         println!("{}", style("No registries configured.").dim());
         println!();
@@ -122,10 +120,7 @@ pub async fn list_registries() -> Result<()> {
 }
 
 /// Remove a registry by name.
-pub async fn remove_registry(name: String) -> Result<()> {
-    let mut config =
-        Config::load().map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
-
+pub async fn remove_registry(mut config: Config, name: String) -> Result<()> {
     if !config.remove_registry(&name) {
         bail!("Registry '{}' not found.", name);
     }
@@ -142,10 +137,7 @@ pub async fn remove_registry(name: String) -> Result<()> {
 }
 
 /// Update (refresh) all registry caches.
-pub async fn update_registries() -> Result<()> {
-    let config =
-        Config::load().map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
-
+pub async fn update_registries(config: &Config) -> Result<()> {
     if config.registries.is_empty() {
         println!("{}", style("No registries configured.").dim());
         return Ok(());

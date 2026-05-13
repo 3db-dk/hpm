@@ -57,11 +57,13 @@ fn parse_name_version(input: &str) -> (String, Option<String>) {
 ///
 /// # Arguments
 ///
+/// * `config` - The already-loaded HPM configuration
 /// * `package_names` - Names of the packages to add
 /// * `path` - Local path to package directory (for development dependencies, single package only)
 /// * `manifest_path` - Path to the manifest file or directory
 /// * `optional` - Whether the dependencies are optional
 pub async fn add_packages(
+    config: &Config,
     package_names: Vec<String>,
     path: Option<PathBuf>,
     manifest_path: Option<PathBuf>,
@@ -108,9 +110,7 @@ pub async fn add_packages(
             // Parse name@version syntax
             let (pkg_name, requested_version) = parse_name_version(package_name);
 
-            let config = Config::load()
-                .map_err(|e| anyhow::anyhow!("Failed to load HPM configuration: {e}"))?;
-            let registry_set = build_registry_set(&config);
+            let registry_set = build_registry_set(config);
 
             if registry_set.is_empty() {
                 let example_pkg = package_names.first().unwrap();
@@ -180,7 +180,7 @@ pub async fn add_packages(
 
     // Install the newly added dependencies
     info!("Installing dependencies...");
-    super::install::install_dependencies(Some(manifest_path), false)
+    super::install::install_dependencies(config, Some(manifest_path), false)
         .await
         .context("Failed to install dependencies after adding packages")?;
 

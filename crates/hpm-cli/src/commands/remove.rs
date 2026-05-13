@@ -48,11 +48,16 @@
 
 use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifest};
 use anyhow::{Context, Result};
+use hpm_config::Config;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
 /// Remove a package dependency from hpm.toml manifest
-pub async fn remove_package(package_name: String, manifest_path: Option<PathBuf>) -> Result<()> {
+pub async fn remove_package(
+    config: &Config,
+    package_name: String,
+    manifest_path: Option<PathBuf>,
+) -> Result<()> {
     info!("Removing package dependency: {}", package_name);
 
     // Determine manifest path
@@ -100,7 +105,7 @@ pub async fn remove_package(package_name: String, manifest_path: Option<PathBuf>
 
     // Update lock file by running install (which regenerates the lock file)
     info!("Updating lock file...");
-    match super::install::install_dependencies(Some(manifest_path), false).await {
+    match super::install::install_dependencies(config, Some(manifest_path), false).await {
         Ok(()) => {
             info!("Lock file updated successfully");
         }
@@ -221,8 +226,13 @@ mod tests {
 
         let manifest_path = temp_dir.path().join("hpm.toml");
 
-        let _result =
-            remove_package("utility-nodes".to_string(), Some(manifest_path.clone())).await;
+        let config = Config::default();
+        let _result = remove_package(
+            &config,
+            "utility-nodes".to_string(),
+            Some(manifest_path.clone()),
+        )
+        .await;
 
         let manifest = load_manifest(&manifest_path).unwrap();
 
@@ -247,7 +257,13 @@ mod tests {
 
         let manifest_path = temp_dir.path().join("hpm.toml");
 
-        let result = remove_package("non-existent-package".to_string(), Some(manifest_path)).await;
+        let config = Config::default();
+        let result = remove_package(
+            &config,
+            "non-existent-package".to_string(),
+            Some(manifest_path),
+        )
+        .await;
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -263,7 +279,8 @@ mod tests {
 
         let manifest_path = temp_dir.path().join("hpm.toml");
 
-        let result = remove_package("some-package".to_string(), Some(manifest_path)).await;
+        let config = Config::default();
+        let result = remove_package(&config, "some-package".to_string(), Some(manifest_path)).await;
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -276,7 +293,8 @@ mod tests {
         let _cwd = CwdGuard::enter(temp_dir.path());
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(remove_package("some-package".to_string(), None));
+        let config = Config::default();
+        let result = rt.block_on(remove_package(&config, "some-package".to_string(), None));
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();

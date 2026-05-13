@@ -669,7 +669,9 @@ async fn run_command(
             manifest,
             optional,
         } => {
+            let config = load_cli_config()?;
             commands::add::add_packages(
+                &config,
                 packages.clone(),
                 path.clone(),
                 manifest.clone(),
@@ -693,7 +695,8 @@ async fn run_command(
             }
         }
         Commands::Remove { package, manifest } => {
-            commands::remove::remove_package(package.clone(), manifest.clone())
+            let config = load_cli_config()?;
+            commands::remove::remove_package(&config, package.clone(), manifest.clone())
                 .await
                 .map_err(|e| {
                     CliError::package(
@@ -720,7 +723,8 @@ async fn run_command(
                 output: output_format,
             };
 
-            commands::update::update_packages(options)
+            let config = load_cli_config()?;
+            commands::update::update_packages(&config, options)
                 .await
                 .map_err(|e| {
                     CliError::package(
@@ -756,7 +760,8 @@ async fn run_command(
         }
         Commands::Search { query } => {
             let json_output = output_format != OutputFormat::Human;
-            commands::search::search_packages(query.clone(), None, json_output)
+            let config = load_cli_config()?;
+            commands::search::search_packages(&config, query.clone(), None, json_output)
                 .await
                 .map_err(|e| {
                     CliError::network(
@@ -795,7 +800,8 @@ async fn run_command(
             manifest,
             frozen_lockfile,
         } => {
-            commands::install::install_dependencies(manifest.clone(), *frozen_lockfile)
+            let config = load_cli_config()?;
+            commands::install::install_dependencies(&config, manifest.clone(), *frozen_lockfile)
                 .await
                 .map_err(|e| {
                     CliError::package(
@@ -828,7 +834,9 @@ async fn run_command(
             json,
             platform,
         } => {
+            let config = load_cli_config()?;
             commands::pack::execute(
+                &config,
                 directory.clone(),
                 key.clone(),
                 output.clone(),
@@ -845,7 +853,8 @@ async fn run_command(
             })?;
         }
         Commands::Audit { manifest } => {
-            commands::audit::audit_packages(manifest.clone())
+            let config = load_cli_config()?;
+            commands::audit::audit_packages(&config, manifest.clone())
                 .await
                 .map_err(|e| {
                     CliError::package(
@@ -860,22 +869,30 @@ async fn run_command(
                 name,
                 registry_type,
             } => {
-                commands::registry::add_registry(url.clone(), name.clone(), registry_type.clone())
-                    .await
-                    .map_err(|e| {
-                        CliError::config(
-                            e,
-                            Some("Use 'hpm registry add --help' for usage information".to_string()),
-                        )
-                    })?;
+                let config = load_cli_config()?;
+                commands::registry::add_registry(
+                    config,
+                    url.clone(),
+                    name.clone(),
+                    registry_type.clone(),
+                )
+                .await
+                .map_err(|e| {
+                    CliError::config(
+                        e,
+                        Some("Use 'hpm registry add --help' for usage information".to_string()),
+                    )
+                })?;
             }
             RegistryAction::List => {
-                commands::registry::list_registries()
+                let config = load_cli_config()?;
+                commands::registry::list_registries(&config)
                     .await
                     .map_err(|e| CliError::config(e, None))?;
             }
             RegistryAction::Remove { name } => {
-                commands::registry::remove_registry(name.clone())
+                let config = load_cli_config()?;
+                commands::registry::remove_registry(config, name.clone())
                     .await
                     .map_err(|e| {
                         CliError::config(
@@ -888,21 +905,27 @@ async fn run_command(
                     })?;
             }
             RegistryAction::Update => {
-                commands::registry::update_registries().await.map_err(|e| {
-                    CliError::network(
-                        e,
-                        Some("Check your internet connection and registry URLs.".to_string()),
-                    )
-                })?;
+                let config = load_cli_config()?;
+                commands::registry::update_registries(&config)
+                    .await
+                    .map_err(|e| {
+                        CliError::network(
+                            e,
+                            Some("Check your internet connection and registry URLs.".to_string()),
+                        )
+                    })?;
             }
         },
         Commands::Clean(args) => {
-            commands::clean::execute_clean(args).await.map_err(|e| {
-                CliError::package(
-                    e,
-                    Some("Use 'hpm clean --help' for usage information".to_string()),
-                )
-            })?;
+            let config = load_cli_config()?;
+            commands::clean::execute_clean(&config, args)
+                .await
+                .map_err(|e| {
+                    CliError::package(
+                        e,
+                        Some("Use 'hpm clean --help' for usage information".to_string()),
+                    )
+                })?;
 
             if output_format == OutputFormat::Human {
                 console.success("Cleanup completed successfully");
@@ -916,6 +939,16 @@ async fn run_command(
     }
 
     Ok(ExitStatus::Success)
+}
+
+/// Load HPM config once for a single command invocation.
+///
+/// Pulled out of each `Commands::*` arm so the same `Config` can be threaded
+/// into helpers that previously each called `Config::load()` themselves —
+/// `install` used to reload twice, and `add` reloaded once then handed control
+/// to `install` which reloaded twice more.
+fn load_cli_config() -> CliResult<hpm_config::Config> {
+    hpm_config::Config::load().map_err(|e| CliError::config(e, None))
 }
 
 fn init_logging(verbosity: Verbosity) {

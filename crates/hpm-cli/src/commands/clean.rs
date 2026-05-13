@@ -1,4 +1,3 @@
-use anyhow::Context;
 use clap::Args;
 use hpm_config::Config;
 use hpm_core::StorageManager;
@@ -28,10 +27,8 @@ pub struct CleanArgs {
     pub comprehensive: bool,
 }
 
-pub async fn execute_clean(args: &CleanArgs) -> anyhow::Result<()> {
+pub async fn execute_clean(config: &Config, args: &CleanArgs) -> anyhow::Result<()> {
     info!("Starting package cleanup");
-
-    let config = Config::load().context("Failed to load HPM configuration")?;
 
     // Initialize storage manager
     let storage_manager = StorageManager::new(config.storage.clone())?;
@@ -47,16 +44,16 @@ pub async fn execute_clean(args: &CleanArgs) -> anyhow::Result<()> {
         }
         (false, true) => {
             // Comprehensive cleanup (packages + Python)
-            execute_comprehensive_cleanup(&storage_manager, &config, args.dry_run, args.yes).await
+            execute_comprehensive_cleanup(&storage_manager, config, args.dry_run, args.yes).await
         }
         (false, false) => {
             // Traditional package-only cleanup
             if args.dry_run {
-                execute_dry_run_cleanup(&storage_manager, &config).await
+                execute_dry_run_cleanup(&storage_manager, config).await
             } else if args.yes {
-                execute_automated_cleanup(&storage_manager, &config).await
+                execute_automated_cleanup(&storage_manager, config).await
             } else {
-                execute_interactive_cleanup(&storage_manager, &config).await
+                execute_interactive_cleanup(&storage_manager, config).await
             }
         }
     }

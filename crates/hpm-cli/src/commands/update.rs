@@ -188,7 +188,7 @@
 use super::manifest_utils::determine_manifest_path;
 use crate::console;
 use crate::output::OutputFormat;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use hpm_config::Config;
 use hpm_package::PackageManifest;
 use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
@@ -230,10 +230,8 @@ struct PackageUpdate {
     requires_venv_update: bool,
 }
 
-pub async fn update_packages(options: UpdateOptions) -> Result<()> {
+pub async fn update_packages(config: &Config, options: UpdateOptions) -> Result<()> {
     log_info!("Starting package update process");
-
-    let config = Config::load().context("Failed to load HPM configuration")?;
 
     // Determine manifest path
     let manifest_path = determine_manifest_path(options.package.clone())?;

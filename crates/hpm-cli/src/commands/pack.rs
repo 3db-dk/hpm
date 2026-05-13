@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::console::Console;
 
 pub async fn execute(
+    config: &Config,
     directory: Option<PathBuf>,
     key: Option<PathBuf>,
     output: Option<PathBuf>,
@@ -65,11 +66,11 @@ pub async fn execute(
             Some(packer::load_signing_key(Path::new(&value))?)
         }
     } else {
-        Config::load()
-            .unwrap_or_default()
+        config
             .signing
             .key_path
-            .map(|p| packer::load_signing_key(&p))
+            .as_ref()
+            .map(|p| packer::load_signing_key(p))
             .transpose()?
     };
 
