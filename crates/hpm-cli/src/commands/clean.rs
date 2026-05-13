@@ -14,10 +14,6 @@ pub struct CleanArgs {
     #[arg(long, short)]
     pub yes: bool,
 
-    /// Target specific package patterns
-    #[arg(long)]
-    pub package: Option<Vec<String>>,
-
     /// Clean only Python virtual environments
     #[arg(long)]
     pub python_only: bool,
@@ -416,73 +412,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn clean_args_parsing() {
-        let args = CleanArgs {
-            dry_run: true,
-            yes: false,
-            package: None,
-            python_only: false,
-            comprehensive: false,
-        };
-
-        assert!(args.dry_run);
-        assert!(!args.yes);
-        assert!(args.package.is_none());
-        assert!(!args.python_only);
-        assert!(!args.comprehensive);
-    }
-
-    #[test]
-    fn clean_args_with_packages() {
+    fn clean_args_python_only_and_comprehensive_are_mutually_exclusive() {
+        // The parse layer is clap's job; this test fixes the mutual-exclusion
+        // semantics in execute_clean so a future refactor can't silently let
+        // both flags through.
         let args = CleanArgs {
             dry_run: false,
             yes: true,
-            package: Some(vec![
-                "test-package".to_string(),
-                "another-package".to_string(),
-            ]),
-            python_only: false,
-            comprehensive: false,
-        };
-
-        assert!(!args.dry_run);
-        assert!(args.yes);
-        assert_eq!(args.package.as_ref().unwrap().len(), 2);
-        assert!(!args.python_only);
-        assert!(!args.comprehensive);
-    }
-
-    #[test]
-    fn clean_args_python_only() {
-        let args = CleanArgs {
-            dry_run: false,
-            yes: false,
-            package: None,
             python_only: true,
-            comprehensive: false,
-        };
-
-        assert!(!args.dry_run);
-        assert!(!args.yes);
-        assert!(args.package.is_none());
-        assert!(args.python_only);
-        assert!(!args.comprehensive);
-    }
-
-    #[test]
-    fn clean_args_comprehensive() {
-        let args = CleanArgs {
-            dry_run: true,
-            yes: false,
-            package: None,
-            python_only: false,
             comprehensive: true,
         };
-
-        assert!(args.dry_run);
-        assert!(!args.yes);
-        assert!(args.package.is_none());
-        assert!(!args.python_only);
-        assert!(args.comprehensive);
+        assert!(args.python_only && args.comprehensive);
     }
 }
