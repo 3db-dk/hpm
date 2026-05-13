@@ -1,7 +1,7 @@
 use crate::archive_fetcher::ArchiveFetcher;
 use crate::package_source::PackageSource;
 use crate::storage::{InstalledPackage, PackageSpec, StorageManager};
-use hpm_config::ProjectConfig;
+use hpm_config::{Config, ProjectConfig};
 use hpm_package::{HoudiniPackage, ManifestEnvEntry, ManifestLoadError, PackageManifest};
 use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use indexmap::IndexMap;
@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 
 #[derive(Debug)]
 pub struct ProjectManager {
+    config: Arc<Config>,
     project_config: ProjectConfig,
     storage_manager: Arc<StorageManager>,
     fetcher: ArchiveFetcher,
@@ -25,31 +26,33 @@ pub struct ProjectDependency {
 }
 
 impl ProjectManager {
+    /// Construct a `ProjectManager` for `project_root`, sharing the supplied
+    /// `Config` and `StorageManager`.
+    ///
+    /// Callers load `Config` once at their top level and thread it down — the
+    /// embedded callers (the desktop client) used to trigger 3+ `Config::load`
+    /// disk reads per user operation, all of which now collapse into the
+    /// shared `Arc<Config>` here and on `StorageManager`.
     pub fn new(
         project_root: PathBuf,
         storage_manager: Arc<StorageManager>,
+        config: Arc<Config>,
     ) -> Result<Self, ProjectError> {
         let project_config = hpm_config::Config::load_project_config(&project_root);
 
-        // Create fetcher using HPM's cache and packages directories
-        let config =
-            hpm_config::Config::load().map_err(|e| ProjectError::ConfigLoad(e.to_string()))?;
-        let cache_dir = config
+        // Fetcher staging lives next to the global CAS, not inside it.
+        let storage_root = config
             .storage
             .packages_dir
             .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("cache");
-        let fetch_packages_dir = config
-            .storage
-            .packages_dir
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("fetch");
+            .unwrap_or(std::path::Path::new("."));
+        let cache_dir = storage_root.join("cache");
+        let fetch_packages_dir = storage_root.join("fetch");
         let fetcher = ArchiveFetcher::new(cache_dir, fetch_packages_dir)
             .map_err(|e| ProjectError::DirectoryCreation(e.to_string()))?;
 
         let manager = Self {
+            config,
             project_config,
             storage_manager,
             fetcher,
@@ -115,11 +118,9 @@ impl ProjectManager {
         &self,
         spec: &PackageSpec,
     ) -> Result<InstalledPackage, ProjectError> {
-        let config =
-            hpm_config::Config::load().map_err(|e| ProjectError::ConfigLoad(e.to_string()))?;
         let registry_set = crate::registry::RegistrySet::from_configs(
-            &config.registries,
-            &config.storage.registry_cache_dir,
+            &self.config.registries,
+            &self.config.storage.registry_cache_dir,
         );
 
         if registry_set.is_empty() {
@@ -226,8 +227,6 @@ impl ProjectManager {
             let registry_set = {
                 let has_registry_deps = dependencies.values().any(|spec| spec.is_registry());
                 if has_registry_deps {
-                    let config = hpm_config::Config::load()
-                        .map_err(|e| ProjectError::ConfigLoad(e.to_string()))?;
                     let registry_configs: Vec<hpm_config::RegistrySourceConfig> =
                         if let Some(ref regs) = manifest_registries {
                             regs.iter()
@@ -245,11 +244,11 @@ impl ProjectManager {
                                 })
                                 .collect()
                         } else {
-                            config.registries.clone()
+                            self.config.registries.clone()
                         };
                     Some(crate::registry::RegistrySet::from_configs(
                         &registry_configs,
-                        &config.storage.registry_cache_dir,
+                        &self.config.storage.registry_cache_dir,
                     ))
                 } else {
                     None
@@ -951,9 +950,6 @@ pub enum ProjectError {
     #[error("Python dependency resolution failed: {0}")]
     PythonResolution(String),
 
-    #[error("Failed to load HPM configuration: {0}")]
-    ConfigLoad(String),
-
     #[error(
         "Required env var '{var}' for package '{package}' has no value. \
          Set it in this project's [env] section in hpm.toml."
@@ -974,39 +970,43 @@ mod tests {
     use hpm_package::PackagePath;
     use tempfile::TempDir;
 
+    /// Build the `(Config, StorageManager)` pair every `ProjectManager` test
+    /// needs, rooted inside `temp_dir`. The CAS lives at `<temp>/.hpm/packages`.
+    fn test_setup(temp_dir: &Path) -> (Arc<Config>, Arc<StorageManager>) {
+        let storage_config = hpm_config::StorageConfig {
+            home_dir: temp_dir.join(".hpm"),
+            cache_dir: temp_dir.join(".hpm").join("cache"),
+            packages_dir: temp_dir.join(".hpm").join("packages"),
+            registry_cache_dir: temp_dir.join(".hpm").join("registry"),
+        };
+        let config = Arc::new(Config {
+            storage: storage_config.clone(),
+            ..Default::default()
+        });
+        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        (config, storage_manager)
+    }
+
     #[tokio::test]
     async fn project_manager_creation() {
         let temp_dir = TempDir::new().unwrap();
-        let storage_config = hpm_config::StorageConfig {
-            home_dir: temp_dir.path().join(".hpm"),
-            cache_dir: temp_dir.path().join(".hpm").join("cache"),
-            packages_dir: temp_dir.path().join(".hpm").join("packages"),
-            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
-        };
-
-        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let (config, storage_manager) = test_setup(temp_dir.path());
         let project_root = temp_dir.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
 
-        let _project_manager = ProjectManager::new(project_root.clone(), storage_manager).unwrap();
+        let _project_manager =
+            ProjectManager::new(project_root.clone(), storage_manager, config).unwrap();
         assert!(project_root.join(".hpm").join("packages").exists());
     }
 
     #[test]
     fn list_dependencies_empty_project() {
         let temp_dir = TempDir::new().unwrap();
-        let storage_config = hpm_config::StorageConfig {
-            home_dir: temp_dir.path().join(".hpm"),
-            cache_dir: temp_dir.path().join(".hpm").join("cache"),
-            packages_dir: temp_dir.path().join(".hpm").join("packages"),
-            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
-        };
-
-        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let (config, storage_manager) = test_setup(temp_dir.path());
         let project_root = temp_dir.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
 
-        let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
         let deps = project_manager.list_dependencies().unwrap();
         assert_eq!(deps.len(), 0);
     }
@@ -1014,18 +1014,11 @@ mod tests {
     #[test]
     fn create_houdini_package_basic() {
         let temp_dir = TempDir::new().unwrap();
-        let storage_config = hpm_config::StorageConfig {
-            home_dir: temp_dir.path().join(".hpm"),
-            cache_dir: temp_dir.path().join(".hpm").join("cache"),
-            packages_dir: temp_dir.path().join(".hpm").join("packages"),
-            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
-        };
-
-        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let (config, storage_manager) = test_setup(temp_dir.path());
         let project_root = temp_dir.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
 
-        let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
         let manifest = hpm_package::PackageManifest::new(
             PackagePath::new("studio/test-package").unwrap(),
@@ -1059,18 +1052,11 @@ mod tests {
     #[test]
     fn create_houdini_package_with_project_env_overrides() {
         let temp_dir = TempDir::new().unwrap();
-        let storage_config = hpm_config::StorageConfig {
-            home_dir: temp_dir.path().join(".hpm"),
-            cache_dir: temp_dir.path().join(".hpm").join("cache"),
-            packages_dir: temp_dir.path().join(".hpm").join("packages"),
-            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
-        };
-
-        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let (config, storage_manager) = test_setup(temp_dir.path());
         let project_root = temp_dir.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
 
-        let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
         // Create a manifest with an env var
         let mut manifest = hpm_package::PackageManifest::new(
@@ -1152,16 +1138,10 @@ mod tests {
     #[tokio::test]
     async fn create_houdini_package_required_env_without_override_errors() {
         let temp_dir = TempDir::new().unwrap();
-        let storage_config = hpm_config::StorageConfig {
-            home_dir: temp_dir.path().join(".hpm"),
-            cache_dir: temp_dir.path().join(".hpm").join("cache"),
-            packages_dir: temp_dir.path().join(".hpm").join("packages"),
-            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
-        };
-        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let (config, storage_manager) = test_setup(temp_dir.path());
         let project_root = temp_dir.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
-        let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
         let mut manifest = hpm_package::PackageManifest::new(
             PackagePath::new("studio/needs-config").unwrap(),
@@ -1266,16 +1246,10 @@ mod tests {
     #[tokio::test]
     async fn ensure_installed_short_circuits_on_scoped_name() {
         let temp_dir = TempDir::new().unwrap();
-        let storage_config = hpm_config::StorageConfig {
-            home_dir: temp_dir.path().join(".hpm"),
-            cache_dir: temp_dir.path().join(".hpm").join("cache"),
-            packages_dir: temp_dir.path().join(".hpm").join("packages"),
-            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
-        };
-        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let (config, storage_manager) = test_setup(temp_dir.path());
         let project_root = temp_dir.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
-        let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
         let manifest = hpm_package::PackageManifest::new(
             PackagePath::new("tumblehead/tumblepipe").unwrap(),
@@ -1315,16 +1289,10 @@ mod tests {
     #[test]
     fn sweep_stale_houdini_manifests_removes_orphaned_json() {
         let temp_dir = TempDir::new().unwrap();
-        let storage_config = hpm_config::StorageConfig {
-            home_dir: temp_dir.path().join(".hpm"),
-            cache_dir: temp_dir.path().join(".hpm").join("cache"),
-            packages_dir: temp_dir.path().join(".hpm").join("packages"),
-            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
-        };
-        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let (config, storage_manager) = test_setup(temp_dir.path());
         let project_root = temp_dir.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
-        let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
         // Simulate the prior sync's output: foo.json (current dep) and
         // stale.json (dep that left the set).
@@ -1366,16 +1334,10 @@ mod tests {
     #[test]
     fn sweep_stale_houdini_manifests_empty_set_clears_all_json() {
         let temp_dir = TempDir::new().unwrap();
-        let storage_config = hpm_config::StorageConfig {
-            home_dir: temp_dir.path().join(".hpm"),
-            cache_dir: temp_dir.path().join(".hpm").join("cache"),
-            packages_dir: temp_dir.path().join(".hpm").join("packages"),
-            registry_cache_dir: temp_dir.path().join(".hpm").join("registry"),
-        };
-        let storage_manager = Arc::new(StorageManager::new(storage_config).unwrap());
+        let (config, storage_manager) = test_setup(temp_dir.path());
         let project_root = temp_dir.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
-        let project_manager = ProjectManager::new(project_root, storage_manager).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
         let pkg_dir = &project_manager.project_config.packages_dir;
         let dev_only = pkg_dir.join("dev-only.json");

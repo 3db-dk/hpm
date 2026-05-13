@@ -251,4 +251,4 @@ pub use registry::{
 pub use storage::{StorageError, StorageManager};
 
 // Re-export config types so library consumers don't need to depend on hpm-config directly
-pub use hpm_config::{RegistrySourceConfig, RegistryType};
+pub use hpm_config::{Config, RegistrySourceConfig, RegistryType};
