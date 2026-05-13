@@ -169,24 +169,24 @@ impl ProjectManager {
         let req_str = spec.version_req.as_str();
 
         if semver::Version::parse(req_str).is_ok() {
-            return registry_set.get_version(&spec.name, req_str).await.map_err(
-                |source| ProjectError::RegistryResolution {
-                    name: spec.name.clone(),
-                    version_req: req_str.to_string(),
-                    source: Box::new(source),
-                },
-            );
-        }
-
-        let mut versions =
-            registry_set
-                .get_versions(&spec.name)
+            return registry_set
+                .get_version(&spec.name, req_str)
                 .await
                 .map_err(|source| ProjectError::RegistryResolution {
                     name: spec.name.clone(),
                     version_req: req_str.to_string(),
                     source: Box::new(source),
-                })?;
+                });
+        }
+
+        let mut versions = registry_set
+            .get_versions(&spec.name)
+            .await
+            .map_err(|source| ProjectError::RegistryResolution {
+                name: spec.name.clone(),
+                version_req: req_str.to_string(),
+                source: Box::new(source),
+            })?;
 
         versions.retain(|v| !v.yanked && spec.version_req.matches(&v.version));
         versions.sort_by(|a, b| {
@@ -247,32 +247,30 @@ impl ProjectManager {
         // Build registry set once for any registry-resolved deps. A manifest
         // [[registries]] override beats the user's [registries] from config.
         // Wrapped in Arc so each spawned task can hold a cheap clone.
-        let registry_set: Option<Arc<crate::registry::RegistrySet>> = if dependencies
-            .values()
-            .any(|spec| spec.is_registry())
-        {
-            let registry_configs: Vec<hpm_config::RegistrySourceConfig> =
-                if let Some(ref regs) = manifest_registries {
-                    regs.iter()
-                        .map(|r| hpm_config::RegistrySourceConfig {
-                            name: r.name.clone(),
-                            url: r.url.clone(),
-                            registry_type: match r.registry_type {
-                                hpm_package::RegistryType::Api => hpm_config::RegistryType::Api,
-                                hpm_package::RegistryType::Git => hpm_config::RegistryType::Git,
-                            },
-                        })
-                        .collect()
-                } else {
-                    self.config.registries.clone()
-                };
-            Some(Arc::new(crate::registry::RegistrySet::from_configs(
-                &registry_configs,
-                &self.config.storage.registry_cache_dir,
-            )))
-        } else {
-            None
-        };
+        let registry_set: Option<Arc<crate::registry::RegistrySet>> =
+            if dependencies.values().any(|spec| spec.is_registry()) {
+                let registry_configs: Vec<hpm_config::RegistrySourceConfig> =
+                    if let Some(ref regs) = manifest_registries {
+                        regs.iter()
+                            .map(|r| hpm_config::RegistrySourceConfig {
+                                name: r.name.clone(),
+                                url: r.url.clone(),
+                                registry_type: match r.registry_type {
+                                    hpm_package::RegistryType::Api => hpm_config::RegistryType::Api,
+                                    hpm_package::RegistryType::Git => hpm_config::RegistryType::Git,
+                                },
+                            })
+                            .collect()
+                    } else {
+                        self.config.registries.clone()
+                    };
+                Some(Arc::new(crate::registry::RegistrySet::from_configs(
+                    &registry_configs,
+                    &self.config.storage.registry_cache_dir,
+                )))
+            } else {
+                None
+            };
 
         // Fetch list of globally installed packages once for short-circuit lookups
         let all_installed = Arc::new(self.storage_manager.list_installed()?);
@@ -355,12 +353,11 @@ impl ProjectManager {
             .map(|pkg| pkg.manifest.package.slug())
             .collect();
 
-        let entries = std::fs::read_dir(packages_dir).map_err(|source| {
-            ProjectError::DirectoryRead {
+        let entries =
+            std::fs::read_dir(packages_dir).map_err(|source| ProjectError::DirectoryRead {
                 path: packages_dir.clone(),
                 source,
-            }
-        })?;
+            })?;
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -949,7 +946,9 @@ async fn fetch_and_install_pkg(
 ) -> Result<(InstalledPackage, String), ProjectError> {
     let fetch_result = fetcher.fetch(&source, name).await?;
     let checksum = fetch_result.checksum.clone();
-    let installed = storage.install_from_path(&fetch_result.package_path).await?;
+    let installed = storage
+        .install_from_path(&fetch_result.package_path)
+        .await?;
     info!("Successfully fetched and installed {}@{}", name, version);
     Ok((installed, checksum))
 }
@@ -1362,11 +1361,9 @@ mod tests {
     async fn install_one_dep_short_circuits_on_scoped_name() {
         let temp_dir = TempDir::new().unwrap();
         let (_config, storage_manager) = test_setup(temp_dir.path());
-        let fetcher = ArchiveFetcher::new(
-            temp_dir.path().join("cache"),
-            temp_dir.path().join("fetch"),
-        )
-        .unwrap();
+        let fetcher =
+            ArchiveFetcher::new(temp_dir.path().join("cache"), temp_dir.path().join("fetch"))
+                .unwrap();
 
         let manifest = hpm_package::PackageManifest::new(
             PackagePath::new("tumblehead/tumblepipe").unwrap(),

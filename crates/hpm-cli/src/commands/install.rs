@@ -67,10 +67,11 @@ pub async fn install_dependencies(
         match LockFile::load(&lock_path) {
             Ok(lock) => {
                 progress.set_message("Verifying cached packages");
-                lock.verify_checksums(&config.storage.packages_dir).context(
-                    "Package integrity check failed. \
+                lock.verify_checksums(&config.storage.packages_dir)
+                    .context(
+                        "Package integrity check failed. \
                      Delete the corrupted package and run 'hpm install' again.",
-                )?;
+                    )?;
                 info!("Cached packages verified successfully");
                 if let Some(ref metadata) = lock.metadata {
                     if let Some(days) = metadata.days_since_generated() {
@@ -108,11 +109,8 @@ pub async fn install_dependencies(
         StorageManager::new(config.storage.clone())
             .context("Failed to initialize storage manager")?,
     );
-    let project_manager = ProjectManager::new(
-        project_dir,
-        storage_manager,
-        Arc::new(config.clone()),
-    )?;
+    let project_manager =
+        ProjectManager::new(project_dir, storage_manager, Arc::new(config.clone()))?;
     let outcomes = project_manager
         .sync_dependencies()
         .await
@@ -159,7 +157,10 @@ fn build_lock_file(
     outcomes: &[(String, InstallOutcome)],
     existing: Option<&LockFile>,
 ) -> LockFile {
-    let mut lock = LockFile::new(manifest.package.name.clone(), manifest.package.version.clone());
+    let mut lock = LockFile::new(
+        manifest.package.name.clone(),
+        manifest.package.version.clone(),
+    );
 
     for (name, outcome) in outcomes {
         let prior = existing.and_then(|l| l.get_dependency(name));

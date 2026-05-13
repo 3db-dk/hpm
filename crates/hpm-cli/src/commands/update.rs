@@ -167,9 +167,7 @@ async fn collect_candidates(
             .map(|d| d.version.clone());
 
         let locked_is_yanked = if let Some(ref l) = locked {
-            entries
-                .iter()
-                .any(|e| e.version == *l && e.yanked)
+            entries.iter().any(|e| e.version == *l && e.yanked)
         } else {
             false
         };

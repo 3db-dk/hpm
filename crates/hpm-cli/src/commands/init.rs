@@ -327,11 +327,7 @@ async fn init_git_repository(dir: &Path) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "git init failed in {}: {}",
-            dir.display(),
-            stderr.trim()
-        );
+        anyhow::bail!("git init failed in {}: {}", dir.display(), stderr.trim());
     }
 
     Ok(())

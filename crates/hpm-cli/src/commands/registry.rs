@@ -176,4 +176,3 @@ pub async fn update_registries(config: &Config) -> Result<()> {
     println!("{}", style("Registry update complete.").green().bold());
     Ok(())
 }
-

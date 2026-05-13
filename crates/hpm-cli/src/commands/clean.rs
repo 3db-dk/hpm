@@ -85,11 +85,7 @@ fn prompt_yes_no(label: &str) -> Result<bool> {
     Ok(response == "y" || response == "yes")
 }
 
-async fn cleanup_packages(
-    storage: &StorageManager,
-    config: &Config,
-    mode: Mode,
-) -> Result<()> {
+async fn cleanup_packages(storage: &StorageManager, config: &Config, mode: Mode) -> Result<()> {
     let would_remove = storage.cleanup_unused_dry_run(&config.projects).await?;
     if would_remove.is_empty() {
         println!("No orphaned packages found - cleanup not needed");
@@ -173,14 +169,19 @@ async fn cleanup_comprehensive(
     config: &Config,
     mode: Mode,
 ) -> Result<()> {
-    let analysis = storage.cleanup_comprehensive(&config.projects, true).await?;
+    let analysis = storage
+        .cleanup_comprehensive(&config.projects, true)
+        .await?;
     if analysis.total_items_that_would_be_cleaned() == 0 {
         println!("No orphaned packages or virtual environments found - cleanup not needed");
         return Ok(());
     }
 
     if !analysis.removed_packages.is_empty() {
-        println!("Found {} orphaned packages:", analysis.removed_packages.len());
+        println!(
+            "Found {} orphaned packages:",
+            analysis.removed_packages.len()
+        );
         for package in &analysis.removed_packages {
             println!("  - {package}");
         }
@@ -207,7 +208,9 @@ async fn cleanup_comprehensive(
             Ok(())
         }
         Mode::Automated | Mode::Interactive => {
-            let result = storage.cleanup_comprehensive(&config.projects, false).await?;
+            let result = storage
+                .cleanup_comprehensive(&config.projects, false)
+                .await?;
             if !result.removed_packages.is_empty() {
                 println!(
                     "Successfully removed {} orphaned packages:",

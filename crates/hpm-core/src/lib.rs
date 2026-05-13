@@ -231,23 +231,54 @@ pub mod project;
 pub mod registry;
 pub mod storage;
 
-pub use archive_fetcher::{ArchiveFetcher, FetchError, FetchResult};
-pub use dependency::{
-    DependencyError, DependencyGraph, DependencyResolver, PackageId, PackageNode,
+// ==========================================================================
+// Stable library API
+// ==========================================================================
+//
+// Re-exports below are organised by how downstream consumers (CLI, the
+// TumbleTrove desktop client) tend to reach for them. Everything here is
+// also accessible via the submodule path (`hpm_core::project::ProjectManager`
+// etc.); the top-level aliases just spare callers a deeper import.
+
+// Project orchestration — the entry point most library consumers use.
+pub use project::{InstallOutcome, ProjectDependency, ProjectError, ProjectManager};
+
+// Configuration. Re-exported from hpm-config so a single `hpm-core` dep
+// covers both for embedded callers.
+pub use hpm_config::{Config, RegistrySourceConfig, RegistryType};
+
+// Storage / CAS layer.
+pub use storage::{StorageError, StorageManager};
+
+// Registry: prefer `RegistrySet::from_config(&Config)` as the entry point.
+// `ApiRegistry`/`GitRegistry` are only useful if you're building a custom
+// `RegistrySet`.
+pub use registry::{
+    ApiRegistry, GitRegistry, Registry, RegistryEntry, RegistryError, RegistrySet, SearchResults,
 };
-pub use discovery::{DiscoveredProject, DiscoveryError, ProjectDiscovery};
-pub use fetch_manifest::{FetchManifestError, fetch_manifest};
+
+// Lock file. `LockFile::load` / `LockFile::save` and `verify_checksums`
+// are the common surface; the sub-types are needed to read or build
+// individual entries.
 pub use lock::{
     LockError, LockFile, LockMetadata, LockPackageInfo, LockedDependency, LockedPythonDependency,
     LockedSource,
 };
+
+// Project discovery and reachability — `hpm clean` machinery, but
+// re-exported for downstream tools that want to do orphan analysis
+// against a custom project set.
+pub use dependency::{
+    DependencyError, DependencyGraph, DependencyResolver, PackageId, PackageNode,
+};
+pub use discovery::{DiscoveredProject, DiscoveryError, ProjectDiscovery};
+
+// Lower-level building blocks. Used by the CLI's install + pack commands
+// today. Stay re-exported because the boundary between "library callers
+// shouldn't touch this" and "library callers want to script their own
+// install/pack flow" isn't sharp; if a downstream consumer needs them,
+// they should be reachable from the top-level alias.
+pub use archive_fetcher::{ArchiveFetcher, FetchError, FetchResult};
+pub use fetch_manifest::{FetchManifestError, fetch_manifest};
 pub use package_source::{PackageSource, PackageSourceError};
 pub use packer::{PackError, PackResult};
-pub use project::{InstallOutcome, ProjectDependency, ProjectError, ProjectManager};
-pub use registry::{
-    ApiRegistry, GitRegistry, Registry, RegistryEntry, RegistryError, RegistrySet, SearchResults,
-};
-pub use storage::{StorageError, StorageManager};
-
-// Re-export config types so library consumers don't need to depend on hpm-config directly
-pub use hpm_config::{Config, RegistrySourceConfig, RegistryType};

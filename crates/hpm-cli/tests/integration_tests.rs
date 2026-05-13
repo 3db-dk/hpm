@@ -146,7 +146,6 @@ fn test_deprecated_commands() {
         "Expected no-registries message in search output. stdout: '{}'",
         stdout
     );
-
 }
 
 /// Test list command with nonexistent manifest
