@@ -5,7 +5,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tracing::{info, warn};
+use tracing::info;
 
 pub struct InitOptions {
     pub name_or_path: Option<String>,
@@ -327,8 +327,11 @@ async fn init_git_repository(dir: &Path) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!("Git initialization failed: {}", stderr);
-        // Don't fail the entire init process if git fails
+        anyhow::bail!(
+            "git init failed in {}: {}",
+            dir.display(),
+            stderr.trim()
+        );
     }
 
     Ok(())
