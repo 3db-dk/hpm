@@ -192,7 +192,6 @@
 //! println!("Cleanup completed:");
 //! println!("  Packages removed: {}", result.removed_packages.len());
 //! println!("  Virtual environments cleaned: {}", result.python_cleanup.items_cleaned());
-//! println!("  Total space freed: {}", result.format_total_space_freed());
 //! # Ok(())
 //! # }
 //! ```

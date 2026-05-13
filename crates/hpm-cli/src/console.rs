@@ -138,16 +138,6 @@ impl Level {
     }
 }
 
-/// Convenience: print a success message with default settings.
-pub fn success(message: impl Display) {
-    Console::new().success(message);
-}
-
-/// Convenience: print an info message with default settings.
-pub fn info(message: impl Display) {
-    Console::new().info(message);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
