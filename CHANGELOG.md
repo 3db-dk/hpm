@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`ProjectManager::new_with_auth`.** Closes the parallel gap to the
+  0.12.1 `RegistrySet::from_configs_with_auth` work: `ProjectManager`
+  builds its own `RegistrySet` internally inside `sync_dependencies` and
+  `resolve_and_install_from_registry`, and those previously went through
+  the no-auth constructors regardless of how the embedder built its own
+  registry sets. For visibility-gated registries (e.g. TumbleTrove's
+  `/v1/registry`), that meant a desktop pre-flight could resolve a
+  PRIVATE dep correctly via an authenticated set, then `hpm install`'s
+  Simple/Registry → registry-lookup branch would fire its own anonymous
+  `get_version` for the same dep and 404. The new constructor stashes an
+  `Option<String>` on the manager; both internal sites now build their
+  `RegistrySet` via `from_configs_with_auth(..., self.auth_token.as_deref())`.
+  `ProjectManager::new` becomes a one-line delegate with `None`, so
+  existing callers (`hpm-cli`, every other embedder) keep working as
+  anonymous. Token semantics mirror the registry variant: callers
+  tracking a refreshing token rebuild the `ProjectManager` per
+  operation. Static-token API on `RegistrySet` and on `ProjectManager`
+  is now a matched pair.
+
 ## [0.12.1] - 2026-05-13
 
 ### Added

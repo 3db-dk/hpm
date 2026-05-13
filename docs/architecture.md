@@ -544,6 +544,16 @@ baked into the HTTP client at construction, so callers tracking a
 refreshing token rebuild the `RegistrySet` per operation rather than
 mutating one in place. Git registries currently ignore the token.
 
+`ProjectManager` mirrors that contract via
+`ProjectManager::new_with_auth(.., Option<String>)`. The token is
+stashed on the manager and forwarded to every `RegistrySet` it builds
+internally — `sync_dependencies` for registry-form deps and
+`add_dependency`'s registry-resolved path both go through
+`from_configs_with_auth` with the stashed token. `ProjectManager::new`
+delegates with `None`, so anonymous use is unchanged. As with the
+`RegistrySet` variant, refreshing tokens are handled by rebuilding the
+`ProjectManager` per operation.
+
 ### Plugin system
 
 Not implemented. The CLI surface is currently fixed at compile time. A
