@@ -147,20 +147,6 @@ fn test_deprecated_commands() {
         stdout
     );
 
-    // Test publish command (registry-based)
-    let (mut publish_cmd, _publish_home) = hpm_binary_isolated();
-    let publish_output = publish_cmd
-        .args(["publish"])
-        .output()
-        .expect("Failed to execute hpm publish");
-
-    assert!(publish_output.status.success());
-    let stdout = String::from_utf8_lossy(&publish_output.stdout);
-    assert!(
-        stdout.contains("registry-based package distribution"),
-        "Expected registry info in publish output. stdout: '{}'",
-        stdout
-    );
 }
 
 /// Test list command with nonexistent manifest

@@ -130,7 +130,6 @@
 //! Commands planned for future releases:
 //!
 //! - **`search`** - Search registry for packages with filtering
-//! - **`publish`** - Publish packages to registry with validation
 //!
 //! ## Error Handling Philosophy
 //!
@@ -285,7 +284,7 @@
 //!
 //! - **HPM Core**: Package storage, project discovery, dependency analysis
 //! - **HPM Python**: Python dependency management and virtual environments
-//! - **HPM Registry**: Package search, download, and publishing (planned)
+//! - **HPM Registry**: Package search and download
 //! - **HPM Config**: Configuration management and project settings
 //! - **HPM Package**: Manifest processing and Houdini integration
 
@@ -471,8 +470,6 @@ enum Commands {
         /// Search query
         query: String,
     },
-    /// Publish a package
-    Publish,
     /// Execute a package script defined in `[scripts]`
     Run {
         /// Script name to execute
@@ -769,16 +766,6 @@ async fn run_command(
                         Some("Use 'hpm search --help' for usage information".to_string()),
                     )
                 })?;
-        }
-        Commands::Publish => {
-            console.info("HPM uses registry-based package distribution.");
-            println!();
-            println!("To publish your package:");
-            println!("  1. Configure a registry in your hpm.toml or ~/.hpm/config.toml");
-            println!("  2. Run: hpm publish");
-            println!();
-            println!("Users can then add your package with:");
-            println!("  hpm add <package>@<version>");
         }
         Commands::Run { script, args } => {
             let exit_code = commands::run::run_script(script, args, directory.clone(), console)
