@@ -284,7 +284,7 @@ pub enum ConfigError {
     },
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub install: InstallConfig,
@@ -325,7 +325,7 @@ pub enum RegistryType {
     Git,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallConfig {
     #[serde(default = "default_install_path")]
     pub path: String,
@@ -449,7 +449,7 @@ impl Config {
             match Self::load_from_path(&user_config_path) {
                 Ok(user_config) => {
                     config.merge(user_config);
-                    info!("Loaded user configuration from {:?}", user_config_path);
+                    debug!("Loaded user configuration from {:?}", user_config_path);
                 }
                 Err(e) => {
                     warn!(
@@ -467,7 +467,7 @@ impl Config {
                 debug!("Loading project config from {:?}", project_config_path);
                 let project_config = Self::load_from_path(&project_config_path)?;
                 config.merge(project_config);
-                info!(
+                debug!(
                     "Loaded project configuration from {:?}",
                     project_config_path
                 );
