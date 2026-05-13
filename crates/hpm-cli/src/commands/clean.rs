@@ -98,11 +98,6 @@ async fn execute_automated_cleanup(
         for package in &removed {
             println!("  - {}", package);
         }
-
-        // Calculate approximate space saved (rough estimate)
-        let estimated_space_mb = removed.len() * 10; // Rough estimate of 10MB per package
-        println!();
-        println!("Estimated disk space freed: ~{}MB", estimated_space_mb);
     }
 
     Ok(())
@@ -145,10 +140,6 @@ async fn execute_interactive_cleanup(
         for package in &removed {
             println!("  - {}", package);
         }
-
-        let estimated_space_mb = removed.len() * 10;
-        println!();
-        println!("Estimated disk space freed: ~{}MB", estimated_space_mb);
     } else {
         println!("Cleanup cancelled");
     }
@@ -286,10 +277,6 @@ async fn execute_comprehensive_cleanup(
                 }
             }
 
-            println!(
-                "Total would free approximately: {}",
-                result.format_total_space_that_would_be_freed()
-            );
             println!();
             println!("Run 'hpm clean --comprehensive' to remove these items");
             println!("Run 'hpm clean --comprehensive --yes' to remove without confirmation");
@@ -322,11 +309,6 @@ async fn execute_comprehensive_cleanup(
                     println!("  - {:?}", venv_path);
                 }
             }
-
-            println!(
-                "Total disk space freed: {}",
-                result.format_total_space_freed()
-            );
         }
     } else {
         // Interactive cleanup
@@ -356,11 +338,6 @@ async fn execute_comprehensive_cleanup(
                 println!("  - {:?}", venv_path);
             }
         }
-
-        println!(
-            "Total would free approximately: {}",
-            result.format_total_space_that_would_be_freed()
-        );
 
         println!();
         print!("Remove these items? [y/N]: ");
@@ -395,10 +372,6 @@ async fn execute_comprehensive_cleanup(
                     println!("    - {:?}", venv_path);
                 }
             }
-            println!(
-                "Total disk space freed: {}",
-                result.format_total_space_freed()
-            );
         } else {
             println!("Cleanup cancelled");
         }

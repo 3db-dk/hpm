@@ -34,44 +34,6 @@ impl ComprehensiveCleanupResult {
     pub fn total_items_that_would_be_cleaned(&self) -> usize {
         self.removed_packages.len() + self.python_cleanup.items_that_would_be_cleaned()
     }
-
-    /// Format the total space freed
-    pub fn format_total_space_freed(&self) -> String {
-        let package_space_estimate = self.removed_packages.len() as u64 * 10 * 1024 * 1024; // 10MB per package
-        let total_space = package_space_estimate + self.python_cleanup.space_freed;
-        format_bytes(total_space)
-    }
-
-    /// Format the total space that would be freed
-    pub fn format_total_space_that_would_be_freed(&self) -> String {
-        let package_space_estimate = self.removed_packages.len() as u64 * 10 * 1024 * 1024; // 10MB per package
-        let total_space = package_space_estimate + self.python_cleanup.space_that_would_be_freed;
-        format_bytes(total_space)
-    }
-}
-
-/// Format byte size in human-readable format
-fn format_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    const THRESHOLD: u64 = 1024;
-
-    if bytes == 0 {
-        return "0 B".to_string();
-    }
-
-    let mut size = bytes as f64;
-    let mut unit_index = 0;
-
-    while size >= THRESHOLD as f64 && unit_index < UNITS.len() - 1 {
-        size /= THRESHOLD as f64;
-        unit_index += 1;
-    }
-
-    if unit_index == 0 {
-        format!("{} {}", bytes, UNITS[unit_index])
-    } else {
-        format!("{:.1} {}", size, UNITS[unit_index])
-    }
 }
 
 #[derive(Debug, Clone)]
