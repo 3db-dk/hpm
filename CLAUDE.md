@@ -24,6 +24,5 @@ cargo fmt --check    # check formatting
 | `hpm-cli` | CLI frontend (clap) |
 | `hpm-core` | Core orchestration logic |
 | `hpm-config` | Configuration loading/saving |
-| `hpm-resolver` | Dependency resolution |
 | `hpm-package` | Package format and metadata |
 | `hpm-python` | Python environment integration |

@@ -26,13 +26,12 @@ failures.
 ### Property test distribution
 
 Property tests are concentrated in the crates with the most value-shaped
-logic: resolver, manifest parsing, Python version handling. Exact counts
-shift over time — run `grep -rh "fn prop_" crates/*/src | wc -l` for the
-current number.
+logic: manifest parsing, Python version handling, storage types. Exact
+counts shift over time — run `grep -rh "fn prop_" crates/*/src | wc -l`
+for the current number.
 
 | Crate | Focus |
 |-------|-------|
-| `hpm-resolver` | Version parsing, constraint satisfaction, solver invariants. |
 | `hpm-cli` | Argument parsing, output format round-trips. |
 | `hpm-core` | Storage types, package specs, platform-filtered packing. |
 | `hpm-package` | Manifest validation, TOML round-trips, native configs. |
@@ -162,8 +161,8 @@ Proptest persists failing cases to `crates/<crate>/proptest-regressions/`.
 These are source-of-truth regression tests — commit them alongside the fix.
 
 ```
-crates/hpm-resolver/proptest-regressions/
-└── version.txt              # Each line is a minimized failing input.
+crates/hpm-package/proptest-regressions/
+└── manifest.txt             # Each line is a minimized failing input.
 ```
 
 Never delete these by hand unless you're *certain* the bug class is gone and
@@ -189,7 +188,7 @@ PROPTEST_CASES=10 cargo test failing_prop_test -- --nocapture
 ### Inspect the regression file
 
 ```sh
-cat crates/hpm-resolver/proptest-regressions/version.txt
+cat crates/hpm-package/proptest-regressions/manifest.txt
 ```
 
 Each line is a serialized form of the seed that reproduced the bug. Proptest

@@ -134,7 +134,7 @@ ABI bug in 0.7.0). See the [Python guide](docs/python-guide.md).
 
 ## How it works
 
-- **Resolution** — PubGrub-style solver with conflict learning and backtracking.
+- **Resolution** — naive per-package version selection: highest non-yanked version matching the spec's `VersionReq`. Transitive constraint solving is intentionally not implemented yet.
 - **Lock file** — `hpm.lock` pins exact versions, sources, and SHA-256 checksums.
 - **Storage** — `~/.hpm/packages/` for packages, `~/.hpm/venvs/` for Python environments (same layout on Linux, macOS, Windows).
 - **Houdini integration** — `hpm install` writes one `{name}.json` per dependency into `<project>/.hpm/packages/`. Point Houdini's `HOUDINI_PACKAGE_PATH` at that directory.
@@ -146,7 +146,6 @@ crates/
   hpm-cli/       CLI frontend (clap)
   hpm-core/      Storage, installation, lock files, project discovery
   hpm-config/    Configuration loading and schema
-  hpm-resolver/  PubGrub dependency resolver
   hpm-package/   Manifest parsing, Houdini package.json generation
   hpm-python/    Python venv management (bundled uv)
 ```

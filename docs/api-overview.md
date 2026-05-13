@@ -20,8 +20,6 @@ cargo doc --workspace --no-deps --open
 │  hpm-package │   Manifest parsing, Houdini integration, dependency types
 ├──────────────┤
 │  hpm-python  │   Venv management, bundled uv, Houdini→Python mapping
-├──────────────┤
-│ hpm-resolver │   PubGrub-style solver
 └──────┬───────┘
        │
 ┌──────▼───────┐
@@ -30,8 +28,8 @@ cargo doc --workspace --no-deps --open
 ```
 
 Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
-`ResolverError`, `ConfigError`). `hpm-cli` converts these into a single
-`CliError` with exit codes and help hints.
+`ConfigError`). `hpm-cli` converts these into a single `CliError` with exit
+codes and help hints.
 
 ## Key types by crate
 
@@ -86,14 +84,6 @@ Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
 | `ensure_script_venv(python, requirements)` | Free function for the table form of `[scripts]`. Resolves raw PEP-508 requirement strings via `uv pip compile` and defers to `VenvManager`, returning the venv root. |
 | `venv_bin_dir(path)` | Returns the executable directory inside a uv-created venv (`bin/` on Unix, `Scripts/` on Windows). Pre-pend to `PATH` before spawning the script. |
 | `DEFAULT_SCRIPT_PYTHON` | `"3.11"`. The Python version `ensure_script_venv` uses when a script omits `python`. |
-
-### hpm-resolver
-
-| Type | Purpose |
-|------|---------|
-| `Resolver` | PubGrub-style incremental solver with conflict learning. |
-| `VersionReq` | Parsed version requirement. |
-| `ResolutionState`, `DecisionPoint` | Solver state for backtracking. |
 
 ### hpm-config
 

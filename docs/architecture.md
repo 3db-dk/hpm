@@ -42,19 +42,19 @@ depend on the library crates and skip the CLI entirely).
 │   • ArchiveFetcher, packer                                             │
 └─────────┬──────────────────┬──────────────────┬──────────────────┬─────┘
           │                  │                  │                  │
-┌─────────▼───────┐ ┌────────▼────────┐ ┌───────▼──────┐ ┌─────────▼─────┐
-│ hpm-package     │ │ hpm-python      │ │ hpm-resolver │ │ hpm-config    │
-│   PackageManifest│ │   VenvManager   │ │   Resolver   │ │   Config      │
-│   DependencySpec │ │   PythonVersion │ │   VersionReq │ │   Storage/    │
-│   NativeConfig   │ │   ResolvedSet   │ │              │ │   Projects/   │
-│   Platform       │ │   bundled uv    │ │              │ │   Signing     │
-│   HoudiniPackage │ └─────────────────┘ └──────────────┘ └───────────────┘
+┌─────────▼───────┐ ┌────────▼────────┐ ┌─────────▼─────┐
+│ hpm-package     │ │ hpm-python      │ │ hpm-config    │
+│   PackageManifest│ │   VenvManager   │ │   Config      │
+│   DependencySpec │ │   PythonVersion │ │   Storage/    │
+│   NativeConfig   │ │   ResolvedSet   │ │   Projects/   │
+│   Platform       │ │   bundled uv    │ │   Signing     │
+│   HoudiniPackage │ └─────────────────┘ └───────────────┘
 └──────────────────┘
 ```
 
-Each crate defines its own error type (e.g. `StorageError`, `ResolverError`,
-`ConfigError`) via `thiserror`. Errors surface to the user through `CliError`
-in `hpm-cli`, which converts them to exit codes and help hints.
+Each crate defines its own error type (e.g. `StorageError`, `ConfigError`)
+via `thiserror`. Errors surface to the user through `CliError` in `hpm-cli`,
+which converts them to exit codes and help hints.
 
 Key non-functional properties:
 
@@ -71,13 +71,12 @@ Key non-functional properties:
 | `hpm-core` | Storage, project discovery, lock file, registry trait + two implementations, archive fetching/packing. |
 | `hpm-package` | `hpm.toml` parsing and validation, dependency/Python dependency types, Houdini `package.json` generation, platform enum. |
 | `hpm-python` | Bundled `uv`, content-addressable venv management, Houdini→Python version mapping, venv cleanup analysis. |
-| `hpm-resolver` | PubGrub-style dependency solver. |
 | `hpm-config` | Global and project configuration loading and merging. |
 
 Dependencies flow downward: `hpm-cli` depends on everything else, `hpm-core`
-depends on package/python/resolver/config, and so on. No crate depends
-upward. Domain errors (`StorageError`, `ResolverError`, `ConfigError`, ...)
-live in the crate that produces them.
+depends on package/python/config, and so on. No crate depends upward.
+Domain errors (`StorageError`, `ConfigError`, ...) live in the crate that
+produces them.
 
 ## Core types
 
@@ -229,26 +228,14 @@ Configuration merges in this order: defaults → `~/.hpm/config.toml` →
 
 ## Dependency resolution
 
-HPM's resolver (`hpm-resolver`) is PubGrub-inspired: the same family of
-algorithms `uv`, Dart's `pub`, and Swift PM use. It models resolution as a
-constraint-satisfaction problem.
-
-```text
-Given:
-  P = { p₁, …, pₙ }        packages
-  V(pᵢ) = { v₁, …, vₖ }    available versions
-  C = { c₁, …, cₘ }        version constraints
-
-Find an assignment A: P → V such that ∀c ∈ C, c(A) holds.
-```
-
-The solver:
-
-1. Starts with the root manifest's direct dependencies.
-2. Picks the highest version that satisfies all current constraints for a candidate package.
-3. Recursively adds that version's transitive dependencies.
-4. On conflict, learns a minimal explanation of why the current path is infeasible and backtracks.
-5. Continues until an assignment exists or failure is final.
+HPM currently does naive per-package version selection: for each declared
+registry dependency, query the registry, filter non-yanked versions, and
+pick the highest that matches the spec's `VersionReq`. There is no
+transitive constraint solving — every dependency is treated as a direct
+dependency, and registry packages don't declare their own deps in a way
+the install path consumes. A proper constraint solver (PubGrub-style or
+otherwise) will be reintroduced if/when transitive resolution becomes a
+real requirement.
 
 ### Version requirement grammar
 

@@ -83,7 +83,6 @@ crates/
   hpm-cli/       CLI frontend (clap)
   hpm-core/      Storage, installation, lock files, project discovery
   hpm-config/    Configuration management
-  hpm-resolver/  PubGrub dependency resolver
   hpm-package/   Package manifest parsing, Houdini integration
   hpm-python/    Python venv management (uv integration)
 ```

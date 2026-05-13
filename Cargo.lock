@@ -916,19 +916,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hpm-resolver"
-version = "0.11.3"
-dependencies = [
- "anyhow",
- "proptest",
- "serde",
- "thiserror 2.0.18",
- "tokio",
- "tokio-test",
- "tracing",
-]
-
-[[package]]
 name = "http"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -3,7 +3,6 @@ members = [
     "crates/hpm-cli",
     "crates/hpm-core",
     "crates/hpm-config",
-    "crates/hpm-resolver",
     "crates/hpm-package",
     "crates/hpm-python",
 ]
