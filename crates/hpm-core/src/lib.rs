@@ -243,7 +243,7 @@ pub use lock::{
 };
 pub use package_source::{PackageSource, PackageSourceError};
 pub use packer::{PackError, PackResult};
-pub use project::{ProjectDependency, ProjectError, ProjectManager};
+pub use project::{InstallOutcome, ProjectDependency, ProjectError, ProjectManager};
 pub use registry::{
     ApiRegistry, GitRegistry, Registry, RegistryEntry, RegistryError, RegistrySet, SearchResults,
 };
