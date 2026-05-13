@@ -1,7 +1,7 @@
 //! Registry type definitions.
 //!
-//! Types representing package entries in a registry, registry configuration,
-//! and dependency specifications within registry entries.
+//! Types representing package entries in a registry and dependency
+//! specifications within registry entries.
 
 use serde::{Deserialize, Serialize};
 
@@ -61,23 +61,6 @@ pub struct RegistryDependency {
     /// Whether this is an optional dependency
     #[serde(default)]
     pub optional: bool,
-}
-
-/// Registry configuration, served at the root of a registry.
-///
-/// For git registries this is `config.json` at the repo root.
-/// For API registries this is served at `GET /config`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RegistryConfig {
-    /// Human-readable name of the registry
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// API base URL (for registries that support HTTP access)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api: Option<String>,
-    /// URL to fetch public signing keys
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub public_keys_url: Option<String>,
 }
 
 /// Search results returned from a registry search.

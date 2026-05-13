@@ -22,7 +22,7 @@
 //!
 //! Each `.json` file contains one JSON object per line (one per version).
 
-use super::types::{RegistryConfig, RegistryEntry, SearchResults};
+use super::types::{RegistryEntry, SearchResults};
 use super::{Registry, RegistryError};
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -283,24 +283,6 @@ impl Registry for GitRegistry {
 
     async fn refresh(&self) -> Result<(), RegistryError> {
         self.update_cache().await
-    }
-
-    async fn config(&self) -> Result<RegistryConfig, RegistryError> {
-        if !self.is_cached() {
-            self.update_cache().await?;
-        }
-        let config_path = self.cache_dir.join("config.json");
-        if !config_path.exists() {
-            return Ok(RegistryConfig {
-                name: Some(self.display_name.clone()),
-                api: None,
-                public_keys_url: None,
-            });
-        }
-        let content = std::fs::read_to_string(&config_path)?;
-        let config: RegistryConfig =
-            serde_json::from_str(&content).map_err(|e| RegistryError::ParseError(e.to_string()))?;
-        Ok(config)
     }
 
     fn name(&self) -> &str {

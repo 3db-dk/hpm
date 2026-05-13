@@ -16,7 +16,7 @@ use thiserror::Error;
 
 pub use api::ApiRegistry;
 pub use git::GitRegistry;
-pub use types::{RegistryConfig, RegistryDependency, RegistryEntry, SearchResults};
+pub use types::{RegistryDependency, RegistryEntry, SearchResults};
 
 /// Errors that can occur during registry operations.
 #[derive(Error, Debug)]
@@ -77,9 +77,6 @@ pub trait Registry: Send + Sync {
 
     /// Refresh the local registry cache (fetch latest index).
     async fn refresh(&self) -> Result<(), RegistryError>;
-
-    /// Get the registry configuration/metadata.
-    async fn config(&self) -> Result<RegistryConfig, RegistryError>;
 
     /// Get the registry display name.
     fn name(&self) -> &str;
@@ -183,14 +180,6 @@ impl RegistrySet {
             name: name.to_string(),
             version: version.to_string(),
         })
-    }
-
-    /// Refresh all registries.
-    pub async fn refresh_all(&self) -> Result<(), RegistryError> {
-        for registry in &self.registries {
-            registry.refresh().await?;
-        }
-        Ok(())
     }
 
     pub fn is_empty(&self) -> bool {

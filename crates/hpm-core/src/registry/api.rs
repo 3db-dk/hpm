@@ -3,7 +3,7 @@
 //! Connects to registries that serve package metadata over HTTP,
 //! such as `https://api.3db.dk/v1/registry`.
 
-use super::types::{RegistryConfig, RegistryEntry, SearchResults};
+use super::types::{RegistryEntry, SearchResults};
 use super::{Registry, RegistryError};
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -175,20 +175,6 @@ impl Registry for ApiRegistry {
         // API registries don't need local cache refresh - data is always live
         debug!("API registry '{}' refresh (no-op)", self.display_name);
         Ok(())
-    }
-
-    async fn config(&self) -> Result<RegistryConfig, RegistryError> {
-        let url = format!("{}/config", self.base_url);
-        debug!("API registry config: {}", url);
-
-        let response = self.client.get(&url).send().await?;
-        let response = response.error_for_status()?;
-        let config: RegistryConfig = response
-            .json()
-            .await
-            .map_err(|e| RegistryError::ParseError(e.to_string()))?;
-
-        Ok(config)
     }
 
     fn name(&self) -> &str {
