@@ -6,6 +6,7 @@
 use super::types::{RegistryEntry, SearchResults};
 use super::{Registry, RegistryError};
 use async_trait::async_trait;
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use tracing::{debug, info};
 
 /// An HTTP API-based package registry.
@@ -27,15 +28,46 @@ pub struct ApiRegistry {
 }
 
 impl ApiRegistry {
-    /// Create a new API registry client.
+    /// Create a new API registry client (anonymous requests).
     pub fn new(
         name: impl Into<String>,
         base_url: impl Into<String>,
     ) -> Result<Self, RegistryError> {
-        let client = reqwest::Client::builder()
+        Self::with_auth_token(name, base_url, None)
+    }
+
+    /// Create a new API registry client, optionally injecting a bearer token
+    /// on every request via the `Authorization` header.
+    ///
+    /// When `token` is `None`, behavior is identical to [`Self::new`]: the
+    /// underlying client is built without an `Authorization` header. When
+    /// `Some`, the token is attached as `Authorization: Bearer <token>` for
+    /// every request the client issues, and the header value is flagged
+    /// sensitive so reqwest does not log it.
+    ///
+    /// Note: the token is baked into the client at construction time. Callers
+    /// that need to track a refreshing token should rebuild the registry
+    /// (or the enclosing `RegistrySet`) when the token changes.
+    pub fn with_auth_token(
+        name: impl Into<String>,
+        base_url: impl Into<String>,
+        token: Option<&str>,
+    ) -> Result<Self, RegistryError> {
+        let mut builder = reqwest::Client::builder()
             .user_agent("hpm/0.1.0")
-            .timeout(std::time::Duration::from_secs(30))
-            .build()?;
+            .timeout(std::time::Duration::from_secs(30));
+
+        if let Some(token) = token {
+            let mut value = HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|e| {
+                RegistryError::ParseError(format!("invalid auth token for registry: {}", e))
+            })?;
+            value.set_sensitive(true);
+            let mut headers = HeaderMap::new();
+            headers.insert(AUTHORIZATION, value);
+            builder = builder.default_headers(headers);
+        }
+
+        let client = builder.build()?;
 
         let mut url = base_url.into();
         // Normalize: remove trailing slash
@@ -50,7 +82,9 @@ impl ApiRegistry {
         })
     }
 
-    /// Create with a custom reqwest client (for testing or auth tokens).
+    /// Create with a custom reqwest client (for testing).
+    ///
+    /// For attaching an auth token, prefer [`Self::with_auth_token`].
     pub fn with_client(
         name: impl Into<String>,
         base_url: impl Into<String>,
@@ -275,6 +309,38 @@ mod tests {
     fn test_api_registry_url_normalization() {
         let reg = ApiRegistry::new("test", "https://example.com/v1/registry/").unwrap();
         assert_eq!(reg.base_url, "https://example.com/v1/registry");
+    }
+
+    #[test]
+    fn with_auth_token_none_is_equivalent_to_new() {
+        let reg =
+            ApiRegistry::with_auth_token("test", "https://example.com/v1/registry/", None).unwrap();
+        assert_eq!(reg.base_url, "https://example.com/v1/registry");
+        assert_eq!(reg.display_name, "test");
+    }
+
+    #[test]
+    fn with_auth_token_some_builds_successfully() {
+        // A well-formed token should not fail header construction; bad chars
+        // would surface as ParseError.
+        let reg = ApiRegistry::with_auth_token(
+            "test",
+            "https://example.com/v1/registry",
+            Some("supabase-access-token-xyz"),
+        )
+        .unwrap();
+        assert_eq!(reg.base_url, "https://example.com/v1/registry");
+    }
+
+    #[test]
+    fn with_auth_token_rejects_tokens_with_invalid_header_bytes() {
+        // Newline in a header value is not legal; reqwest rejects it on build.
+        let result = ApiRegistry::with_auth_token(
+            "test",
+            "https://example.com/v1/registry",
+            Some("bad\ntoken"),
+        );
+        assert!(matches!(result, Err(RegistryError::ParseError(_))));
     }
 
     use hpm_package::Platform;

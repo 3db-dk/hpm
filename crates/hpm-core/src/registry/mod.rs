@@ -107,6 +107,10 @@ impl RegistrySet {
     /// manifest's `[[registries]]`) rather than coming from `Config`. For the
     /// straight `Config`-driven case, prefer [`Self::from_config`].
     ///
+    /// All API registries are built without authentication. For caller-driven
+    /// auth (e.g. a desktop client passing a bearer token for visibility-gated
+    /// registries), use [`Self::from_configs_with_auth`].
+    ///
     /// # Arguments
     /// * `registries` - Registry configurations to add
     /// * `registry_cache_dir` - Directory for caching git registry indices
@@ -114,12 +118,28 @@ impl RegistrySet {
         registries: &[hpm_config::RegistrySourceConfig],
         registry_cache_dir: &std::path::Path,
     ) -> Self {
+        Self::from_configs_with_auth(registries, registry_cache_dir, None)
+    }
+
+    /// Like [`Self::from_configs`], but attaches a bearer token to every API
+    /// registry's HTTP client when `auth_token` is `Some`.
+    ///
+    /// Git registries ignore the token — there is no auth story for the git
+    /// index today. When `auth_token` is `None`, behavior is identical to
+    /// [`Self::from_configs`].
+    pub fn from_configs_with_auth(
+        registries: &[hpm_config::RegistrySourceConfig],
+        registry_cache_dir: &std::path::Path,
+        auth_token: Option<&str>,
+    ) -> Self {
         let mut set = Self::new();
 
         for reg in registries {
             match reg.registry_type {
                 hpm_config::RegistryType::Api => {
-                    if let Ok(api_reg) = ApiRegistry::new(&reg.name, &reg.url) {
+                    if let Ok(api_reg) =
+                        ApiRegistry::with_auth_token(&reg.name, &reg.url, auth_token)
+                    {
                         set.add(Box::new(api_reg));
                     }
                 }
