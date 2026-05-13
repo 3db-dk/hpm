@@ -250,37 +250,54 @@ HPM manifest values accept the usual semver constraint operators:
 
 ## Install flow
 
+The install command itself is a thin shell — it loads the manifest +
+lockfile, builds a `ProjectManager`, and calls `sync_dependencies()`.
+The desktop client uses the same `ProjectManager` entry point, so both
+clients run the same flow.
+
 ```text
  ┌──────────────────────────────────────────────────────────────────────┐
- │ hpm install                                                          │
+ │ hpm install (CLI)            ── ProjectManager::sync_dependencies ── │
  ├──────────────────────────────────────────────────────────────────────┤
  │  1. Load hpm.toml                                                    │
  │  2. If hpm.lock exists:                                              │
  │       verify cached packages against stored checksums                │
  │       warn if metadata.generated_at > 90 days                        │
- │  3. Resolve HPM dependencies                                         │
- │       query configured registries                                    │
- │       backtrack on conflict                                          │
- │  4. Fetch + install in parallel (one task per dep):                  │
- │       URL/registry → ArchiveFetcher → ~/.hpm/fetch/                  │
- │                    → install_from_path → ~/.hpm/packages/<slug>@<v>/ │
- │       Path         → install_from_path_dev                           │
- │                    → ~/.hpm/packages/_dev/<slug>@<v>/                │
- │  5. Merge [python_dependencies] from root + every dep manifest       │
+ │  3. Fetch + install in parallel (one task per dep, JoinSet):         │
+ │       Simple/Registry → query registry, exact-version lookup         │
+ │                       → ArchiveFetcher → ~/.hpm/fetch/               │
+ │                       → install_from_path → ~/.hpm/packages/<slug>@<v>/ │
+ │       Url             → ArchiveFetcher (no registry query)           │
+ │                       → install_from_path                            │
+ │       Path            → install_from_path_dev                        │
+ │                       → ~/.hpm/packages/_dev/<slug>@<v>/             │
+ │     Already-in-CAS deps short-circuit (avoids the install_from_path  │
+ │     remove-and-recopy that breaks on Windows when Houdini is open).  │
+ │  4. Merge [python_dependencies] from root + every dep manifest       │
  │     Python ABI = root manifest's [houdini].min_version (NOT per-dep) │
- │  6. Ensure managed CPython installed under ~/.hpm/uv-python/         │
+ │  5. Ensure managed CPython installed under ~/.hpm/uv-python/         │
  │     (uv python install <ver>) — auto-downloads on clean machines     │
- │  7. Resolve with bundled uv, hash the resolved set, pick or          │
+ │  6. Resolve with bundled uv, hash the resolved set, pick or          │
  │     rebuild ~/.hpm/venvs/<hash>/                                     │
- │  8. uv pip install --python <venv>/bin/python                        │
- │  9. Write <project>/.hpm/packages/{name}.json per dep                │
- │ 10. Sweep stale <project>/.hpm/packages/ entries                     │
- │ 11. Write hpm.lock                                                   │
+ │  7. uv pip install --python <venv>/bin/python                        │
+ │  8. Write <project>/.hpm/packages/{name}.json per dep                │
+ │  9. Sweep stale <project>/.hpm/packages/ entries                     │
+ │ 10. CLI step: build new lockfile from sync's InstallOutcomes         │
+ │     (backfilled from the prior lockfile for short-circuited entries) │
+ │     and write hpm.lock                                               │
  └──────────────────────────────────────────────────────────────────────┘
 ```
 
-`--frozen-lockfile` inserts a check between steps 2 and 3 that aborts if
-the solver's output would require a different lock than the existing one.
+Note: registry resolution currently uses each dep spec's `version` string
+as an *exact* lookup against the registry. Range specs like `^1.0.0` in
+`[dependencies]` won't resolve through `hpm install` today — `hpm update`
+is the path that re-resolves ranges (querying all versions, filtering by
+`VersionReq`, picking the highest non-yanked) and rewrites the spec to
+the resolved exact version.
+
+`--frozen-lockfile` aborts if loading the existing lockfile fails, if any
+cached checksum mismatches, or if the freshly-resolved set differs from
+the prior lockfile.
 
 ## Project-aware cleanup
 

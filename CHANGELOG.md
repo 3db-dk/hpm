@@ -7,31 +7,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`hpm update` actually does something now.** The previous implementation
+  was a placebo — `find_available_updates` synthesised version numbers
+  (`format!("{}.1", current_version)`), `query_pypi_latest` returned a
+  hardcoded string. Real impl: parse each registry dep's spec as
+  `semver::VersionReq`, query the registry for all versions, pick the
+  highest non-yanked match, compare against `hpm.lock`. Dry-run prints the
+  diff (human, JSON, JSON-lines, JSON-compact). Apply rewrites the
+  manifest spec to the resolved exact version and re-runs install. Honours
+  `--packages` filtering, warns when a locked version has been yanked,
+  prompts before applying unless `--yes`.
+- **`InstallOutcome` is now part of the public `hpm-core` API.** Returned
+  per-dep from `ProjectManager::sync_dependencies`, carries the install
+  path plus the lockfile-relevant `checksum` / `source` (both `Option`
+  because CAS short-circuits don't refetch). Library consumers that want
+  to drive their own lockfile build can do so from these outcomes.
+- **`RegistrySet::from_config(&Config)`** convenience constructor. Was
+  previously a free function inside the CLI's `registry` command module.
+
 ### Changed
 - **`ProjectManager::new` now takes an `Arc<Config>` parameter** (breaking
-  change for library consumers, e.g. the TumbleTrove desktop). The constructor
-  used to call `Config::load()` internally, and `resolve_and_install_from_registry`
-  and `sync_dependencies` each loaded the user→project config chain again,
-  so a single embedded "install package" operation triggered three disk
-  reads of `~/.hpm/config.toml` plus the matching `[hpm_config] Loaded user
-  configuration from …` log lines, drowning out unrelated warnings in
-  desktop logs. Callers now load `Config` once at their top level and
-  share it via `Arc<Config>`; internal methods read from `self.config`.
-  `hpm-cli` was updated in lockstep: each command loads `Config` exactly
-  once via `load_cli_config()` and passes `&Config` down, eliminating the
-  redundant second load inside `install` and the third load triggered by
-  `hpm add` → `install`. `Config` is now re-exported from `hpm-core` so
-  library consumers don't need to depend on `hpm-config` directly.
+  change for library consumers, e.g. the TumbleTrove desktop). The
+  constructor used to call `Config::load()` internally, and so did
+  `resolve_and_install_from_registry` / `sync_dependencies` — so a single
+  embedded "install package" operation triggered three disk reads of
+  `~/.hpm/config.toml` per click, each with a `[hpm_config] Loaded user
+  configuration from …` log line drowning out unrelated warnings.
+  Callers now load `Config` once and share it via `Arc<Config>`; internal
+  methods read from `self.config`. `hpm-cli` was updated in lockstep:
+  each command loads `Config` exactly once via `load_cli_config()` and
+  passes `&Config` down, eliminating the redundant second load inside
+  `install` and the third load `hpm add` → `install` used to trigger.
+  `Config` is now re-exported from `hpm-core`.
 - **`Config::load` success path is now `debug!`, not `info!`.** Embedded
   callers that legitimately load config once per operation no longer get
-  a user-visible `[hpm_config] Loaded user configuration from …` line per
-  call. The malformed-config `warn!` is unchanged — that's a real
-  user-visible problem and still surfaces at `WARN`.
+  a `[hpm_config] Loaded user configuration from …` line per call. The
+  malformed-config `warn!` is unchanged.
+- **`ProjectManager::sync_dependencies` returns `Vec<(String,
+  InstallOutcome)>`** instead of `()`. Two reasons: (1) callers (the CLI,
+  the desktop client) can now build a lockfile from sync's output; (2)
+  the same call site now does parallel installs internally via a
+  `JoinSet` — the parallel install path was previously duplicated in
+  `hpm-cli::commands::install`.
+- **`hpm install` is now a thin shell over `ProjectManager`.** The
+  command goes from 1118 lines to ~315: it loads + verifies the existing
+  lockfile, constructs a `ProjectManager`, calls `sync_dependencies`,
+  builds a fresh lockfile from the returned outcomes (backfilling
+  short-circuited entries from the prior lockfile), and writes it.
+  `--frozen-lockfile` semantics tightened: previously the flag just
+  skipped lockfile regeneration; now `install` aborts when the
+  freshly-resolved set differs from the prior lockfile.
+- **`ProjectError` variants carry typed source chains.** The stringly-typed
+  `DirectoryCreation(String)`, `DirectoryRead(String)`,
+  `PackageInstallation(String)`, `StorageRead(String)`,
+  `InvalidDependency(String)`, `PythonResolution(String)` were replaced
+  with `#[from]` / `#[source]` variants: `DirectoryCreation { path,
+  source: io::Error }`, `Storage(Box<StorageError>)`,
+  `Fetch(Box<FetchError>)`, `InvalidPackageSource(PackageSourceError)`,
+  `NoRegistriesConfigured { name, version_req }`, `RegistryResolution {
+  name, version_req, source: Box<RegistryError> }`, `NoMatchingVersion {
+  name, version_req }`, `PythonResolution(Box<dyn Error + Send + Sync>)`.
+  Downstream `match` arms that read the old `String` payload need
+  rewriting against the typed variants.
+- **`hpm-cli::commands::clean` collapsed 6× duplicated control flow.**
+  The dry-run / automated / interactive × packages / python /
+  comprehensive matrix is now a `(Scope, Mode)` parametrisation; 401
+  lines down to 240, six functions down to three.
+- **`hpm init --vcs=git` propagates `git init` failures** instead of
+  warning and reporting success. If the user asked for a VCS and git is
+  missing or fails, the whole init fails.
+- **Top-level `Cargo.toml` is now a pure workspace manifest.** Was a
+  hybrid `[package]` + `[workspace]` with a stub `src/lib.rs` "documentation-
+  only crate" — removed.
 
 ### Removed
-- `ProjectError::ConfigLoad` variant. It was only constructed by the now-
-  removed internal `Config::load()` calls in `ProjectManager`. Match arms
-  for this variant in downstream code can be deleted.
+- **`hpm-resolver` crate (~2,330 lines).** Claimed to be PubGrub but
+  skipped conflict-driven clause learning ("`Simplified conflict
+  resolution`"); zero external callers. The install path picks the
+  highest matching version per package, which doesn't need a constraint
+  solver. Re-add when transitive resolution becomes a real requirement.
+- **`hpm publish` subcommand.** The body was a help blurb pointing users
+  at the registry publishing workflow that lives elsewhere (the
+  tumbletrove creator API). A command that pretends to be documentation
+  is worse than no command.
+- **`hpm clean --package <name>` flag.** Declared, parsed by clap, and
+  tested, but `execute_clean` never read it — pure CLI fiction.
+- **Fake disk-space estimates.** `"Estimated disk space freed: ~NMB"`
+  was `removed.len() * 10MB` regardless of actual content.
+  `ComprehensiveCleanupResult::format_total_space_*` is gone.
+- **`Registry::config()` trait method + `RegistrySet::refresh_all()`.**
+  Both had zero callers anywhere. The `RegistryConfig` type backing
+  `config()` is also gone.
+- **`.hpmref` / symlink legacy sweep.** `install.rs` used to clean up an
+  earlier install layout that doesn't exist anymore.
+- **`ProjectError::ConfigLoad`** and `ProjectError::PackageNotFound`
+  variants. Both unused after the typed-error refactor.
+
+### Fixed
+- **Stub `hpm update` no longer lies.** Even before the real implementation
+  landed, the placebo body was replaced with a `bail!` pointing users at
+  the manual workaround.
 
 ## [0.11.3] - 2026-05-11
 
