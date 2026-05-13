@@ -19,6 +19,7 @@ pub struct ProjectManager {
     project_config: ProjectConfig,
     storage_manager: Arc<StorageManager>,
     fetcher: ArchiveFetcher,
+    auth_token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,10 +56,38 @@ impl ProjectManager {
     /// embedded callers (the desktop client) used to trigger 3+ `Config::load`
     /// disk reads per user operation, all of which now collapse into the
     /// shared `Arc<Config>` here and on `StorageManager`.
+    ///
+    /// All internally-built `RegistrySet`s are anonymous. For caller-driven
+    /// auth (e.g. a desktop client passing a bearer token for visibility-gated
+    /// registries), use [`Self::new_with_auth`].
     pub fn new(
         project_root: PathBuf,
         storage_manager: Arc<StorageManager>,
         config: Arc<Config>,
+    ) -> Result<Self, ProjectError> {
+        Self::new_with_auth(project_root, storage_manager, config, None)
+    }
+
+    /// Like [`Self::new`], but stashes a bearer token that is forwarded to
+    /// every `RegistrySet` the manager builds internally.
+    ///
+    /// `sync_dependencies` and `add_dependency`'s registry-resolved path both
+    /// construct their own `RegistrySet` from the supplied [`Config`] (or the
+    /// project manifest's `[[registries]]` override). With `auth_token =
+    /// Some(...)`, those internal sets are built via
+    /// [`crate::registry::RegistrySet::from_configs_with_auth`] so the token
+    /// reaches the API-registry HTTP client. `None` is identical to
+    /// [`Self::new`].
+    ///
+    /// Token semantics mirror the registry variant: the token is baked into
+    /// the manager and propagates to each `RegistrySet` at the point of
+    /// construction. Callers tracking a refreshing token should rebuild the
+    /// `ProjectManager` per operation rather than mutating one in place.
+    pub fn new_with_auth(
+        project_root: PathBuf,
+        storage_manager: Arc<StorageManager>,
+        config: Arc<Config>,
+        auth_token: Option<String>,
     ) -> Result<Self, ProjectError> {
         let project_config = hpm_config::Config::load_project_config(&project_root);
 
@@ -77,6 +106,7 @@ impl ProjectManager {
             project_config,
             storage_manager,
             fetcher,
+            auth_token,
         };
 
         manager.ensure_directories()?;
@@ -142,7 +172,11 @@ impl ProjectManager {
         &self,
         spec: &PackageSpec,
     ) -> Result<InstalledPackage, ProjectError> {
-        let registry_set = crate::registry::RegistrySet::from_config(&self.config);
+        let registry_set = crate::registry::RegistrySet::from_configs_with_auth(
+            &self.config.registries,
+            &self.config.storage.registry_cache_dir,
+            self.auth_token.as_deref(),
+        );
 
         if registry_set.is_empty() {
             return Err(ProjectError::NoRegistriesConfigured {
@@ -264,10 +298,13 @@ impl ProjectManager {
                     } else {
                         self.config.registries.clone()
                     };
-                Some(Arc::new(crate::registry::RegistrySet::from_configs(
-                    &registry_configs,
-                    &self.config.storage.registry_cache_dir,
-                )))
+                Some(Arc::new(
+                    crate::registry::RegistrySet::from_configs_with_auth(
+                        &registry_configs,
+                        &self.config.storage.registry_cache_dir,
+                        self.auth_token.as_deref(),
+                    ),
+                ))
             } else {
                 None
             };
@@ -1111,6 +1148,40 @@ mod tests {
         let _project_manager =
             ProjectManager::new(project_root.clone(), storage_manager, config).unwrap();
         assert!(project_root.join(".hpm").join("packages").exists());
+    }
+
+    #[tokio::test]
+    async fn new_with_auth_none_matches_new() {
+        // Regression: `new(...)` must remain a one-line delegate to
+        // `new_with_auth(..., None)`. If the two paths diverge, anonymous
+        // callers (the CLI, every existing embedder) would silently drift
+        // from the authenticated path's behavior.
+        let temp_dir = TempDir::new().unwrap();
+        let (config, storage_manager) = test_setup(temp_dir.path());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+
+        let pm = ProjectManager::new_with_auth(project_root.clone(), storage_manager, config, None)
+            .unwrap();
+        assert!(pm.auth_token.is_none());
+        assert!(project_root.join(".hpm").join("packages").exists());
+    }
+
+    #[tokio::test]
+    async fn new_with_auth_some_stashes_token() {
+        let temp_dir = TempDir::new().unwrap();
+        let (config, storage_manager) = test_setup(temp_dir.path());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+
+        let pm = ProjectManager::new_with_auth(
+            project_root,
+            storage_manager,
+            config,
+            Some("supabase-access-token-xyz".to_string()),
+        )
+        .unwrap();
+        assert_eq!(pm.auth_token.as_deref(), Some("supabase-access-token-xyz"));
     }
 
     #[test]
