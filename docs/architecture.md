@@ -535,6 +535,15 @@ Any type that implements the `Registry` async trait can be plugged into a
 `RegistrySet` and used for resolution. The built-in `ApiRegistry` and
 `GitRegistry` are reference implementations.
 
+For visibility-gated API registries (e.g. private packages an
+authenticated user is entitled to see), embedders can pass a bearer
+token through `RegistrySet::from_configs_with_auth` — the token is
+attached as `Authorization: Bearer <token>` on every API-registry
+request and marked sensitive so reqwest won't log it. The token is
+baked into the HTTP client at construction, so callers tracking a
+refreshing token rebuild the `RegistrySet` per operation rather than
+mutating one in place. Git registries currently ignore the token.
+
 ### Plugin system
 
 Not implemented. The CLI surface is currently fixed at compile time. A

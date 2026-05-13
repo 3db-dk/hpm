@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`ApiRegistry::with_auth_token` and `RegistrySet::from_configs_with_auth`.**
+  Embedded callers (e.g. TumbleTrove Desktop) can now build a registry set
+  that attaches `Authorization: Bearer <token>` to every API-registry
+  request. Required for visibility-gated registries: server-side, the
+  TumbleTrove `/v1/registry` route shows anonymous callers only PUBLIC
+  packages, so an org member trying to install their own org's PRIVATE
+  package previously got a 404 from `get_versions` and the package was
+  silently dropped from the generated `hpm.toml`. The token header is
+  marked sensitive (reqwest won't log it). Git registries ignore the
+  token — there is no auth story for the git index yet. Both
+  `ApiRegistry::new` and `RegistrySet::from_configs` are unchanged
+  (delegate to the new entry points with `None`), so existing callers
+  including the CLI keep working as anonymous.
+
 ## [0.12.0] - 2026-05-13
 
 ### Added
