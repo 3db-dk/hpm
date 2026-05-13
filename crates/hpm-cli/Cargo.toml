@@ -34,6 +34,7 @@ hpm-package = { path = "../hpm-package" }
 hpm-core = { path = "../hpm-core" }
 hpm-config = { path = "../hpm-config" }
 hpm-python = { path = "../hpm-python" }
+semver.workspace = true
 
 
 [dev-dependencies]
