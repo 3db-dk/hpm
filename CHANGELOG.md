@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-05-13
+
 ### Added
 - **`ProjectManager::new_with_auth`.** Closes the parallel gap to the
   0.12.1 `RegistrySet::from_configs_with_auth` work: `ProjectManager`
