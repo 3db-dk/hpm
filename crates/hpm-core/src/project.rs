@@ -9,6 +9,7 @@ use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
 #[derive(Debug)]
@@ -208,86 +209,85 @@ impl ProjectManager {
         Ok(())
     }
 
-    pub async fn sync_dependencies(&self) -> Result<(), ProjectError> {
+    pub async fn sync_dependencies(&self) -> Result<Vec<InstalledPackage>, ProjectError> {
         info!("Syncing project dependencies");
 
         let project_manifest = match self.load_project_manifest()? {
             Some(manifest) => manifest,
             None => {
                 info!("No project manifest found, nothing to sync");
-                return Ok(());
+                return Ok(Vec::new());
             }
         };
 
-        let mut installed_packages: Vec<InstalledPackage> = Vec::new();
-
         let project_env_overrides = project_manifest.env;
         let manifest_registries = project_manifest.registries;
-        if let Some(dependencies) = project_manifest.dependencies {
-            // Build registry set once (lazily) for any registry-resolved deps
-            let registry_set = {
-                let has_registry_deps = dependencies.values().any(|spec| spec.is_registry());
-                if has_registry_deps {
-                    let registry_configs: Vec<hpm_config::RegistrySourceConfig> =
-                        if let Some(ref regs) = manifest_registries {
-                            regs.iter()
-                                .map(|r| hpm_config::RegistrySourceConfig {
-                                    name: r.name.clone(),
-                                    url: r.url.clone(),
-                                    registry_type: match r.registry_type {
-                                        hpm_package::RegistryType::Api => {
-                                            hpm_config::RegistryType::Api
-                                        }
-                                        hpm_package::RegistryType::Git => {
-                                            hpm_config::RegistryType::Git
-                                        }
-                                    },
-                                })
-                                .collect()
-                        } else {
-                            self.config.registries.clone()
-                        };
-                    Some(crate::registry::RegistrySet::from_configs(
-                        &registry_configs,
-                        &self.config.storage.registry_cache_dir,
-                    ))
+        let dependencies = project_manifest.dependencies.unwrap_or_default();
+
+        // Build registry set once for any registry-resolved deps. A manifest
+        // [[registries]] override beats the user's [registries] from config.
+        // Wrapped in Arc so each spawned task can hold a cheap clone.
+        let registry_set: Option<Arc<crate::registry::RegistrySet>> = if dependencies
+            .values()
+            .any(|spec| spec.is_registry())
+        {
+            let registry_configs: Vec<hpm_config::RegistrySourceConfig> =
+                if let Some(ref regs) = manifest_registries {
+                    regs.iter()
+                        .map(|r| hpm_config::RegistrySourceConfig {
+                            name: r.name.clone(),
+                            url: r.url.clone(),
+                            registry_type: match r.registry_type {
+                                hpm_package::RegistryType::Api => hpm_config::RegistryType::Api,
+                                hpm_package::RegistryType::Git => hpm_config::RegistryType::Git,
+                            },
+                        })
+                        .collect()
                 } else {
-                    None
-                }
-            };
+                    self.config.registries.clone()
+                };
+            Some(Arc::new(crate::registry::RegistrySet::from_configs(
+                &registry_configs,
+                &self.config.storage.registry_cache_dir,
+            )))
+        } else {
+            None
+        };
 
-            // Fetch list of globally installed packages once for lookups
-            let all_installed = self.storage_manager.list_installed()?;
+        // Fetch list of globally installed packages once for short-circuit lookups
+        let all_installed = Arc::new(self.storage_manager.list_installed()?);
 
-            for (name, dep_spec) in dependencies {
-                // Build a PackageSource from the dependency spec and use fetcher for remote deps
-                match &dep_spec {
-                    hpm_package::DependencySpec::Simple(version)
-                    | hpm_package::DependencySpec::Registry { version, .. } => {
-                        let pkg = self
-                            .ensure_installed(&name, version, &registry_set, &all_installed)
-                            .await?;
-                        installed_packages.push(pkg);
-                    }
-                    hpm_package::DependencySpec::Url { url, version, .. } => {
-                        let pkg = self
-                            .ensure_installed_from_url(&name, version, url, &all_installed)
-                            .await?;
-                        installed_packages.push(pkg);
-                    }
-                    hpm_package::DependencySpec::Path { path, .. } => {
-                        // Path deps install into the dev-only subtree so they
-                        // don't poison the shared registry CAS — see
-                        // `install_from_path_dev`.
-                        let source_path = std::path::Path::new(path);
-                        let installed = self
-                            .storage_manager
-                            .install_from_path_dev(source_path)
-                            .await?;
-                        installed_packages.push(installed);
-                    }
-                }
-            }
+        // Phase 1: spawn all installs in parallel via a JoinSet. Each task owns
+        // a clone of (StorageManager, ArchiveFetcher, RegistrySet) and its dep
+        // spec, so resolve→fetch→copy-into-CAS chains overlap across deps.
+        let mut tasks: JoinSet<Result<InstalledPackage, ProjectError>> = JoinSet::new();
+        for (name, spec) in dependencies {
+            let storage = self.storage_manager.clone();
+            let fetcher = self.fetcher.clone();
+            let registry_set = registry_set.clone();
+            let all_installed = all_installed.clone();
+
+            tasks.spawn(async move {
+                install_one_dep(
+                    &storage,
+                    &fetcher,
+                    registry_set.as_deref(),
+                    &all_installed,
+                    &name,
+                    &spec,
+                )
+                .await
+            });
+        }
+
+        let mut installed_packages: Vec<InstalledPackage> = Vec::new();
+        while let Some(joined) = tasks.join_next().await {
+            // A spawned-task panic leaks structural confusion; propagate as a
+            // synthetic Storage error chained through Box<dyn Error> would be
+            // wrong-shaped, so just re-throw the panic and let the runtime
+            // surface it.
+            let pkg = joined.expect("dependency install task panicked")?;
+            installed_packages.push(pkg);
         }
 
         // Resolve Python pip dependencies and get venv site-packages path (if any)
@@ -310,7 +310,7 @@ impl ProjectManager {
         self.sweep_stale_houdini_manifests(&installed_packages)?;
 
         info!("Successfully synced project dependencies");
-        Ok(())
+        Ok(installed_packages)
     }
 
     /// Remove `<slug>.json` files in the project's packages dir whose slug is
@@ -372,59 +372,6 @@ impl ProjectManager {
         Ok(())
     }
 
-    /// Ensure a registry/simple dependency is installed, returning the InstalledPackage.
-    async fn ensure_installed(
-        &self,
-        name: &str,
-        version: &str,
-        registry_set: &Option<crate::registry::RegistrySet>,
-        all_installed: &[InstalledPackage],
-    ) -> Result<InstalledPackage, ProjectError> {
-        // Check if already in global storage. The dependency `name` from a
-        // project manifest is typically scoped (`creator/slug`); the CAS keys
-        // installed packages by bare slug. `matches_spec_name` bridges both
-        // forms — comparing `p.name == name` directly here would miss every
-        // scoped match and trigger a redundant fetch + remove-and-reinstall.
-        if let Some(pkg) = all_installed
-            .iter()
-            .find(|p| Self::matches_spec_name(p, name) && p.version == version)
-        {
-            info!("Package {}@{} already installed", name, version);
-            return Ok(pkg.clone());
-        }
-
-        let rs = registry_set.as_ref().expect("registry set built above");
-        let entry = rs.get_version(name, version).await.map_err(|source| {
-            ProjectError::RegistryResolution {
-                name: name.to_string(),
-                version_req: version.to_string(),
-                source: Box::new(source),
-            }
-        })?;
-        let source = PackageSource::url(entry.dl, version)?;
-        self.fetch_and_install_pkg(name, version, source).await
-    }
-
-    /// Ensure a URL dependency is installed, returning the InstalledPackage.
-    async fn ensure_installed_from_url(
-        &self,
-        name: &str,
-        version: &str,
-        url: &str,
-        all_installed: &[InstalledPackage],
-    ) -> Result<InstalledPackage, ProjectError> {
-        if let Some(pkg) = all_installed
-            .iter()
-            .find(|p| Self::matches_spec_name(p, name) && p.version == version)
-        {
-            info!("Package {}@{} already installed", name, version);
-            return Ok(pkg.clone());
-        }
-
-        let source = PackageSource::url(url, version)?;
-        self.fetch_and_install_pkg(name, version, source).await
-    }
-
     /// Fetch a remote package and install it to global storage, returning the InstalledPackage.
     async fn fetch_and_install_pkg(
         &self,
@@ -432,17 +379,7 @@ impl ProjectManager {
         version: &str,
         source: PackageSource,
     ) -> Result<InstalledPackage, ProjectError> {
-        // Fetch (download + extract) the package
-        let fetch_result = self.fetcher.fetch(&source, name).await?;
-
-        // Install from the extracted path into global storage
-        let installed = self
-            .storage_manager
-            .install_from_path(&fetch_result.package_path)
-            .await?;
-
-        info!("Successfully fetched and installed {}@{}", name, version);
-        Ok(installed)
+        fetch_and_install_pkg(&self.storage_manager, &self.fetcher, name, version, source).await
     }
 
     fn generate_houdini_manifest(
@@ -883,6 +820,77 @@ impl ProjectManager {
     }
 }
 
+/// Install a single dependency, short-circuiting if it's already in the
+/// global CAS. Spawnable from the JoinSet in `sync_dependencies` — takes
+/// shared state by `&` (cloned into the task by the caller).
+///
+/// `all_installed` is the snapshot of `StorageManager::list_installed()`
+/// captured before installs began; comparing against it avoids re-fetching
+/// packages that another concurrent task may also be racing to install
+/// (the CAS is idempotent under `install_from_path`, but skipping the
+/// network round-trip when a previous sync already landed the package is
+/// worth the shared snapshot).
+async fn install_one_dep(
+    storage: &StorageManager,
+    fetcher: &ArchiveFetcher,
+    registry_set: Option<&crate::registry::RegistrySet>,
+    all_installed: &[InstalledPackage],
+    name: &str,
+    spec: &hpm_package::DependencySpec,
+) -> Result<InstalledPackage, ProjectError> {
+    use hpm_package::DependencySpec;
+    match spec {
+        DependencySpec::Simple(version) | DependencySpec::Registry { version, .. } => {
+            if let Some(pkg) = all_installed
+                .iter()
+                .find(|p| ProjectManager::matches_spec_name(p, name) && p.version == *version)
+            {
+                info!("Package {}@{} already installed", name, version);
+                return Ok(pkg.clone());
+            }
+            let rs = registry_set.expect("registry set built when registry deps present");
+            let entry = rs.get_version(name, version).await.map_err(|source| {
+                ProjectError::RegistryResolution {
+                    name: name.to_string(),
+                    version_req: version.clone(),
+                    source: Box::new(source),
+                }
+            })?;
+            let source = PackageSource::url(entry.dl, version)?;
+            fetch_and_install_pkg(storage, fetcher, name, version, source).await
+        }
+        DependencySpec::Url { url, version, .. } => {
+            if let Some(pkg) = all_installed
+                .iter()
+                .find(|p| ProjectManager::matches_spec_name(p, name) && p.version == *version)
+            {
+                info!("Package {}@{} already installed", name, version);
+                return Ok(pkg.clone());
+            }
+            let source = PackageSource::url(url, version)?;
+            fetch_and_install_pkg(storage, fetcher, name, version, source).await
+        }
+        DependencySpec::Path { path, .. } => {
+            let source_path = std::path::Path::new(path);
+            Ok(storage.install_from_path_dev(source_path).await?)
+        }
+    }
+}
+
+/// Fetch a remote package and copy it into the global CAS.
+async fn fetch_and_install_pkg(
+    storage: &StorageManager,
+    fetcher: &ArchiveFetcher,
+    name: &str,
+    version: &str,
+    source: PackageSource,
+) -> Result<InstalledPackage, ProjectError> {
+    let fetch_result = fetcher.fetch(&source, name).await?;
+    let installed = storage.install_from_path(&fetch_result.package_path).await?;
+    info!("Successfully fetched and installed {}@{}", name, version);
+    Ok(installed)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
     /// Failed to create a directory the project depends on (`.hpm/packages`,
@@ -1288,12 +1296,14 @@ mod tests {
     /// Windows the remove-and-recopy can fail with os error 5 when another
     /// Houdini holds the package dir open.
     #[tokio::test]
-    async fn ensure_installed_short_circuits_on_scoped_name() {
+    async fn install_one_dep_short_circuits_on_scoped_name() {
         let temp_dir = TempDir::new().unwrap();
-        let (config, storage_manager) = test_setup(temp_dir.path());
-        let project_root = temp_dir.path().join("project");
-        std::fs::create_dir_all(&project_root).unwrap();
-        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+        let (_config, storage_manager) = test_setup(temp_dir.path());
+        let fetcher = ArchiveFetcher::new(
+            temp_dir.path().join("cache"),
+            temp_dir.path().join("fetch"),
+        )
+        .unwrap();
 
         let manifest = hpm_package::PackageManifest::new(
             PackagePath::new("tumblehead/tumblepipe").unwrap(),
@@ -1309,18 +1319,20 @@ mod tests {
             install_path: temp_dir.path().join("tumblepipe@1.1.20"),
         };
 
-        // registry_set: None — if the short-circuit misses, the function would
-        // panic on `expect("registry set built above")`. Reaching that panic
-        // is exactly the bug.
-        let result = project_manager
-            .ensure_installed(
-                "tumblehead/tumblepipe",
-                "1.1.20",
-                &None,
-                std::slice::from_ref(&installed),
-            )
-            .await
-            .expect("scoped lookup must short-circuit on the bare-slug InstalledPackage");
+        // registry_set: None — if the short-circuit misses, install_one_dep
+        // would panic on `expect("registry set built when registry deps
+        // present")`. Reaching that panic is exactly the bug.
+        let spec = hpm_package::DependencySpec::Simple("1.1.20".to_string());
+        let result = install_one_dep(
+            &storage_manager,
+            &fetcher,
+            None,
+            std::slice::from_ref(&installed),
+            "tumblehead/tumblepipe",
+            &spec,
+        )
+        .await
+        .expect("scoped lookup must short-circuit on the bare-slug InstalledPackage");
 
         assert_eq!(result.slug(), "tumblepipe");
         assert_eq!(result.version, "1.1.20");
