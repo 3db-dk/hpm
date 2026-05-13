@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-05-13
+
 ### Added
 - **`ApiRegistry::with_auth_token` and `RegistrySet::from_configs_with_auth`.**
   Embedded callers (e.g. TumbleTrove Desktop) can now build a registry set
