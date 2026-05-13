@@ -317,7 +317,9 @@ async fn install_hpm_dependencies(
     let registry_set = {
         let has_registry_deps = dependencies.values().any(|spec| spec.is_registry());
         if has_registry_deps {
-            Some(Arc::new(super::registry::build_registry_set(config)))
+            Some(Arc::new(hpm_core::registry::RegistrySet::from_config(
+                config,
+            )))
         } else {
             None
         }

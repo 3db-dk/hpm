@@ -33,9 +33,9 @@
 //! ```
 
 use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifest};
-use super::registry::build_registry_set;
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
+use hpm_core::registry::RegistrySet;
 use hpm_package::DependencySpec;
 use indexmap::IndexMap;
 use std::path::PathBuf;
@@ -110,7 +110,7 @@ pub async fn add_packages(
             // Parse name@version syntax
             let (pkg_name, requested_version) = parse_name_version(package_name);
 
-            let registry_set = build_registry_set(config);
+            let registry_set = RegistrySet::from_config(config);
 
             if registry_set.is_empty() {
                 let example_pkg = package_names.first().unwrap();

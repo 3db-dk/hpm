@@ -2,10 +2,10 @@
 //!
 //! Searches configured registries for packages matching a query.
 
-use super::registry::build_registry_set;
 use anyhow::Result;
 use console::style;
 use hpm_config::Config;
+use hpm_core::registry::RegistrySet;
 
 /// Execute the search command.
 ///
@@ -34,7 +34,7 @@ pub async fn search_packages(
         return Ok(());
     }
 
-    let registry_set = build_registry_set(config);
+    let registry_set = RegistrySet::from_config(config);
 
     let results = registry_set
         .search(&query)

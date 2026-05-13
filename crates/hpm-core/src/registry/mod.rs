@@ -94,10 +94,18 @@ impl RegistrySet {
         }
     }
 
+    /// Build a `RegistrySet` from a full `Config`. Convenience wrapper around
+    /// [`Self::from_configs`] for the common case where the caller just wants
+    /// the set defined by the user's global config.
+    pub fn from_config(config: &hpm_config::Config) -> Self {
+        Self::from_configs(&config.registries, &config.storage.registry_cache_dir)
+    }
+
     /// Build a `RegistrySet` from registry configurations.
     ///
-    /// This is the primary way for library consumers to construct a `RegistrySet`
-    /// without going through the CLI.
+    /// Use this when the registry list is overridden (e.g. by a project
+    /// manifest's `[[registries]]`) rather than coming from `Config`. For the
+    /// straight `Config`-driven case, prefer [`Self::from_config`].
     ///
     /// # Arguments
     /// * `registries` - Registry configurations to add

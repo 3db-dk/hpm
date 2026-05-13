@@ -16,6 +16,10 @@ use hpm_config::{Config, RegistrySourceConfig, RegistryType};
 use hpm_core::registry::Registry;
 use tracing::info;
 
+// `RegistrySet` construction lives on the type itself
+// (`RegistrySet::from_config(&Config)` in hpm-core); this module owns the
+// imperative `hpm registry …` subcommands only.
+
 /// Add a new registry.
 ///
 /// `config` is taken by value because the registry add mutates it and then
@@ -173,10 +177,3 @@ pub async fn update_registries(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Build a RegistrySet from the current configuration.
-pub fn build_registry_set(config: &Config) -> hpm_core::registry::RegistrySet {
-    hpm_core::registry::RegistrySet::from_configs(
-        &config.registries,
-        &config.storage.registry_cache_dir,
-    )
-}
