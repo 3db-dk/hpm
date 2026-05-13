@@ -526,11 +526,6 @@ async fn install_python_dependencies(manifests: &[PackageManifest]) -> Result<Op
 /// for deps that have left the dependency set. Houdini reads every JSON
 /// in this dir on launch, so an orphan manifest keeps loading the dropped
 /// package; only entries we ourselves write (`.json`) are touched.
-///
-/// Earlier installs also created `<name>` symlinks and `<name>.hpmref`
-/// reference files; both are gone now that JSON manifests embed absolute
-/// CAS paths directly. Any leftovers from older installs are swept here
-/// too, keyed off the bare-stem-matches-a-dep heuristic.
 async fn sweep_stale_install_entries(
     hpm_dir: &Path,
     install_results: &HashMap<String, PackageInstallResult>,
@@ -558,16 +553,7 @@ async fn sweep_stale_install_entries(
             None => continue,
         };
 
-        // Sweep our own entry shapes; anything else (README.md, .gitignore)
-        // is left alone. The `<name>` and `<name>.hpmref` cases are kept so
-        // upgrades from the previous symlink-based install layout clean up.
-        let dep_name = if let Some(stem) = file_name.strip_suffix(".json") {
-            stem
-        } else if let Some(stem) = file_name.strip_suffix(".hpmref") {
-            stem
-        } else if !file_name.contains('.') {
-            file_name
-        } else {
+        let Some(dep_name) = file_name.strip_suffix(".json") else {
             continue;
         };
 
@@ -575,23 +561,13 @@ async fn sweep_stale_install_entries(
             continue;
         }
 
-        let meta = match tokio::fs::symlink_metadata(&path).await {
-            Ok(m) => m,
-            Err(e) => {
-                warn!("Failed to stat stale entry {}: {}", path.display(), e);
-                continue;
-            }
-        };
-
-        let result = if meta.file_type().is_dir() {
-            tokio::fs::remove_dir_all(&path).await
-        } else {
-            tokio::fs::remove_file(&path).await
-        };
-
-        match result {
-            Ok(()) => debug!("Removed stale install entry: {}", path.display()),
-            Err(e) => warn!("Failed to remove stale entry {}: {}", path.display(), e),
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => debug!("Removed stale Houdini manifest: {}", path.display()),
+            Err(e) => warn!(
+                "Failed to remove stale Houdini manifest {}: {}",
+                path.display(),
+                e
+            ),
         }
     }
 
@@ -1056,63 +1032,4 @@ description = "Test custom manifest path"
         assert!(unrelated.exists(), "non-dep entries must be left alone");
     }
 
-    /// Regression: the `<name>` symlink/dir created by `install_hpm_dependencies`
-    /// also leaks when the dep leaves the set. The sweep must remove that too,
-    /// otherwise Houdini sees a directory entry that still contains a package.
-    #[tokio::test]
-    async fn sweep_removes_stale_symlink_or_dir() {
-        let temp_dir = TempDir::new().unwrap();
-        let hpm_dir = temp_dir.path().join(".hpm");
-        let pkgs = hpm_dir.join("packages");
-        tokio::fs::create_dir_all(&pkgs).await.unwrap();
-
-        // Simulate an old dep's directory entry. A real install would write
-        // this as a symlink to the global package dir, but the sweep treats
-        // dir/file/symlink uniformly; a regular dir is the simplest fixture.
-        let stale_pkg = pkgs.join("old-pkg");
-        tokio::fs::create_dir_all(&stale_pkg).await.unwrap();
-        tokio::fs::write(stale_pkg.join("dummy"), b"x")
-            .await
-            .unwrap();
-
-        // And the Windows-fallback ref file shape.
-        let stale_ref = pkgs.join("old-pkg.hpmref");
-        tokio::fs::write(&stale_ref, b"/some/path").await.unwrap();
-
-        // Empty install set: every entry is stale.
-        sweep_stale_install_entries(&hpm_dir, &HashMap::new())
-            .await
-            .unwrap();
-
-        assert!(
-            !stale_pkg.exists(),
-            "stale package dir/symlink must be swept"
-        );
-        assert!(!stale_ref.exists(), "stale .hpmref must be swept");
-    }
-
-    /// `.hpmref` files keyed off a dep that *is* still in the set must be kept.
-    /// The sweep strips the `.hpmref` suffix to derive the dep name.
-    #[tokio::test]
-    async fn sweep_keeps_active_hpmref() {
-        let temp_dir = TempDir::new().unwrap();
-        let hpm_dir = temp_dir.path().join(".hpm");
-        let pkgs = hpm_dir.join("packages");
-        tokio::fs::create_dir_all(&pkgs).await.unwrap();
-
-        let active_ref = pkgs.join("foo.hpmref");
-        tokio::fs::write(&active_ref, b"/some/path").await.unwrap();
-
-        let mut results = HashMap::new();
-        results.insert("foo".to_string(), fake_install_result(temp_dir.path()));
-
-        sweep_stale_install_entries(&hpm_dir, &results)
-            .await
-            .unwrap();
-
-        assert!(
-            active_ref.exists(),
-            "active dep .hpmref must be kept (suffix-stripped name match)"
-        );
-    }
 }
