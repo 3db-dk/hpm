@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`prepare_script_env` and `ScriptEnvHandle` in `hpm-python`.** Promotes
+  per-script venv preparation from a private helper inside `hpm run` to a
+  shared, spawn-strategy-agnostic API. Given a `ScriptEntry`, the function
+  lazily bootstraps bundled uv, materializes the venv if needed, and
+  returns a `ScriptEnvHandle` that carries the env-var mutations
+  (`VIRTUAL_ENV`, prepended `PATH`) the caller must apply before spawning.
+  `apply_to(&mut HashMap<String,String>)` folds those mutations into a
+  caller-staged env map, so outside embedders — `hpm run` (shells via
+  `cmd /C` / `sh -c`) and the tumbletrove-desktop hook runner
+  (direct-spawn via `CreateProcessW` / `execvp`) — consume the same handle
+  through their own spawn primitives. Plain string entries and table-form
+  entries with neither `python` nor `requirements` get a default no-op
+  handle. `ensure_script_venv` + `venv_bin_dir` remain exported as
+  lower-level escape hatches.
+
+### Changed
+- **`hpm-cli` `run.rs`** routes its env-prep through `prepare_script_env`
+  instead of its own `ensure_script_venv_for` / `prepend_path` helpers,
+  so a manifest-handling change in `hpm-python` is picked up by every
+  embedder without per-caller drift.
+
 ## [0.12.2] - 2026-05-13
 
 ### Added

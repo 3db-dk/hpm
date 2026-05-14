@@ -81,8 +81,10 @@ codes and help hints.
 | `PythonVersion` | Houdini-to-Python version value. |
 | `ResolvedDependencies`, `ResolvedDependencySet`, `ResolvedPackage` | UV-resolved dependency sets with content hash. |
 | `PythonCleanupAnalyzer` | Detects orphan venvs for `hpm clean --python-only`. |
-| `ensure_script_venv(python, requirements)` | Free function for the table form of `[scripts]`. Resolves raw PEP-508 requirement strings via `uv pip compile` and defers to `VenvManager`, returning the venv root. |
-| `venv_bin_dir(path)` | Returns the executable directory inside a uv-created venv (`bin/` on Unix, `Scripts/` on Windows). Pre-pend to `PATH` before spawning the script. |
+| `prepare_script_env(entry)` | Canonical entry point for table-form `[scripts]`. Bootstraps bundled uv, materializes the venv if needed, and returns a `ScriptEnvHandle` carrying the env-var mutations to apply before spawning. Plain string entries return a default (no-op) handle. Shared by `hpm run` and outside embedders (e.g. tumbletrove-desktop's hook runner). |
+| `ScriptEnvHandle` | Spawn-strategy-agnostic env-var bundle (`path_prepend`, `env`). `apply_to(&mut HashMap<String,String>)` folds it into a caller-staged env map ready for `Command::envs` or any other spawn primitive. |
+| `ensure_script_venv(python, requirements)` | Lower-level free function: resolves raw PEP-508 requirement strings via `uv pip compile` and defers to `VenvManager`, returning the venv root. Prefer `prepare_script_env` for the full flow. |
+| `venv_bin_dir(path)` | Returns the executable directory inside a uv-created venv (`bin/` on Unix, `Scripts/` on Windows). `prepare_script_env` already prepends this to `PATH`; use directly only when bypassing the handle. |
 | `DEFAULT_SCRIPT_PYTHON` | `"3.11"`. The Python version `ensure_script_venv` uses when a script omits `python`. |
 
 ### hpm-config
