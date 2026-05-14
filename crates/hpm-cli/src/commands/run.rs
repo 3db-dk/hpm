@@ -5,7 +5,9 @@
 //! venv on demand and run with that interpreter on PATH.
 
 use anyhow::{Context, Result};
-use hpm_package::{Platform, ScriptEntry};
+use hpm_package::Platform;
+use hpm_python::prepare_script_env;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use tracing::debug;
@@ -43,18 +45,28 @@ pub async fn run_script(
     let cmd_string = build_command_string(entry.cmd(), extra_args);
     debug!("hpm run {}: {}", script, cmd_string);
 
-    let mut command = shell_command(&cmd_string);
-    command
-        .current_dir(&package_root)
-        .env("HPM_PACKAGE_ROOT", &package_root);
-
-    if entry.needs_venv() {
-        let venv_path = ensure_script_venv_for(&entry, console).await?;
-        let bin_dir = hpm_python::venv_bin_dir(&venv_path);
-        prepend_path(&mut command, &bin_dir);
-        command.env("VIRTUAL_ENV", &venv_path);
-        debug!("hpm run {}: using venv {}", script, venv_path.display());
+    if entry.needs_venv() && !entry.requirements().is_empty() {
+        console.info(format!(
+            "Preparing script venv ({} requirement(s))",
+            entry.requirements().len()
+        ));
     }
+    let env_handle = prepare_script_env(&entry)
+        .await
+        .with_context(|| format!("Preparing environment for script '{}'", script))?;
+    if let Some(venv_bin) = &env_handle.path_prepend {
+        debug!("hpm run {}: using venv bin {}", script, venv_bin.display());
+    }
+
+    let mut env_vars: HashMap<String, String> = HashMap::new();
+    env_vars.insert(
+        "HPM_PACKAGE_ROOT".to_string(),
+        package_root.to_string_lossy().into_owned(),
+    );
+    env_handle.apply_to(&mut env_vars);
+
+    let mut command = shell_command(&cmd_string);
+    command.current_dir(&package_root).envs(&env_vars);
 
     let status = command
         .status()
@@ -69,23 +81,6 @@ pub async fn run_script(
     }
 
     Ok(exit_code)
-}
-
-async fn ensure_script_venv_for(entry: &ScriptEntry, console: &mut Console) -> Result<PathBuf> {
-    hpm_python::initialize()
-        .await
-        .context("Failed to initialize bundled uv")?;
-
-    if !entry.requirements().is_empty() {
-        console.info(format!(
-            "Preparing script venv ({} requirement(s))",
-            entry.requirements().len()
-        ));
-    }
-
-    hpm_python::ensure_script_venv(entry.python(), entry.requirements())
-        .await
-        .context("Failed to prepare script venv")
 }
 
 fn build_command_string(cmd: &str, extra_args: &[String]) -> String {
@@ -134,21 +129,6 @@ fn shell_quote(arg: &str) -> String {
         let escaped = arg.replace('\'', "'\\''");
         format!("'{}'", escaped)
     }
-}
-
-fn prepend_path(command: &mut Command, dir: &std::path::Path) {
-    let separator = if cfg!(target_os = "windows") {
-        ";"
-    } else {
-        ":"
-    };
-    let existing = std::env::var_os("PATH").unwrap_or_default();
-    let mut new_path = std::ffi::OsString::from(dir.as_os_str());
-    if !existing.is_empty() {
-        new_path.push(separator);
-        new_path.push(&existing);
-    }
-    command.env("PATH", new_path);
 }
 
 #[cfg(test)]

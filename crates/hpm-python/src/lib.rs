@@ -196,7 +196,9 @@ pub use types::{
 pub use venv::VenvManager;
 
 // Per-script venvs (table-form `[scripts]` entries with python/requirements)
-pub use script_env::{DEFAULT_SCRIPT_PYTHON, ensure_script_venv, venv_bin_dir};
+pub use script_env::{
+    DEFAULT_SCRIPT_PYTHON, ScriptEnvHandle, ensure_script_venv, prepare_script_env, venv_bin_dir,
+};
 
 use anyhow::Result;
 use std::path::PathBuf;
