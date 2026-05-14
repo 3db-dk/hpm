@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-05-14
+
 ### Added
 - **`prepare_script_env` and `ScriptEnvHandle` in `hpm-python`.** Promotes
   per-script venv preparation from a private helper inside `hpm run` to a
