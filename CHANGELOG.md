@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-05-15
+
 ### Changed
 - **Platform identifiers aligned with the TumbleTrove API.** `Platform` now
   carries arch-suffixed variants — `linux-x86_64`, `linux-aarch64`,
