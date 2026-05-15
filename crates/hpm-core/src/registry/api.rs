@@ -235,19 +235,25 @@ fn encode_package_path(name: &str) -> String {
 }
 
 /// Map any platform identifier a registry might emit to hpm's canonical
-/// [`hpm_package::Platform`]. Accepts both the canonical long form
-/// (`"windows-x86_64"`) and the short OS form (`"WINDOWS"`/`"linux"`/etc.,
-/// case-insensitive). Returns `None` for anything else, including the
-/// universal sentinels handled separately by [`is_universal`].
+/// [`hpm_package::Platform`]. Accepts the canonical arch-suffixed long form
+/// (`"windows-x86_64"`, `"macos-aarch64"`, …) and the short OS form
+/// (`"WINDOWS"`/`"linux"`/etc., case-insensitive) for back-compat with
+/// pre-arch-suffix data. Short OS tags assume x86_64 — the dominant arch at
+/// the time those entries were written. Returns `None` for anything else,
+/// including the universal sentinel handled separately by [`is_universal`].
 fn normalize_platform(s: &str) -> Option<hpm_package::Platform> {
     use hpm_package::Platform;
-    if let Ok(p) = s.parse::<Platform>() {
+    // Match the canonical long form first via FromStr; treat the universal
+    // tag as a fallback signal (see is_universal), not a Platform match.
+    if let Ok(p) = s.parse::<Platform>()
+        && p != Platform::Universal
+    {
         return Some(p);
     }
     match s.to_ascii_lowercase().as_str() {
         "windows" => Some(Platform::WindowsX86_64),
         "linux" => Some(Platform::LinuxX86_64),
-        "macos" => Some(Platform::MacosUniversal),
+        "macos" => Some(Platform::MacosX86_64),
         _ => None,
     }
 }
@@ -374,23 +380,42 @@ mod tests {
             Some(Platform::LinuxX86_64)
         );
         assert_eq!(
-            normalize_platform("macos-universal"),
-            Some(Platform::MacosUniversal)
+            normalize_platform("linux-aarch64"),
+            Some(Platform::LinuxAarch64)
+        );
+        assert_eq!(
+            normalize_platform("macos-x86_64"),
+            Some(Platform::MacosX86_64)
+        );
+        assert_eq!(
+            normalize_platform("macos-aarch64"),
+            Some(Platform::MacosAarch64)
+        );
+        assert_eq!(
+            normalize_platform("windows-aarch64"),
+            Some(Platform::WindowsAarch64)
         );
     }
 
     #[test]
     fn normalize_accepts_short_os_case_insensitive() {
+        // Short OS tags pre-date arch suffixes and assume x86_64 — that's
+        // what was published at the time entries with those tags existed.
         assert_eq!(normalize_platform("WINDOWS"), Some(Platform::WindowsX86_64));
         assert_eq!(normalize_platform("Linux"), Some(Platform::LinuxX86_64));
-        assert_eq!(normalize_platform("macos"), Some(Platform::MacosUniversal));
+        assert_eq!(normalize_platform("macos"), Some(Platform::MacosX86_64));
     }
 
     #[test]
-    fn normalize_rejects_unknown_and_universal() {
-        // "universal" is intentionally not a Platform — it's handled by is_universal.
+    fn normalize_rejects_universal_and_unknown() {
+        // "universal" parses as Platform::Universal, but normalize routes it
+        // to None so the is_universal fallback path handles selection.
         assert_eq!(normalize_platform("universal"), None);
         assert_eq!(normalize_platform(""), None);
+        // The legacy macos-universal tag is no longer recognized; data tagged
+        // that way needs to be re-registered with the new arch suffixes.
+        assert_eq!(normalize_platform("macos-universal"), None);
+        // arm64 (vs aarch64) is the wrong spelling for hpm's enum.
         assert_eq!(normalize_platform("linux-arm64"), None);
     }
 
@@ -414,6 +439,30 @@ mod tests {
         ];
         let picked = select_build(&builds, Some(Platform::WindowsX86_64)).unwrap();
         assert_eq!(picked.dl, "windows.zip");
+    }
+
+    #[test]
+    fn select_distinguishes_arch_suffixed_macos_variants() {
+        // The new API enum allows mixing arches under one OS. macos-aarch64
+        // and macos-x86_64 must not be cross-matched.
+        let builds = vec![
+            build_with(Some("macos-x86_64"), "intel.zip"),
+            build_with(Some("macos-aarch64"), "arm.zip"),
+        ];
+        let picked = select_build(&builds, Some(Platform::MacosAarch64)).unwrap();
+        assert_eq!(picked.dl, "arm.zip");
+        let picked = select_build(&builds, Some(Platform::MacosX86_64)).unwrap();
+        assert_eq!(picked.dl, "intel.zip");
+    }
+
+    #[test]
+    fn select_falls_back_to_universal_for_arch_suffixed_host() {
+        // A package that ships a single 'universal' build (pure-Python /
+        // data) must be reachable by an aarch64 host that has no exact
+        // match in the build list.
+        let builds = vec![build_with(Some("universal"), "any.zip")];
+        let picked = select_build(&builds, Some(Platform::LinuxAarch64)).unwrap();
+        assert_eq!(picked.dl, "any.zip");
     }
 
     #[test]

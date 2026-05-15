@@ -454,7 +454,8 @@ impl PackageManifest {
         let mut out = scripts.commands.clone();
 
         if let (Some(platform), Some(platform_scripts)) = (platform, &scripts.platform)
-            && let Some(entries) = platform_scripts.for_os(platform.os_key())
+            && let Some(os) = platform.os_key()
+            && let Some(entries) = platform_scripts.for_os(os)
         {
             for (name, entry) in entries {
                 out.insert(name.clone(), entry.clone());
@@ -472,7 +473,8 @@ impl PackageManifest {
         let scripts = self.scripts.as_ref()?;
 
         if let (Some(platform), Some(platform_scripts)) = (platform, &scripts.platform)
-            && let Some(entries) = platform_scripts.for_os(platform.os_key())
+            && let Some(os) = platform.os_key()
+            && let Some(entries) = platform_scripts.for_os(os)
             && let Some(entry) = entries.get(name)
         {
             return Some(entry.clone());
@@ -983,13 +985,13 @@ name = "My Native Pkg"
 version = "1.0.0"
 
 [native]
-platforms = ["linux-x86_64", "macos-universal"]
+platforms = ["linux-x86_64", "macos-aarch64"]
 
 [native.linux-x86_64]
 files = ["lib/linux-x86_64/*"]
 
-[native.macos-universal]
-files = ["lib/macos-universal/*"]
+[native.macos-aarch64]
+files = ["lib/macos-aarch64/*"]
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         let native = manifest.native.unwrap();
@@ -1300,7 +1302,7 @@ unregister = "windows-only"
         assert_eq!(resolved["unregister"].cmd(), "windows-only");
 
         // macOS has no platform entry — falls back to the flat map.
-        let resolved_mac = manifest.resolved_scripts(Some(Platform::MacosUniversal));
+        let resolved_mac = manifest.resolved_scripts(Some(Platform::MacosAarch64));
         assert_eq!(resolved_mac["register"].cmd(), "fallback");
         assert!(!resolved_mac.contains_key("unregister"));
 
@@ -1334,7 +1336,7 @@ register = "linux-specific"
         );
         assert_eq!(
             manifest
-                .script_for("register", Some(Platform::MacosUniversal))
+                .script_for("register", Some(Platform::MacosAarch64))
                 .map(|e| e.cmd().to_string()),
             Some("fallback".to_string())
         );
@@ -1480,7 +1482,7 @@ register = "linux-register"
 
         let resolved = manifest.resolved_scripts(Some(Platform::LinuxX86_64));
         assert_eq!(resolved["register"].cmd(), "linux-register");
-        let resolved_mac = manifest.resolved_scripts(Some(Platform::MacosUniversal));
+        let resolved_mac = manifest.resolved_scripts(Some(Platform::MacosAarch64));
         assert!(resolved_mac.is_empty());
     }
 

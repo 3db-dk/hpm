@@ -620,12 +620,8 @@ version = "1.0.0"
         create_test_package(dir);
         fs::create_dir_all(dir.join("lib/linux-x86_64")).unwrap();
         fs::write(dir.join("lib/linux-x86_64/libfoo.so"), b"elf-binary").unwrap();
-        fs::create_dir_all(dir.join("lib/macos-universal")).unwrap();
-        fs::write(
-            dir.join("lib/macos-universal/libfoo.dylib"),
-            b"macho-binary",
-        )
-        .unwrap();
+        fs::create_dir_all(dir.join("lib/macos-aarch64")).unwrap();
+        fs::write(dir.join("lib/macos-aarch64/libfoo.dylib"), b"macho-binary").unwrap();
         fs::create_dir_all(dir.join("lib/windows-x86_64")).unwrap();
         fs::write(dir.join("lib/windows-x86_64/foo.dll"), b"pe-binary").unwrap();
     }
@@ -639,9 +635,9 @@ version = "1.0.0"
             },
         );
         platform_files.insert(
-            "macos-universal".to_string(),
+            "macos-aarch64".to_string(),
             hpm_package::manifest::NativePlatformFiles {
-                files: vec!["lib/macos-universal/*".to_string()],
+                files: vec!["lib/macos-aarch64/*".to_string()],
             },
         );
         platform_files.insert(
@@ -653,7 +649,7 @@ version = "1.0.0"
         hpm_package::manifest::NativeConfig {
             platforms: vec![
                 "linux-x86_64".to_string(),
-                "macos-universal".to_string(),
+                "macos-aarch64".to_string(),
                 "windows-x86_64".to_string(),
             ],
             platform_files,
@@ -718,7 +714,7 @@ version = "1.0.0"
         // Should contain linux files
         assert!(names.contains(&"lib/linux-x86_64/libfoo.so".to_string()));
         // Should NOT contain other platforms
-        assert!(!names.iter().any(|n| n.contains("macos-universal")));
+        assert!(!names.iter().any(|n| n.contains("macos-aarch64")));
         assert!(!names.iter().any(|n| n.contains("windows-x86_64")));
         // Should still contain shared files
         assert!(names.contains(&"hpm.toml".to_string()));
@@ -740,7 +736,7 @@ version = "1.0.0"
         .unwrap();
 
         let mut platform_files = indexmap::IndexMap::new();
-        for plat in ["linux-x86_64", "macos-universal", "windows-x86_64"] {
+        for plat in ["linux-x86_64", "macos-aarch64", "windows-x86_64"] {
             platform_files.insert(
                 plat.to_string(),
                 hpm_package::manifest::NativePlatformFiles {
@@ -751,7 +747,7 @@ version = "1.0.0"
         let native_config = hpm_package::manifest::NativeConfig {
             platforms: vec![
                 "linux-x86_64".to_string(),
-                "macos-universal".to_string(),
+                "macos-aarch64".to_string(),
                 "windows-x86_64".to_string(),
             ],
             platform_files,
@@ -759,7 +755,7 @@ version = "1.0.0"
 
         for platform in [
             hpm_package::platform::Platform::LinuxX86_64,
-            hpm_package::platform::Platform::MacosUniversal,
+            hpm_package::platform::Platform::MacosAarch64,
             hpm_package::platform::Platform::WindowsX86_64,
         ] {
             let output_dir = TempDir::new().unwrap();
@@ -807,13 +803,13 @@ version = "1.0.0"
             },
         );
         platform_files.insert(
-            "macos-universal".to_string(),
+            "macos-aarch64".to_string(),
             hpm_package::manifest::NativePlatformFiles {
-                files: vec!["shared/*".to_string(), "lib/macos-universal/*".to_string()],
+                files: vec!["shared/*".to_string(), "lib/macos-aarch64/*".to_string()],
             },
         );
         let native_config = hpm_package::manifest::NativeConfig {
-            platforms: vec!["linux-x86_64".to_string(), "macos-universal".to_string()],
+            platforms: vec!["linux-x86_64".to_string(), "macos-aarch64".to_string()],
             platform_files,
         };
 
