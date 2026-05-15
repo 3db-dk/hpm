@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Platform identifiers aligned with the TumbleTrove API.** `Platform` now
+  carries arch-suffixed variants — `linux-x86_64`, `linux-aarch64`,
+  `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, `windows-aarch64` — plus
+  an OS-agnostic `universal`, matching the registry's `build.platform` enum
+  verbatim. `hpm pack --platform` and the `[native].platforms` list in
+  `hpm.toml` accept any of these. `Platform::current()` reports the
+  arch-suffixed variant for the host, so auto-detect on Apple Silicon now
+  returns `macos-aarch64` instead of the old fat-binary identifier.
+
+### Removed
+- **`macos-universal` platform identifier.** The legacy hpm-only "fat binary"
+  tag was dropped — the API rejects it, and the new `macos-x86_64` /
+  `macos-aarch64` (or `universal` for OS-agnostic content) cover both
+  meanings explicitly. Existing `hpm.toml` manifests carrying
+  `macos-universal` in `[native].platforms` or any `[native.macos-universal]`
+  section fail to parse and must be migrated to the arch-suffixed names.
+  `Platform::os_key()` now returns `Option<&'static str>` (`None` for
+  `Universal`).
+
 ## [0.12.3] - 2026-05-14
 
 ### Added

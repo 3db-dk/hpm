@@ -76,13 +76,13 @@ HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar"
 
 # Native library packaging (optional)
 [native]
-platforms = ["linux-x86_64", "macos-universal", "windows-x86_64"]
+platforms = ["linux-x86_64", "macos-aarch64", "windows-x86_64"]
 
 [native.linux-x86_64]
 files = ["lib/linux-x86_64/*"]
 
-[native.macos-universal]
-files = ["lib/macos-universal/*"]
+[native.macos-aarch64]
+files = ["lib/macos-aarch64/*"]
 
 [native.windows-x86_64]
 files = ["lib/windows-x86_64/*"]

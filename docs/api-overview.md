@@ -68,7 +68,7 @@ codes and help hints.
 | `PackageScripts`, `PlatformScripts` | `[scripts]` table and per-OS overrides. Both store `IndexMap<String, ScriptEntry>`. |
 | `ScriptEntry`, `ScriptEnv` | Untagged enum: `Plain(String)` for the shorthand form, `WithEnv { cmd, python?, requirements? }` for the table form. Accessors `cmd()`, `python()`, `requirements()`, `needs_venv()` work on both arms. |
 | `NativeConfig`, `NativePlatformFiles` | `[native]` and per-platform file globs. |
-| `Platform` | Canonical platform enum: `LinuxX86_64`, `MacosUniversal`, `WindowsX86_64`. |
+| `Platform` | Canonical platform enum, mirroring the TumbleTrove API: `LinuxX86_64`, `LinuxAarch64`, `MacosX86_64`, `MacosAarch64`, `WindowsX86_64`, `WindowsAarch64`, `Universal`. `os_key()` returns `Option<&str>` (`None` for `Universal`). |
 | `RegistryConfig`, `RegistryType` | `[[registries]]` entries in manifests. |
 | `PackageTemplate` | Scaffolding for `hpm init` (standard and `--bare`). |
 | `HoudiniPackage`, `HoudiniNativePackage`, `HoudiniEnvValue` | Houdini `package.json` output types. |

@@ -369,7 +369,7 @@ Pack runs `hpm check` first, then:
 | `--key <path>` | Ed25519 PKCS#8 PEM private key. Overrides `HPM_SIGNING_KEY`. |
 | `--output <dir>` | Output directory. Defaults to the current directory. |
 | `--json` | Emit the result as JSON (useful in CI). |
-| `--platform <id>` | Override host-platform detection. Valid: `linux-x86_64`, `macos-universal`, `windows-x86_64`. Only legal when `[native]` is declared. |
+| `--platform <id>` | Override host-platform detection. Valid: `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, `windows-aarch64`, `universal`. Only legal when `[native]` is declared. |
 
 **Signing key resolution order**
 
@@ -635,21 +635,24 @@ archive that includes only the files relevant to the target platform.
 
 ```toml
 [native]
-platforms = ["linux-x86_64", "macos-universal", "windows-x86_64"]
+platforms = ["linux-x86_64", "macos-aarch64", "windows-x86_64"]
 
 [native.linux-x86_64]
 files = ["lib/linux-x86_64/*"]
 
-[native.macos-universal]
-files = ["lib/macos-universal/*"]
+[native.macos-aarch64]
+files = ["lib/macos-aarch64/*"]
 
 [native.windows-x86_64]
 files = ["lib/windows-x86_64/*"]
 ```
 
-Valid platform identifiers: `linux-x86_64`, `macos-universal`, `windows-x86_64`.
-`files` uses glob patterns relative to the package root. `hpm pack`
-auto-detects the host platform; pass `--platform <id>` to target a different one.
+Valid platform identifiers (matching the TumbleTrove API's build platform
+enum verbatim): `linux-x86_64`, `linux-aarch64`, `macos-x86_64`,
+`macos-aarch64`, `windows-x86_64`, `windows-aarch64`, `universal`. Use
+`universal` for OS-agnostic content (pure-Python / data). `files` uses glob
+patterns relative to the package root. `hpm pack` auto-detects the host
+platform; pass `--platform <id>` to target a different one.
 
 **Per-platform filter semantics.** When packing for `--platform <X>`:
 

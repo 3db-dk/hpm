@@ -145,9 +145,13 @@ pub enum DependencySpec {
 }
 
 pub enum Platform {
-    LinuxX86_64,      // "linux-x86_64"
-    MacosUniversal,   // "macos-universal"
-    WindowsX86_64,    // "windows-x86_64"
+    LinuxX86_64,       // "linux-x86_64"
+    LinuxAarch64,      // "linux-aarch64"
+    MacosX86_64,       // "macos-x86_64"
+    MacosAarch64,      // "macos-aarch64"
+    WindowsX86_64,     // "windows-x86_64"
+    WindowsAarch64,    // "windows-aarch64"
+    Universal,         // "universal" — OS-agnostic (pure-Python / data)
 }
 ```
 
