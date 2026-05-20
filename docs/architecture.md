@@ -445,11 +445,13 @@ the manifest's `{ path = "...", link = ? }` spec:
   the Developer Mode / admin requirement that NTFS directory symlinks
   carry, so the workflow is viable on a stock Houdini workstation.
 
-Reinstall is symlink-safe: `clear_existing_install` checks
-`symlink_metadata` (plus `junction::exists` on Windows) before deciding
-between `remove_dir_all` (real dir) and `remove_file` / `junction::delete`
-(link entry). Without this, a `remove_dir_all` on a Windows junction would
-recurse into and delete the user's workspace on the next sync.
+Both install replacement (`clear_existing_install`) and orphan cleanup
+(`remove_package`) are symlink-safe: each checks `symlink_metadata` (plus
+`junction::exists` on Windows) before deciding between `remove_dir_all`
+(real dir) and `remove_file` / `junction::delete` (link entry), via a
+shared `remove_install_entry` primitive. Without this, a `remove_dir_all`
+on a Windows junction would recurse into and delete the user's workspace
+on the next sync or orphan sweep.
 
 ## Python integration
 
