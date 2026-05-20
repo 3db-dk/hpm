@@ -323,6 +323,7 @@ description = "Test project {}"
             hpm_package::DependencySpec::Path {
                 path: "../material-lib".to_string(),
                 optional: false,
+                link: false,
             },
         );
         manifest2.dependencies = Some(deps);

@@ -186,6 +186,7 @@ mod tests {
             DependencySpec::Path {
                 path: "../remove-me".to_string(),
                 optional: false,
+                link: false,
             },
         );
         manifest.dependencies = Some(dependencies);

@@ -60,12 +60,14 @@ fn parse_name_version(input: &str) -> (String, Option<String>) {
 /// * `config` - The already-loaded HPM configuration
 /// * `package_names` - Names of the packages to add
 /// * `path` - Local path to package directory (for development dependencies, single package only)
+/// * `link` - For path dependencies, install as symlink/junction instead of copy
 /// * `manifest_path` - Path to the manifest file or directory
 /// * `optional` - Whether the dependencies are optional
 pub async fn add_packages(
     config: &Config,
     package_names: Vec<String>,
     path: Option<PathBuf>,
+    link: bool,
     manifest_path: Option<PathBuf>,
     optional: bool,
 ) -> Result<()> {
@@ -79,6 +81,12 @@ pub async fn add_packages(
     // Disallow --path with multiple packages
     if path.is_some() && package_names.len() > 1 {
         bail!("Cannot use --path with multiple packages. Add path dependencies one at a time.");
+    }
+
+    // --link is path-only; clap already enforces this with `requires = "path"`,
+    // but assert for callers that bypass the CLI surface.
+    if link && path.is_none() {
+        bail!("--link is only valid alongside --path.");
     }
 
     // Determine manifest path
@@ -104,6 +112,7 @@ pub async fn add_packages(
             DependencySpec::Path {
                 path: path_str,
                 optional,
+                link,
             }
         } else {
             // Resolve from registries
@@ -446,6 +455,7 @@ mod tests {
             let path_spec = DependencySpec::Path {
                 path: path.clone(),
                 optional,
+                link: false,
             };
 
             match &path_spec {

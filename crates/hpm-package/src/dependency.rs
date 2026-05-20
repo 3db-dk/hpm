@@ -25,6 +25,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// # Local path dependency (for development)
 /// my-local-pkg = { path = "../my-local-package" }
+///
+/// # Local path dependency installed as a symlink/junction (live edits)
+/// my-local-pkg = { path = "../my-local-package", link = true }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -52,6 +55,12 @@ pub enum DependencySpec {
         /// Whether this dependency is optional
         #[serde(default)]
         optional: bool,
+        /// Install the package as a symlink/junction into the dev subtree
+        /// instead of copying the contents. Lets working-tree edits reach a
+        /// live Houdini session without re-running `hpm sync`. Opt-in: the
+        /// default keeps snapshot-copy semantics.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        link: bool,
     },
 
     /// Registry-resolved dependency with options
@@ -84,7 +93,22 @@ impl DependencySpec {
         DependencySpec::Path {
             path: path.into(),
             optional: false,
+            link: false,
         }
+    }
+
+    /// Create a new link-mode path dependency.
+    pub fn path_link(path: impl Into<String>) -> Self {
+        DependencySpec::Path {
+            path: path.into(),
+            optional: false,
+            link: true,
+        }
+    }
+
+    /// Whether this path dependency requests link-mode install.
+    pub fn is_link(&self) -> bool {
+        matches!(self, DependencySpec::Path { link: true, .. })
     }
 
     /// Create a new registry dependency.
@@ -210,10 +234,50 @@ mod tests {
         let spec = DependencySpec::Path {
             path: "../local-package".to_string(),
             optional: true,
+            link: false,
         };
         let json = serde_json::to_string(&spec).unwrap();
         assert!(json.contains("../local-package"));
         assert!(json.contains("true"));
+    }
+
+    /// `link` is omitted from serialized output when false so we don't churn
+    /// existing manifests, and round-trips intact when true.
+    #[test]
+    fn dependency_spec_path_link_roundtrip() {
+        let default_link = DependencySpec::Path {
+            path: "../local-package".to_string(),
+            optional: false,
+            link: false,
+        };
+        let json = serde_json::to_string(&default_link).unwrap();
+        assert!(
+            !json.contains("link"),
+            "default link=false must not serialize: {json}"
+        );
+
+        let with_link = DependencySpec::Path {
+            path: "../local-package".to_string(),
+            optional: false,
+            link: true,
+        };
+        let toml_str = toml::to_string(&with_link).unwrap();
+        assert!(toml_str.contains("link"), "link=true must serialize");
+
+        // Backward compat: manifests without `link` parse to link=false.
+        let legacy_toml = r#"
+[deps]
+my-pkg = { path = "../local" }
+"#;
+        #[derive(Deserialize)]
+        struct Wrapper {
+            deps: indexmap::IndexMap<String, DependencySpec>,
+        }
+        let parsed: Wrapper = toml::from_str(legacy_toml).unwrap();
+        match &parsed.deps["my-pkg"] {
+            DependencySpec::Path { link, .. } => assert!(!link),
+            other => panic!("expected Path, got {other:?}"),
+        }
     }
 
     #[test]
@@ -320,6 +384,7 @@ test = { version = "1.0.0" }
         let empty = DependencySpec::Path {
             path: "".to_string(),
             optional: false,
+            link: false,
         };
         assert!(empty.validate().is_err());
     }

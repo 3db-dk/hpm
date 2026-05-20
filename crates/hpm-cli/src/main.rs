@@ -420,6 +420,12 @@ enum Commands {
         #[arg(long)]
         path: Option<std::path::PathBuf>,
 
+        /// Install path dependency as a symlink/junction so working-tree edits
+        /// reach a live Houdini session without re-running `hpm sync`.
+        /// Requires --path.
+        #[arg(long, requires = "path")]
+        link: bool,
+
         /// Path to directory containing hpm.toml or direct path to hpm.toml file
         #[arg(short = 'p', long = "package")]
         manifest: Option<std::path::PathBuf>,
@@ -663,6 +669,7 @@ async fn run_command(
         Commands::Add {
             packages,
             path,
+            link,
             manifest,
             optional,
         } => {
@@ -671,6 +678,7 @@ async fn run_command(
                 &config,
                 packages.clone(),
                 path.clone(),
+                *link,
                 manifest.clone(),
                 *optional,
             )

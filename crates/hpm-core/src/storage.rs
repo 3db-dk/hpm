@@ -17,6 +17,119 @@ pub use types::{InstalledPackage, PackageSpec, VersionReq};
 /// the same coordinate.
 const DEV_INSTALL_DIR: &str = "_dev";
 
+/// Remove `path` if it is a symlink/junction, without following the link.
+fn remove_dev_link(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        // On Unix, symlink-to-directory entries are removed via `remove_file`.
+        std::fs::remove_file(path)
+    }
+    #[cfg(windows)]
+    {
+        // `junction::delete` handles both NTFS symlinks-to-dirs and junctions
+        // by stripping the reparse point and removing the empty stub.
+        junction::delete(path)
+    }
+}
+
+/// Create a symlink (Unix) or junction (Windows) at `link` pointing at the
+/// absolute `target`. The target must be a directory.
+fn create_dev_link(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        // Junctions are intentional here (vs NTFS symlinks): they don't
+        // require Developer Mode or admin, which makes the link-install
+        // workflow viable on a stock Houdini workstation.
+        junction::create(target, link)
+    }
+}
+
+/// Replace whatever is currently at `target_dir` with a clean slate, with
+/// link-aware removal semantics. Always safe to call before installing.
+///
+/// - Missing → no-op.
+/// - Symlink/junction → remove the link entry itself; never follow.
+/// - Real directory → `remove_dir_all`, with Houdini-handle errors lifted to
+///   [`StorageError::PackageInUse`] so the user gets an actionable message.
+fn clear_existing_install(
+    target_dir: &std::path::Path,
+    name: &str,
+    version: &str,
+) -> Result<(), StorageError> {
+    let meta = match std::fs::symlink_metadata(target_dir) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(StorageError::DirectoryRemoval(e)),
+    };
+
+    let is_link = meta.file_type().is_symlink() || {
+        #[cfg(windows)]
+        {
+            junction::exists(target_dir).unwrap_or(false)
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    };
+
+    if is_link {
+        warn!(
+            "replacing existing link install for {}@{} at {}",
+            name,
+            version,
+            target_dir.display()
+        );
+        remove_dev_link(target_dir).map_err(StorageError::DirectoryRemoval)?;
+        return Ok(());
+    }
+
+    warn!(
+        "package {}@{} already exists, removing old version",
+        name, version
+    );
+    std::fs::remove_dir_all(target_dir).map_err(|e| {
+        // On Windows, a running Houdini process holds open handles to files
+        // inside the package dir, so removal fails with ERROR_ACCESS_DENIED
+        // (os error 5 → PermissionDenied). Map it to an actionable error
+        // instead of leaking a raw OS code.
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            StorageError::PackageInUse {
+                name: name.to_string(),
+                version: version.to_string(),
+                source: e,
+            }
+        } else {
+            StorageError::DirectoryRemoval(e)
+        }
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+enum InstallStyle {
+    /// Registry/URL fetch → copy into the CAS at `packages_dir/<slug>@<ver>/`.
+    CasCopy,
+    /// Path dep → copy into `packages_dir/_dev/<slug>@<ver>/`.
+    DevCopy,
+    /// Path dep → symlink/junction at `packages_dir/_dev/<slug>@<ver>/`
+    /// pointing at the workspace.
+    DevLink,
+}
+
+impl InstallStyle {
+    fn log_kind(self) -> &'static str {
+        match self {
+            InstallStyle::CasCopy => "",
+            InstallStyle::DevCopy => "dev ",
+            InstallStyle::DevLink => "dev-link ",
+        }
+    }
+}
+
 /// Result of comprehensive cleanup including both packages and Python environments
 #[derive(Debug)]
 pub struct ComprehensiveCleanupResult {
@@ -165,7 +278,8 @@ impl StorageManager {
         &self,
         source_path: &std::path::Path,
     ) -> Result<InstalledPackage, StorageError> {
-        self.install_from_path_inner(source_path, false).await
+        self.install_from_path_inner(source_path, InstallStyle::CasCopy)
+            .await
     }
 
     /// Install a path-dependency into the dev subtree
@@ -178,15 +292,31 @@ impl StorageManager {
         &self,
         source_path: &std::path::Path,
     ) -> Result<InstalledPackage, StorageError> {
-        self.install_from_path_inner(source_path, true).await
+        self.install_from_path_inner(source_path, InstallStyle::DevCopy)
+            .await
+    }
+
+    /// Install a path-dependency into the dev subtree as a symlink (Unix) or
+    /// junction (Windows). Working-tree edits at `source_path` become visible
+    /// to a live Houdini session immediately, with no re-sync.
+    ///
+    /// Same namespace isolation as [`install_from_path_dev`]: the link entry
+    /// lives at `<packages_dir>/_dev/<slug>@<version>/`, never in the registry
+    /// CAS. Registry resolutions at the same coordinate are unaffected.
+    pub async fn install_from_path_dev_link(
+        &self,
+        source_path: &std::path::Path,
+    ) -> Result<InstalledPackage, StorageError> {
+        self.install_from_path_inner(source_path, InstallStyle::DevLink)
+            .await
     }
 
     async fn install_from_path_inner(
         &self,
         source_path: &std::path::Path,
-        is_dev: bool,
+        style: InstallStyle,
     ) -> Result<InstalledPackage, StorageError> {
-        let kind = if is_dev { "dev " } else { "" };
+        let kind = style.log_kind();
         info!(
             "Installing {kind}package from path: {}",
             source_path.display()
@@ -207,40 +337,49 @@ impl StorageManager {
             source_path.display()
         );
 
-        let target_dir = if is_dev {
-            self.config
+        let target_dir = match style {
+            InstallStyle::CasCopy => self.config.package_dir(name, version),
+            InstallStyle::DevCopy | InstallStyle::DevLink => self
+                .config
                 .packages_dir
                 .join(DEV_INSTALL_DIR)
-                .join(format!("{}@{}", name, version))
-        } else {
-            self.config.package_dir(name, version)
+                .join(format!("{}@{}", name, version)),
         };
 
-        // Check if already installed
-        if target_dir.exists() {
-            warn!(
-                "{kind}package {}@{} already exists, removing old version",
-                name, version
-            );
-            std::fs::remove_dir_all(&target_dir).map_err(|e| {
-                // On Windows, a running Houdini process holds open handles to
-                // files inside the package dir, so removal fails with
-                // ERROR_ACCESS_DENIED (os error 5 → PermissionDenied). Map it
-                // to an actionable error instead of leaking a raw OS code.
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    StorageError::PackageInUse {
-                        name: name.to_string(),
-                        version: version.to_string(),
-                        source: e,
-                    }
-                } else {
-                    StorageError::DirectoryRemoval(e)
-                }
-            })?;
-        }
+        // Symlink-safe replacement: if the existing entry is a link (the
+        // common case during repeat sync of a link-installed dep), we must
+        // never `remove_dir_all` it — that would follow a Windows junction
+        // into the user's workspace and recursively delete it.
+        clear_existing_install(&target_dir, name, version)?;
 
-        // Copy the package directory
-        self.copy_directory(source_path, &target_dir)?;
+        match style {
+            InstallStyle::CasCopy | InstallStyle::DevCopy => {
+                self.copy_directory(source_path, &target_dir)?;
+            }
+            InstallStyle::DevLink => {
+                // Junctions need absolute paths; symlinks behave more
+                // predictably when absolute too. Canonicalize so the link
+                // survives changes to the project's working directory.
+                let absolute_source = std::fs::canonicalize(source_path).map_err(|e| {
+                    StorageError::DirectoryRead(format!(
+                        "Failed to canonicalize link source {}: {}",
+                        source_path.display(),
+                        e
+                    ))
+                })?;
+                if let Some(parent) = target_dir.parent() {
+                    std::fs::create_dir_all(parent).map_err(StorageError::DirectoryCreation)?;
+                }
+                create_dev_link(&absolute_source, &target_dir).map_err(|e| {
+                    StorageError::DirectoryRead(format!(
+                        "Failed to create dev link {} -> {}: {}",
+                        target_dir.display(),
+                        absolute_source.display(),
+                        e
+                    ))
+                })?;
+            }
+        }
 
         info!("Successfully installed {kind}{}@{}", name, version);
 
@@ -1033,6 +1172,232 @@ min_version = "20.5"
         assert_eq!(
             std::fs::read_to_string(&reg_marker).unwrap(),
             "registry-content"
+        );
+    }
+
+    /// Link-mode dev install creates a symlink/junction at
+    /// `_dev/<slug>@<version>/`. Reading through the link must reach the
+    /// workspace (this is the whole point of the feature).
+    #[tokio::test]
+    async fn install_from_path_dev_link_creates_link_to_workspace() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        let source = temp_dir.path().join("link-source");
+        write_source_package(&source, "creator/foo", "1.0.0", "link-content");
+
+        let installed = storage_manager
+            .install_from_path_dev_link(&source)
+            .await
+            .unwrap();
+
+        let expected = temp_dir
+            .path()
+            .join("packages")
+            .join("_dev")
+            .join("foo@1.0.0");
+        assert_eq!(installed.install_path, expected);
+
+        // The install entry is a symlink/junction, not a real directory.
+        let meta = std::fs::symlink_metadata(&expected).unwrap();
+        let is_link = meta.file_type().is_symlink() || {
+            #[cfg(windows)]
+            {
+                junction::exists(&expected).unwrap_or(false)
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        };
+        assert!(is_link, "dev link install must be a symlink/junction");
+
+        // Reading through the link reaches the workspace.
+        assert_eq!(
+            std::fs::read_to_string(expected.join("MARKER")).unwrap(),
+            "link-content"
+        );
+    }
+
+    /// Live-edit guarantee: a file written into the workspace *after* the
+    /// link install becomes visible through the install_path. This is the
+    /// whole reason the feature exists.
+    #[tokio::test]
+    async fn dev_link_install_reflects_live_workspace_edits() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        let source = temp_dir.path().join("live-source");
+        write_source_package(&source, "creator/foo", "1.0.0", "initial");
+        let installed = storage_manager
+            .install_from_path_dev_link(&source)
+            .await
+            .unwrap();
+
+        // Simulate a working-tree edit after install.
+        std::fs::write(source.join("new_file.txt"), "edited-after-install").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(installed.install_path.join("new_file.txt")).unwrap(),
+            "edited-after-install"
+        );
+    }
+
+    /// Repeated link-installs must replace the link entry without nuking the
+    /// workspace. This is the safety property the symlink-aware removal
+    /// branch in `clear_existing_install` enforces — without it,
+    /// `remove_dir_all` on a Windows junction would recursively delete the
+    /// user's source tree.
+    #[tokio::test]
+    async fn repeated_dev_link_install_preserves_workspace() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        let source = temp_dir.path().join("workspace");
+        write_source_package(&source, "creator/foo", "1.0.0", "workspace-marker");
+        std::fs::write(source.join("user-script.py"), "# user authored").unwrap();
+
+        storage_manager
+            .install_from_path_dev_link(&source)
+            .await
+            .unwrap();
+        storage_manager
+            .install_from_path_dev_link(&source)
+            .await
+            .unwrap();
+
+        // Workspace files must survive — both the marker and the user file.
+        assert_eq!(
+            std::fs::read_to_string(source.join("MARKER")).unwrap(),
+            "workspace-marker"
+        );
+        assert_eq!(
+            std::fs::read_to_string(source.join("user-script.py")).unwrap(),
+            "# user authored"
+        );
+        assert!(source.join("hpm.toml").exists());
+    }
+
+    /// Switching install styles at the same coordinate is allowed and must
+    /// not delete the workspace: a copy install replaced by a link install
+    /// (or vice versa) goes through `clear_existing_install`, which uses
+    /// `remove_dir_all` for real dirs and link-safe removal for links.
+    #[tokio::test]
+    async fn switching_copy_to_link_does_not_touch_workspace() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        let source = temp_dir.path().join("workspace");
+        write_source_package(&source, "creator/foo", "1.0.0", "ws");
+
+        // First: copy install lays down a real directory at the dev path.
+        storage_manager
+            .install_from_path_dev(&source)
+            .await
+            .unwrap();
+
+        // Then: link install must replace the real dir without traversing
+        // into the workspace.
+        storage_manager
+            .install_from_path_dev_link(&source)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(source.join("MARKER")).unwrap(),
+            "ws"
+        );
+
+        // And the reverse: link → copy.
+        storage_manager
+            .install_from_path_dev(&source)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(source.join("MARKER")).unwrap(),
+            "ws"
+        );
+    }
+
+    /// Link install must respect the same `_dev/` namespace isolation as
+    /// copy-install. A registry install at the same coordinate is unaffected.
+    #[tokio::test]
+    async fn dev_link_and_registry_installs_coexist_at_same_coordinate() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        let link_source = temp_dir.path().join("link-source");
+        write_source_package(&link_source, "creator/foo", "1.0.0", "link-content");
+        storage_manager
+            .install_from_path_dev_link(&link_source)
+            .await
+            .unwrap();
+
+        let reg_source = temp_dir.path().join("reg-source");
+        write_source_package(&reg_source, "creator/foo", "1.0.0", "registry-content");
+        storage_manager
+            .install_from_path(&reg_source)
+            .await
+            .unwrap();
+
+        let link_marker = temp_dir
+            .path()
+            .join("packages")
+            .join("_dev")
+            .join("foo@1.0.0")
+            .join("MARKER");
+        let reg_marker = temp_dir
+            .path()
+            .join("packages")
+            .join("foo@1.0.0")
+            .join("MARKER");
+        assert_eq!(
+            std::fs::read_to_string(&link_marker).unwrap(),
+            "link-content"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&reg_marker).unwrap(),
+            "registry-content"
+        );
+
+        // And `list_installed` still ignores the dev subtree, even when the
+        // entry is a link rather than a real directory.
+        let listed = storage_manager.list_installed().unwrap();
+        let names: Vec<&str> = listed.iter().map(|p| p.manifest.package.slug()).collect();
+        assert_eq!(
+            names,
+            vec!["foo"],
+            "only the registry install should surface"
         );
     }
 }

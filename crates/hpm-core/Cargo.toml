@@ -40,6 +40,12 @@ ignore.workspace = true
 base64.workspace = true
 glob = "0.3"
 
+[target.'cfg(windows)'.dependencies]
+# NTFS junctions for dev-link installs. Junctions work without Developer
+# Mode/admin (unlike NTFS directory symlinks), which is the realistic baseline
+# for Houdini Windows users.
+junction = "1.2"
+
 [dev-dependencies]
 tempfile.workspace = true
 proptest.workspace = true

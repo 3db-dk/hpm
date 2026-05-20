@@ -246,6 +246,7 @@ mod tests {
             let add_cmd = Commands::Add {
                 packages: vec![package_name.clone()],
                 path: None,
+                link: false,
                 manifest: manifest_path.clone(),
                 optional,
             };
@@ -314,6 +315,7 @@ mod tests {
             let add_cmd = Commands::Add {
                 packages: vec![problematic_name.clone()],
                 path: None,
+                link: false,
                 manifest: None,
                 optional: false,
             };

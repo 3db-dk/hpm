@@ -537,6 +537,7 @@ mod tests {
         let spec = DependencySpec::Path {
             path: "../local-package".to_string(),
             optional: false,
+            link: false,
         };
         let result = format_dependency_spec(&spec);
         assert_eq!(result, "path: ../local-package");
@@ -561,12 +562,14 @@ mod tests {
         let path_optional = DependencySpec::Path {
             path: "../local".to_string(),
             optional: true,
+            link: false,
         };
         assert!(is_optional_dependency(&path_optional));
 
         let path_not_optional = DependencySpec::Path {
             path: "../local".to_string(),
             optional: false,
+            link: false,
         };
         assert!(!is_optional_dependency(&path_not_optional));
     }

@@ -105,9 +105,14 @@ pub fn dependency_spec_strategy() -> impl Strategy<Value = DependencySpec> {
         // Path dependency
         (
             prop::string::string_regex(r"\.?\./[a-z0-9-/]{3,30}").unwrap(),
+            any::<bool>(),
             any::<bool>()
         )
-            .prop_map(|(path, optional)| DependencySpec::Path { path, optional }),
+            .prop_map(|(path, optional, link)| DependencySpec::Path {
+                path,
+                optional,
+                link
+            }),
         // Registry dependency with options
         (
             version_strategy(),
@@ -475,6 +480,7 @@ proptest! {
         let path_spec = DependencySpec::Path {
             path: path.clone(),
             optional: false,
+            link: false,
         };
         let path_json = serde_json::to_string(&path_spec);
         prop_assert!(path_json.is_ok(), "Path spec serialization should always work");

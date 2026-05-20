@@ -960,9 +960,13 @@ async fn install_one_dep(
                 source: Some(LockedSource::url(url.clone(), version.clone())),
             })
         }
-        DependencySpec::Path { path, .. } => {
+        DependencySpec::Path { path, link, .. } => {
             let source_path = std::path::Path::new(path);
-            let package = storage.install_from_path_dev(source_path).await?;
+            let package = if *link {
+                storage.install_from_path_dev_link(source_path).await?
+            } else {
+                storage.install_from_path_dev(source_path).await?
+            };
             Ok(InstallOutcome {
                 package,
                 checksum: None,
