@@ -162,18 +162,46 @@ impl InstallStyle {
 #[derive(Debug)]
 pub struct ComprehensiveCleanupResult {
     pub removed_packages: Vec<String>,
+    /// Orphaned dev (path-dep) installs removed from `_dev/`. Identifiers are
+    /// `_dev/<slug>@<version>` so CLI output makes the source obvious.
+    pub removed_dev_installs: Vec<String>,
     pub python_cleanup: CleanupResult,
 }
 
 impl ComprehensiveCleanupResult {
-    /// Total number of items cleaned (packages + venvs)
+    /// Total number of items cleaned (packages + dev installs + venvs)
     pub fn total_items_cleaned(&self) -> usize {
-        self.removed_packages.len() + self.python_cleanup.items_cleaned()
+        self.removed_packages.len()
+            + self.removed_dev_installs.len()
+            + self.python_cleanup.items_cleaned()
     }
 
-    /// Total number of items that would be cleaned (packages + venvs)
+    /// Total number of items that would be cleaned (packages + dev installs + venvs)
     pub fn total_items_that_would_be_cleaned(&self) -> usize {
-        self.removed_packages.len() + self.python_cleanup.items_that_would_be_cleaned()
+        self.removed_packages.len()
+            + self.removed_dev_installs.len()
+            + self.python_cleanup.items_that_would_be_cleaned()
+    }
+}
+
+/// A path-installed (dev) package entry under `<packages_dir>/_dev/`.
+///
+/// Identity comes from the directory name (`<slug>@<version>`), not from
+/// reading the entry's `hpm.toml` — link installs that point at a deleted
+/// workspace still surface as a `DevInstall` so cleanup can collect them.
+#[derive(Debug, Clone)]
+pub struct DevInstall {
+    pub slug: String,
+    pub version: String,
+    pub install_path: PathBuf,
+}
+
+impl DevInstall {
+    /// Identifier used in CLI output and `removed_dev_installs`. Prefixed
+    /// with `_dev/` so users can distinguish dev cleanup from CAS cleanup
+    /// in the same `hpm clean` listing.
+    pub fn identifier(&self) -> String {
+        format!("_dev/{}@{}", self.slug, self.version)
     }
 }
 
@@ -634,28 +662,220 @@ impl StorageManager {
         Ok(ids)
     }
 
-    /// Comprehensive cleanup: orphaned packages + orphaned Python virtual environments.
+    /// Enumerate dev (path-dep) installs in `<packages_dir>/_dev/`.
     ///
-    /// When `dry_run` is true, nothing is removed — the result lists what *would*
-    /// have been removed.
+    /// Walks the dev subtree at one level deep, parsing the `<slug>@<version>`
+    /// directory naming we control on the install side. Reads the directory
+    /// name rather than the entry's `hpm.toml` so a link install pointing at a
+    /// deleted workspace still surfaces here — that's exactly the case dev
+    /// cleanup needs to reach.
+    pub fn list_dev_installs(&self) -> Result<Vec<DevInstall>, StorageError> {
+        let dev_root = self.config.packages_dir.join(DEV_INSTALL_DIR);
+        if !dev_root.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut out = Vec::new();
+        let entries =
+            std::fs::read_dir(&dev_root).map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Don't follow links — we want to know they exist, not what they
+            // point at. `symlink_metadata` keeps a link install visible even
+            // if its target has been deleted.
+            let meta = match std::fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if !meta.is_dir() && !meta.file_type().is_symlink() {
+                continue;
+            }
+
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            // `<slug>@<version>` — split on the *last* `@` for defensiveness
+            // even though install never produces multiple separators.
+            let Some((slug, version)) = name.rsplit_once('@') else {
+                continue;
+            };
+            if slug.is_empty() || version.is_empty() {
+                continue;
+            }
+
+            out.push(DevInstall {
+                slug: slug.to_string(),
+                version: version.to_string(),
+                install_path: path,
+            });
+        }
+
+        debug!("Found {} dev installs in {}", out.len(), dev_root.display());
+        Ok(out)
+    }
+
+    /// Find dev installs that no known project's path-dependency claims.
+    ///
+    /// Walks every discovered project, parses its `hpm.toml`, and for each
+    /// `DependencySpec::Path` resolves the source manifest to extract
+    /// `(slug, version)`. The union of those tuples is the "needed" set; dev
+    /// installs outside it are orphans.
+    ///
+    /// Source reads that fail (missing path, malformed manifest) log a
+    /// warning and skip the dep. A broken project doesn't bypass cleanup —
+    /// re-running `hpm sync` re-creates whatever it needs.
+    async fn find_orphaned_dev_installs(
+        &self,
+        projects_config: &ProjectsConfig,
+    ) -> Result<Vec<DevInstall>, StorageError> {
+        let dev_installs = self.list_dev_installs()?;
+        if dev_installs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let project_discovery = ProjectDiscovery::new(projects_config.clone());
+        let projects = project_discovery
+            .find_projects()
+            .map_err(|e| StorageError::ProjectDiscovery(e.to_string()))?;
+
+        if projects.is_empty() {
+            warn!(
+                "No HPM-managed projects found - skipping dev cleanup to prevent removing dev installs"
+            );
+            return Ok(Vec::new());
+        }
+
+        let mut needed: HashSet<(String, String)> = HashSet::new();
+        for project in &projects {
+            let Some(deps) = &project.manifest.dependencies else {
+                continue;
+            };
+            for (dep_name, spec) in deps {
+                let hpm_package::DependencySpec::Path { path, .. } = spec else {
+                    continue;
+                };
+                // Resolve relative to the project directory, just like
+                // `install_one_dep` does at install time.
+                let source = project.path.join(path);
+                let manifest_path = source.join("hpm.toml");
+                match PackageManifest::from_path(&manifest_path) {
+                    Ok(m) => {
+                        needed.insert((m.package.slug().to_string(), m.package.version.clone()));
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Project {} has path dep {} pointing at {}, but its manifest is unreadable ({}); \
+                             dev install from this dep will not be protected from cleanup",
+                            project.path.display(),
+                            dep_name,
+                            source.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        let orphans: Vec<DevInstall> = dev_installs
+            .into_iter()
+            .filter(|d| !needed.contains(&(d.slug.clone(), d.version.clone())))
+            .collect();
+        Ok(orphans)
+    }
+
+    /// Remove dev installs that no project's path-dependency claims.
+    /// Returns identifiers of the entries actually removed.
+    pub async fn cleanup_unused_dev_installs(
+        &self,
+        projects_config: &ProjectsConfig,
+    ) -> Result<Vec<String>, StorageError> {
+        let orphans = self.find_orphaned_dev_installs(projects_config).await?;
+        if orphans.is_empty() {
+            info!("No orphaned dev installs found");
+            return Ok(Vec::new());
+        }
+
+        info!("Found {} orphaned dev installs to remove", orphans.len());
+        let mut removed = Vec::new();
+        for dev in orphans {
+            // symlink_metadata + remove_install_entry is the same defensive
+            // removal we use in `clear_existing_install` and `remove_package`:
+            // a link install must be unlinked, never followed.
+            let meta = match std::fs::symlink_metadata(&dev.install_path) {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!(
+                        "Failed to stat dev install {} at {}: {}",
+                        dev.identifier(),
+                        dev.install_path.display(),
+                        e
+                    );
+                    continue;
+                }
+            };
+            match remove_install_entry(&dev.install_path, &meta, &dev.slug, &dev.version) {
+                Ok(()) => {
+                    info!("Removed orphaned dev install: {}", dev.identifier());
+                    removed.push(dev.identifier());
+                }
+                Err(e) => {
+                    warn!("Failed to remove dev install {}: {}", dev.identifier(), e);
+                }
+            }
+        }
+
+        Ok(removed)
+    }
+
+    /// Plan — but don't execute — a dev cleanup. Returns identifiers that
+    /// `cleanup_unused_dev_installs` *would* remove if called.
+    pub async fn cleanup_unused_dev_installs_dry_run(
+        &self,
+        projects_config: &ProjectsConfig,
+    ) -> Result<Vec<String>, StorageError> {
+        let orphans = self.find_orphaned_dev_installs(projects_config).await?;
+        let ids: Vec<String> = orphans.iter().map(DevInstall::identifier).collect();
+        info!("Dry run: would remove {} orphaned dev installs", ids.len());
+        for id in &ids {
+            info!("Would remove: {id}");
+        }
+        Ok(ids)
+    }
+
+    /// Comprehensive cleanup: orphaned packages + dev installs + orphaned
+    /// Python virtual environments.
+    ///
+    /// When `dry_run` is true, nothing is removed — the result lists what
+    /// *would* have been removed.
     pub async fn cleanup_comprehensive(
         &self,
         projects_config: &ProjectsConfig,
         dry_run: bool,
     ) -> Result<ComprehensiveCleanupResult, StorageError> {
         info!(
-            "Starting comprehensive cleanup{} (packages + Python environments)",
+            "Starting comprehensive cleanup{} (packages + dev installs + Python environments)",
             if dry_run { " dry run" } else { "" }
         );
 
-        // 1. Package cleanup.
+        // 1. Registry CAS package cleanup.
         let removed_packages = if dry_run {
             self.cleanup_unused_dry_run(projects_config).await?
         } else {
             self.cleanup_unused(projects_config).await?
         };
 
-        // 2. Build the set of packages that remain (or would remain) after package cleanup.
+        // 2. Dev (path-dep) install cleanup. The `_dev/` subtree is filtered
+        //    out of `list_installed`, so the CAS pass above never sees it;
+        //    we need a parallel pass driven by project path-deps directly.
+        let removed_dev_installs = if dry_run {
+            self.cleanup_unused_dev_installs_dry_run(projects_config)
+                .await?
+        } else {
+            self.cleanup_unused_dev_installs(projects_config).await?
+        };
+
+        // 3. Build the set of packages that remain (or would remain) after CAS cleanup.
         let all_installed = self
             .list_installed()
             .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
@@ -667,7 +887,7 @@ impl StorageManager {
             })
             .collect();
 
-        // 3. Python virtual environment cleanup against the remaining set.
+        // 4. Python virtual environment cleanup against the remaining set.
         let python_analyzer = PythonCleanupAnalyzer::new();
         let orphaned_venvs = python_analyzer
             .analyze_orphaned_venvs(&remaining_packages)
@@ -681,19 +901,22 @@ impl StorageManager {
 
         let result = ComprehensiveCleanupResult {
             removed_packages,
+            removed_dev_installs,
             python_cleanup,
         };
 
         if dry_run {
             info!(
-                "Comprehensive cleanup dry run: {} packages, {} venvs would be removed",
+                "Comprehensive cleanup dry run: {} packages, {} dev installs, {} venvs would be removed",
                 result.removed_packages.len(),
+                result.removed_dev_installs.len(),
                 result.python_cleanup.items_that_would_be_cleaned()
             );
         } else {
             info!(
-                "Comprehensive cleanup completed: {} packages, {} venvs, {} space freed",
+                "Comprehensive cleanup completed: {} packages, {} dev installs, {} venvs, {} space freed",
                 result.removed_packages.len(),
+                result.removed_dev_installs.len(),
                 result.python_cleanup.items_cleaned(),
                 result.python_cleanup.format_space_freed()
             );
@@ -1473,5 +1696,361 @@ min_version = "20.5"
             vec!["foo"],
             "only the registry install should surface"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Dev (path-dep) install cleanup
+    // ------------------------------------------------------------------
+
+    /// Build a project hpm.toml at `dir` that depends on a single path dep
+    /// pointing at `dep_path` (relative or absolute string written verbatim).
+    fn write_project_with_path_dep(
+        dir: &std::path::Path,
+        project_slug: &str,
+        version: &str,
+        dep_name: &str,
+        dep_path: &str,
+        link: bool,
+    ) {
+        std::fs::create_dir_all(dir).unwrap();
+        let link_field = if link { ", link = true" } else { "" };
+        std::fs::write(
+            dir.join("hpm.toml"),
+            format!(
+                "[package]\n\
+                 path = \"studio/{project_slug}\"\n\
+                 name = \"{project_slug}\"\n\
+                 version = \"{version}\"\n\
+                 \n\
+                 [dependencies]\n\
+                 \"{dep_name}\" = {{ path = \"{dep_path}\"{link_field} }}\n",
+            ),
+        )
+        .unwrap();
+    }
+
+    fn projects_config_with(paths: Vec<std::path::PathBuf>) -> ProjectsConfig {
+        ProjectsConfig {
+            explicit_paths: paths,
+            search_roots: vec![],
+            max_search_depth: 0,
+            ignore_patterns: vec![],
+        }
+    }
+
+    /// A dev install that no project's path-dep claims must be classified
+    /// as orphan and removed.
+    #[tokio::test]
+    async fn unreferenced_dev_install_is_orphan() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        // Plant a dev install for `studio/orphan@1.0.0`.
+        let source = temp_dir.path().join("orphan-source");
+        write_source_package(&source, "studio/orphan", "1.0.0", "orphan-marker");
+        storage_manager
+            .install_from_path_dev(&source)
+            .await
+            .unwrap();
+        let dev_path = temp_dir
+            .path()
+            .join("packages")
+            .join("_dev")
+            .join("orphan@1.0.0");
+        assert!(dev_path.exists());
+
+        // A project exists but doesn't reference this dep.
+        let project_dir = temp_dir.path().join("project");
+        write_project_with_path_dep(
+            &project_dir,
+            "consumer",
+            "1.0.0",
+            "studio/something-else",
+            "../something-else-src",
+            false,
+        );
+        // The "something-else" source doesn't exist — the dep is broken, but
+        // that's irrelevant to this test (the dep would also fail to claim
+        // the `orphan` dev install regardless).
+
+        let projects_cfg = projects_config_with(vec![project_dir]);
+        let removed = storage_manager
+            .cleanup_unused_dev_installs(&projects_cfg)
+            .await
+            .unwrap();
+
+        assert_eq!(removed, vec!["_dev/orphan@1.0.0"]);
+        assert!(!dev_path.exists());
+        // Source workspace is untouched.
+        assert!(source.join("MARKER").exists());
+    }
+
+    /// A dev install that any project's path-dep manifest resolves to must
+    /// be protected from cleanup.
+    #[tokio::test]
+    async fn referenced_dev_install_survives_cleanup() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        // Plant a dev install for `studio/keep@2.0.0`.
+        let source = temp_dir.path().join("keep-source");
+        write_source_package(&source, "studio/keep", "2.0.0", "keep-marker");
+        storage_manager
+            .install_from_path_dev(&source)
+            .await
+            .unwrap();
+        let dev_path = temp_dir
+            .path()
+            .join("packages")
+            .join("_dev")
+            .join("keep@2.0.0");
+        assert!(dev_path.exists());
+
+        // Project references the same source workspace via path dep.
+        let project_dir = temp_dir.path().join("project");
+        write_project_with_path_dep(
+            &project_dir,
+            "consumer",
+            "1.0.0",
+            "studio/keep",
+            "../keep-source",
+            false,
+        );
+
+        let projects_cfg = projects_config_with(vec![project_dir]);
+        let removed = storage_manager
+            .cleanup_unused_dev_installs(&projects_cfg)
+            .await
+            .unwrap();
+
+        assert!(removed.is_empty(), "no orphans expected, got {removed:?}");
+        assert!(dev_path.exists(), "referenced dev install must survive");
+    }
+
+    /// Cleaning up a link-mode dev install must remove the link entry only,
+    /// never follow it into the workspace.
+    #[tokio::test]
+    async fn orphan_link_install_cleanup_preserves_source() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        // Link install with no referencing project.
+        let workspace = temp_dir.path().join("workspace");
+        write_source_package(&workspace, "studio/linked", "1.0.0", "workspace-marker");
+        std::fs::write(workspace.join("user-file.py"), "# user authored").unwrap();
+        storage_manager
+            .install_from_path_dev_link(&workspace)
+            .await
+            .unwrap();
+        let dev_path = temp_dir
+            .path()
+            .join("packages")
+            .join("_dev")
+            .join("linked@1.0.0");
+
+        // A different project exists, doesn't claim `linked`.
+        let project_dir = temp_dir.path().join("project");
+        write_project_with_path_dep(
+            &project_dir,
+            "consumer",
+            "1.0.0",
+            "studio/other",
+            "../other",
+            false,
+        );
+
+        let projects_cfg = projects_config_with(vec![project_dir]);
+        let removed = storage_manager
+            .cleanup_unused_dev_installs(&projects_cfg)
+            .await
+            .unwrap();
+
+        assert_eq!(removed, vec!["_dev/linked@1.0.0"]);
+        assert!(std::fs::symlink_metadata(&dev_path).is_err());
+        // Workspace files survive — the link unlinked, the workspace did not.
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("MARKER")).unwrap(),
+            "workspace-marker"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("user-file.py")).unwrap(),
+            "# user authored"
+        );
+    }
+
+    /// A project with an unresolvable path-dep source (e.g. workspace moved
+    /// or deleted) must not bypass cleanup of other dev installs. We log a
+    /// warning for the broken dep and continue.
+    #[tokio::test]
+    async fn unresolvable_path_dep_does_not_block_cleanup() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        // Plant two dev installs.
+        let alpha_src = temp_dir.path().join("alpha-src");
+        write_source_package(&alpha_src, "studio/alpha", "1.0.0", "alpha");
+        storage_manager
+            .install_from_path_dev(&alpha_src)
+            .await
+            .unwrap();
+        let beta_src = temp_dir.path().join("beta-src");
+        write_source_package(&beta_src, "studio/beta", "1.0.0", "beta");
+        storage_manager
+            .install_from_path_dev(&beta_src)
+            .await
+            .unwrap();
+
+        // Project references `alpha` correctly, but `beta`'s path points at
+        // a directory that doesn't have an hpm.toml — `from_path` errors.
+        let project_dir = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(
+            project_dir.join("hpm.toml"),
+            "[package]\n\
+             path = \"studio/consumer\"\n\
+             name = \"consumer\"\n\
+             version = \"1.0.0\"\n\
+             \n\
+             [dependencies]\n\
+             \"studio/alpha\" = { path = \"../alpha-src\" }\n\
+             \"studio/beta\" = { path = \"../does-not-exist\" }\n",
+        )
+        .unwrap();
+
+        let projects_cfg = projects_config_with(vec![project_dir]);
+        let removed = storage_manager
+            .cleanup_unused_dev_installs(&projects_cfg)
+            .await
+            .unwrap();
+
+        // `alpha` is referenced → survives.
+        // `beta`'s referencing dep is unresolvable → `beta` looks orphaned
+        // (correct: a broken dep cannot protect anything from cleanup).
+        assert_eq!(removed, vec!["_dev/beta@1.0.0"]);
+        let alpha_path = temp_dir
+            .path()
+            .join("packages")
+            .join("_dev")
+            .join("alpha@1.0.0");
+        let beta_path = temp_dir
+            .path()
+            .join("packages")
+            .join("_dev")
+            .join("beta@1.0.0");
+        assert!(alpha_path.exists());
+        assert!(!beta_path.exists());
+    }
+
+    /// Safety guard: an empty projects list means we can't tell whether any
+    /// dev install is needed, so we must not remove anything. Matches the
+    /// existing CAS-cleanup behavior.
+    #[tokio::test]
+    async fn no_projects_skips_dev_cleanup() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        let source = temp_dir.path().join("orphan-src");
+        write_source_package(&source, "studio/orphan", "1.0.0", "orphan");
+        storage_manager
+            .install_from_path_dev(&source)
+            .await
+            .unwrap();
+        let dev_path = temp_dir
+            .path()
+            .join("packages")
+            .join("_dev")
+            .join("orphan@1.0.0");
+
+        let projects_cfg = projects_config_with(vec![]);
+        let removed = storage_manager
+            .cleanup_unused_dev_installs(&projects_cfg)
+            .await
+            .unwrap();
+
+        assert!(removed.is_empty());
+        assert!(dev_path.exists(), "no projects → no cleanup");
+    }
+
+    /// `cleanup_comprehensive` carries dev orphans through to the result.
+    #[tokio::test]
+    async fn cleanup_comprehensive_reports_dev_orphans() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        let orphan_src = temp_dir.path().join("orphan-src");
+        write_source_package(&orphan_src, "studio/orphan", "1.0.0", "orphan");
+        storage_manager
+            .install_from_path_dev(&orphan_src)
+            .await
+            .unwrap();
+
+        // Non-empty project list, none claiming `orphan`.
+        let project_dir = temp_dir.path().join("project");
+        write_project_with_path_dep(
+            &project_dir,
+            "consumer",
+            "1.0.0",
+            "studio/anything",
+            "../anything",
+            false,
+        );
+        let projects_cfg = projects_config_with(vec![project_dir]);
+
+        // Dry-run first — nothing removed but the report is populated.
+        let dry = storage_manager
+            .cleanup_comprehensive(&projects_cfg, true)
+            .await
+            .unwrap();
+        assert_eq!(dry.removed_dev_installs, vec!["_dev/orphan@1.0.0"]);
+        let dev_path = temp_dir
+            .path()
+            .join("packages")
+            .join("_dev")
+            .join("orphan@1.0.0");
+        assert!(dev_path.exists(), "dry-run must not delete");
+
+        // Real run — the dev install is gone.
+        let real = storage_manager
+            .cleanup_comprehensive(&projects_cfg, false)
+            .await
+            .unwrap();
+        assert_eq!(real.removed_dev_installs, vec!["_dev/orphan@1.0.0"]);
+        assert!(!dev_path.exists());
     }
 }

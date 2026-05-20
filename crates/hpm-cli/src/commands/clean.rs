@@ -86,15 +86,26 @@ fn prompt_yes_no(label: &str) -> Result<bool> {
 }
 
 async fn cleanup_packages(storage: &StorageManager, config: &Config, mode: Mode) -> Result<()> {
-    let would_remove = storage.cleanup_unused_dry_run(&config.projects).await?;
-    if would_remove.is_empty() {
+    let would_remove_cas = storage.cleanup_unused_dry_run(&config.projects).await?;
+    let would_remove_dev = storage
+        .cleanup_unused_dev_installs_dry_run(&config.projects)
+        .await?;
+    if would_remove_cas.is_empty() && would_remove_dev.is_empty() {
         println!("No orphaned packages found - cleanup not needed");
         return Ok(());
     }
 
-    println!("Found {} orphaned packages:", would_remove.len());
-    for package in &would_remove {
-        println!("  - {package}");
+    if !would_remove_cas.is_empty() {
+        println!("Found {} orphaned packages:", would_remove_cas.len());
+        for package in &would_remove_cas {
+            println!("  - {package}");
+        }
+    }
+    if !would_remove_dev.is_empty() {
+        println!("Found {} orphaned dev installs:", would_remove_dev.len());
+        for entry in &would_remove_dev {
+            println!("  - {entry}");
+        }
     }
 
     match mode {
@@ -109,10 +120,27 @@ async fn cleanup_packages(storage: &StorageManager, config: &Config, mode: Mode)
             Ok(())
         }
         Mode::Automated | Mode::Interactive => {
-            let removed = storage.cleanup_unused(&config.projects).await?;
-            println!("Successfully removed {} orphaned packages:", removed.len());
-            for package in &removed {
-                println!("  - {package}");
+            let removed_cas = storage.cleanup_unused(&config.projects).await?;
+            let removed_dev = storage
+                .cleanup_unused_dev_installs(&config.projects)
+                .await?;
+            if !removed_cas.is_empty() {
+                println!(
+                    "Successfully removed {} orphaned packages:",
+                    removed_cas.len()
+                );
+                for package in &removed_cas {
+                    println!("  - {package}");
+                }
+            }
+            if !removed_dev.is_empty() {
+                println!(
+                    "Successfully removed {} orphaned dev installs:",
+                    removed_dev.len()
+                );
+                for entry in &removed_dev {
+                    println!("  - {entry}");
+                }
             }
             Ok(())
         }
@@ -186,6 +214,15 @@ async fn cleanup_comprehensive(
             println!("  - {package}");
         }
     }
+    if !analysis.removed_dev_installs.is_empty() {
+        println!(
+            "Found {} orphaned dev installs:",
+            analysis.removed_dev_installs.len()
+        );
+        for entry in &analysis.removed_dev_installs {
+            println!("  - {entry}");
+        }
+    }
     if analysis.python_cleanup.items_that_would_be_cleaned() > 0 {
         println!(
             "Found {} orphaned virtual environments:",
@@ -218,6 +255,15 @@ async fn cleanup_comprehensive(
                 );
                 for package in &result.removed_packages {
                     println!("  - {package}");
+                }
+            }
+            if !result.removed_dev_installs.is_empty() {
+                println!(
+                    "Successfully removed {} orphaned dev installs:",
+                    result.removed_dev_installs.len()
+                );
+                for entry in &result.removed_dev_installs {
+                    println!("  - {entry}");
                 }
             }
             if result.python_cleanup.items_cleaned() > 0 {
