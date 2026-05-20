@@ -412,7 +412,8 @@ See [Security](security.md) for more.
 
 ### `hpm clean`
 
-Remove orphaned packages and/or venvs that no active project depends on.
+Remove orphaned packages, dev (path-dep) installs, and/or venvs that no
+active project depends on.
 
 ```
 hpm clean [OPTIONS]
@@ -422,13 +423,28 @@ hpm clean [OPTIONS]
 |------|-------------|
 | `-n, --dry-run` | Print what would be removed, without touching anything. |
 | `-y, --yes` | Skip confirmation. |
-| `--package <pattern>` | Target specific package patterns. |
 | `--python-only` | Clean only orphaned venvs. |
-| `--comprehensive` | Clean packages **and** venvs. |
+| `--comprehensive` | Clean packages, dev installs, **and** venvs. |
 
 HPM identifies active projects via `[projects]` in `~/.hpm/config.toml`
-(`explicit_paths` plus recursive `search_roots`). Anything reachable from
-those projects is preserved; the rest is a candidate for removal.
+(`explicit_paths` plus recursive `search_roots`). Three classes of artifact
+are considered:
+
+- **Registry/URL packages** in `~/.hpm/packages/<slug>@<version>/`:
+  preserved if reachable from any active project's dependency graph.
+- **Dev installs** in `~/.hpm/packages/_dev/<slug>@<version>/` (created by
+  `{ path = "..." }` deps, copy or link mode): preserved if any active
+  project's path-dep source manifest reports that `(slug, version)`.
+  Entries are listed as `_dev/<slug>@<version>` so the source of each is
+  obvious. Link installs are unlinked safely — never followed.
+- **Python venvs** under `~/.hpm/venvs/`: preserved if any kept package
+  declares matching `[python_dependencies]`. Removed only when
+  `--python-only` or `--comprehensive` is set.
+
+A project whose path-dep source can't be read (workspace moved or
+deleted) logs a warning and doesn't block cleanup of other dev installs;
+re-run `hpm sync` after fixing the path to reinstate anything that was
+swept.
 
 ### `hpm registry`
 
