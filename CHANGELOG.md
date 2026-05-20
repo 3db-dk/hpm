@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Garbage collection for dev (`_dev/`) installs.** `hpm clean` (and
+  `hpm clean --comprehensive`) now sweeps stranded entries in
+  `~/.hpm/packages/_dev/`. The `_dev/` subtree was previously invisible to
+  orphan collection because it's filtered out of `list_installed`, so
+  removing a `{ path = "..." }` dep from `hpm.toml` left its snapshot or
+  link entry behind forever. A new parallel cleanup pass walks every
+  discovered project's path-dependencies, reads each source manifest for
+  its `(slug, version)`, and treats anything in `_dev/` outside that union
+  as orphan. Link installs are unlinked safely via the existing
+  `remove_install_entry` primitive (no `remove_dir_all` traversal into a
+  workspace). Projects with an unresolvable path-dep source log a warning
+  and don't block cleanup. `ComprehensiveCleanupResult` gains a
+  `removed_dev_installs: Vec<String>` field whose entries are prefixed
+  `_dev/<slug>@<version>` so CLI output keeps the two cleanup scopes
+  distinct.
 - **Link-mode installs for path dependencies.** A new opt-in `link = true`
   on `[dependencies] my-dep = { path = "...", link = true }` installs the
   package into `~/.hpm/packages/_dev/<slug>@<version>/` as a symlink (Unix)

@@ -432,6 +432,19 @@ The `_dev` subtree is invisible to `list_installed`, so a dev install of
 `foo@1.0.0` cannot be served as the cached install for a registry
 resolution at the same coordinate from a different project.
 
+`_dev/` entries are garbage-collected by a parallel cleanup pass driven
+directly off project path-dependencies (since the CAS-orphan logic
+deliberately can't see them). For each discovered project,
+`find_orphaned_dev_installs` parses the manifest, resolves every
+`{ path = "..." }` dep's source manifest to its `(slug, version)`, and
+unions those into the "needed" set. Anything in `_dev/` whose dir-name
+encoding falls outside that set is orphan. A project with an unreadable
+path-dep source logs a warning and skips that dep — a broken project
+doesn't bypass cleanup of *other* dev installs; re-running `hpm sync`
+re-creates whatever the project still needs. Removal goes through the
+same `remove_install_entry` primitive used by `clear_existing_install`
+and `remove_package`, so link installs are unlinked without traversal.
+
 Path deps come in two install styles, selected by the `link` field on
 the manifest's `{ path = "...", link = ? }` spec:
 
