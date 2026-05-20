@@ -273,8 +273,11 @@ clients run the same flow.
  │                       → install_from_path → ~/.hpm/packages/<slug>@<v>/ │
  │       Url             → ArchiveFetcher (no registry query)           │
  │                       → install_from_path                            │
- │       Path            → install_from_path_dev                        │
+ │       Path            → install_from_path_dev (or _dev_link if      │
+ │                         { link = true })                             │
  │                       → ~/.hpm/packages/_dev/<slug>@<v>/             │
+ │                         (real dir for copy, symlink/junction for     │
+ │                         link mode — both honor _dev/ CAS isolation)  │
  │     Already-in-CAS deps short-circuit (avoids the install_from_path  │
  │     remove-and-recopy that breaks on Windows when Houdini is open).  │
  │  4. Merge [python_dependencies] from root + every dep manifest       │
@@ -428,6 +431,25 @@ rather than the registry CAS at `~/.hpm/packages/<slug>@<version>/`.
 The `_dev` subtree is invisible to `list_installed`, so a dev install of
 `foo@1.0.0` cannot be served as the cached install for a registry
 resolution at the same coordinate from a different project.
+
+Path deps come in two install styles, selected by the `link` field on
+the manifest's `{ path = "...", link = ? }` spec:
+
+- **Copy** (default, `link = false`): `install_from_path_dev` snapshot-copies
+  the workspace into `_dev/<slug>@<version>/`. Subsequent working-tree
+  edits don't reach the install until the next `hpm sync`.
+- **Link** (`link = true`): `install_from_path_dev_link` creates a symlink
+  (Unix) or NTFS junction (Windows) at `_dev/<slug>@<version>/` pointing
+  at the canonicalized workspace. Edits are live; Houdini's HPATH
+  resolution follows the link transparently. Junctions on Windows side-step
+  the Developer Mode / admin requirement that NTFS directory symlinks
+  carry, so the workflow is viable on a stock Houdini workstation.
+
+Reinstall is symlink-safe: `clear_existing_install` checks
+`symlink_metadata` (plus `junction::exists` on Windows) before deciding
+between `remove_dir_all` (real dir) and `remove_file` / `junction::delete`
+(link entry). Without this, a `remove_dir_all` on a Windows junction would
+recurse into and delete the user's workspace on the next sync.
 
 ## Python integration
 

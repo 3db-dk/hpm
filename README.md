@@ -95,7 +95,7 @@ See the [user guide](docs/user-guide.md) for the full manifest reference.
 | Command | Description |
 |---------|-------------|
 | `hpm init [name]` | Create a new package (`--bare` for manifest only) |
-| `hpm add <pkg>...` | Add dependencies (`name@version`, `--path`, `--optional`) |
+| `hpm add <pkg>...` | Add dependencies (`name@version`, `--path`, `--path --link`, `--optional`) |
 | `hpm remove <pkg>` | Remove a dependency |
 | `hpm install` | Install all dependencies (`--frozen-lockfile` for CI) |
 | `hpm update [pkg...]` | Update dependencies (`--dry-run` to preview) |

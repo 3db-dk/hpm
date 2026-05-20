@@ -199,6 +199,7 @@ or `name@version`. `name` uses the `creator/slug` form.
 | Flag | Description |
 |------|-------------|
 | `--path <dir>` | Add as a local path dependency (only valid with a single package). Path dependencies install into a `_dev/` subtree of the global packages dir so they never overwrite a registry install at the same `(slug, version)`. |
+| `--link` | For path dependencies, install as a symlink (Unix) or NTFS junction (Windows) instead of copying. Working-tree edits become visible to a live Houdini session without re-running `hpm sync`. Requires `--path`. |
 | `-p, --package <path>` | Path to the manifest to modify (`hpm.toml` or containing dir). Defaults to cwd. |
 | `--optional` | Mark all added dependencies as optional. |
 
@@ -208,6 +209,7 @@ or `name@version`. `name` uses the `creator/slug` form.
 hpm add studio/utility-nodes@1.0.0
 hpm add studio/a@1.0.0 studio/b@2.0.0
 hpm add local-tools --path ../local-tools
+hpm add local-tools --path ../local-tools --link  # live edits → Houdini
 hpm add studio/visualize@1.0.0 --optional
 hpm add studio/lib@1.0.0 -p /path/to/project
 ```
@@ -512,6 +514,12 @@ one of four shapes:
 # 4. Local path (development)
 local-tools = { path = "../local-tools" }
 local-tools = { path = "../local-tools", optional = true }
+
+# 5. Local path, installed as a symlink/junction (live edits)
+#    Working-tree edits become visible to a live Houdini session without
+#    re-running `hpm sync`. Otherwise identical to (4): same _dev/ namespace
+#    isolation, no effect on registry installs at the same coordinate.
+local-tools = { path = "../local-tools", link = true }
 ```
 
 The lock file (`hpm.lock`) records the resolved version and SHA-256 checksum
