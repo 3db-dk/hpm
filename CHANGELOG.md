@@ -20,14 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing manifests are unaffected.
 
 ### Fixed
-- **Symlink-aware target removal in `StorageManager::install_from_path_*`.**
-  The reinstall branch now distinguishes link entries from real directories
-  via `symlink_metadata` (plus `junction::exists` on Windows) and removes
-  symlinks/junctions through `remove_file` / `junction::delete` rather than
-  `remove_dir_all`. Prevents the catastrophic case where a stale Windows
-  junction at the dev path would have caused `remove_dir_all` to recurse
-  into and delete the user's workspace on the next sync. Defensive even
-  without link mode, since a junction could have been created out-of-band.
+- **Symlink-aware target removal in `StorageManager::install_from_path_*`
+  and `remove_package`.** Both removal paths now distinguish link entries
+  from real directories via `symlink_metadata` (plus `junction::exists` on
+  Windows) and remove symlinks/junctions through `remove_file` /
+  `junction::delete` rather than `remove_dir_all`. Prevents the catastrophic
+  case where a stale Windows junction at a package path would have caused
+  `remove_dir_all` to recurse into and delete the user's workspace on the
+  next sync or orphan-cleanup. Defensive even without link mode, since a
+  junction could have been created out-of-band.
 
 ## [0.13.0] - 2026-05-15
 

@@ -48,6 +48,61 @@ fn create_dev_link(target: &std::path::Path, link: &std::path::Path) -> std::io:
     }
 }
 
+/// Returns true when the entry at `path` is a symlink (Unix) or a
+/// junction/symlink (Windows). Caller must have already verified the entry
+/// exists (typically by reading `symlink_metadata` themselves) — this helper
+/// is a pure file-type predicate that doesn't follow links.
+fn is_link_entry(meta: &std::fs::Metadata, path: &std::path::Path) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        // Older Rust stdlib reports junctions as non-symlinks; ask the
+        // junction crate directly so callers never accidentally fall through
+        // to `remove_dir_all` on a reparse point.
+        junction::exists(path).unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// Remove an install entry without following links. The caller is
+/// responsible for verifying the entry exists (and supplying the matching
+/// metadata) so this stays a pure removal primitive.
+///
+/// - Symlink/junction → remove the link entry itself.
+/// - Real directory → `remove_dir_all`, with Houdini-handle errors lifted to
+///   [`StorageError::PackageInUse`] so the user gets an actionable message.
+fn remove_install_entry(
+    target_dir: &std::path::Path,
+    meta: &std::fs::Metadata,
+    name: &str,
+    version: &str,
+) -> Result<(), StorageError> {
+    if is_link_entry(meta, target_dir) {
+        return remove_dev_link(target_dir).map_err(StorageError::DirectoryRemoval);
+    }
+    std::fs::remove_dir_all(target_dir).map_err(|e| {
+        // On Windows, a running Houdini process holds open handles to files
+        // inside the package dir, so removal fails with ERROR_ACCESS_DENIED
+        // (os error 5 → PermissionDenied). Map it to an actionable error
+        // instead of leaking a raw OS code.
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            StorageError::PackageInUse {
+                name: name.to_string(),
+                version: version.to_string(),
+                source: e,
+            }
+        } else {
+            StorageError::DirectoryRemoval(e)
+        }
+    })
+}
+
 /// Replace whatever is currently at `target_dir` with a clean slate, with
 /// link-aware removal semantics. Always safe to call before installing.
 ///
@@ -66,47 +121,20 @@ fn clear_existing_install(
         Err(e) => return Err(StorageError::DirectoryRemoval(e)),
     };
 
-    let is_link = meta.file_type().is_symlink() || {
-        #[cfg(windows)]
-        {
-            junction::exists(target_dir).unwrap_or(false)
-        }
-        #[cfg(not(windows))]
-        {
-            false
-        }
-    };
-
-    if is_link {
+    if is_link_entry(&meta, target_dir) {
         warn!(
             "replacing existing link install for {}@{} at {}",
             name,
             version,
             target_dir.display()
         );
-        remove_dev_link(target_dir).map_err(StorageError::DirectoryRemoval)?;
-        return Ok(());
+    } else {
+        warn!(
+            "package {}@{} already exists, removing old version",
+            name, version
+        );
     }
-
-    warn!(
-        "package {}@{} already exists, removing old version",
-        name, version
-    );
-    std::fs::remove_dir_all(target_dir).map_err(|e| {
-        // On Windows, a running Houdini process holds open handles to files
-        // inside the package dir, so removal fails with ERROR_ACCESS_DENIED
-        // (os error 5 → PermissionDenied). Map it to an actionable error
-        // instead of leaking a raw OS code.
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
-            StorageError::PackageInUse {
-                name: name.to_string(),
-                version: version.to_string(),
-                source: e,
-            }
-        } else {
-            StorageError::DirectoryRemoval(e)
-        }
-    })
+    remove_install_entry(target_dir, &meta, name, version)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -448,17 +476,22 @@ impl StorageManager {
     pub async fn remove_package(&self, name: &str, version: &str) -> Result<(), StorageError> {
         let package_dir = self.config.package_dir(name, version);
 
-        if !package_dir.exists() {
-            return Err(StorageError::PackageNotFound(format!(
-                "{}@{}",
-                name, version
-            )));
-        }
+        // `symlink_metadata` rather than `exists()` because `exists()` follows
+        // links — a junction pointing at a missing target would falsely report
+        // not-found, and we wouldn't reach the link-safe removal path below.
+        let meta = match std::fs::symlink_metadata(&package_dir) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(StorageError::PackageNotFound(format!(
+                    "{}@{}",
+                    name, version
+                )));
+            }
+            Err(e) => return Err(StorageError::DirectoryRemoval(e)),
+        };
 
         info!("Removing package: {}@{}", name, version);
-        std::fs::remove_dir_all(&package_dir).map_err(StorageError::DirectoryRemoval)?;
-
-        Ok(())
+        remove_install_entry(&package_dir, &meta, name, version)
     }
 
     /// Find orphaned packages that are not needed by any active project.
@@ -863,6 +896,47 @@ min_version = "20.5"
             }
             _ => panic!("Expected PackageNotFound error"),
         }
+    }
+
+    /// Defensive: if a junction/symlink ever lands at the registry CAS path
+    /// (manually, or via future code), `remove_package` must remove the link
+    /// entry itself rather than follow it. On Unix this is mostly a
+    /// belt-and-braces check (remove_dir_all on a symlink errors anyway); on
+    /// Windows this is the load-bearing safety property.
+    #[tokio::test]
+    async fn remove_package_unlinks_symlink_entries() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage_config = StorageConfig {
+            home_dir: temp_dir.path().to_path_buf(),
+            packages_dir: temp_dir.path().join("packages"),
+            cache_dir: temp_dir.path().join("cache"),
+            registry_cache_dir: temp_dir.path().join("registry"),
+        };
+        let storage_manager = StorageManager::new(storage_config).unwrap();
+
+        // Stand up an external "workspace" with a manifest.
+        let external = temp_dir.path().join("external-workspace");
+        write_source_package(&external, "creator/foo", "1.0.0", "external-marker");
+
+        // Manually plant a symlink/junction at the registry CAS path that
+        // `remove_package` resolves to. `package_dir(name, version)` uses the
+        // bare-slug layout, so the link lives at `<packages_dir>/<slug>@<v>/`.
+        let cas_path = storage_manager.config.package_dir("foo", "1.0.0");
+        std::fs::create_dir_all(cas_path.parent().unwrap()).unwrap();
+        create_dev_link(&external, &cas_path).unwrap();
+        assert!(cas_path.join("MARKER").exists());
+
+        storage_manager
+            .remove_package("foo", "1.0.0")
+            .await
+            .unwrap();
+
+        // CAS path is gone, external workspace survives intact.
+        assert!(std::fs::symlink_metadata(&cas_path).is_err());
+        assert_eq!(
+            std::fs::read_to_string(external.join("MARKER")).unwrap(),
+            "external-marker"
+        );
     }
 
     #[test]
