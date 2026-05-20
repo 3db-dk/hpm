@@ -44,7 +44,7 @@ glob = "0.3"
 # NTFS junctions for dev-link installs. Junctions work without Developer
 # Mode/admin (unlike NTFS directory symlinks), which is the realistic baseline
 # for Houdini Windows users.
-junction = "1.2"
+junction = "2.0"
 
 [dev-dependencies]
 tempfile.workspace = true
