@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Repeated dev-link installs no longer fail on Windows with
+  `ERROR_ALREADY_EXISTS` (os error 183).** `remove_dev_link` previously called
+  `junction::delete` alone, which strips the reparse point but leaves the
+  now-empty directory stub in place — the next `junction::create` at the same
+  path then failed because the entry already existed. The Windows branch now
+  follows `junction::delete` with `std::fs::remove_dir` so the path is fully
+  free for the next link. Manifested as a sync failure on every second-and-
+  onward project launch with a `link = true` path dep; the only workaround
+  was deleting `~/.hpm/packages/_dev/<slug>@<version>` between launches.
+
 ## [0.14.0] - 2026-05-20
 
 ### Added

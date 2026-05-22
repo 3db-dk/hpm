@@ -26,9 +26,13 @@ fn remove_dev_link(path: &std::path::Path) -> std::io::Result<()> {
     }
     #[cfg(windows)]
     {
-        // `junction::delete` handles both NTFS symlinks-to-dirs and junctions
-        // by stripping the reparse point and removing the empty stub.
-        junction::delete(path)
+        // `junction::delete` strips the reparse point but leaves the now-empty
+        // directory stub in place — re-creating the link at the same path
+        // would then fail with ERROR_ALREADY_EXISTS (os error 183). Remove the
+        // stub explicitly. The same applies to NTFS symlinks-to-dirs, whose
+        // reparse point sits on a directory entry that survives `delete`.
+        junction::delete(path)?;
+        std::fs::remove_dir(path)
     }
 }
 
