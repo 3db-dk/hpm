@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Per-platform test execution in release pipelines.** The Woodpecker
+  `build-{linux,macos,windows}.yml` jobs are now split into three steps —
+  `build → test → upload` — so `cargo test --release --workspace` runs on
+  each platform before any artifact is uploaded to GitHub Releases. Previously
+  only the Linux `check` job ran the test suite, so platform-specific
+  regressions (e.g. the Windows junction bug above) could ship in a release
+  without ever being exercised. macOS tests run against the x86_64 host slice
+  only; aarch64 stays cross-compile-only.
+
 ### Fixed
 - **Repeated dev-link installs no longer fail on Windows with
   `ERROR_ALREADY_EXISTS` (os error 183).** `remove_dev_link` previously called

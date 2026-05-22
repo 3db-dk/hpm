@@ -13,9 +13,6 @@ skip_clone: true
 steps:
   - name: build
     image: powershell
-    environment:
-      GITHUB_TOKEN:
-        from_secret: github_token
     commands:
       - git init
       - git remote add origin $env:CI_REPO_CLONE_URL
@@ -24,6 +21,20 @@ steps:
       - $env:PATH = "$env:USERPROFILE\.cargo\bin;C:\Users\Administrator\.cargo\bin;$env:PATH"
       - rustup default stable
       - cargo build --release -p hpm-cli --bin hpm
+
+  - name: test
+    image: powershell
+    commands:
+      - $env:PATH = "$env:USERPROFILE\.cargo\bin;C:\Users\Administrator\.cargo\bin;$env:PATH"
+      - rustup default stable
+      - cargo test --release --workspace
+
+  - name: upload
+    image: powershell
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
       - >-
         $VERSION = $env:CI_COMMIT_TAG -replace '^v','';
         $ARTIFACT = "hpm-v$VERSION-windows-x86_64.exe";
