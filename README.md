@@ -57,9 +57,8 @@ description = "Custom Houdini tools"
 authors = ["Name <name@example.com>"]
 license = "MIT"
 
-[houdini]
-min_version = "20.5"              # compatibility floor for this package
-max_version = "21.0"              # optional upper bound
+[compat]
+houdini = ">=20.5, <22"           # Cargo-style range; see User Guide
 
 [dependencies]
 "my-studio/utility-nodes" = "1.0.0"
@@ -119,7 +118,7 @@ bundled copy of [uv](https://github.com/astral-sh/uv) and installed into
 content-addressable virtual environments under `~/.hpm/venvs/`. Packages
 whose resolved Python dependencies hash to the same set share a single venv.
 
-HPM picks the Python version from `[houdini].min_version`:
+HPM picks the Python version from the lower bound of `[compat].houdini`:
 
 | Houdini    | Python |
 |-----------:|--------|

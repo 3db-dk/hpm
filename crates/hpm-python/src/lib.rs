@@ -103,7 +103,7 @@
 //! initialize().await?;
 //!
 //! // 2. Collect dependencies from package manifests. The first arg is the
-//! //    project's `[houdini].min_version` — authoritative for Python ABI.
+//! //    project's `[compat].houdini` lower bound — authoritative for Python ABI.
 //! let packages: Vec<PackageManifest> = vec![]; // Your package manifests
 //! let collected_deps = collect_python_dependencies(Some("22.0.307"), &packages).await?;
 //!

@@ -128,10 +128,9 @@ fn validate_manifest_content(manifest: &PackageManifest, result: &mut Validation
         );
     }
 
-    if manifest.houdini.is_none() {
+    if manifest.compat.as_ref().is_none_or(|c| c.houdini.is_none()) {
         result.add_warning(
-            "Houdini configuration is missing - consider specifying min/max version constraints"
-                .to_string(),
+            "[compat].houdini is missing - consider declaring a Houdini version range".to_string(),
         );
     }
 }
@@ -247,35 +246,21 @@ fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut Valid
         }
     }
 
-    // Validate version constraints
-    if let Some(ref houdini_config) = manifest.houdini {
-        if let Some(ref min_version) = houdini_config.min_version {
-            if !is_valid_houdini_version(min_version) {
-                result.add_warning(format!(
-                    "Minimum Houdini version '{}' format may not be recognized by Houdini",
-                    min_version
+    // Validate [compat].houdini parses as a Cargo-style range. Manifest
+    // validate() already rejects malformed ranges, so this branch only
+    // surfaces an info line on the happy path.
+    if let Some(compat) = &manifest.compat
+        && let Some(req) = &compat.houdini
+    {
+        match hpm_package::compile_houdini_req(req) {
+            Ok(expr) => {
+                result.add_info(format!(
+                    "[OK] Houdini compatibility: {} (compiles to `{}`)",
+                    req, expr
                 ));
-            } else {
-                result.add_info(format!("[OK] Minimum Houdini version: {}", min_version));
             }
-        }
-
-        if let Some(ref max_version) = houdini_config.max_version {
-            if !is_valid_houdini_version(max_version) {
-                result.add_warning(format!(
-                    "Maximum Houdini version '{}' format may not be recognized by Houdini",
-                    max_version
-                ));
-            } else {
-                result.add_info(format!("[OK] Maximum Houdini version: {}", max_version));
-            }
-        }
-
-        if let (Some(min), Some(max)) = (&houdini_config.min_version, &houdini_config.max_version) {
-            if compare_versions(min, max).unwrap_or(0) > 0 {
-                result.add_error(
-                    "Minimum Houdini version is greater than maximum version".to_string(),
-                );
+            Err(e) => {
+                result.add_error(format!("[compat].houdini '{}': {}", req, e));
             }
         }
     }
@@ -391,38 +376,6 @@ async fn check_package_size(project_dir: &Path, result: &mut ValidationResult) {
     }
 }
 
-fn is_valid_houdini_version(version: &str) -> bool {
-    // Houdini uses major.minor format primarily
-    let parts: Vec<&str> = version.split('.').collect();
-    if parts.len() < 2 || parts.len() > 3 {
-        return false;
-    }
-
-    parts.iter().all(|part| part.parse::<u32>().is_ok())
-}
-
-fn compare_versions(v1: &str, v2: &str) -> Option<i32> {
-    let parts1: Vec<u32> = v1.split('.').filter_map(|s| s.parse().ok()).collect();
-    let parts2: Vec<u32> = v2.split('.').filter_map(|s| s.parse().ok()).collect();
-
-    if parts1.is_empty() || parts2.is_empty() {
-        return None;
-    }
-
-    for i in 0..parts1.len().max(parts2.len()) {
-        let p1 = parts1.get(i).unwrap_or(&0);
-        let p2 = parts2.get(i).unwrap_or(&0);
-
-        if p1 > p2 {
-            return Some(1);
-        } else if p1 < p2 {
-            return Some(-1);
-        }
-    }
-
-    Some(0)
-}
-
 fn display_results(result: ValidationResult) -> Result<()> {
     println!();
 
@@ -493,29 +446,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_is_valid_houdini_version() {
-        assert!(is_valid_houdini_version("21.0"));
-        assert!(is_valid_houdini_version("20.5"));
-        assert!(is_valid_houdini_version("22.0.123"));
-
-        assert!(!is_valid_houdini_version("invalid"));
-        assert!(!is_valid_houdini_version(""));
-        assert!(!is_valid_houdini_version("21"));
-        assert!(!is_valid_houdini_version("21.0.0.1"));
-    }
-
-    #[tokio::test]
-    async fn test_compare_versions() {
-        assert_eq!(compare_versions("21.0", "20.5"), Some(1));
-        assert_eq!(compare_versions("20.5", "21.0"), Some(-1));
-        assert_eq!(compare_versions("21.0", "21.0"), Some(0));
-        assert_eq!(compare_versions("21.0.1", "21.0"), Some(1));
-
-        assert_eq!(compare_versions("invalid", "21.0"), None);
-        assert_eq!(compare_versions("21.0", "invalid"), None);
-    }
-
-    #[tokio::test]
     async fn test_validate_manifest_file_missing() {
         let temp_dir = TempDir::new().unwrap();
         let manifest_path = temp_dir.path().join("hpm.toml");
@@ -542,8 +472,8 @@ name = "test-package"
 version = "1.0.0"
 description = "A test package"
 
-[houdini]
-min_version = "20.5"
+[compat]
+houdini = ">=20.5"
 "#;
 
         std::fs::write(&manifest_path, manifest_content).unwrap();

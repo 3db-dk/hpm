@@ -278,20 +278,10 @@ fn display_package_info(manifest: &PackageManifest) {
         println!("Description: {}", description);
     }
 
-    if let Some(houdini_config) = &manifest.houdini {
-        let mut houdini_info = Vec::new();
-
-        if let Some(min_version) = &houdini_config.min_version {
-            houdini_info.push(format!("min: {}", min_version));
-        }
-
-        if let Some(max_version) = &houdini_config.max_version {
-            houdini_info.push(format!("max: {}", max_version));
-        }
-
-        if !houdini_info.is_empty() {
-            println!("Houdini compatibility: {}", houdini_info.join(", "));
-        }
+    if let Some(compat) = &manifest.compat
+        && let Some(req) = &compat.houdini
+    {
+        println!("Houdini compatibility: {}", req);
     }
 
     println!(); // Empty line for readability

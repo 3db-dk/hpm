@@ -7,7 +7,7 @@ use proptest::prelude::*;
 
 use crate::dependency::DependencySpec;
 use crate::houdini::HoudiniEnvValue;
-use crate::manifest::{HoudiniConfig, PackageInfo, PackageManifest};
+use crate::manifest::{CompatConfig, PackageInfo, PackageManifest};
 use crate::package_path::PackagePath;
 use crate::python::PythonDependencySpec;
 
@@ -80,12 +80,16 @@ pub fn url_strategy() -> impl Strategy<Value = String> {
     ]
 }
 
-/// Strategy to generate Houdini version strings
+/// Strategy to generate `[compat].houdini` range strings.
 pub fn houdini_version_strategy() -> impl Strategy<Value = String> {
     prop_oneof![
-        Just("20.5".to_string()),
-        Just("21.0".to_string()),
-        Just("22.0".to_string()),
+        Just(">=20.5".to_string()),
+        Just(">=21.0".to_string()),
+        Just(">=22.0".to_string()),
+        Just("^21".to_string()),
+        Just("^22".to_string()),
+        Just(">=20.5, <22".to_string()),
+        Just("~21.5".to_string()),
     ]
 }
 
@@ -156,37 +160,33 @@ pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
         prop::option::of(prop::collection::vec(author_strategy(), 1..4)),
         prop::option::of(license_strategy()),
         prop::option::of(houdini_version_strategy()),
-        prop::option::of(houdini_version_strategy()),
     )
         .prop_map(
-            |(path, name, version, description, authors, license, min_houdini, max_houdini)| {
-                PackageManifest {
-                    package: PackageInfo {
-                        path,
-                        name,
-                        version,
-                        description,
-                        authors,
-                        license,
-                        readme: Some("README.md".to_string()),
-                        homepage: None,
-                        repository: None,
-                        documentation: None,
-                        keywords: Some(vec!["houdini".to_string()]),
-                        categories: None,
-                    },
-                    houdini: Some(HoudiniConfig {
-                        min_version: min_houdini,
-                        max_version: max_houdini,
-                    }),
-                    native: None,
-                    registries: None,
-                    dependencies: None,
-                    python_dependencies: None,
-                    env: None,
-                    scripts: None,
-                    dev: None,
-                }
+            |(path, name, version, description, authors, license, houdini_req)| PackageManifest {
+                package: PackageInfo {
+                    path,
+                    name,
+                    version,
+                    description,
+                    authors,
+                    license,
+                    readme: Some("README.md".to_string()),
+                    homepage: None,
+                    repository: None,
+                    documentation: None,
+                    keywords: Some(vec!["houdini".to_string()]),
+                    categories: None,
+                },
+                compat: Some(CompatConfig {
+                    houdini: houdini_req,
+                }),
+                native: None,
+                registries: None,
+                dependencies: None,
+                python_dependencies: None,
+                env: None,
+                scripts: None,
+                dev: None,
             },
         )
 }
@@ -341,9 +341,9 @@ proptest! {
         prop_assert!(houdini_pkg.hpath.is_some());
         prop_assert!(houdini_pkg.env.is_some());
 
-        // If Houdini config exists with versions, enable should be set
-        if let Some(houdini_config) = &manifest.houdini {
-            if houdini_config.min_version.is_some() || houdini_config.max_version.is_some() {
+        // If [compat].houdini is set, the enable expression should be derived.
+        if let Some(compat) = &manifest.compat {
+            if compat.houdini.is_some() {
                 prop_assert!(houdini_pkg.enable.is_some());
             }
         }
@@ -496,8 +496,7 @@ proptest! {
         path in package_path_strategy(),
         name in package_name_strategy(),
         version in prop_oneof![version_strategy(), malformed_version_strategy()],
-        min_version in prop::option::of(houdini_version_strategy()),
-        max_version in prop::option::of(houdini_version_strategy())
+        houdini_req in prop::option::of(houdini_version_strategy()),
     ) {
         let manifest = PackageManifest {
             package: PackageInfo {
@@ -514,9 +513,8 @@ proptest! {
                 keywords: None,
                 categories: None,
             },
-            houdini: Some(HoudiniConfig {
-                min_version,
-                max_version,
+            compat: Some(CompatConfig {
+                houdini: houdini_req,
             }),
             native: None,
             registries: None,

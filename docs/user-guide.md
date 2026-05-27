@@ -166,8 +166,7 @@ hpm init [OPTIONS] [NAME]
 | `--author <name>` | `git config user.*` if set | Author (`"Name <email>"`). |
 | `--version <v>` | `0.1.0` | Initial version. |
 | `--license <id>` | `MIT` | License identifier. |
-| `--houdini-min <v>` | `20.5` | Minimum Houdini version. |
-| `--houdini-max <v>` | — | Maximum Houdini version. |
+| `--houdini <range>` | `>=20.5` | `[compat].houdini` Cargo-style range (e.g. `">=20.5"`, `"^21"`, `">=20.5, <22"`). |
 | `--bare` | off | Skip standard directories; create only `hpm.toml` and `README.md`. |
 | `--vcs <vcs>` | `git` | `git` or `none`. |
 
@@ -180,7 +179,7 @@ hpm init advanced-tools \
   --description "Advanced geometry tools" \
   --author "Artist <artist@studio.com>" \
   --license Apache-2.0 \
-  --houdini-min 20.5 --houdini-max 21.0
+  --houdini ">=20.5, <22"
 ```
 
 ### `hpm add`
@@ -240,7 +239,7 @@ Install does the following:
 1. Loads `hpm.toml`.
 2. If `hpm.lock` exists, verifies cached packages against stored checksums and warns if the lock is older than 90 days.
 3. Resolves HPM dependencies through configured registries and downloads anything missing to `~/.hpm/packages/`.
-4. Collects Python dependencies from the root manifest and every installed dependency's manifest, downloads a managed CPython matching the root manifest's `[houdini].min_version` to `~/.hpm/uv-python/` (no-op if already present), resolves them with the bundled `uv`, and installs them into a content-addressable venv in `~/.hpm/venvs/<hash>/`.
+4. Collects Python dependencies from the root manifest and every installed dependency's manifest, downloads a managed CPython matching the lower bound of the root manifest's `[compat].houdini` to `~/.hpm/uv-python/` (no-op if already present), resolves them with the bundled `uv`, and installs them into a content-addressable venv in `~/.hpm/venvs/<hash>/`.
 5. Writes one Houdini manifest per installed dependency to `<project>/.hpm/packages/{name}.json`.
 6. Writes or updates `hpm.lock`.
 
@@ -299,10 +298,9 @@ hpm check
 
 Check runs:
 
-- `hpm.toml` exists, parses, and passes manifest validation (scoped `creator/slug` path, semver version, `[native]` consistency).
-- Houdini version constraints are well-formed and `min_version <= max_version`.
+- `hpm.toml` exists, parses, and passes manifest validation (scoped `creator/slug` path, semver version, `[compat].houdini` parseable, `[native]` consistency).
 - Generated Houdini `package.json` serializes cleanly.
-- Soft warnings for: missing description, missing authors, missing keywords, missing `[houdini]`, missing README or license file, missing `.gitignore` when a `.git` directory is present, packages larger than 100 MB, and individual files larger than 10 MB.
+- Soft warnings for: missing description, missing authors, missing keywords, missing `[compat].houdini`, missing README or license file, missing `.gitignore` when a `.git` directory is present, packages larger than 100 MB, and individual files larger than 10 MB.
 
 Check is advisory — warnings do not fail the command.
 
@@ -494,20 +492,28 @@ All sections, in the order they appear in practice:
 | `keywords` | no | List of keywords for discovery. |
 | `categories` | no | List of categories. |
 
-### `[houdini]`
+### `[compat]`
 
-Houdini version constraints:
+Target-environment compatibility for the package. Currently exposes one
+axis — `houdini` — as a Cargo-style version requirement string:
 
 ```toml
-[houdini]
-min_version = "20.5"
-max_version = "21.0"   # optional
+[compat]
+houdini = ">=20.5, <22"      # explicit range
+# houdini = "^21"             # caret: >=21, <22
+# houdini = "~21.5"           # tilde: >=21.5, <21.6
+# houdini = "20.5"            # bare = caret = >=20.5, <21
+# houdini = ">=20.5"          # unbounded above
 ```
 
-Both fields accept `"major"` (e.g. `"21"`) or `"major.minor"` (e.g. `"21.0"`).
-The **root** manifest's `min_version` drives the bundled Python version — a
-dependency package's `min_version` is a compatibility floor only and does
-not influence the venv ABI. See [Python guide](python-guide.md).
+The supported operators are `=`, `>=`, `>`, `<=`, `<`, `^`, `~`, and the
+bare-version shorthand (aliases caret). Multiple comparators combine with
+`and` when separated by commas. The same grammar is reused inside `[env]`
+conditional values (`when = { houdini = "^21" }`).
+
+The lower bound of `[compat].houdini` on the **root** manifest drives the
+bundled Python version. A dependency package's range is a compatibility
+floor only and does not influence the venv ABI. See [Python guide](python-guide.md).
 
 ### `[dependencies]`
 
@@ -1008,9 +1014,9 @@ If registries are configured, run `hpm registry update` and try again.
 Error: No Python version mapping for Houdini 22; supported majors are 19, 20, 21.
 ```
 
-As of 0.7.0, an unsupported `[houdini].min_version` is a hard error rather
+An unsupported `[compat].houdini` lower bound is a hard error rather
 than a silent fallback. Update `hpm-python` if you need to add a new major,
-or set `min_version` to a supported value.
+or set the range to a supported lower bound.
 
 ### Checksum mismatch at install time
 

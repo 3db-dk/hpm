@@ -64,8 +64,8 @@ description = "A test package"
 authors = ["Test Author <test@example.com>"]
 license = "MIT"
 
-[houdini]
-min_version = "20.5"
+[compat]
+houdini = ">=20.5"
 "#
     .to_string();
 

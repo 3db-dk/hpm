@@ -60,7 +60,7 @@ codes and help hints.
 | `ManifestLoadError` | `NotFound { path }` / `Read { path, source }` / `Parse { path, source }`. Re-exported by `hpm-core`'s `StorageError`, `ProjectError`, `DiscoveryError`, and `FetchManifestError`. |
 | `PackagePath`, `PackagePathError` | Validated `creator/slug` newtype. Kebab-case enforced at deserialization, so `creator()` and `slug()` return `&str` — no `Option`. |
 | `PackageInfo` | Contents of `[package]`. `path: PackagePath` is the canonical identifier; `name`, `version`, etc. are user-facing metadata. |
-| `HoudiniConfig` | Contents of `[houdini]`. |
+| `CompatConfig` | Contents of `[compat]`. `houdini: Option<String>` is a Cargo-style range. `houdini_min()` extracts the lower bound for Python ABI selection. |
 | `DependencySpec` | Untagged enum: `Simple(String) \| Url {..} \| Path {..} \| Registry {..}`. |
 | `PythonDependencySpec` | Untagged enum: `Simple(String) \| Detailed {..}`. |
 | `ManifestEnvEntry`, `EnvMethod` | `[env]` entries (method, optional value, `required` flag) and methods (`set`/`prepend`/`append`). `value` is `Option<EnvValueSpec>` — flat string or ordered variant list. `lower(substitutions)` is the single emit path. |

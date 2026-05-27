@@ -115,8 +115,8 @@ license = "{}"
 readme = "README.md"
 keywords = ["houdini"]
 
-[houdini]
-min_version = "20.5"
+[compat]
+houdini = ">=20.5"
 "#,
                 manifest.package.path,
                 manifest.package.name,

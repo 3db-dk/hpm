@@ -88,7 +88,7 @@ full list.
 ```rust
 pub struct PackageManifest {
     pub package: PackageInfo,
-    pub houdini: Option<HoudiniConfig>,
+    pub compat: Option<CompatConfig>,
     pub native: Option<NativeConfig>,
     pub registries: Option<Vec<RegistryConfig>>,
     pub dependencies: Option<IndexMap<String, DependencySpec>>,
@@ -286,7 +286,7 @@ clients run the same flow.
  │     Already-in-CAS deps short-circuit (avoids the install_from_path  │
  │     remove-and-recopy that breaks on Windows when Houdini is open).  │
  │  4. Merge [python_dependencies] from root + every dep manifest       │
- │     Python ABI = root manifest's [houdini].min_version (NOT per-dep) │
+ │     Python ABI = root manifest's [compat].houdini lower bound        │
  │  5. Ensure managed CPython installed under ~/.hpm/uv-python/         │
  │     (uv python install <ver>) — auto-downloads on clean machines     │
  │  6. Resolve with bundled uv, hash the resolved set, pick or          │
@@ -519,12 +519,13 @@ pub fn content_hash(resolved: &ResolvedDependencies) -> String {
 | 21.x | 3.11 |
 | 22.x | 3.13 |
 
-The mapping is sourced from the **root** manifest's `[houdini].min_version`
-— the project's Houdini build is what determines the embedded CPython ABI
-that wheels in the venv must match. A dependency package's own
-`[houdini].min_version` is a compatibility floor (the oldest Houdini it
-runs on) and is **not** consulted for ABI selection: a `min_version =
-"21.0"` package consumed by a Houdini-22 project still gets a 3.13 venv.
+The mapping is sourced from the lower bound of the **root** manifest's
+`[compat].houdini` — the project's Houdini build is what determines the
+embedded CPython ABI that wheels in the venv must match. A dependency
+package's own `[compat].houdini` describes a compatibility floor (the
+oldest Houdini it runs on) and is **not** consulted for ABI selection: a
+`[compat].houdini = ">=21.0"` package consumed by a Houdini-22 project
+still gets a 3.13 venv.
 
 Unsupported versions return an error. No silent fallback — an ABI-mismatched
 venv would break C-extension imports at Houdini launch instead of surfacing

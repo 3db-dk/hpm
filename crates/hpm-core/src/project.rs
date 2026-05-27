@@ -4,7 +4,9 @@ use crate::package_source::{PackageSource, PackageSourceError};
 use crate::registry::RegistryError;
 use crate::storage::{InstalledPackage, PackageSpec, StorageError, StorageManager};
 use hpm_config::{Config, ProjectConfig};
-use hpm_package::{HoudiniPackage, ManifestEnvEntry, ManifestLoadError, PackageManifest};
+use hpm_package::{
+    HoudiniPackage, ManifestEnvEntry, ManifestLoadError, PackageManifest, compile_houdini_req,
+};
 use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
@@ -532,7 +534,7 @@ impl ProjectManager {
         // Collect python dependencies from all package manifests. The project
         // manifest's own Houdini version is the source of truth for which
         // CPython we target — Houdini ships a fixed embedded interpreter
-        // (20.5→3.10, 21→3.11, 22→3.13), and per-package `min_version`
+        // (20.5→3.10, 21→3.11, 22→3.13), and per-package `[compat].houdini`
         // declarations only describe compatibility floors, not the runtime
         // ABI. Without this override the venv could end up pinned to a
         // package's older Python and crash on import inside the launched
@@ -545,7 +547,7 @@ impl ProjectManager {
             .load_project_manifest()
             .ok()
             .flatten()
-            .and_then(|m| m.houdini.and_then(|h| h.min_version));
+            .and_then(|m| m.compat.and_then(|c| c.houdini_min()));
         let collected = collect_python_dependencies(project_houdini_version.as_deref(), &manifests)
             .await
             .map_err(|e| ProjectError::PythonResolution(e.into()))?;
@@ -721,26 +723,19 @@ impl ProjectManager {
             }
         }
 
-        // Generate enable condition from Houdini config
-        let enable = if let Some(houdini_config) = &installed_package.manifest.houdini {
-            let mut conditions = vec![];
-
-            if let Some(min_version) = &houdini_config.min_version {
-                conditions.push(format!("houdini_version >= '{}'", min_version));
-            }
-
-            if let Some(max_version) = &houdini_config.max_version {
-                conditions.push(format!("houdini_version <= '{}'", max_version));
-            }
-
-            if conditions.is_empty() {
-                None
-            } else {
-                Some(conditions.join(" && "))
-            }
-        } else {
-            None
-        };
+        // Generate enable condition from [compat].houdini.
+        let enable = installed_package
+            .manifest
+            .compat
+            .as_ref()
+            .and_then(|c| c.houdini.as_deref())
+            .map(|req| {
+                compile_houdini_req(req).map_err(|e| ProjectError::InvalidHoudiniCompat {
+                    package: installed_package.manifest.package.slug().to_string(),
+                    message: format!("'{}': {}", req, e),
+                })
+            })
+            .transpose()?;
 
         Ok(HoudiniPackage {
             hpath: if hpath.is_empty() { None } else { Some(hpath) },
@@ -1141,6 +1136,13 @@ pub enum ProjectError {
         package: String,
         message: String,
     },
+
+    /// `[compat].houdini` in a package manifest could not be parsed as a
+    /// Cargo-style range. `PackageManifest::validate` catches this at load
+    /// time, so reaching this variant means a manifest was constructed
+    /// programmatically and never validated.
+    #[error("Invalid [compat].houdini in package '{package}': {message}")]
+    InvalidHoudiniCompat { package: String, message: String },
 }
 
 // Hand-written so call sites can `?` from the unboxed source error types.

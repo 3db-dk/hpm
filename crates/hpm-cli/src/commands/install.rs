@@ -265,8 +265,8 @@ description = "Test package for install command"
 authors = ["Test Author <test@example.com>"]
 license = "MIT"
 
-[houdini]
-min_version = "20.5"
+[compat]
+houdini = ">=20.5"
 "#;
         std::fs::write(temp_dir.path().join("hpm.toml"), manifest_content).unwrap();
         let _cwd = CwdGuard::enter(temp_dir.path());

@@ -1,6 +1,6 @@
 //! Integration tests for Python dependency management system
 
-use hpm_package::{HoudiniConfig, PackageInfo, PackageManifest, PackagePath, PythonDependencySpec};
+use hpm_package::{CompatConfig, PackageInfo, PackageManifest, PackagePath, PythonDependencySpec};
 use hpm_python::{cleanup, dependency, types, venv};
 use indexmap::IndexMap;
 
@@ -43,9 +43,8 @@ async fn test_end_to_end_python_workflow() {
             keywords: None,
             categories: None,
         },
-        houdini: Some(HoudiniConfig {
-            min_version: Some("20.5".to_string()),
-            max_version: None,
+        compat: Some(CompatConfig {
+            houdini: Some(">=20.5".to_string()),
         }),
         native: None,
         registries: None,
@@ -85,9 +84,8 @@ async fn test_end_to_end_python_workflow() {
             keywords: None,
             categories: None,
         },
-        houdini: Some(HoudiniConfig {
-            min_version: Some("20.5".to_string()), // Same as package A
-            max_version: None,
+        compat: Some(CompatConfig {
+            houdini: Some(">=20.5".to_string()), // Same as package A
         }),
         native: None,
         registries: None,
@@ -265,7 +263,7 @@ async fn test_virtual_environment_sharing() {
 async fn test_houdini_python_version_mapping_edge_cases() {
     // Unparseable or unmapped Houdini versions must hard-fail rather than
     // silently install a wrong Python version into the venv.
-    use hpm_package::{HoudiniConfig, PackageInfo, PackagePath};
+    use hpm_package::{PackageInfo, PackagePath};
     use indexmap::IndexMap;
 
     let make_manifest = |version: &str| PackageManifest {
@@ -283,9 +281,8 @@ async fn test_houdini_python_version_mapping_edge_cases() {
             keywords: None,
             categories: None,
         },
-        houdini: Some(HoudiniConfig {
-            min_version: Some(version.to_string()),
-            max_version: None,
+        compat: Some(CompatConfig {
+            houdini: Some(format!(">={}", version)),
         }),
         native: None,
         registries: None,
@@ -296,14 +293,13 @@ async fn test_houdini_python_version_mapping_edge_cases() {
         dev: None,
     };
 
-    // Garbage input → error.
-    let err = dependency::collect_python_dependencies(None, &[make_manifest("invalid")])
-        .await
-        .expect_err("expected error for unparseable Houdini version");
-    assert!(
-        err.to_string().contains("Could not parse Houdini version"),
-        "unexpected error message: {err}"
-    );
+    // A syntactically invalid `[compat].houdini` is caught earlier by
+    // `PackageManifest::validate()` (slice 1 of the manifest refactor), so
+    // by the time `collect_python_dependencies` sees a manifest, the range
+    // either parses or `houdini_min()` returns `None`. We therefore exercise
+    // only the unmapped-but-parseable case at the per-package layer; the
+    // unparseable case is covered by the `[compat].houdini` validate tests
+    // in hpm-package::manifest.
 
     // Known-but-unmapped future major → error (so we don't silently pick an
     // outdated Python ABI when a new Houdini ships).

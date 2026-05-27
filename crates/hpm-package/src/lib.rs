@@ -114,11 +114,12 @@ mod proptest_helpers;
 // Re-exports for convenient access
 pub use dependency::DependencySpec;
 pub use env_value::{
-    EnvValueSpec, EnvValueVariant, ExpressionError, WhenSelector, compile_when, lower_conditional,
+    EnvValueSpec, EnvValueVariant, ExpressionError, WhenSelector, compile_houdini_req,
+    compile_when, houdini_req_lower_bound, lower_conditional,
 };
 pub use houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 pub use manifest::{
-    DevSection, EnvMethod, HoudiniConfig, ManifestEnvEntry, ManifestLoadError, NativeConfig,
+    CompatConfig, DevSection, EnvMethod, ManifestEnvEntry, ManifestLoadError, NativeConfig,
     NativePlatformFiles, PackageInfo, PackageManifest, PackageScripts, PlatformScripts,
     RegistryConfig, RegistryType, ScriptEntry, ScriptEnv,
 };

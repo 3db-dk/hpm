@@ -13,8 +13,9 @@ pub struct InitOptions {
     pub author: Option<String>,
     pub version: String,
     pub license: String,
-    pub houdini_min: Option<String>,
-    pub houdini_max: Option<String>,
+    /// `[compat].houdini` Cargo-style range (e.g. `">=20.5"`, `"^21"`,
+    /// `">=20.5, <22"`). When `None`, the template default (`">=20.5"`) is kept.
+    pub houdini: Option<String>,
     pub bare: bool,
     pub vcs: String,
     /// Base directory where the package should be created. If None, uses current working directory.
@@ -68,14 +69,11 @@ pub async fn init_package(options: InitOptions) -> Result<String> {
         Some(options.license),
     );
 
-    // Update Houdini configuration
-    if let Some(houdini_config) = &mut manifest.houdini {
-        if let Some(min_version) = options.houdini_min {
-            houdini_config.min_version = Some(min_version);
-        }
-        if let Some(max_version) = options.houdini_max {
-            houdini_config.max_version = Some(max_version);
-        }
+    // Override the template's default [compat].houdini range, if requested.
+    if let Some(houdini_req) = options.houdini
+        && let Some(compat) = &mut manifest.compat
+    {
+        compat.houdini = Some(houdini_req);
     }
 
     // Validate manifest
@@ -400,8 +398,7 @@ mod tests {
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
             license: "MIT".to_string(),
-            houdini_min: Some("20.5".to_string()),
-            houdini_max: None,
+            houdini: Some(">=20.5".to_string()),
             bare: true,
             vcs: "none".to_string(),
             base_dir: Some(temp_dir.path().to_path_buf()),
@@ -433,7 +430,7 @@ mod tests {
         assert!(hpm_toml_content.contains("description = \"Test bare package\""));
         assert!(hpm_toml_content.contains("Test Author <test@example.com>"));
         assert!(hpm_toml_content.contains("license = \"MIT\""));
-        assert!(hpm_toml_content.contains("min_version = \"20.5\""));
+        assert!(hpm_toml_content.contains("houdini = \">=20.5\""));
     }
 
     #[tokio::test]
@@ -446,8 +443,7 @@ mod tests {
             author: Some("Test Author <test@example.com>".to_string()),
             version: "2.1.0".to_string(),
             license: "Apache-2.0".to_string(),
-            houdini_min: Some("20.5".to_string()),
-            houdini_max: Some("21.0".to_string()),
+            houdini: Some(">=20.5, <=21.0".to_string()),
             bare: false,
             vcs: "none".to_string(),
             base_dir: Some(temp_dir.path().to_path_buf()),
@@ -487,8 +483,7 @@ mod tests {
         assert!(hpm_toml_content.contains("description = \"A comprehensive test package\""));
         assert!(hpm_toml_content.contains("Test Author <test@example.com>"));
         assert!(hpm_toml_content.contains("license = \"Apache-2.0\""));
-        assert!(hpm_toml_content.contains("min_version = \"20.5\""));
-        assert!(hpm_toml_content.contains("max_version = \"21.0\""));
+        assert!(hpm_toml_content.contains("houdini = \">=20.5, <=21.0\""));
 
         // Validate package.json content (Houdini package manifest)
         let package_json_content = fs::read_to_string(package_path.join("package.json")).unwrap();
@@ -497,6 +492,7 @@ mod tests {
         assert!(package_json_content.contains("PYTHONPATH"));
         assert!(package_json_content.contains("HOUDINI_SCRIPT_PATH"));
         assert!(package_json_content.contains("houdini_version >= '20.5'"));
+        assert!(package_json_content.contains("houdini_version <= '21.0'"));
         assert!(package_json["hpath"].as_array().is_some());
 
         // Validate README.md content
@@ -529,8 +525,7 @@ mod tests {
             author: None,      // No author
             version: "0.1.0".to_string(),
             license: "MIT".to_string(),
-            houdini_min: None,
-            houdini_max: None,
+            houdini: None,
             bare: false,
             vcs: "none".to_string(),
             base_dir: Some(temp_dir.path().to_path_buf()),
@@ -566,8 +561,7 @@ mod tests {
             author: Some("Author Name <email+test@example.com>".to_string()),
             version: "1.0.0".to_string(),
             license: "MIT".to_string(),
-            houdini_min: None,
-            houdini_max: None,
+            houdini: None,
             bare: false,
             vcs: "none".to_string(),
             base_dir: Some(temp_dir.path().to_path_buf()),
@@ -599,8 +593,7 @@ mod tests {
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
             license: "MIT".to_string(),
-            houdini_min: None,
-            houdini_max: None,
+            houdini: None,
             bare: false,
             vcs: "none".to_string(),
             base_dir: Some(temp_dir.path().to_path_buf()),
@@ -627,8 +620,7 @@ mod tests {
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
             license: "MIT".to_string(),
-            houdini_min: None,
-            houdini_max: None,
+            houdini: None,
             bare: false,
             vcs: "none".to_string(),
             base_dir: Some(test_dir),
@@ -652,8 +644,7 @@ mod tests {
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
             license: "MIT".to_string(),
-            houdini_min: None,
-            houdini_max: None,
+            houdini: None,
             bare: false,
             vcs: "none".to_string(),
             base_dir: Some(test_dir.clone()),
@@ -680,8 +671,7 @@ mod tests {
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
             license: "MIT".to_string(),
-            houdini_min: None,
-            houdini_max: None,
+            houdini: None,
             bare: false,
             vcs: "none".to_string(),
             base_dir: Some(temp_dir.path().to_path_buf()),
@@ -707,8 +697,7 @@ mod tests {
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
             license: "MIT".to_string(),
-            houdini_min: None,
-            houdini_max: None,
+            houdini: None,
             bare: false,
             vcs: "none".to_string(),
             base_dir: Some(temp_dir.path().to_path_buf()),
@@ -739,8 +728,7 @@ mod tests {
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
             license: "MIT".to_string(),
-            houdini_min: None,
-            houdini_max: None,
+            houdini: None,
             bare: false,
             vcs: "none".to_string(),
             base_dir: Some(temp_dir.path().to_path_buf()),
@@ -766,8 +754,7 @@ mod tests {
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
             license: "MIT".to_string(),
-            houdini_min: None,
-            houdini_max: None,
+            houdini: None,
             bare: false,
             vcs: "none".to_string(),
             base_dir: Some(temp_dir.path().to_path_buf()),
@@ -796,8 +783,7 @@ mod tests {
             author: Some("Test Author <test@example.com>".to_string()),
             version: "1.0.0".to_string(),
             license: "MIT".to_string(),
-            houdini_min: None,
-            houdini_max: None,
+            houdini: None,
             bare: false,
             vcs: "none".to_string(),
             base_dir: Some(test_dir.clone()),

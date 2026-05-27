@@ -30,7 +30,7 @@ HPM addresses this by:
 - Installing the resolved packages into a content-addressable virtual environment in `~/.hpm/venvs/<hash>/`.
 - Sharing that venv across every package whose resolved dependency set hashes to the same value.
 - Emitting a Houdini manifest per package that prepends the venv's `site-packages` onto `PYTHONPATH`.
-- Automatically mapping `[houdini].min_version` to a Python version compatible with Houdini's embedded interpreter.
+- Automatically mapping the lower bound of `[compat].houdini` to a Python version compatible with Houdini's embedded interpreter.
 
 The bundled `uv` and its caches (`~/.hpm/uv-cache/`, `~/.hpm/uv-config/`) are
 fully isolated from any system `uv` you might have, so HPM never interferes
@@ -80,9 +80,10 @@ have pinned, defeating the lock file's reproducibility guarantee.
 
 ## Houdini to Python version mapping
 
-HPM reads `[houdini].min_version` from the **project's** root manifest (the
-`hpm.toml` of the project being installed/launched) and maps it to the Python
-version Houdini ships that interpreter with:
+HPM reads `[compat].houdini` from the **project's** root manifest (the
+`hpm.toml` of the project being installed/launched), extracts its lower
+bound, and maps that to the Python version Houdini ships that interpreter
+with:
 
 | Houdini version    | Python version |
 |--------------------|----------------|
@@ -90,14 +91,15 @@ version Houdini ships that interpreter with:
 | 21.x               | 3.11           |
 | 22.x               | 3.13           |
 
-Both `"21"` and `"21.0"` are accepted — bare majors are treated as `major.0`.
+A range like `">=20.5, <22"` uses `20.5` for the mapping. Both `"21"` and
+`"21.0"` are accepted as lower bounds — bare majors are treated as `major.0`.
 
 The project's Houdini version is **authoritative** for venv ABI selection.
-A dependency package's own `[houdini].min_version` describes its
-compatibility floor (the oldest Houdini it supports) — it does not influence
-which CPython the venv targets. If it did, a project on Houdini 22 (Python
-3.13) consuming a `min_version = "21.0"` package would silently get a 3.11
-venv whose C-extension wheels would crash on import inside Houdini 22.
+A dependency package's own `[compat].houdini` describes its compatibility
+floor (the oldest Houdini it supports) — it does not influence which CPython
+the venv targets. If it did, a project on Houdini 22 (Python 3.13) consuming
+a `[compat].houdini = ">=21.0"` package would silently get a 3.11 venv whose
+C-extension wheels would crash on import inside Houdini 22.
 
 ### Unsupported: Houdini 19.x and 20.0 – 20.4
 
@@ -107,11 +109,11 @@ If you need to run one of those Houdini versions, stay on HPM 0.7.x.
 
 ### No silent fallback
 
-If `min_version` is unparseable (`"latest"`) or points at a Houdini major
-outside this table (`"23"`, `"18"`), `hpm install` **errors out** rather
-than silently picking a wrong Python — an ABI-mismatched venv would let
-the install succeed and then break C-extension imports (`pymongo`,
-`watchdog`, …) at Houdini launch instead.
+If `[compat].houdini`'s lower bound is unparseable (`"latest"`) or points at
+a Houdini major outside this table (`">=23"`, `">=18"`), `hpm install`
+**errors out** rather than silently picking a wrong Python — an
+ABI-mismatched venv would let the install succeed and then break
+C-extension imports (`pymongo`, `watchdog`, …) at Houdini launch instead.
 
 ```
 Error: No Python version mapping for Houdini 23; supported versions are 20.5+, 21, 22.
@@ -336,7 +338,7 @@ on the same 12-character prefix.
 ### Install flow
 
 1. Collect `[python_dependencies]` from the root manifest and every installed HPM dependency's manifest.
-2. Read `[houdini].min_version` from the **root** manifest, map it to a Python version. Per-package `min_version` is ignored for ABI selection.
+2. Read `[compat].houdini` from the **root** manifest, extract its lower bound, and map it to a Python version. Per-package `[compat].houdini` is ignored for ABI selection.
 3. Resolve the merged dependency set with `uv` (lockfile-aware).
 4. Hash the resolved set + Python version → venv directory name.
 5. If that directory exists and its `site-packages/` has a `dist-info/` for each resolved package, reuse it. Otherwise, delete and rebuild.

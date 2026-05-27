@@ -168,8 +168,7 @@ mod tests {
             version in package_version_strategy(),
             author in author_strategy(),
             license in license_strategy(),
-            houdini_min in prop::option::of(houdini_version_strategy()),
-            houdini_max in prop::option::of(houdini_version_strategy()),
+            houdini in prop::option::of(houdini_version_strategy()),
             bare in any::<bool>(),
             vcs in vcs_strategy(),
         ) {
@@ -179,8 +178,7 @@ mod tests {
                 author: Some(author),
                 version,
                 license,
-                houdini_min,
-                houdini_max,
+                houdini,
                 bare,
                 vcs,
             };
@@ -364,8 +362,7 @@ mod tests {
             author in prop::option::of(author_strategy()),
             version in package_version_strategy(),
             license in license_strategy(),
-            houdini_min in prop::option::of(houdini_version_strategy()),
-            houdini_max in prop::option::of(houdini_version_strategy()),
+            houdini in prop::option::of(houdini_version_strategy()),
             bare in any::<bool>(),
             vcs in vcs_strategy()
         ) {
@@ -375,8 +372,7 @@ mod tests {
                 author: author.clone(),
                 version: version.clone(),
                 license: license.clone(),
-                houdini_min: houdini_min.clone(),
-                houdini_max: houdini_max.clone(),
+                houdini: houdini.clone(),
                 bare,
                 vcs: vcs.clone(),
             };
@@ -389,8 +385,7 @@ mod tests {
                     author: a,
                     version: v,
                     license: l,
-                    houdini_min: hmin,
-                    houdini_max: hmax,
+                    houdini: h,
                     bare: b,
                     vcs: vc,
                 } => {
@@ -399,8 +394,7 @@ mod tests {
                     prop_assert_eq!(a, author);
                     prop_assert_eq!(v, version);
                     prop_assert_eq!(l, license);
-                    prop_assert_eq!(hmin, houdini_min);
-                    prop_assert_eq!(hmax, houdini_max);
+                    prop_assert_eq!(h, houdini);
                     prop_assert_eq!(b, bare);
                     prop_assert_eq!(vc, vcs);
                 }

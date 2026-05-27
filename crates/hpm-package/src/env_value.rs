@@ -123,13 +123,55 @@ fn compile_python(py: &str) -> Result<String, ExpressionError> {
     Ok(format!("houdini_python == 'python{}'", trimmed))
 }
 
+/// Extract the lower bound of a Cargo-style houdini version requirement, if
+/// any clause implies one.
+///
+/// Returns the version string from the first comparator with an implied lower
+/// bound (`>=`, `>`, `==`, `^`, `~`, or a bare version — bare aliases caret).
+/// Pure upper-bound comparators (`<`, `<=`) are skipped, so `"<22"` returns
+/// `None` and `"<22, >=20.5"` returns `Some("20.5")`.
+///
+/// Used by Python ABI selection: the lower bound of `[compat].houdini`
+/// determines which embedded CPython version a project's venv must match.
+pub fn houdini_req_lower_bound(req: &str) -> Option<String> {
+    let trimmed = req.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    for raw_part in trimmed.split(',') {
+        let part = raw_part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let version = if let Some(rest) = part.strip_prefix(">=") {
+            rest.trim()
+        } else if let Some(rest) = part.strip_prefix("==") {
+            rest.trim()
+        } else if let Some(rest) = part.strip_prefix(">") {
+            rest.trim()
+        } else if part.starts_with("<=") || part.starts_with("<") {
+            continue;
+        } else if let Some(rest) = part.strip_prefix('^') {
+            rest.trim()
+        } else if let Some(rest) = part.strip_prefix('~') {
+            rest.trim()
+        } else {
+            part
+        };
+        if is_simple_version(version) {
+            return Some(version.to_string());
+        }
+    }
+    None
+}
+
 /// Translate a Cargo-style version requirement into a Houdini expression.
 ///
 /// Each comma-separated comparator becomes one `houdini_version <op> '<v>'`
 /// clause; caret/tilde/bare-version forms expand to `>= X and < Y` ranges
 /// using semver upper bounds. All clauses combine with `and`, parenthesised
 /// so they compose cleanly when joined with other axes.
-fn compile_houdini_req(req: &str) -> Result<String, ExpressionError> {
+pub fn compile_houdini_req(req: &str) -> Result<String, ExpressionError> {
     let trimmed = req.trim();
     if trimmed.is_empty() {
         return Err(ExpressionError::InvalidHoudiniReq(req.to_string()));
@@ -330,6 +372,26 @@ mod tests {
     fn comma_separated_comparators_combine_with_and() {
         let s = compile_houdini_req(">=21, <22.5").unwrap();
         assert_eq!(s, "(houdini_version >= '21' and houdini_version < '22.5')");
+    }
+
+    #[test]
+    fn houdini_lower_bound_extraction() {
+        assert_eq!(houdini_req_lower_bound("20.5"), Some("20.5".to_string()));
+        assert_eq!(houdini_req_lower_bound("^21"), Some("21".to_string()));
+        assert_eq!(houdini_req_lower_bound("~21.5"), Some("21.5".to_string()));
+        assert_eq!(houdini_req_lower_bound(">=20.5"), Some("20.5".to_string()));
+        assert_eq!(
+            houdini_req_lower_bound(">=20.5, <22"),
+            Some("20.5".to_string())
+        );
+        assert_eq!(
+            houdini_req_lower_bound("<22, >=20.5"),
+            Some("20.5".to_string())
+        );
+        assert_eq!(houdini_req_lower_bound("<22"), None);
+        assert_eq!(houdini_req_lower_bound("<=21"), None);
+        assert_eq!(houdini_req_lower_bound(""), None);
+        assert_eq!(houdini_req_lower_bound("garbage"), None);
     }
 
     #[test]

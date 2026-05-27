@@ -394,13 +394,10 @@ enum Commands {
         #[arg(long, default_value = "MIT")]
         license: String,
 
-        /// Minimum Houdini version
-        #[arg(long = "houdini-min")]
-        houdini_min: Option<String>,
-
-        /// Maximum Houdini version
-        #[arg(long = "houdini-max")]
-        houdini_max: Option<String>,
+        /// `[compat].houdini` Cargo-style range, e.g. `">=20.5"`, `"^21"`,
+        /// or `">=20.5, <22"`. Defaults to the template's `>=20.5`.
+        #[arg(long = "houdini")]
+        houdini: Option<String>,
 
         /// Create minimal package structure (only hpm.toml)
         #[arg(long)]
@@ -634,8 +631,7 @@ async fn run_command(
             author,
             version,
             license,
-            houdini_min,
-            houdini_max,
+            houdini,
             bare,
             vcs,
         } => {
@@ -645,8 +641,7 @@ async fn run_command(
                 author: author.clone(),
                 version: version.clone(),
                 license: license.clone(),
-                houdini_min: houdini_min.clone(),
-                houdini_max: houdini_max.clone(),
+                houdini: houdini.clone(),
                 bare: *bare,
                 vcs: vcs.clone(),
                 base_dir: directory.clone(), // Use directory from CLI flag

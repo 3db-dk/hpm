@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::dependency::DependencySpec;
-use crate::env_value::{EnvValueSpec, ExpressionError, lower_conditional};
+use crate::env_value::{
+    EnvValueSpec, ExpressionError, compile_houdini_req, houdini_req_lower_bound, lower_conditional,
+};
 use crate::houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 use crate::package_path::PackagePath;
 use crate::platform::Platform;
@@ -308,7 +310,8 @@ fn dev_section_is_none_or_empty(d: &Option<DevSection>) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageManifest {
     pub package: PackageInfo,
-    pub houdini: Option<HoudiniConfig>,
+    #[serde(default, skip_serializing_if = "compat_is_none_or_empty")]
+    pub compat: Option<CompatConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native: Option<NativeConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -321,6 +324,10 @@ pub struct PackageManifest {
     pub scripts: Option<PackageScripts>,
     #[serde(default, skip_serializing_if = "dev_section_is_none_or_empty")]
     pub dev: Option<DevSection>,
+}
+
+fn compat_is_none_or_empty(c: &Option<CompatConfig>) -> bool {
+    c.as_ref().is_none_or(CompatConfig::is_empty)
 }
 
 /// Package metadata information
@@ -360,11 +367,30 @@ impl PackageInfo {
     }
 }
 
-/// Houdini version compatibility configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HoudiniConfig {
-    pub min_version: Option<String>,
-    pub max_version: Option<String>,
+/// Target-environment compatibility for the package.
+///
+/// `houdini` is a Cargo-style version requirement (`"20.5"`, `"^21"`,
+/// `">=20.5, <22"`). Bare versions alias caret semantics: `"20.5"` means
+/// `>=20.5, <21`. See [`compile_houdini_req`] for the supported grammar.
+///
+/// An absent `[compat]` section, or an absent `houdini` field, leaves the
+/// package's Houdini compatibility unconstrained — the generated package
+/// manifest emits no `enable` clause.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompatConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub houdini: Option<String>,
+}
+
+impl CompatConfig {
+    pub fn is_empty(&self) -> bool {
+        self.houdini.is_none()
+    }
+
+    /// Lower bound of the Houdini range, used for Python ABI selection.
+    pub fn houdini_min(&self) -> Option<String> {
+        self.houdini.as_deref().and_then(houdini_req_lower_bound)
+    }
 }
 
 impl ManifestEnvEntry {
@@ -484,9 +510,8 @@ impl PackageManifest {
                 keywords: Some(vec!["houdini".to_string()]),
                 categories: None,
             },
-            houdini: Some(HoudiniConfig {
-                min_version: Some("20.5".to_string()),
-                max_version: None,
+            compat: Some(CompatConfig {
+                houdini: Some(">=20.5".to_string()),
             }),
             native: None,
             registries: None,
@@ -561,6 +586,15 @@ impl PackageManifest {
         // Basic semver validation
         if !self.is_valid_semver(&self.package.version) {
             return Err("Package version must be valid semantic version".to_string());
+        }
+
+        // Validate [compat].houdini is a parseable Cargo-style range. Empty
+        // string is treated as a malformed constraint rather than "no
+        // constraint" — authors who don't want a constraint omit the field.
+        if let Some(compat) = &self.compat
+            && let Some(req) = &compat.houdini
+        {
+            compile_houdini_req(req).map_err(|e| format!("[compat].houdini: {}", e))?;
         }
 
         // Validate [native] section
@@ -665,26 +699,14 @@ impl PackageManifest {
             }
         }
 
-        // Generate version constraint
-        let enable = if let Some(houdini_config) = &self.houdini {
-            let mut conditions = vec![];
-
-            if let Some(min_version) = &houdini_config.min_version {
-                conditions.push(format!("houdini_version >= '{}'", min_version));
-            }
-
-            if let Some(max_version) = &houdini_config.max_version {
-                conditions.push(format!("houdini_version <= '{}'", max_version));
-            }
-
-            if conditions.is_empty() {
-                None
-            } else {
-                Some(conditions.join(" and "))
-            }
-        } else {
-            None
-        };
+        let enable = self
+            .compat
+            .as_ref()
+            .and_then(|c| c.houdini.as_deref())
+            .map(compile_houdini_req)
+            .transpose()
+            .ok()
+            .flatten();
 
         HoudiniPackage {
             hpath: Some(hpath),
@@ -734,23 +756,12 @@ impl PackageManifest {
             }
         }
 
-        // Build enable from houdini version constraints
-        let enable = if let Some(houdini_config) = &self.houdini {
-            let mut conditions = vec![];
-            if let Some(min_version) = &houdini_config.min_version {
-                conditions.push(format!("houdini_version >= '{}'", min_version));
-            }
-            if let Some(max_version) = &houdini_config.max_version {
-                conditions.push(format!("houdini_version <= '{}'", max_version));
-            }
-            if conditions.is_empty() {
-                None
-            } else {
-                Some(conditions.join(" and "))
-            }
-        } else {
-            None
-        };
+        let enable = self
+            .compat
+            .as_ref()
+            .and_then(|c| c.houdini.as_deref())
+            .map(|req| compile_houdini_req(req).map_err(|e| e.to_string()))
+            .transpose()?;
 
         // Build requires from dependency keys (slug portion only)
         let requires = self.dependencies.as_ref().and_then(|deps| {
@@ -811,13 +822,59 @@ mod tests {
             None,
         );
 
-        manifest.houdini = Some(HoudiniConfig {
-            min_version: None,
-            max_version: None,
-        });
+        manifest.compat = Some(CompatConfig { houdini: None });
 
         let houdini_pkg = manifest.generate_houdini_package();
         assert!(houdini_pkg.enable.is_none());
+    }
+
+    #[test]
+    fn compat_houdini_compiles_to_enable_expression() {
+        let toml_str = r#"
+[package]
+path = "studio/test"
+name = "Test"
+version = "1.0.0"
+
+[compat]
+houdini = ">=20.5, <22"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let pkg = manifest.generate_houdini_package();
+        assert_eq!(
+            pkg.enable.as_deref(),
+            Some("(houdini_version >= '20.5' and houdini_version < '22')")
+        );
+    }
+
+    #[test]
+    fn compat_houdini_invalid_range_rejected_by_validate() {
+        let toml_str = r#"
+[package]
+path = "studio/test"
+name = "Test"
+version = "1.0.0"
+
+[compat]
+houdini = "not-a-version"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let err = manifest.validate().unwrap_err();
+        assert!(err.contains("[compat].houdini"), "error: {err}");
+    }
+
+    #[test]
+    fn compat_houdini_min_extracts_lower_bound() {
+        let compat = CompatConfig {
+            houdini: Some(">=20.5, <22".to_string()),
+        };
+        assert_eq!(compat.houdini_min(), Some("20.5".to_string()));
+        let compat = CompatConfig {
+            houdini: Some("^21".to_string()),
+        };
+        assert_eq!(compat.houdini_min(), Some("21".to_string()));
+        let compat = CompatConfig { houdini: None };
+        assert_eq!(compat.houdini_min(), None);
     }
 
     #[test]
@@ -1303,8 +1360,8 @@ path = "creator/my-tool"
 name = "My Cool Tool"
 version = "1.2.3"
 
-[houdini]
-min_version = "21.0"
+[compat]
+houdini = ">=21.0"
 
 [dependencies]
 "studio/some-dep" = "1.0.0"

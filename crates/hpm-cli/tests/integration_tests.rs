@@ -67,8 +67,8 @@ fn test_init_workflow() {
             "1.2.3",
             "--license",
             "Apache-2.0",
-            "--houdini-min",
-            "20.5",
+            "--houdini",
+            ">=20.5",
             "--vcs",
             "none",
         ])
@@ -256,8 +256,8 @@ name = "test-check-package"
 version = "1.0.0"
 description = "Test package for check command"
 
-[houdini]
-min_version = "20.5"
+[compat]
+houdini = ">=20.5"
 "#;
     fs::write(temp_dir.path().join("hpm.toml"), manifest_content).unwrap();
 
