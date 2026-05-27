@@ -81,6 +81,39 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// Shared validation for `[env]`-shaped tables (currently `[env]` and
+/// `[dev.env]`). The `section` label is used verbatim in error messages so
+/// authors can tell which table the offending key lives in.
+fn validate_env_table(
+    section: &str,
+    env: &IndexMap<String, ManifestEnvEntry>,
+) -> Result<(), String> {
+    for (key, entry) in env {
+        match &entry.value {
+            None => {
+                if !entry.required {
+                    return Err(format!(
+                        "{section} var '{key}' has no value and is not marked required = true"
+                    ));
+                }
+            }
+            Some(EnvValueSpec::Flat(_)) => {}
+            Some(EnvValueSpec::Conditional(variants)) => {
+                if variants.is_empty() {
+                    return Err(format!(
+                        "{section} var '{key}' has an empty conditional value list"
+                    ));
+                }
+                for variant in variants {
+                    crate::env_value::compile_when(&variant.when)
+                        .map_err(|e| format!("{section} var '{key}': {e}"))?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A single `[scripts]` entry.
 ///
 /// The shorthand form is a bare command string. The table form opts the
@@ -242,6 +275,32 @@ pub struct RegistryConfig {
     pub registry_type: RegistryType,
 }
 
+/// Dev-only manifest overrides.
+///
+/// Entries here apply only when the package is loaded via a path dependency
+/// (`install_from_path_dev` / `install_from_path_dev_link`). They never ship
+/// to consumers of a registry-published archive — even though the TOML stays
+/// in `hpm.toml`, the dev-only merge step only runs against installs that
+/// originated from a local workspace. The motivating case is HDK plugin
+/// development: `[dev.env]` lets a package contribute build-tree paths like
+/// `HOUDINI_DSO_PATH = "$HPM_PACKAGE_ROOT/build/Release"` without leaking
+/// personal-machine paths into the published manifest.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DevSection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, ManifestEnvEntry>>,
+}
+
+impl DevSection {
+    fn is_empty(&self) -> bool {
+        self.env.as_ref().is_none_or(IndexMap::is_empty)
+    }
+}
+
+fn dev_section_is_none_or_empty(d: &Option<DevSection>) -> bool {
+    d.as_ref().is_none_or(DevSection::is_empty)
+}
+
 /// HPM package manifest (hpm.toml)
 ///
 /// Uses `IndexMap` for dependencies and python_dependencies to preserve
@@ -260,6 +319,8 @@ pub struct PackageManifest {
     pub env: Option<IndexMap<String, ManifestEnvEntry>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scripts: Option<PackageScripts>,
+    #[serde(default, skip_serializing_if = "dev_section_is_none_or_empty")]
+    pub dev: Option<DevSection>,
 }
 
 /// Package metadata information
@@ -433,6 +494,7 @@ impl PackageManifest {
             python_dependencies: None,
             env: None,
             scripts: None,
+            dev: None,
         }
     }
 
@@ -540,31 +602,17 @@ impl PackageManifest {
         // compiled here so malformed expressions surface at manifest load
         // time, not at install/emit time.
         if let Some(env) = &self.env {
-            for (key, entry) in env {
-                match &entry.value {
-                    None => {
-                        if !entry.required {
-                            return Err(format!(
-                                "env var '{}' has no value and is not marked required = true",
-                                key
-                            ));
-                        }
-                    }
-                    Some(EnvValueSpec::Flat(_)) => {}
-                    Some(EnvValueSpec::Conditional(variants)) => {
-                        if variants.is_empty() {
-                            return Err(format!(
-                                "env var '{}' has an empty conditional value list",
-                                key
-                            ));
-                        }
-                        for variant in variants {
-                            crate::env_value::compile_when(&variant.when)
-                                .map_err(|e| format!("env var '{}': {}", key, e))?;
-                        }
-                    }
-                }
-            }
+            validate_env_table("env", env)?;
+        }
+
+        // Same shape rules apply to [dev.env]. Required-placeholders are
+        // permitted but practically useless here since project-level [env]
+        // overrides target [env] keys, not [dev.env] keys — validation just
+        // matches the [env] shape so authors aren't surprised by the parser.
+        if let Some(dev) = &self.dev
+            && let Some(env) = &dev.env
+        {
+            validate_env_table("dev.env", env)?;
         }
 
         Ok(())
@@ -921,6 +969,100 @@ MY_VAR = { method = "invalid", value = "foo" }
 "#;
         let result: Result<PackageManifest, _> = toml::from_str(toml_str);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn dev_env_deserialize_from_toml() {
+        let toml_str = r#"
+[package]
+path = "studio/my-package"
+name = "My Package"
+version = "0.1.0"
+
+[env]
+PYTHONPATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/python" }
+
+[dev.env]
+HOUDINI_DSO_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/build/Release" }
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let dev_env = manifest.dev.as_ref().unwrap().env.as_ref().unwrap();
+        assert_eq!(dev_env.len(), 1);
+        assert_eq!(dev_env["HOUDINI_DSO_PATH"].method, EnvMethod::Prepend);
+        assert_eq!(
+            dev_env["HOUDINI_DSO_PATH"]
+                .value
+                .as_ref()
+                .and_then(EnvValueSpec::as_flat),
+            Some("$HPM_PACKAGE_ROOT/build/Release")
+        );
+        // [env] remains independently parseable
+        assert!(manifest.env.as_ref().unwrap().contains_key("PYTHONPATH"));
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn dev_env_missing_value_without_required_is_invalid() {
+        let toml_str = r#"
+[package]
+path = "studio/my-package"
+name = "My Package"
+version = "0.1.0"
+
+[dev.env]
+LEAKED = { method = "set" }
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let err = manifest.validate().unwrap_err();
+        assert!(
+            err.contains("dev.env"),
+            "error must name the section: {err}"
+        );
+        assert!(err.contains("LEAKED"));
+    }
+
+    #[test]
+    fn dev_env_none_when_absent() {
+        let toml_str = r#"
+[package]
+path = "studio/my-package"
+name = "My Package"
+version = "0.1.0"
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        assert!(manifest.dev.is_none());
+    }
+
+    #[test]
+    fn generate_houdini_package_excludes_dev_env() {
+        // The standalone manifest-level generator (used during pack/publish)
+        // never sees dev-only env. [dev.env] only applies via the install-time
+        // path in hpm-core::project, gated on InstalledPackage::is_dev.
+        let mut manifest = PackageManifest::new(
+            PackagePath::new("studio/test").unwrap(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
+        let mut dev_env = IndexMap::new();
+        dev_env.insert(
+            "HOUDINI_DSO_PATH".to_string(),
+            ManifestEnvEntry {
+                method: EnvMethod::Prepend,
+                value: Some("$HPM_PACKAGE_ROOT/build/Release".into()),
+                required: false,
+            },
+        );
+        manifest.dev = Some(DevSection { env: Some(dev_env) });
+
+        let pkg = manifest.generate_houdini_package();
+        let env_list = pkg.env.unwrap();
+        assert!(
+            env_list.iter().all(|m| !m.contains_key("HOUDINI_DSO_PATH")),
+            "[dev.env] must not leak into the published Houdini manifest"
+        );
     }
 
     #[test]

@@ -185,6 +185,7 @@ pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
                     python_dependencies: None,
                     env: None,
                     scripts: None,
+                    dev: None,
                 }
             },
         )
@@ -523,6 +524,7 @@ proptest! {
             python_dependencies: None,
             env: None,
             scripts: None,
+            dev: None,
         };
 
         // Houdini package generation should never panic, even with bad input

@@ -230,6 +230,7 @@ mod tests {
             python_dependencies: Some(python_deps),
             env: None,
             scripts: None,
+            dev: None,
         };
 
         let packages = vec![manifest];
@@ -282,6 +283,7 @@ mod tests {
             python_dependencies: Some(python_deps),
             env: None,
             scripts: None,
+            dev: None,
         };
 
         let result = collect_python_dependencies(Some("22.0.307"), &[manifest])
@@ -329,6 +331,7 @@ mod tests {
                 python_dependencies: Some(python_deps),
                 env: None,
                 scripts: None,
+                dev: None,
             }
         };
 

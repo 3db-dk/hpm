@@ -118,7 +118,7 @@ pub use env_value::{
 };
 pub use houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 pub use manifest::{
-    EnvMethod, HoudiniConfig, ManifestEnvEntry, ManifestLoadError, NativeConfig,
+    DevSection, EnvMethod, HoudiniConfig, ManifestEnvEntry, ManifestLoadError, NativeConfig,
     NativePlatformFiles, PackageInfo, PackageManifest, PackageScripts, PlatformScripts,
     RegistryConfig, RegistryType, ScriptEntry, ScriptEnv,
 };
