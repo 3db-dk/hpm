@@ -65,6 +65,7 @@ codes and help hints.
 | `PythonDependencySpec` | Untagged enum: `Simple(String) \| Detailed {..}`. |
 | `ManifestEnvEntry`, `EnvMethod` | `[env]` entries (method, optional value, `required` flag) and methods (`set`/`prepend`/`append`). `value` is `Option<EnvValueSpec>` — flat string or ordered variant list. `lower(substitutions)` is the single emit path. |
 | `EnvValueSpec`, `EnvValueVariant`, `WhenSelector` | Conditional `[env]` value support. Variants compile to Houdini's expression-object array via `compile_when` / `lower_conditional`. Axes: `houdini` (Cargo-style req), `os`, `python`. |
+| `DevSection` | Contents of `[dev]`. Carries `env: Option<IndexMap<String, ManifestEnvEntry>>` for `[dev.env]`. Same shape and validation as `[env]`; gating on `InstalledPackage::is_dev` happens in `hpm-core`, not in this crate. |
 | `PackageScripts`, `PlatformScripts` | `[scripts]` table and per-OS overrides. Both store `IndexMap<String, ScriptEntry>`. |
 | `ScriptEntry`, `ScriptEnv` | Untagged enum: `Plain(String)` for the shorthand form, `WithEnv { cmd, python?, requirements? }` for the table form. Accessors `cmd()`, `python()`, `requirements()`, `needs_venv()` work on both arms. |
 | `NativeConfig`, `NativePlatformFiles` | `[native]` and per-platform file globs. |

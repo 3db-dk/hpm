@@ -95,6 +95,11 @@ pub struct PackageManifest {
     pub python_dependencies: Option<IndexMap<String, PythonDependencySpec>>,
     pub env: Option<IndexMap<String, ManifestEnvEntry>>,
     pub scripts: Option<PackageScripts>,
+    pub dev: Option<DevSection>,        // [dev.env] — fires only for path-dep installs
+}
+
+pub struct DevSection {
+    pub env: Option<IndexMap<String, ManifestEnvEntry>>,
 }
 
 pub struct PackageScripts {
@@ -465,6 +470,17 @@ Both install replacement (`clear_existing_install`) and orphan cleanup
 shared `remove_install_entry` primitive. Without this, a `remove_dir_all`
 on a Windows junction would recurse into and delete the user's workspace
 on the next sync or orphan sweep.
+
+Both styles set `InstalledPackage::is_dev = true`. That flag flows
+through to `create_houdini_package_with_python`, which uses it to gate
+the `[dev.env]` merge — a manifest's dev-only env contributions only
+land in the generated Houdini `package.json` when the install
+originated from a path dep. Registry-fetched installs ignore
+`[dev.env]` even when it is present in the bundled `hpm.toml`, so the
+published archive stays inert for downstream consumers. Precedence at
+emission time: project-level `[env]` override > package `[dev.env]` >
+package `[env]`, with `[dev.env]` keys *replacing* the same `[env]`
+key rather than layering.
 
 ## Python integration
 
