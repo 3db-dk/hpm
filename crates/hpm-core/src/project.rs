@@ -7,7 +7,7 @@ use hpm_config::{Config, ProjectConfig};
 use hpm_package::{HoudiniPackage, ManifestEnvEntry, ManifestLoadError, PackageManifest};
 use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use indexmap::IndexMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -648,18 +648,57 @@ impl ProjectManager {
             env.push(scripts_env);
         }
 
-        // Append user-defined env vars from [env] section, applying project-level overrides.
-        // A package entry with `required = true` and no value is a placeholder
-        // that the project's [env] must override; otherwise we hard-error so
-        // the package is not silently launched without a value it depends on.
-        // Conditional value branches lower to Houdini's expression-object form.
-        if let Some(user_env) = &installed_package.manifest.env {
+        // Append user-defined env vars from [env], with [dev.env] layered on
+        // top for dev-installed packages and project [env] overrides on top
+        // of both. Precedence (highest first): project [env] override,
+        // package [dev.env] (only when is_dev), package [env]. A required-
+        // but-unsupplied placeholder that none of the higher-precedence
+        // sources fills surfaces as MissingRequiredEnv so a package is not
+        // silently launched without a value it depends on.
+        let user_env_opt = installed_package.manifest.env.as_ref();
+        let dev_env_opt = if installed_package.is_dev {
+            installed_package
+                .manifest
+                .dev
+                .as_ref()
+                .and_then(|d| d.env.as_ref())
+        } else {
+            None
+        };
+
+        if user_env_opt.is_some() || dev_env_opt.is_some() {
             let pkg_root = package_path.to_string_lossy().into_owned();
-            for (key, entry) in user_env {
-                let override_entry = project_env_overrides
+
+            // Emission order: [env] keys in declared order, then any
+            // [dev.env]-only keys in their declared order. Stable order
+            // keeps the generated Houdini manifest diff-friendly.
+            let mut keys: Vec<&String> = Vec::new();
+            let mut seen: HashSet<&String> = HashSet::new();
+            if let Some(user_env) = user_env_opt {
+                for key in user_env.keys() {
+                    if seen.insert(key) {
+                        keys.push(key);
+                    }
+                }
+            }
+            if let Some(dev_env) = dev_env_opt {
+                for key in dev_env.keys() {
+                    if seen.insert(key) {
+                        keys.push(key);
+                    }
+                }
+            }
+
+            for key in keys {
+                let project_override = project_env_overrides
                     .as_ref()
                     .and_then(|overrides| overrides.get(key));
-                let effective_entry = override_entry.unwrap_or(entry);
+                let dev_entry = dev_env_opt.and_then(|m| m.get(key));
+                let env_entry = user_env_opt.and_then(|m| m.get(key));
+                let effective_entry = project_override
+                    .or(dev_entry)
+                    .or(env_entry)
+                    .expect("key originates from one of the env sources");
 
                 if effective_entry.value.is_none() {
                     return Err(ProjectError::MissingRequiredEnv {
@@ -1401,6 +1440,216 @@ mod tests {
                 assert_eq!(method, "set");
             }
             _ => panic!("Expected Detailed env value"),
+        }
+    }
+
+    /// Helper: locate a single [env]-emitted entry by key.
+    fn find_env_entry<'a>(
+        pkg: &'a hpm_package::HoudiniPackage,
+        key: &str,
+    ) -> Option<&'a hpm_package::HoudiniEnvValue> {
+        pkg.env.as_ref()?.iter().find_map(|m| m.get(key))
+    }
+
+    #[test]
+    fn dev_env_applied_only_when_is_dev() {
+        let temp_dir = TempDir::new().unwrap();
+        let (config, storage_manager) = test_setup(temp_dir.path());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+
+        let mut manifest = hpm_package::PackageManifest::new(
+            PackagePath::new("studio/hdk-plugin").unwrap(),
+            "HDK Plugin".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
+        let mut dev_env = IndexMap::new();
+        dev_env.insert(
+            "HOUDINI_DSO_PATH".to_string(),
+            ManifestEnvEntry {
+                method: hpm_package::EnvMethod::Prepend,
+                value: Some("$HPM_PACKAGE_ROOT/build/Release".into()),
+                required: false,
+            },
+        );
+        manifest.dev = Some(hpm_package::DevSection { env: Some(dev_env) });
+
+        let package_path = temp_dir.path().join("hdk-plugin@1.0.0");
+        std::fs::create_dir_all(&package_path).unwrap();
+
+        // is_dev = false: [dev.env] must be skipped entirely.
+        let non_dev = InstalledPackage {
+            version: "1.0.0".to_string(),
+            manifest: manifest.clone(),
+            install_path: package_path.clone(),
+            is_dev: false,
+        };
+        let pkg = project_manager.create_houdini_package(&non_dev).unwrap();
+        assert!(
+            find_env_entry(&pkg, "HOUDINI_DSO_PATH").is_none(),
+            "[dev.env] must not be emitted for non-dev installs"
+        );
+
+        // is_dev = true: [dev.env] entry is emitted with $HPM_PACKAGE_ROOT
+        // expanded to the install path.
+        let dev = InstalledPackage {
+            version: "1.0.0".to_string(),
+            manifest,
+            install_path: package_path.clone(),
+            is_dev: true,
+        };
+        let pkg = project_manager.create_houdini_package(&dev).unwrap();
+        let entry = find_env_entry(&pkg, "HOUDINI_DSO_PATH")
+            .expect("[dev.env] must be emitted for dev installs");
+        match entry {
+            hpm_package::HoudiniEnvValue::Detailed { method, value } => {
+                assert_eq!(method, "prepend");
+                let expected = package_path.join("build/Release");
+                assert_eq!(value, &expected.to_string_lossy().to_string());
+            }
+            other => panic!("expected Detailed env value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dev_env_overrides_env_for_shared_key() {
+        let temp_dir = TempDir::new().unwrap();
+        let (config, storage_manager) = test_setup(temp_dir.path());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+
+        let mut manifest = hpm_package::PackageManifest::new(
+            PackagePath::new("studio/with-shared-key").unwrap(),
+            "Shared Key".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
+        let mut env = IndexMap::new();
+        env.insert(
+            "PYTHONPATH".to_string(),
+            ManifestEnvEntry {
+                method: hpm_package::EnvMethod::Prepend,
+                value: Some("$HPM_PACKAGE_ROOT/published-python".into()),
+                required: false,
+            },
+        );
+        manifest.env = Some(env);
+        let mut dev_env = IndexMap::new();
+        dev_env.insert(
+            "PYTHONPATH".to_string(),
+            ManifestEnvEntry {
+                method: hpm_package::EnvMethod::Prepend,
+                value: Some("$HPM_PACKAGE_ROOT/dev-python".into()),
+                required: false,
+            },
+        );
+        manifest.dev = Some(hpm_package::DevSection { env: Some(dev_env) });
+
+        let package_path = temp_dir.path().join("with-shared-key@1.0.0");
+        std::fs::create_dir_all(&package_path).unwrap();
+
+        let installed = InstalledPackage {
+            version: "1.0.0".to_string(),
+            manifest,
+            install_path: package_path.clone(),
+            is_dev: true,
+        };
+        let pkg = project_manager.create_houdini_package(&installed).unwrap();
+
+        // Exactly one PYTHONPATH user entry — the [dev.env] value replaces
+        // the [env] value rather than layering both.
+        let user_pythonpath: Vec<_> = pkg
+            .env
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m.get("PYTHONPATH"))
+            .filter(|v| match v {
+                hpm_package::HoudiniEnvValue::Detailed { value, .. } => {
+                    value.contains("python") && !value.ends_with("/python")
+                }
+                _ => false,
+            })
+            .collect();
+        assert_eq!(
+            user_pythonpath.len(),
+            1,
+            "[dev.env] must replace [env] for shared key, not layer"
+        );
+        match user_pythonpath[0] {
+            hpm_package::HoudiniEnvValue::Detailed { value, .. } => {
+                assert!(
+                    value.ends_with("dev-python"),
+                    "[dev.env] value must win: got {value}"
+                );
+            }
+            other => panic!("expected Detailed env value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn project_override_wins_over_dev_env() {
+        let temp_dir = TempDir::new().unwrap();
+        let (config, storage_manager) = test_setup(temp_dir.path());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+
+        let mut manifest = hpm_package::PackageManifest::new(
+            PackagePath::new("studio/overridable").unwrap(),
+            "Overridable".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
+        let mut dev_env = IndexMap::new();
+        dev_env.insert(
+            "HOUDINI_DSO_PATH".to_string(),
+            ManifestEnvEntry {
+                method: hpm_package::EnvMethod::Prepend,
+                value: Some("$HPM_PACKAGE_ROOT/build/Release".into()),
+                required: false,
+            },
+        );
+        manifest.dev = Some(hpm_package::DevSection { env: Some(dev_env) });
+
+        let package_path = temp_dir.path().join("overridable@1.0.0");
+        std::fs::create_dir_all(&package_path).unwrap();
+
+        let installed = InstalledPackage {
+            version: "1.0.0".to_string(),
+            manifest,
+            install_path: package_path,
+            is_dev: true,
+        };
+
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            "HOUDINI_DSO_PATH".to_string(),
+            ManifestEnvEntry {
+                method: hpm_package::EnvMethod::Prepend,
+                value: Some("/opt/forced/dso".into()),
+                required: false,
+            },
+        );
+        let pkg = project_manager
+            .create_houdini_package_with_python(&installed, None, &Some(overrides))
+            .unwrap();
+        let entry = find_env_entry(&pkg, "HOUDINI_DSO_PATH")
+            .expect("dev-env key must still emit when overridden");
+        match entry {
+            hpm_package::HoudiniEnvValue::Detailed { value, .. } => {
+                assert_eq!(value, "/opt/forced/dso");
+            }
+            other => panic!("expected Detailed env value, got {other:?}"),
         }
     }
 
