@@ -651,6 +651,59 @@ through verbatim so Houdini's own variable expansion handles it.
 Malformed selectors fail at manifest validation time, so authors find them
 before publish, not at install.
 
+### `[dev.env]`
+
+Environment contributions that only fire when the package is loaded via a
+path dependency (`{ path = "...", link = true }` or `{ path = "..." }`).
+Same value shape as `[env]` — flat string, conditional `{ when, set }`
+variants, `$HPM_PACKAGE_ROOT` substitution all behave identically. The
+distinction is gating: a package's `[env]` ships to consumers of the
+published archive, while `[dev.env]` is for personal-machine paths that
+must not leak out of the developer's workstation.
+
+The motivating case is HDK plugin development. Your build artifact lives
+inside the package source tree, and the resulting `HOUDINI_DSO_PATH`
+contribution is package-relative, so it belongs on the package — but the
+build directory itself is a personal-machine concept that no downstream
+consumer would ever want.
+
+```toml
+[env]
+PYTHONPATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/python" }
+
+[dev.env]
+HOUDINI_DSO_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/build/Release" }
+```
+
+Per-OS overrides slot in via the same conditional shape `[env]` uses:
+
+```toml
+[dev.env]
+HOUDINI_DSO_PATH = { method = "prepend", value = [
+  { when = { os = "windows" }, set = "$HPM_PACKAGE_ROOT/build/Release" },
+  { when = { os = "linux" },   set = "$HPM_PACKAGE_ROOT/build/lib" },
+  { when = { os = "macos" },   set = "$HPM_PACKAGE_ROOT/build/lib" },
+]}
+```
+
+Precedence when a key appears in more than one place (highest first):
+
+1. The consuming project's `[env]` override.
+2. The package's `[dev.env]` (when dev-installed).
+3. The package's `[env]`.
+
+`[dev.env]` *replaces* — it doesn't layer — for shared keys. Re-declaring
+`PYTHONPATH` in `[dev.env]` substitutes the dev path for the published
+one, rather than emitting both as `prepend` entries. Use distinct keys
+when you want layering.
+
+`[dev.env]` is gated on the install source, not on a global flag. Once a
+project switches a dependency from a path dep back to a registry version,
+`[dev.env]` stops firing for it without any further configuration. The
+table stays in `hpm.toml` and ships with the published archive, but it is
+inert for any install resolved from the registry CAS, so it never appears
+in the generated Houdini `package.json` for a published consumer.
+
 ### `[native]`
 
 Declare that this package ships per-platform binaries (HDK plugins, shared

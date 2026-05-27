@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`[dev.env]` table in `hpm.toml` for dev-only environment contributions.**
+  Mirrors the `[env]` value shape (flat string, conditional `{ when, set }`
+  variants, `$HPM_PACKAGE_ROOT` substitution, per-OS / per-Houdini-version
+  gating) but only fires when the package is loaded via a path dependency
+  (`{ path = "..." }` or `{ path = "...", link = true }`). Motivating case:
+  HDK plugin development, where a package's build output lives in its own
+  source tree but `HOUDINI_DSO_PATH = "$HPM_PACKAGE_ROOT/build/Release"` is
+  a personal-machine path that must not ship in the published archive's
+  Houdini manifest. Precedence (highest first): project-level `[env]`
+  override, package `[dev.env]` (only when dev-installed), package `[env]`.
+  Replacement semantics for shared keys — `[dev.env]` substitutes for the
+  matching `[env]` entry rather than emitting both. Inert for any install
+  resolved from the registry CAS, so the table stays in the published
+  `hpm.toml` without leaking into downstream Houdini manifests.
+
 ## [0.14.1] - 2026-05-22
 
 ### Changed
