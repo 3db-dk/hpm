@@ -30,30 +30,39 @@ pub async fn execute(
     let name = &manifest.package.name;
     let version = &manifest.package.version;
 
-    // Resolve platform
-    let platform = match (&platform_arg, &manifest.native) {
-        (Some(_), None) => {
-            bail!("--platform was specified but package has no [native] section");
+    // Resolve target platform. A package targets per-platform builds when
+    // it declares `[compat].platforms`; pure-data / pure-Python packages
+    // omit that and produce a single common archive.
+    let declared_platforms: Vec<String> = manifest
+        .compat
+        .as_ref()
+        .map(|c| c.platforms.clone())
+        .unwrap_or_default();
+    let has_platforms = !declared_platforms.is_empty();
+
+    let platform = match (&platform_arg, has_platforms) {
+        (Some(_), false) => {
+            bail!("--platform was specified but package has no [compat].platforms");
         }
-        (Some(p), Some(_)) => Some(p.parse::<Platform>().map_err(|e| anyhow::anyhow!(e))?),
-        (None, Some(_)) => {
+        (Some(p), true) => Some(p.parse::<Platform>().map_err(|e| anyhow::anyhow!(e))?),
+        (None, true) => {
             // Auto-detect host platform
             let detected = Platform::current()
                 .context("Could not detect host platform; use --platform to specify explicitly")?;
             Some(detected)
         }
-        (None, None) => None,
+        (None, false) => None,
     };
 
-    // Validate platform is in native.platforms
-    if let (Some(p), Some(native)) = (&platform, &manifest.native) {
-        if !native.platforms.contains(&p.to_string()) {
-            bail!(
-                "Platform '{}' is not declared in [native] platforms: {:?}",
-                p,
-                native.platforms
-            );
-        }
+    // Validate platform is declared in [compat].platforms
+    if let Some(p) = &platform
+        && !declared_platforms.contains(&p.to_string())
+    {
+        bail!(
+            "Platform '{}' is not declared in [compat].platforms: {:?}",
+            p,
+            declared_platforms
+        );
     }
 
     // Resolve signing key: CLI flag → HPM_SIGNING_KEY env (PEM content or path) → config
@@ -92,7 +101,7 @@ pub async fn execute(
     };
 
     // Run pack on blocking thread (zip I/O)
-    let native_config = manifest.native.clone();
+    let stage_config = manifest.stage.clone();
     let result = tokio::task::spawn_blocking({
         let package_dir = package_dir.clone();
         let name = name.clone();
@@ -106,7 +115,7 @@ pub async fn execute(
                 &output_dir,
                 signing_key.as_ref(),
                 platform.as_ref(),
-                native_config.as_ref(),
+                stage_config.as_ref(),
                 &inject_files,
             )
         }

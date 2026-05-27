@@ -298,7 +298,7 @@ hpm check
 
 Check runs:
 
-- `hpm.toml` exists, parses, and passes manifest validation (scoped `creator/slug` path, semver version, `[compat].houdini` parseable, `[native]` consistency).
+- `hpm.toml` exists, parses, and passes manifest validation (scoped `creator/slug` path, semver version, `[compat].houdini` parseable, `[stage]` per-platform consistency with `[compat].platforms`).
 - Generated Houdini `package.json` serializes cleanly.
 - Soft warnings for: missing description, missing authors, missing keywords, missing `[compat].houdini`, missing README or license file, missing `.gitignore` when a `.git` directory is present, packages larger than 100 MB, and individual files larger than 10 MB.
 
@@ -358,7 +358,7 @@ hpm pack [OPTIONS]
 Pack runs `hpm check` first, then:
 
 1. Auto-generates a Houdini-native `{slug}.json` inside the archive unless the user has provided one. This file follows Houdini's own package format, so the archive is usable by Houdini even without HPM.
-2. Filters files by `[native]` platform when the manifest has a `[native]` section.
+2. Filters files by `[stage]` (per-platform `place` rules and `include`/`exclude` globs) when the manifest declares `[compat].platforms`.
 3. Produces a `.zip` archive plus a SHA-256 checksum.
 4. If a signing key is supplied, produces an Ed25519 signature over the archive bytes and emits a `keyId`.
 
@@ -369,7 +369,7 @@ Pack runs `hpm check` first, then:
 | `--key <path>` | Ed25519 PKCS#8 PEM private key. Overrides `HPM_SIGNING_KEY`. |
 | `--output <dir>` | Output directory. Defaults to the current directory. |
 | `--json` | Emit the result as JSON (useful in CI). |
-| `--platform <id>` | Override host-platform detection. Valid: `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, `windows-aarch64`, `universal`. Only legal when `[native]` is declared. |
+| `--platform <id>` | Override host-platform detection. Valid: `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, `windows-aarch64`, `universal`. Only legal when `[compat].platforms` is declared. |
 
 **Signing key resolution order**
 
@@ -686,44 +686,72 @@ Precedence when a key appears in more than one place (highest first):
 1. The consuming project's `[runtime]` override.
 2. The package's `[runtime]` entry (with surviving variants).
 
-### `[native]`
+### `[stage]`
 
-Declare that this package ships per-platform binaries (HDK plugins, shared
-libraries). When `[native]` is present, `hpm pack` produces a slim, per-platform
-archive that includes only the files relevant to the target platform.
+Defines how the install image is derived from the workspace. `[stage]`
+governs both `hpm pack` (which streams an archive directly from the
+workspace, applying these rules) and — when present — `hpm build` (which
+materialises the same image into `output_dir` on disk so a path-dep
+consumer can pick it up live).
 
 ```toml
-[native]
-platforms = ["linux-x86_64", "macos-aarch64", "windows-x86_64"]
+[stage]
+# Where `hpm build` materialises the install image. Default: "dist".
+output_dir = "dist"
 
-[native.linux-x86_64]
-files = ["lib/linux-x86_64/*"]
+# Scripts (named entries from [scripts]) to run before staging. Fail-fast.
+prepack = ["build-dso"]
 
-[native.macos-aarch64]
-files = ["lib/macos-aarch64/*"]
+# Gitignore-style globs applied on top of .gitignore and .hpmignore.
+# Empty `include` means "everything not excluded". Always-excluded: .git/, .hpm/.
+include = ["python/**", "otls/**", "config/**", "LICENSE", "README.md"]
+exclude = ["src/**", "build/**", "tests/**"]
 
-[native.windows-x86_64]
-files = ["lib/windows-x86_64/*"]
+# Per-platform place rules. The platform key must appear in [compat].platforms.
+[stage.platform.linux-x86_64]
+place = [{ from = "build/linux/*.so", to = "dso/" }]
+
+[stage.platform.macos-aarch64]
+place = [{ from = "build/macos/*.dylib", to = "dso/" }]
+
+[stage.platform.windows-x86_64]
+place = [{ from = "build/win/*.dll", to = "dso/" }]
 ```
 
-Valid platform identifiers (matching the TumbleTrove API's build platform
+**Platforms.** Valid platform identifiers (TumbleTrove API build platform
 enum verbatim): `linux-x86_64`, `linux-aarch64`, `macos-x86_64`,
 `macos-aarch64`, `windows-x86_64`, `windows-aarch64`, `universal`. Use
-`universal` for OS-agnostic content (pure-Python / data). `files` uses glob
-patterns relative to the package root. `hpm pack` auto-detects the host
-platform; pass `--platform <id>` to target a different one.
+`universal` for OS-agnostic content (pure-Python / data). Declare the
+platforms you ship under `[compat].platforms`; each per-platform
+`[stage.platform.<plat>]` table must reference a platform listed there.
 
-**Per-platform filter semantics.** When packing for `--platform <X>`:
+**Place rules.** Each rule has a `from` glob (workspace-relative) and a
+`to` path (archive-relative). If `to` ends with `/` it's a directory; the
+file's basename is appended. Otherwise `to` is the literal archive path
+(use when relocating a single file under a renamed name). Both `from`
+and `to` use forward slashes regardless of host OS.
 
-- A path matched by `[native.X].files` is included.
-- A path matched only by `[native.Y].files` (some `Y != X`) is excluded.
-- A path matched by both `[native.X].files` and some `[native.Y].files` is
-  included — the target's claim wins.
-- A path matched by no `[native.*].files` glob is included as common content.
+**Per-platform packing semantics.** When packing for `--platform <X>`:
 
-This means listing the same glob under every platform is a valid way to
-declare "this content ships in every per-platform archive" (e.g. a shared
-install path that all platforms use).
+- A path matched by `[stage.platform.X].place[*].from` is included at the
+  rewritten `to` path. The target's claim wins over other platforms'.
+- A path matched only by `[stage.platform.Y].place[*].from` (some `Y != X`)
+  is excluded.
+- A path matched by no `place` rule and not covered by `[stage].exclude`
+  is included as common content at its workspace-relative path. (If
+  `[stage].include` is non-empty, common content is restricted to paths
+  matching one of those globs.)
+
+This means listing the same `from` glob under every platform is a valid
+way to declare "this content ships in every per-platform archive"
+(e.g. a shared resolver path).
+
+**Build vs pack.** `hpm pack` reads `[stage]` directly and streams the
+archive from the workspace — useful in CI where you build immediately
+before packing. `hpm build` runs `prepack` scripts and materialises the
+same install image into `output_dir` on disk, so a path-dep consumer
+working in another project can pick it up live (with `link = true`,
+edits flow through without re-running `hpm sync`).
 
 ### `[[registries]]` <a id="registries-array"></a>
 

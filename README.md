@@ -59,6 +59,7 @@ license = "MIT"
 
 [compat]
 houdini = ">=20.5, <22"           # Cargo-style range; see User Guide
+platforms = ["linux-x86_64", "macos-aarch64", "windows-x86_64"]   # omit for pure-data
 
 [dependencies]
 "my-studio/utility-nodes" = "1.0.0"
@@ -73,18 +74,22 @@ requests = { version = ">=2.25.0", extras = ["security"] }
 MY_TOOLS_CONFIG = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
 HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
 
-# Native library packaging (optional)
-[native]
-platforms = ["linux-x86_64", "macos-aarch64", "windows-x86_64"]
+# Staging: how the install image is derived from the workspace.
+# Required when [compat].platforms is set.
+[stage]
+output_dir = "dist"
+prepack = ["build-dso"]            # runs entries from [scripts]
+include = ["python/**", "otls/**", "config/**"]
+exclude = ["src/**", "build/**", "tests/**"]
 
-[native.linux-x86_64]
-files = ["lib/linux-x86_64/*"]
+[stage.platform.linux-x86_64]
+place = [{ from = "build/linux/*.so", to = "dso/" }]
 
-[native.macos-aarch64]
-files = ["lib/macos-aarch64/*"]
+[stage.platform.macos-aarch64]
+place = [{ from = "build/macos/*.dylib", to = "dso/" }]
 
-[native.windows-x86_64]
-files = ["lib/windows-x86_64/*"]
+[stage.platform.windows-x86_64]
+place = [{ from = "build/win/*.dll", to = "dso/" }]
 ```
 
 See the [user guide](docs/user-guide.md) for the full manifest reference.

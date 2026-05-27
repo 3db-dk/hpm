@@ -504,7 +504,7 @@ enum Commands {
         /// Output result as JSON (for CI integration)
         #[arg(long)]
         json: bool,
-        /// Target platform (defaults to host platform when [native] is declared)
+        /// Target platform (defaults to host platform when [compat].platforms is declared)
         #[arg(long)]
         platform: Option<String>,
     },

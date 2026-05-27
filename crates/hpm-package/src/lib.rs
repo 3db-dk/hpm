@@ -21,7 +21,7 @@
 //! - [`HoudiniPackage`] - Generated `package.json` structure for HPM runtime
 //! - [`HoudiniNativePackage`] - Houdini-native `package.json` for direct Houdini use
 //! - [`Platform`] - Canonical platform identifiers for native packaging
-//! - [`NativeConfig`] - Platform-specific file declarations
+//! - [`StageConfig`] - Staging configuration (output_dir, prepack, include/exclude, per-platform place rules)
 //! - [`PackageTemplate`] - Template system for generating package directories
 //!
 //! ## Quick Start
@@ -119,9 +119,9 @@ pub use env_value::{
 };
 pub use houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 pub use manifest::{
-    CompatConfig, EnvMethod, ManifestEnvEntry, ManifestLoadError, NativeConfig,
-    NativePlatformFiles, PackageInfo, PackageManifest, PackageScripts, PlatformScripts,
-    RegistryConfig, RegistryType, ScriptEntry, ScriptEnv,
+    CompatConfig, EnvMethod, ManifestEnvEntry, ManifestLoadError, PackageInfo, PackageManifest,
+    PackageScripts, PlaceRule, PlatformScripts, PlatformStaging, RegistryConfig, RegistryType,
+    ScriptEntry, ScriptEnv, StageConfig, StagePlatformRules,
 };
 pub use package_path::{PackagePath, PackagePathError};
 pub use platform::Platform;

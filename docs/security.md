@@ -137,7 +137,7 @@ pipelines and registry upload tooling:
 ```
 
 `signature` and `key_id` are present only when a signing key was supplied.
-`platform` is present only when the manifest declares `[native]`.
+`platform` is present only when the manifest declares `[compat].platforms`.
 
 ### Operational guidance
 

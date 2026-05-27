@@ -221,8 +221,9 @@ mod tests {
             },
             compat: Some(CompatConfig {
                 houdini: Some(">=20.5".to_string()),
+                platforms: Vec::new(),
             }),
-            native: None,
+            stage: None,
             registries: None,
             dependencies: None,
             python_dependencies: Some(python_deps),
@@ -272,8 +273,9 @@ mod tests {
             },
             compat: Some(CompatConfig {
                 houdini: Some(">=20.5".to_string()),
+                platforms: Vec::new(),
             }),
-            native: None,
+            stage: None,
             registries: None,
             dependencies: None,
             python_dependencies: Some(python_deps),
@@ -318,8 +320,9 @@ mod tests {
                 },
                 compat: Some(CompatConfig {
                     houdini: Some(format!(">={}", min_houdini)),
+                    platforms: Vec::new(),
                 }),
-                native: None,
+                stage: None,
                 registries: None,
                 dependencies: None,
                 python_dependencies: Some(python_deps),

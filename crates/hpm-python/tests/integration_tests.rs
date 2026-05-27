@@ -45,8 +45,9 @@ async fn test_end_to_end_python_workflow() {
         },
         compat: Some(CompatConfig {
             houdini: Some(">=20.5".to_string()),
+            platforms: Vec::new(),
         }),
-        native: None,
+        stage: None,
         registries: None,
         dependencies: None,
         python_dependencies: Some(python_deps_a),
@@ -85,8 +86,9 @@ async fn test_end_to_end_python_workflow() {
         },
         compat: Some(CompatConfig {
             houdini: Some(">=20.5".to_string()), // Same as package A
+            platforms: Vec::new(),
         }),
-        native: None,
+        stage: None,
         registries: None,
         dependencies: None,
         python_dependencies: Some(python_deps_b),
@@ -281,8 +283,9 @@ async fn test_houdini_python_version_mapping_edge_cases() {
         },
         compat: Some(CompatConfig {
             houdini: Some(format!(">={}", version)),
+            platforms: Vec::new(),
         }),
-        native: None,
+        stage: None,
         registries: None,
         dependencies: None,
         python_dependencies: Some(IndexMap::new()),

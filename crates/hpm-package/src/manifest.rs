@@ -249,24 +249,93 @@ impl PackageScripts {
     }
 }
 
-/// Native platform configuration for multi-architecture packaging.
+/// Staging configuration: how the install image is derived from the workspace.
 ///
-/// Declares which files belong to which platform, enabling per-platform archives.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NativeConfig {
-    /// Declared platforms this package supports.
-    pub platforms: Vec<String>,
-    /// Per-platform file glob patterns, keyed by platform string.
-    /// Deserialized from `[native.linux-x86_64]` etc.
-    #[serde(flatten)]
-    pub platform_files: IndexMap<String, NativePlatformFiles>,
+/// `[stage]` is the single source of truth for what ends up in a published
+/// archive and in a path-dependency install image. It replaces the prior
+/// `[native]`-only filter model with a more general "where does each file
+/// go" model — useful for HDK plugins whose `.dylib` lives at
+/// `build/Release/foo.dylib` in the workspace but should be installed at
+/// `dso/macos-aarch64/foo.dylib`.
+///
+/// Fields:
+/// - `output_dir` (default `"dist"`) — where `hpm build` materialises the
+///   install image on disk. Unused by `hpm pack` alone, which streams
+///   directly from the workspace.
+/// - `prepack` — list of `[scripts]` entries to run before staging
+///   (compile DSO, collapse expanded HDAs, etc.). Sequential, fail-fast.
+/// - `include` / `exclude` — gitignore-style glob lists applied on top of
+///   `.gitignore` and `.hpmignore`. Empty `include` means "everything not
+///   excluded". Always-excluded: `.git/`, `.hpm/`.
+/// - `[stage.platform.<plat>]` — per-platform `place` rules: copy files
+///   matching a workspace-relative `from` glob into the install image at a
+///   rewritten `to` path. Files matched only by another platform's `place`
+///   rule are excluded from this platform's archive; files matched by no
+///   `place` rule ship as common content at their workspace-relative path.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StageConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prepack: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    /// Per-platform place rules. Deserialized from
+    /// `[stage.platform.<plat>]` sub-tables.
+    #[serde(default, skip_serializing_if = "PlatformStaging::is_empty")]
+    pub platform: PlatformStaging,
 }
 
-/// Files for a single platform.
+impl StageConfig {
+    pub fn is_empty(&self) -> bool {
+        self.output_dir.is_none()
+            && self.prepack.is_empty()
+            && self.include.is_empty()
+            && self.exclude.is_empty()
+            && self.platform.is_empty()
+    }
+
+    /// Effective output directory ("dist" by default).
+    pub fn effective_output_dir(&self) -> &str {
+        self.output_dir.as_deref().unwrap_or("dist")
+    }
+}
+
+/// `[stage.platform.*]` table. Each entry is a list of place rules for a
+/// single platform key (`"linux-x86_64"`, `"macos-aarch64"`, etc.).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PlatformStaging {
+    #[serde(flatten)]
+    pub entries: IndexMap<String, StagePlatformRules>,
+}
+
+impl PlatformStaging {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// Place rules for a single platform.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StagePlatformRules {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub place: Vec<PlaceRule>,
+}
+
+/// A single `from → to` placement: copy workspace files matching the `from`
+/// glob into the install image at `to`. If `to` ends with `/`, files keep
+/// their original basename; otherwise `to` is the literal archive path
+/// (use when relocating a single file).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NativePlatformFiles {
-    /// Glob patterns matching files belonging to this platform.
-    pub files: Vec<String>,
+pub struct PlaceRule {
+    pub from: String,
+    pub to: String,
+}
+
+fn stage_is_none_or_empty(s: &Option<StageConfig>) -> bool {
+    s.as_ref().is_none_or(StageConfig::is_empty)
 }
 
 /// A registry declared in hpm.toml's `[[registries]]` array.
@@ -287,8 +356,8 @@ pub struct PackageManifest {
     pub package: PackageInfo,
     #[serde(default, skip_serializing_if = "compat_is_none_or_empty")]
     pub compat: Option<CompatConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native: Option<NativeConfig>,
+    #[serde(default, skip_serializing_if = "stage_is_none_or_empty")]
+    pub stage: Option<StageConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registries: Option<Vec<RegistryConfig>>,
     pub dependencies: Option<IndexMap<String, DependencySpec>>,
@@ -350,6 +419,11 @@ impl PackageInfo {
 /// `">=20.5, <22"`). Bare versions alias caret semantics: `"20.5"` means
 /// `>=20.5, <21`. See [`compile_houdini_req`] for the supported grammar.
 ///
+/// `platforms` declares which native platforms this package supports.
+/// Pure-data / pure-Python packages omit it (or use `["universal"]`);
+/// HDK or DSO packages list the platforms they ship binaries for. The
+/// per-platform staging rules live under `[stage.platform.<plat>]`.
+///
 /// An absent `[compat]` section, or an absent `houdini` field, leaves the
 /// package's Houdini compatibility unconstrained — the generated package
 /// manifest emits no `enable` clause.
@@ -357,11 +431,13 @@ impl PackageInfo {
 pub struct CompatConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub houdini: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub platforms: Vec<String>,
 }
 
 impl CompatConfig {
     pub fn is_empty(&self) -> bool {
-        self.houdini.is_none()
+        self.houdini.is_none() && self.platforms.is_empty()
     }
 
     /// Lower bound of the Houdini range, used for Python ABI selection.
@@ -499,8 +575,9 @@ impl PackageManifest {
             },
             compat: Some(CompatConfig {
                 houdini: Some(">=20.5".to_string()),
+                platforms: Vec::new(),
             }),
-            native: None,
+            stage: None,
             registries: None,
             dependencies: None,
             python_dependencies: None,
@@ -583,35 +660,47 @@ impl PackageManifest {
             compile_houdini_req(req).map_err(|e| format!("[compat].houdini: {}", e))?;
         }
 
-        // Validate [native] section
-        if let Some(native) = &self.native {
-            for platform_str in &native.platforms {
+        // Validate [compat].platforms members are known.
+        if let Some(compat) = &self.compat {
+            for platform_str in &compat.platforms {
                 platform_str
                     .parse::<Platform>()
                     .map_err(|e| e.to_string())?;
             }
-            for key in native.platform_files.keys() {
-                if !native.platforms.contains(key) {
+        }
+
+        // Validate [stage]: per-platform keys must appear in [compat].platforms,
+        // and place rules must declare both `from` and `to`. Place rules with
+        // empty `from` would match nothing useful; reject those at load time.
+        if let Some(stage) = &self.stage {
+            let declared_platforms: Vec<String> = self
+                .compat
+                .as_ref()
+                .map(|c| c.platforms.clone())
+                .unwrap_or_default();
+            for (platform_str, rules) in &stage.platform.entries {
+                platform_str
+                    .parse::<Platform>()
+                    .map_err(|e| format!("[stage.platform.{}]: {}", platform_str, e))?;
+                if !declared_platforms.contains(platform_str) {
                     return Err(format!(
-                        "[native.{}] declared but '{}' not listed in native.platforms",
-                        key, key
-                    ));
-                }
-            }
-            for platform_str in &native.platforms {
-                if !native.platform_files.contains_key(platform_str) {
-                    return Err(format!(
-                        "Platform '{}' listed in native.platforms but has no [native.{}] section",
+                        "[stage.platform.{}] declared but '{}' not listed in [compat].platforms",
                         platform_str, platform_str
                     ));
                 }
-            }
-            for (platform_str, files) in &native.platform_files {
-                if files.files.is_empty() {
-                    return Err(format!(
-                        "[native.{}] files array must not be empty",
-                        platform_str
-                    ));
+                for (i, rule) in rules.place.iter().enumerate() {
+                    if rule.from.trim().is_empty() {
+                        return Err(format!(
+                            "[stage.platform.{}].place[{}]: `from` must not be empty",
+                            platform_str, i
+                        ));
+                    }
+                    if rule.to.trim().is_empty() {
+                        return Err(format!(
+                            "[stage.platform.{}].place[{}]: `to` must not be empty (use \"./\" for the archive root)",
+                            platform_str, i
+                        ));
+                    }
                 }
             }
         }
@@ -803,7 +892,10 @@ mod tests {
             None,
         );
 
-        manifest.compat = Some(CompatConfig { houdini: None });
+        manifest.compat = Some(CompatConfig {
+            houdini: None,
+            platforms: Vec::new(),
+        });
 
         let houdini_pkg = manifest.generate_houdini_package();
         assert!(houdini_pkg.enable.is_none());
@@ -848,13 +940,15 @@ houdini = "not-a-version"
     fn compat_houdini_min_extracts_lower_bound() {
         let compat = CompatConfig {
             houdini: Some(">=20.5, <22".to_string()),
+            platforms: Vec::new(),
         };
         assert_eq!(compat.houdini_min(), Some("20.5".to_string()));
         let compat = CompatConfig {
             houdini: Some("^21".to_string()),
+            platforms: Vec::new(),
         };
         assert_eq!(compat.houdini_min(), Some("21".to_string()));
-        let compat = CompatConfig { houdini: None };
+        let compat = CompatConfig::default();
         assert_eq!(compat.houdini_min(), None);
     }
 
@@ -1130,34 +1224,47 @@ version = "0.1.0"
     }
 
     #[test]
-    fn native_deserialize_from_toml() {
+    fn stage_deserialize_from_toml() {
         let toml_str = r#"
 [package]
 path = "studio/my-native-pkg"
 name = "My Native Pkg"
 version = "1.0.0"
 
-[native]
+[compat]
 platforms = ["linux-x86_64", "macos-aarch64"]
 
-[native.linux-x86_64]
-files = ["lib/linux-x86_64/*"]
+[stage]
+prepack = ["build-dso"]
+include = ["python/**"]
+exclude = ["src/**", "build/**"]
 
-[native.macos-aarch64]
-files = ["lib/macos-aarch64/*"]
+[stage.platform.linux-x86_64]
+place = [
+  { from = "build/linux/*.so", to = "dso/" },
+]
+
+[stage.platform.macos-aarch64]
+place = [
+  { from = "build/macos/*.dylib", to = "dso/" },
+]
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let native = manifest.native.unwrap();
-        assert_eq!(native.platforms.len(), 2);
-        assert_eq!(native.platform_files.len(), 2);
+        manifest.validate().unwrap();
+        let compat = manifest.compat.as_ref().unwrap();
+        assert_eq!(compat.platforms.len(), 2);
+        let stage = manifest.stage.as_ref().unwrap();
+        assert_eq!(stage.prepack, vec!["build-dso".to_string()]);
+        assert_eq!(stage.platform.entries.len(), 2);
         assert_eq!(
-            native.platform_files["linux-x86_64"].files,
-            vec!["lib/linux-x86_64/*"]
+            stage.platform.entries["linux-x86_64"].place[0].from,
+            "build/linux/*.so"
         );
+        assert_eq!(stage.platform.entries["linux-x86_64"].place[0].to, "dso/");
     }
 
     #[test]
-    fn native_none_when_absent() {
+    fn stage_none_when_absent() {
         let toml_str = r#"
 [package]
 path = "studio/my-package"
@@ -1165,11 +1272,11 @@ name = "My Package"
 version = "0.1.0"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        assert!(manifest.native.is_none());
+        assert!(manifest.stage.is_none());
     }
 
     #[test]
-    fn native_validation_unknown_platform() {
+    fn compat_platforms_unknown_rejected() {
         let mut manifest = PackageManifest::new(
             PackagePath::new("studio/test").unwrap(),
             "Test".to_string(),
@@ -1178,15 +1285,15 @@ version = "0.1.0"
             None,
             None,
         );
-        manifest.native = Some(NativeConfig {
+        manifest.compat = Some(CompatConfig {
+            houdini: None,
             platforms: vec!["linux-arm64".to_string()],
-            platform_files: IndexMap::new(),
         });
         assert!(manifest.validate().is_err());
     }
 
     #[test]
-    fn native_validation_missing_files_section() {
+    fn stage_platform_not_in_compat_rejected() {
         let mut manifest = PackageManifest::new(
             PackagePath::new("studio/test").unwrap(),
             "Test".to_string(),
@@ -1195,60 +1302,58 @@ version = "0.1.0"
             None,
             None,
         );
-        manifest.native = Some(NativeConfig {
+        manifest.compat = Some(CompatConfig {
+            houdini: None,
             platforms: vec!["linux-x86_64".to_string()],
-            platform_files: IndexMap::new(),
         });
-        let err = manifest.validate().unwrap_err();
-        assert!(err.contains("has no [native.linux-x86_64] section"));
-    }
-
-    #[test]
-    fn native_validation_empty_files() {
-        let mut manifest = PackageManifest::new(
-            PackagePath::new("studio/test").unwrap(),
-            "Test".to_string(),
-            "1.0.0".to_string(),
-            None,
-            None,
-            None,
-        );
-        let mut platform_files = IndexMap::new();
-        platform_files.insert(
-            "linux-x86_64".to_string(),
-            NativePlatformFiles { files: vec![] },
-        );
-        manifest.native = Some(NativeConfig {
-            platforms: vec!["linux-x86_64".to_string()],
-            platform_files,
-        });
-        let err = manifest.validate().unwrap_err();
-        assert!(err.contains("files array must not be empty"));
-    }
-
-    #[test]
-    fn native_validation_extra_platform_files() {
-        let mut manifest = PackageManifest::new(
-            PackagePath::new("studio/test").unwrap(),
-            "Test".to_string(),
-            "1.0.0".to_string(),
-            None,
-            None,
-            None,
-        );
-        let mut platform_files = IndexMap::new();
-        platform_files.insert(
+        let mut entries = IndexMap::new();
+        entries.insert(
             "windows-x86_64".to_string(),
-            NativePlatformFiles {
-                files: vec!["lib/*".to_string()],
+            StagePlatformRules {
+                place: vec![PlaceRule {
+                    from: "lib/*".to_string(),
+                    to: "lib/".to_string(),
+                }],
             },
         );
-        manifest.native = Some(NativeConfig {
-            platforms: vec!["linux-x86_64".to_string()],
-            platform_files,
+        manifest.stage = Some(StageConfig {
+            platform: PlatformStaging { entries },
+            ..Default::default()
         });
         let err = manifest.validate().unwrap_err();
-        assert!(err.contains("not listed in native.platforms"));
+        assert!(err.contains("not listed in [compat].platforms"), "{err}");
+    }
+
+    #[test]
+    fn stage_place_empty_from_rejected() {
+        let mut manifest = PackageManifest::new(
+            PackagePath::new("studio/test").unwrap(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            None,
+            None,
+            None,
+        );
+        manifest.compat = Some(CompatConfig {
+            houdini: None,
+            platforms: vec!["linux-x86_64".to_string()],
+        });
+        let mut entries = IndexMap::new();
+        entries.insert(
+            "linux-x86_64".to_string(),
+            StagePlatformRules {
+                place: vec![PlaceRule {
+                    from: "".to_string(),
+                    to: "dso/".to_string(),
+                }],
+            },
+        );
+        manifest.stage = Some(StageConfig {
+            platform: PlatformStaging { entries },
+            ..Default::default()
+        });
+        let err = manifest.validate().unwrap_err();
+        assert!(err.contains("`from` must not be empty"), "{err}");
     }
 
     // Path-format validation lives in `package_path.rs` — see

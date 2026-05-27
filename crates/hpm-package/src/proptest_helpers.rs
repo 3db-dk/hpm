@@ -179,8 +179,9 @@ pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
                 },
                 compat: Some(CompatConfig {
                     houdini: houdini_req,
+                    platforms: Vec::new(),
                 }),
-                native: None,
+                stage: None,
                 registries: None,
                 dependencies: None,
                 python_dependencies: None,
@@ -514,8 +515,9 @@ proptest! {
             },
             compat: Some(CompatConfig {
                 houdini: houdini_req,
+                platforms: Vec::new(),
             }),
-            native: None,
+            stage: None,
             registries: None,
             dependencies: None,
             python_dependencies: None,

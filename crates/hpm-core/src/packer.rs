@@ -9,7 +9,7 @@ pub use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{Signer, VerifyingKey};
 use glob::Pattern;
-use hpm_package::manifest::NativeConfig;
+use hpm_package::manifest::StageConfig;
 use hpm_package::platform::Platform;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use sha2::{Digest, Sha256};
@@ -35,49 +35,133 @@ pub struct PackResult {
     pub platform: Option<String>,
 }
 
-/// Filter that excludes files belonging to other platforms.
-pub struct PlatformFilter {
-    /// Glob patterns for files belonging to OTHER platforms (to exclude).
-    pub exclude: Vec<Pattern>,
-    /// Glob patterns for the target platform's own files. Acts as an
-    /// override: a file matched by `exclude` is still kept when it is
-    /// also claimed by `target`, so manifests where two platforms share
-    /// a glob (intentional common content, e.g. a shared install path)
-    /// don't end up cancelling the file out of every archive.
-    pub target: Vec<Pattern>,
+/// A single `from -> to` placement rule compiled from `[stage.platform.*]`.
+struct CompiledPlaceRule {
+    from: Pattern,
+    /// Archive-path prefix or full path, depending on whether `to` ends
+    /// with `/` in the manifest. See [`StageFilter::archive_path_for`].
+    to: String,
+    /// Whether `to` was authored as a directory (ends with `/`).
+    to_is_dir: bool,
 }
 
-impl PlatformFilter {
-    /// Build a filter from native config, excluding files for all platforms
-    /// other than the target. A file claimed by the target platform is
-    /// always kept, even if another platform also lists it.
-    pub fn new(native_config: &NativeConfig, target: &Platform) -> Result<Self, PackError> {
-        let target_str = target.as_str();
-        let mut exclude = Vec::new();
-        let mut target_patterns = Vec::new();
-        for (platform_str, platform_files) in &native_config.platform_files {
-            for pattern in &platform_files.files {
-                let compiled =
-                    Pattern::new(pattern).map_err(|e| PackError::GlobPattern(e.to_string()))?;
-                if platform_str == target_str {
-                    target_patterns.push(compiled);
-                } else {
-                    exclude.push(compiled);
+/// Derived from `[stage]` at pack time. Combines:
+///   - workspace include/exclude globs from `[stage]`
+///   - per-platform `place` rules (with `from`/`to` paths) from
+///     `[stage.platform.*]`, filtered to the target platform plus exclusion
+///     of files matched only by other platforms' rules.
+pub struct StageFilter {
+    include: Vec<Pattern>,
+    exclude: Vec<Pattern>,
+    /// `from` patterns for the target platform. A file matched by one of
+    /// these is included and its archive path is rewritten via the
+    /// matching rule's `to`.
+    target_rules: Vec<CompiledPlaceRule>,
+    /// `from` patterns claimed only by non-target platforms. A file matched
+    /// only by these is excluded.
+    other_platform_patterns: Vec<Pattern>,
+}
+
+impl StageFilter {
+    /// Build a filter from `[stage]` for the given target platform.
+    /// Pass `target = None` to pack without per-platform placement (used
+    /// when the package declares no `[compat].platforms`).
+    pub fn new(stage: &StageConfig, target: Option<&Platform>) -> Result<Self, PackError> {
+        let include = compile_patterns(&stage.include)?;
+        let exclude = compile_patterns(&stage.exclude)?;
+
+        let mut target_rules = Vec::new();
+        let mut other_platform_patterns = Vec::new();
+
+        if let Some(target) = target {
+            let target_str = target.as_str();
+            for (platform_str, rules) in &stage.platform.entries {
+                for rule in &rules.place {
+                    let from = Pattern::new(&rule.from)
+                        .map_err(|e| PackError::GlobPattern(e.to_string()))?;
+                    if platform_str == target_str {
+                        let trimmed = rule.to.trim();
+                        let to_is_dir = trimmed.ends_with('/') || trimmed == ".";
+                        let to = if trimmed == "." || trimmed == "./" {
+                            String::new()
+                        } else if to_is_dir {
+                            trimmed.trim_end_matches('/').to_string()
+                        } else {
+                            trimmed.to_string()
+                        };
+                        target_rules.push(CompiledPlaceRule {
+                            from,
+                            to,
+                            to_is_dir,
+                        });
+                    } else {
+                        other_platform_patterns.push(from);
+                    }
                 }
             }
         }
+
         Ok(Self {
+            include,
             exclude,
-            target: target_patterns,
+            target_rules,
+            other_platform_patterns,
         })
     }
 
-    /// Returns true if the relative path should be filtered out.
-    pub fn should_exclude(&self, rel_path: &str) -> bool {
-        if !self.exclude.iter().any(|p| p.matches(rel_path)) {
-            return false;
+    /// Returns the archive-relative path for `rel_path`, or `None` if the
+    /// file should be excluded from this platform's archive.
+    pub fn archive_path_for(&self, rel_path: &str) -> Option<String> {
+        // Explicit excludes always win.
+        if self.exclude.iter().any(|p| p.matches(rel_path)) {
+            return None;
         }
-        !self.target.iter().any(|p| p.matches(rel_path))
+        // Explicit includes ("only ship these as common content") narrow
+        // the set when present, but never override a target-platform
+        // `from` match.
+        let target_match = self
+            .target_rules
+            .iter()
+            .find(|rule| rule.from.matches(rel_path));
+        if let Some(rule) = target_match {
+            return Some(rewrite_archive_path(rel_path, rule));
+        }
+        let other_match = self
+            .other_platform_patterns
+            .iter()
+            .any(|p| p.matches(rel_path));
+        if other_match {
+            return None;
+        }
+        if !self.include.is_empty() && !self.include.iter().any(|p| p.matches(rel_path)) {
+            return None;
+        }
+        Some(rel_path.to_string())
+    }
+}
+
+fn compile_patterns(globs: &[String]) -> Result<Vec<Pattern>, PackError> {
+    globs
+        .iter()
+        .map(|g| Pattern::new(g).map_err(|e| PackError::GlobPattern(e.to_string())))
+        .collect()
+}
+
+fn rewrite_archive_path(rel_path: &str, rule: &CompiledPlaceRule) -> String {
+    if rule.to_is_dir {
+        // Take the basename of `rel_path` and append it under `to/`. This
+        // matches the common case of `from = "build/Release/*.dylib"`,
+        // `to = "dso/macos-aarch64/"`.
+        let basename = rel_path.rsplit_once('/').map_or(rel_path, |(_, name)| name);
+        if rule.to.is_empty() {
+            basename.to_string()
+        } else {
+            format!("{}/{}", rule.to, basename)
+        }
+    } else {
+        // `to` is a literal full archive path; use it verbatim. Useful when
+        // exactly one file is being relocated under a renamed name.
+        rule.to.clone()
     }
 }
 
@@ -126,9 +210,13 @@ pub fn build_ignore_rules(dir: &Path) -> Result<Gitignore, PackError> {
     Ok(builder.build()?)
 }
 
-/// Create a zip archive of the package directory, filtering via ignore rules.
+/// Create a zip archive of the package directory, filtering via ignore
+/// rules and `[stage]`.
 ///
-/// Files are added in sorted order for deterministic output.
+/// Files are added in sorted order for deterministic output. When a `[stage]`
+/// filter is supplied, each file's archive path is rewritten via the
+/// matching `place` rule; unmatched files ship at their workspace-relative
+/// path.
 pub fn create_archive(
     package_dir: &Path,
     name: &str,
@@ -136,7 +224,7 @@ pub fn create_archive(
     output_dir: &Path,
     ignore: &Gitignore,
     platform: Option<&Platform>,
-    platform_filter: Option<&PlatformFilter>,
+    stage_filter: Option<&StageFilter>,
     inject_files: &[(String, Vec<u8>)],
 ) -> Result<PathBuf, PackError> {
     // Replace `/` with `-` in package name for flat archive filenames
@@ -147,8 +235,8 @@ pub fn create_archive(
     };
     let archive_path = output_dir.join(&archive_name);
 
-    // Collect files, sorted for determinism
-    let mut entries: Vec<PathBuf> = Vec::new();
+    // Collect (source path, archive path) pairs, sorted for determinism.
+    let mut entries: Vec<(PathBuf, String)> = Vec::new();
     for entry in WalkDir::new(package_dir).sort_by_file_name() {
         let entry = entry.map_err(|e| PackError::Io(std::io::Error::other(e)))?;
 
@@ -169,20 +257,22 @@ pub fn create_archive(
             continue;
         }
 
-        // Filter out files belonging to other platforms.
-        // Manifest globs (e.g. `lib/windows-x86_64/*`) use `/`, so the
-        // input must too — `to_string_lossy()` would emit backslashes on
-        // Windows and silently fail to match.
-        if let Some(filter) = platform_filter {
-            let rel_str = relative_path_to_forward_slash(relative);
-            if filter.should_exclude(&rel_str) {
-                continue;
-            }
+        if !entry.file_type().is_file() {
+            continue;
         }
 
-        if entry.file_type().is_file() {
-            entries.push(path.to_path_buf());
-        }
+        // Manifest globs (e.g. `build/Release/*.dylib`) use forward slashes,
+        // so the input must too — `to_string_lossy()` would emit backslashes
+        // on Windows and silently fail to match.
+        let rel_str = relative_path_to_forward_slash(relative);
+        let archive_path = match stage_filter {
+            Some(filter) => match filter.archive_path_for(&rel_str) {
+                Some(p) => p,
+                None => continue,
+            },
+            None => rel_str,
+        };
+        entries.push((path.to_path_buf(), archive_path));
     }
 
     // Create zip
@@ -190,12 +280,9 @@ pub fn create_archive(
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    for path in &entries {
-        let relative = path.strip_prefix(package_dir).unwrap_or(path);
-        let name = relative_path_to_forward_slash(relative);
-
-        zip.start_file(&name, options)?;
-        let mut f = fs::File::open(path)?;
+    for (source, archive_name) in &entries {
+        zip.start_file(archive_name.as_str(), options)?;
+        let mut f = fs::File::open(source)?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)?;
         zip.write_all(&buf)?;
@@ -282,14 +369,14 @@ pub fn pack(
     output_dir: &Path,
     signing_key: Option<&SigningKey>,
     platform: Option<&Platform>,
-    native_config: Option<&NativeConfig>,
+    stage_config: Option<&StageConfig>,
     inject_files: &[(String, Vec<u8>)],
 ) -> Result<PackResult, PackError> {
     let ignore = build_ignore_rules(package_dir)?;
 
-    let platform_filter = match (platform, native_config) {
-        (Some(p), Some(nc)) => Some(PlatformFilter::new(nc, p)?),
-        _ => None,
+    let stage_filter = match stage_config {
+        Some(stage) => Some(StageFilter::new(stage, platform)?),
+        None => None,
     };
 
     let archive_path = create_archive(
@@ -299,7 +386,7 @@ pub fn pack(
         output_dir,
         &ignore,
         platform,
-        platform_filter.as_ref(),
+        stage_filter.as_ref(),
         inject_files,
     )?;
     let checksum = compute_archive_checksum(&archive_path)?;
@@ -626,33 +713,23 @@ version = "1.0.0"
         fs::write(dir.join("lib/windows-x86_64/foo.dll"), b"pe-binary").unwrap();
     }
 
-    fn test_native_config() -> hpm_package::manifest::NativeConfig {
-        let mut platform_files = indexmap::IndexMap::new();
-        platform_files.insert(
-            "linux-x86_64".to_string(),
-            hpm_package::manifest::NativePlatformFiles {
-                files: vec!["lib/linux-x86_64/*".to_string()],
-            },
-        );
-        platform_files.insert(
-            "macos-aarch64".to_string(),
-            hpm_package::manifest::NativePlatformFiles {
-                files: vec!["lib/macos-aarch64/*".to_string()],
-            },
-        );
-        platform_files.insert(
-            "windows-x86_64".to_string(),
-            hpm_package::manifest::NativePlatformFiles {
-                files: vec!["lib/windows-x86_64/*".to_string()],
-            },
-        );
-        hpm_package::manifest::NativeConfig {
-            platforms: vec![
-                "linux-x86_64".to_string(),
-                "macos-aarch64".to_string(),
-                "windows-x86_64".to_string(),
-            ],
-            platform_files,
+    fn test_stage_config() -> hpm_package::manifest::StageConfig {
+        use hpm_package::manifest::{PlaceRule, PlatformStaging, StageConfig, StagePlatformRules};
+        let mut entries = indexmap::IndexMap::new();
+        for plat in ["linux-x86_64", "macos-aarch64", "windows-x86_64"] {
+            entries.insert(
+                plat.to_string(),
+                StagePlatformRules {
+                    place: vec![PlaceRule {
+                        from: format!("lib/{}/*", plat),
+                        to: format!("lib/{}/", plat),
+                    }],
+                },
+            );
+        }
+        StageConfig {
+            platform: PlatformStaging { entries },
+            ..Default::default()
         }
     }
 
@@ -662,7 +739,7 @@ version = "1.0.0"
         create_native_test_package(dir.path());
 
         let output_dir = TempDir::new().unwrap();
-        let native_config = test_native_config();
+        let stage_config = test_stage_config();
         let platform = hpm_package::platform::Platform::LinuxX86_64;
 
         let result = pack(
@@ -672,7 +749,7 @@ version = "1.0.0"
             output_dir.path(),
             None,
             Some(&platform),
-            Some(&native_config),
+            Some(&stage_config),
             &[],
         )
         .unwrap();
@@ -690,7 +767,7 @@ version = "1.0.0"
         create_native_test_package(dir.path());
 
         let output_dir = TempDir::new().unwrap();
-        let native_config = test_native_config();
+        let stage_config = test_stage_config();
         let platform = hpm_package::platform::Platform::LinuxX86_64;
 
         let result = pack(
@@ -700,7 +777,7 @@ version = "1.0.0"
             output_dir.path(),
             None,
             Some(&platform),
-            Some(&native_config),
+            Some(&stage_config),
             &[],
         )
         .unwrap();
@@ -735,22 +812,25 @@ version = "1.0.0"
         )
         .unwrap();
 
-        let mut platform_files = indexmap::IndexMap::new();
+        // The same `from` glob listed under every platform declares
+        // common content with a shared install path — the place rule's
+        // `to = "resolver/"` plus the basename-only rewrite keeps the
+        // file at its original layout in every per-platform archive.
+        let mut entries = indexmap::IndexMap::new();
         for plat in ["linux-x86_64", "macos-aarch64", "windows-x86_64"] {
-            platform_files.insert(
+            entries.insert(
                 plat.to_string(),
-                hpm_package::manifest::NativePlatformFiles {
-                    files: vec!["resolver/houdini*/**/*".to_string()],
+                hpm_package::manifest::StagePlatformRules {
+                    place: vec![hpm_package::manifest::PlaceRule {
+                        from: "resolver/houdini*/**/*".to_string(),
+                        to: "resolver/houdini21/".to_string(),
+                    }],
                 },
             );
         }
-        let native_config = hpm_package::manifest::NativeConfig {
-            platforms: vec![
-                "linux-x86_64".to_string(),
-                "macos-aarch64".to_string(),
-                "windows-x86_64".to_string(),
-            ],
-            platform_files,
+        let stage_config = hpm_package::manifest::StageConfig {
+            platform: hpm_package::manifest::PlatformStaging { entries },
+            ..Default::default()
         };
 
         for platform in [
@@ -766,7 +846,7 @@ version = "1.0.0"
                 output_dir.path(),
                 None,
                 Some(&platform),
-                Some(&native_config),
+                Some(&stage_config),
                 &[],
             )
             .unwrap();
@@ -795,22 +875,38 @@ version = "1.0.0"
         fs::create_dir_all(dir.path().join("shared")).unwrap();
         fs::write(dir.path().join("shared/binary.so"), b"data").unwrap();
 
-        let mut platform_files = indexmap::IndexMap::new();
-        platform_files.insert(
+        // Linux claims `shared/*`; macOS claims `shared/*` AND
+        // `lib/macos-aarch64/*`. When packing for Linux, `shared/binary.so`
+        // matches the target's rule (kept), and we also confirm the file
+        // isn't dropped just because macOS also lists `shared/*`.
+        let mut entries = indexmap::IndexMap::new();
+        entries.insert(
             "linux-x86_64".to_string(),
-            hpm_package::manifest::NativePlatformFiles {
-                files: vec!["shared/*".to_string()],
+            hpm_package::manifest::StagePlatformRules {
+                place: vec![hpm_package::manifest::PlaceRule {
+                    from: "shared/*".to_string(),
+                    to: "shared/".to_string(),
+                }],
             },
         );
-        platform_files.insert(
+        entries.insert(
             "macos-aarch64".to_string(),
-            hpm_package::manifest::NativePlatformFiles {
-                files: vec!["shared/*".to_string(), "lib/macos-aarch64/*".to_string()],
+            hpm_package::manifest::StagePlatformRules {
+                place: vec![
+                    hpm_package::manifest::PlaceRule {
+                        from: "shared/*".to_string(),
+                        to: "shared/".to_string(),
+                    },
+                    hpm_package::manifest::PlaceRule {
+                        from: "lib/macos-aarch64/*".to_string(),
+                        to: "lib/macos-aarch64/".to_string(),
+                    },
+                ],
             },
         );
-        let native_config = hpm_package::manifest::NativeConfig {
-            platforms: vec!["linux-x86_64".to_string(), "macos-aarch64".to_string()],
-            platform_files,
+        let stage_config = hpm_package::manifest::StageConfig {
+            platform: hpm_package::manifest::PlatformStaging { entries },
+            ..Default::default()
         };
 
         let output_dir = TempDir::new().unwrap();
@@ -821,7 +917,7 @@ version = "1.0.0"
             output_dir.path(),
             None,
             Some(&hpm_package::platform::Platform::LinuxX86_64),
-            Some(&native_config),
+            Some(&stage_config),
             &[],
         )
         .unwrap();

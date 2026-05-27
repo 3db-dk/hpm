@@ -46,7 +46,7 @@ depend on the library crates and skip the CLI entirely).
 │ hpm-package     │ │ hpm-python      │ │ hpm-config    │
 │   PackageManifest│ │   VenvManager   │ │   Config      │
 │   DependencySpec │ │   PythonVersion │ │   Storage/    │
-│   NativeConfig   │ │   ResolvedSet   │ │   Projects/   │
+│   StageConfig    │ │   ResolvedSet   │ │   Projects/   │
 │   Platform       │ │   bundled uv    │ │   Signing     │
 │   HoudiniPackage │ └─────────────────┘ └───────────────┘
 └──────────────────┘
@@ -89,7 +89,7 @@ full list.
 pub struct PackageManifest {
     pub package: PackageInfo,
     pub compat: Option<CompatConfig>,
-    pub native: Option<NativeConfig>,
+    pub stage: Option<StageConfig>,
     pub registries: Option<Vec<RegistryConfig>>,
     pub dependencies: Option<IndexMap<String, DependencySpec>>,
     pub python_dependencies: Option<IndexMap<String, PythonDependencySpec>>,
