@@ -1802,6 +1802,8 @@ mod tests {
 
     // ---- Property tests for [dev.env] merge --------------------------------
 
+    use proptest::prelude::*;
+
     /// Fixed key pool keeps the same string identities in play across [env]
     /// and [dev.env] draws so overlap (the interesting case) is frequent.
     /// Deliberately avoids PYTHONPATH / HOUDINI_SCRIPT_PATH so the
@@ -1815,8 +1817,7 @@ mod tests {
         "ZETA_PATH",
     ];
 
-    fn env_method_strategy() -> impl proptest::strategy::Strategy<Value = hpm_package::EnvMethod> {
-        use proptest::prelude::*;
+    fn env_method_strategy() -> impl Strategy<Value = hpm_package::EnvMethod> {
         prop_oneof![
             Just(hpm_package::EnvMethod::Set),
             Just(hpm_package::EnvMethod::Prepend),
@@ -1824,8 +1825,7 @@ mod tests {
         ]
     }
 
-    fn env_value_strategy() -> impl proptest::strategy::Strategy<Value = String> {
-        use proptest::prelude::*;
+    fn env_value_strategy() -> impl Strategy<Value = String> {
         prop_oneof![
             Just("$HPM_PACKAGE_ROOT/a".to_string()),
             Just("$HPM_PACKAGE_ROOT/b".to_string()),
@@ -1835,8 +1835,7 @@ mod tests {
         ]
     }
 
-    fn env_entry_strategy() -> impl proptest::strategy::Strategy<Value = ManifestEnvEntry> {
-        use proptest::prelude::*;
+    fn env_entry_strategy() -> impl Strategy<Value = ManifestEnvEntry> {
         (env_method_strategy(), env_value_strategy()).prop_map(|(method, value)| ManifestEnvEntry {
             method,
             value: Some(value.into()),
@@ -1844,9 +1843,7 @@ mod tests {
         })
     }
 
-    fn env_table_strategy()
-    -> impl proptest::strategy::Strategy<Value = IndexMap<String, ManifestEnvEntry>> {
-        use proptest::prelude::*;
+    fn env_table_strategy() -> impl Strategy<Value = IndexMap<String, ManifestEnvEntry>> {
         prop::collection::vec((0..ENV_KEY_POOL.len(), env_entry_strategy()), 0..=4).prop_map(
             |pairs| {
                 let mut map = IndexMap::new();
@@ -1859,8 +1856,6 @@ mod tests {
             },
         )
     }
-
-    use proptest::prelude::*;
 
     proptest! {
         /// Safety contract: [dev.env] never leaks into the Houdini manifest

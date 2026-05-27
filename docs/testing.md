@@ -33,7 +33,7 @@ for the current number.
 | Crate | Focus |
 |-------|-------|
 | `hpm-cli` | Argument parsing, output format round-trips. |
-| `hpm-core` | Storage types, package specs, platform-filtered packing. |
+| `hpm-core` | Storage types, package specs, lockfile round-trips, env merge contracts. |
 | `hpm-package` | Manifest validation, TOML round-trips, native configs. |
 | `hpm-python` | Python versions, dependency resolution, content hashing. |
 
