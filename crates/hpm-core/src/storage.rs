@@ -321,6 +321,9 @@ impl StorageManager {
             version: manifest.package.version.clone(),
             manifest,
             install_path: package_dir,
+            // collect_installed_packages skips the `_dev/` subtree, so any
+            // package reached through this path came from the CAS.
+            is_dev: false,
         }))
     }
 
@@ -443,10 +446,13 @@ impl StorageManager {
 
         info!("Successfully installed {kind}{}@{}", name, version);
 
+        let is_dev = matches!(style, InstallStyle::DevCopy | InstallStyle::DevLink);
+
         Ok(InstalledPackage {
             version: version.clone(),
             manifest,
             install_path: target_dir,
+            is_dev,
         })
     }
 

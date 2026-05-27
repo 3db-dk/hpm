@@ -1226,6 +1226,7 @@ mod tests {
             version: "1.0.0".to_string(),
             manifest,
             install_path: package_path.clone(),
+            is_dev: false,
         };
 
         let houdini_package = project_manager
@@ -1274,6 +1275,7 @@ mod tests {
             version: "1.0.0".to_string(),
             manifest,
             install_path: package_path.clone(),
+            is_dev: false,
         };
 
         // Without override: should use package default
@@ -1358,6 +1360,7 @@ mod tests {
             version: "1.0.0".to_string(),
             manifest,
             install_path: package_path,
+            is_dev: false,
         };
 
         // No project override: required placeholder must trigger MissingRequiredEnv.
@@ -1415,6 +1418,7 @@ mod tests {
             version: "0.4.0".to_string(),
             manifest,
             install_path: PathBuf::from("/tmp/claudini2@0.4.0"),
+            is_dev: false,
         };
 
         assert!(ProjectManager::matches_spec_name(
@@ -1452,6 +1456,7 @@ mod tests {
             version: "1.1.20".to_string(),
             manifest,
             install_path: temp_dir.path().join("tumblepipe@1.1.20"),
+            is_dev: false,
         };
 
         // registry_set: None — if the short-circuit misses, install_one_dep
@@ -1510,6 +1515,7 @@ mod tests {
             version: "1.0.0".to_string(),
             manifest,
             install_path: temp_dir.path().join("foo@1.0.0"),
+            is_dev: false,
         };
 
         project_manager

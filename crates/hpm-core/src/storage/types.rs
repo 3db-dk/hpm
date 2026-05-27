@@ -5,11 +5,17 @@ use std::path::PathBuf;
 /// A package present in the global CAS. The bare slug and full path live on
 /// `manifest.package.path` — call `.slug()` / `.identifier()` rather than
 /// duplicating them on the wrapper type.
+///
+/// `is_dev` records whether this entry was installed from a local path
+/// dependency (either copied or symlinked under `_dev/`). It gates the
+/// `[dev.env]` merge at Houdini manifest generation time so personal-machine
+/// env contributions only fire for dev-overridden packages.
 #[derive(Debug, Clone)]
 pub struct InstalledPackage {
     pub version: String,
     pub manifest: PackageManifest,
     pub install_path: PathBuf,
+    pub is_dev: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +219,7 @@ mod tests {
                 version: version.clone(),
                 manifest,
                 install_path: path,
+                is_dev: false,
             };
 
             // Identifier uses the slug from the package path: `studio/<name>` → `<name>`.
@@ -242,6 +249,7 @@ mod tests {
                 version: package_version.clone(),
                 manifest,
                 install_path: path,
+                is_dev: false,
             };
 
             let version_req = VersionReq::new(&req_version).unwrap();
@@ -331,6 +339,7 @@ mod tests {
             version: "1.0.0".to_string(),
             manifest,
             install_path: PathBuf::from("/path"),
+            is_dev: false,
         };
 
         // Test specific edge cases that property tests might miss
