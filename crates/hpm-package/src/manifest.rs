@@ -59,17 +59,19 @@ pub enum EnvMethod {
     Append,
 }
 
-/// An environment variable entry declared in `[env]`.
+/// An environment variable entry declared in `[runtime]`.
 ///
-/// `required = true` with no `value` declares a placeholder that the consuming
-/// project's `[env]` must override; otherwise the package fails to install.
-/// `required = true` alongside a `value` is allowed (the value acts as a
-/// default) and behaves the same as a non-required entry with that value.
+/// `required = true` with no `value` declares a placeholder that the
+/// consuming project's `[runtime]` must override; otherwise the package
+/// fails to install. `required = true` alongside a `value` is allowed (the
+/// value acts as a default) and behaves the same as a non-required entry
+/// with that value.
 ///
-/// `value` accepts either a flat string (today's case) or a list of
-/// `{ when, set }` variants — see [`EnvValueSpec`]. The conditional form
-/// lowers to Houdini's expression-object array per
-/// <https://www.sidefx.com/docs/houdini/ref/plugins.html>.
+/// `value` accepts either a flat string or a list of `{ when, set }`
+/// variants — see [`EnvValueSpec`]. Conditional variants may gate on
+/// `install_source = "dev"` / `"registry"` (filtered by hpm at install
+/// time) or on `houdini` / `os` / `python` (compiled into Houdini's
+/// expression form per <https://www.sidefx.com/docs/houdini/ref/plugins.html>).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestEnvEntry {
     pub method: EnvMethod,
@@ -83,9 +85,8 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
-/// Shared validation for `[env]`-shaped tables (currently `[env]` and
-/// `[dev.env]`). The `section` label is used verbatim in error messages so
-/// authors can tell which table the offending key lives in.
+/// Validate a `[runtime]`-shaped table. The `section` label is used
+/// verbatim in error messages so the source is obvious to authors.
 fn validate_env_table(
     section: &str,
     env: &IndexMap<String, ManifestEnvEntry>,
@@ -277,32 +278,6 @@ pub struct RegistryConfig {
     pub registry_type: RegistryType,
 }
 
-/// Dev-only manifest overrides.
-///
-/// Entries here apply only when the package is loaded via a path dependency
-/// (`install_from_path_dev` / `install_from_path_dev_link`). They never ship
-/// to consumers of a registry-published archive — even though the TOML stays
-/// in `hpm.toml`, the dev-only merge step only runs against installs that
-/// originated from a local workspace. The motivating case is HDK plugin
-/// development: `[dev.env]` lets a package contribute build-tree paths like
-/// `HOUDINI_DSO_PATH = "$HPM_PACKAGE_ROOT/build/Release"` without leaking
-/// personal-machine paths into the published manifest.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DevSection {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub env: Option<IndexMap<String, ManifestEnvEntry>>,
-}
-
-impl DevSection {
-    fn is_empty(&self) -> bool {
-        self.env.as_ref().is_none_or(IndexMap::is_empty)
-    }
-}
-
-fn dev_section_is_none_or_empty(d: &Option<DevSection>) -> bool {
-    d.as_ref().is_none_or(DevSection::is_empty)
-}
-
 /// HPM package manifest (hpm.toml)
 ///
 /// Uses `IndexMap` for dependencies and python_dependencies to preserve
@@ -318,12 +293,14 @@ pub struct PackageManifest {
     pub registries: Option<Vec<RegistryConfig>>,
     pub dependencies: Option<IndexMap<String, DependencySpec>>,
     pub python_dependencies: Option<IndexMap<String, PythonDependencySpec>>,
+    /// `[runtime]` — env-var contributions to the generated Houdini
+    /// `package.json`. Replaces the prior `[env]` + `[dev.env]` pair; the
+    /// dev/registry distinction now lives in the `when.install_source` axis
+    /// on individual conditional variants.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub env: Option<IndexMap<String, ManifestEnvEntry>>,
+    pub runtime: Option<IndexMap<String, ManifestEnvEntry>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scripts: Option<PackageScripts>,
-    #[serde(default, skip_serializing_if = "dev_section_is_none_or_empty")]
-    pub dev: Option<DevSection>,
 }
 
 fn compat_is_none_or_empty(c: &Option<CompatConfig>) -> bool {
@@ -394,32 +371,37 @@ impl CompatConfig {
 }
 
 impl ManifestEnvEntry {
-    /// Convert to a Houdini environment variable value, if a value is set.
+    /// Convert to a Houdini environment variable value for a published
+    /// (non-dev) consumer. Returns `None` for required-but-unsupplied
+    /// placeholders, and for conditional values whose every branch is
+    /// gated to a non-matching `install_source`.
     ///
-    /// Returns `None` for required-but-unsupplied placeholders; callers
-    /// that have no override source (publish/scaffold paths) skip these,
-    /// while project-sync paths surface a hard error instead.
-    ///
-    /// No substitution is applied — the returned value reflects the manifest
-    /// verbatim, so `$HPM_PACKAGE_ROOT` is preserved. Use [`Self::lower`] when
-    /// you have a concrete package path to substitute in.
-    ///
-    /// Conditional values with a malformed `when` selector are dropped
-    /// silently; [`PackageManifest::validate`] catches those before this
-    /// method is reached on any well-formed manifest.
+    /// No substitution is applied — the returned value reflects the
+    /// manifest verbatim, so `$HPM_PACKAGE_ROOT` is preserved. Use
+    /// [`Self::lower`] when you have a concrete package path and install
+    /// context to substitute in.
     pub fn to_houdini_env_value(&self) -> Option<HoudiniEnvValue> {
-        self.lower(&[]).ok().flatten()
+        self.lower(&[], false).ok().flatten()
     }
 
     /// Lower this entry into a Houdini env value, applying the supplied
     /// substitutions to each value branch.
     ///
-    /// Returns `Ok(None)` when there is no value (a required-but-unsupplied
-    /// placeholder); callers in publish/scaffold paths skip those, while
-    /// project-sync paths convert that to a hard error themselves.
+    /// `is_dev` controls the install-source filter for conditional
+    /// variants: `true` means a path-installed (dev) package; `false`
+    /// means a registry/URL-installed (published) consumer. Variants
+    /// gated to a non-matching `install_source` are dropped before
+    /// emission.
+    ///
+    /// Returns `Ok(None)` when the effective value is empty — either the
+    /// entry was a required-but-unsupplied placeholder, or every branch
+    /// of a conditional value got filtered out by `install_source`. Callers
+    /// in publish/scaffold paths skip those; project-sync paths surface a
+    /// hard error for the placeholder case via their own checks.
     pub fn lower(
         &self,
         substitutions: &[(&str, &str)],
+        is_dev: bool,
     ) -> Result<Option<HoudiniEnvValue>, ExpressionError> {
         let Some(value) = self.value.as_ref() else {
             return Ok(None);
@@ -437,7 +419,12 @@ impl ManifestEnvEntry {
                 }
             }
             EnvValueSpec::Conditional(variants) => {
-                let lowered = lower_conditional(variants, substitutions)?;
+                let lowered = lower_conditional(variants, substitutions, is_dev)?;
+                if lowered.is_empty() {
+                    // Every branch filtered out by install_source — treat
+                    // the entry as inert in this install context.
+                    return Ok(None);
+                }
                 HoudiniEnvValue::DetailedConditional {
                     method: method.to_string(),
                     value: lowered,
@@ -517,9 +504,8 @@ impl PackageManifest {
             registries: None,
             dependencies: None,
             python_dependencies: None,
-            env: None,
+            runtime: None,
             scripts: None,
-            dev: None,
         }
     }
 
@@ -630,23 +616,13 @@ impl PackageManifest {
             }
         }
 
-        // Validate [env] entries: a missing value is only legal as a
-        // required-placeholder for project-level [env] to fill in. Conditional
-        // values (the variant list shape) get every branch's `when` selector
-        // compiled here so malformed expressions surface at manifest load
-        // time, not at install/emit time.
-        if let Some(env) = &self.env {
-            validate_env_table("env", env)?;
-        }
-
-        // Same shape rules apply to [dev.env]. Required-placeholders are
-        // permitted but practically useless here since project-level [env]
-        // overrides target [env] keys, not [dev.env] keys — validation just
-        // matches the [env] shape so authors aren't surprised by the parser.
-        if let Some(dev) = &self.dev
-            && let Some(env) = &dev.env
-        {
-            validate_env_table("dev.env", env)?;
+        // Validate [runtime] entries: a missing value is only legal as a
+        // required-placeholder for project-level [runtime] to fill in.
+        // Conditional values get every branch's `when` selector compiled here
+        // so malformed expressions surface at manifest load time, not at
+        // install/emit time.
+        if let Some(runtime) = &self.runtime {
+            validate_env_table("runtime", runtime)?;
         }
 
         Ok(())
@@ -684,12 +660,14 @@ impl PackageManifest {
         );
         env.push(scripts_env);
 
-        // Append user-defined env vars from [env] section. Required-but-
-        // unsupplied placeholders are skipped here because this generator has
-        // no project context to fill them in; project sync supplies them via
-        // `[env]` overrides and errors if any remain unsupplied.
-        if let Some(user_env) = &self.env {
-            for (key, entry) in user_env {
+        // Append user-defined env vars from [runtime]. The standalone
+        // generator has no install context, so it filters as a published
+        // (non-dev) consumer would: `install_source = "dev"` branches drop
+        // out, the rest go through. Required-but-unsupplied placeholders
+        // are skipped — project sync supplies them via `[runtime]`
+        // overrides and errors if any remain unsupplied.
+        if let Some(user_runtime) = &self.runtime {
+            for (key, entry) in user_runtime {
                 let Some(houdini_value) = entry.to_houdini_env_value() else {
                     continue;
                 };
@@ -738,14 +716,17 @@ impl PackageManifest {
         pkg_env.insert(pkg_var_name, HoudiniEnvValue::simple(&pkg_root));
         env.push(pkg_env);
 
-        // User-defined env vars with $HPM_PACKAGE_ROOT replaced. Required-
-        // but-unsupplied placeholders are skipped (see generate_houdini_package).
-        // Conditional value branches each get the same substitution applied
-        // before the conditional-object array is emitted.
-        if let Some(user_env) = &self.env {
-            for (key, entry) in user_env {
+        // User-defined env vars with $HPM_PACKAGE_ROOT replaced. This
+        // generator emits the bundled `{slug}.json` shipped inside a packed
+        // archive, so it filters as a published consumer would (is_dev=false).
+        // Required-but-unsupplied placeholders are skipped (see
+        // generate_houdini_package). Conditional value branches each get the
+        // same substitution applied before the conditional-object array is
+        // emitted.
+        if let Some(user_runtime) = &self.runtime {
+            for (key, entry) in user_runtime {
                 let Some(houdini_value) = entry
-                    .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)])
+                    .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)], false)
                     .map_err(|e| e.to_string())?
                 else {
                     continue;
@@ -908,53 +889,53 @@ type = "git"
     }
 
     #[test]
-    fn env_deserialize_from_toml() {
+    fn runtime_deserialize_from_toml() {
         let toml_str = r#"
 [package]
 path = "studio/my-package"
 name = "My Package"
 version = "0.1.0"
 
-[env]
+[runtime]
 MY_PLUGIN_ROOT = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
 HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let env = manifest.env.unwrap();
-        assert_eq!(env.len(), 2);
-        assert_eq!(env["MY_PLUGIN_ROOT"].method, EnvMethod::Set);
+        let runtime = manifest.runtime.unwrap();
+        assert_eq!(runtime.len(), 2);
+        assert_eq!(runtime["MY_PLUGIN_ROOT"].method, EnvMethod::Set);
         assert_eq!(
-            env["MY_PLUGIN_ROOT"]
+            runtime["MY_PLUGIN_ROOT"]
                 .value
                 .as_ref()
                 .and_then(EnvValueSpec::as_flat),
             Some("$HPM_PACKAGE_ROOT/config")
         );
-        assert!(!env["MY_PLUGIN_ROOT"].required);
-        assert_eq!(env["HOUDINI_TOOLBAR_PATH"].method, EnvMethod::Prepend);
+        assert!(!runtime["MY_PLUGIN_ROOT"].required);
+        assert_eq!(runtime["HOUDINI_TOOLBAR_PATH"].method, EnvMethod::Prepend);
     }
 
     #[test]
-    fn env_required_without_value_deserializes() {
+    fn runtime_required_without_value_deserializes() {
         let toml_str = r#"
 [package]
 path = "studio/my-package"
 name = "My Package"
 version = "0.1.0"
 
-[env]
+[runtime]
 PROJECT_ROOT = { method = "set", required = true }
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let env = manifest.env.as_ref().unwrap();
-        assert_eq!(env["PROJECT_ROOT"].method, EnvMethod::Set);
-        assert!(env["PROJECT_ROOT"].value.is_none());
-        assert!(env["PROJECT_ROOT"].required);
+        let runtime = manifest.runtime.as_ref().unwrap();
+        assert_eq!(runtime["PROJECT_ROOT"].method, EnvMethod::Set);
+        assert!(runtime["PROJECT_ROOT"].value.is_none());
+        assert!(runtime["PROJECT_ROOT"].required);
         assert!(manifest.validate().is_ok());
     }
 
     #[test]
-    fn env_missing_value_without_required_is_invalid() {
+    fn runtime_missing_value_without_required_is_invalid() {
         // serde happily accepts the missing value (it's now Option), but
         // validate() rejects it because non-required entries must declare a
         // value.
@@ -964,7 +945,7 @@ path = "studio/my-package"
 name = "My Package"
 version = "0.1.0"
 
-[env]
+[runtime]
 LEAKED = { method = "set" }
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
@@ -983,8 +964,8 @@ LEAKED = { method = "set" }
             None,
             None,
         );
-        let mut env = IndexMap::new();
-        env.insert(
+        let mut runtime = IndexMap::new();
+        runtime.insert(
             "PROJECT_ROOT".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Set,
@@ -992,7 +973,7 @@ LEAKED = { method = "set" }
                 required: true,
             },
         );
-        env.insert(
+        runtime.insert(
             "WITH_VALUE".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Set,
@@ -1000,7 +981,7 @@ LEAKED = { method = "set" }
                 required: false,
             },
         );
-        manifest.env = Some(env);
+        manifest.runtime = Some(runtime);
 
         let pkg = manifest.generate_houdini_package();
         let env_list = pkg.env.unwrap();
@@ -1014,14 +995,14 @@ LEAKED = { method = "set" }
     }
 
     #[test]
-    fn env_invalid_method_rejected() {
+    fn runtime_invalid_method_rejected() {
         let toml_str = r#"
 [package]
 path = "studio/my-package"
 name = "My Package"
 version = "0.1.0"
 
-[env]
+[runtime]
 MY_VAR = { method = "invalid", value = "foo" }
 "#;
         let result: Result<PackageManifest, _> = toml::from_str(toml_str);
@@ -1029,101 +1010,74 @@ MY_VAR = { method = "invalid", value = "foo" }
     }
 
     #[test]
-    fn dev_env_deserialize_from_toml() {
+    fn runtime_install_source_dev_variant_drops_for_published_consumer() {
+        // The HDK plugin pattern, expressed in the new shape. A single
+        // [runtime] entry with two variants: dev-only build path + the
+        // fallback published location. For a published consumer the dev
+        // variant is filtered out so only the fallback ships.
         let toml_str = r#"
 [package]
 path = "studio/my-package"
 name = "My Package"
 version = "0.1.0"
 
-[env]
-PYTHONPATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/python" }
-
-[dev.env]
-HOUDINI_DSO_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/build/Release" }
+[runtime.HOUDINI_DSO_PATH]
+method = "prepend"
+value = [
+  { when = { install_source = "dev" }, set = "$HPM_PACKAGE_ROOT/build/Release" },
+  { when = {}, set = "$HPM_PACKAGE_ROOT/dso" },
+]
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let dev_env = manifest.dev.as_ref().unwrap().env.as_ref().unwrap();
-        assert_eq!(dev_env.len(), 1);
-        assert_eq!(dev_env["HOUDINI_DSO_PATH"].method, EnvMethod::Prepend);
-        assert_eq!(
-            dev_env["HOUDINI_DSO_PATH"]
-                .value
-                .as_ref()
-                .and_then(EnvValueSpec::as_flat),
-            Some("$HPM_PACKAGE_ROOT/build/Release")
-        );
-        // [env] remains independently parseable
-        assert!(manifest.env.as_ref().unwrap().contains_key("PYTHONPATH"));
         assert!(manifest.validate().is_ok());
+
+        let pkg = manifest.generate_houdini_package();
+        let env_list = pkg.env.unwrap();
+        // The HOUDINI_DSO_PATH entry must appear, but only the fallback
+        // variant should be present (dev gate dropped).
+        let dso_entry = env_list
+            .iter()
+            .find(|m| m.contains_key("HOUDINI_DSO_PATH"))
+            .expect("HOUDINI_DSO_PATH should be emitted for published consumer");
+        let value = &dso_entry["HOUDINI_DSO_PATH"];
+        match value {
+            HoudiniEnvValue::DetailedConditional { value, .. } => {
+                assert_eq!(value.len(), 1);
+                // The single surviving branch is the empty `when = {}` fallback,
+                // which lowers to the literal "true" expression.
+                assert_eq!(value[0]["true"], "$HPM_PACKAGE_ROOT/dso");
+            }
+            other => panic!("expected conditional value, got {other:?}"),
+        }
     }
 
     #[test]
-    fn dev_env_missing_value_without_required_is_invalid() {
+    fn runtime_install_source_only_drops_entry_for_published_consumer() {
+        // When every variant is gated `install_source = "dev"`, the entry
+        // disappears from a published consumer's package.json entirely.
         let toml_str = r#"
 [package]
 path = "studio/my-package"
 name = "My Package"
 version = "0.1.0"
 
-[dev.env]
-LEAKED = { method = "set" }
+[runtime.HOUDINI_DSO_PATH]
+method = "prepend"
+value = [
+  { when = { install_source = "dev" }, set = "$HPM_PACKAGE_ROOT/build/Release" },
+]
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let err = manifest.validate().unwrap_err();
-        assert!(
-            err.contains("dev.env"),
-            "error must name the section: {err}"
-        );
-        assert!(err.contains("LEAKED"));
-    }
-
-    #[test]
-    fn dev_env_none_when_absent() {
-        let toml_str = r#"
-[package]
-path = "studio/my-package"
-name = "My Package"
-version = "0.1.0"
-"#;
-        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        assert!(manifest.dev.is_none());
-    }
-
-    #[test]
-    fn generate_houdini_package_excludes_dev_env() {
-        // The standalone manifest-level generator (used during pack/publish)
-        // never sees dev-only env. [dev.env] only applies via the install-time
-        // path in hpm-core::project, gated on InstalledPackage::is_dev.
-        let mut manifest = PackageManifest::new(
-            PackagePath::new("studio/test").unwrap(),
-            "Test".to_string(),
-            "1.0.0".to_string(),
-            None,
-            None,
-            None,
-        );
-        let mut dev_env = IndexMap::new();
-        dev_env.insert(
-            "HOUDINI_DSO_PATH".to_string(),
-            ManifestEnvEntry {
-                method: EnvMethod::Prepend,
-                value: Some("$HPM_PACKAGE_ROOT/build/Release".into()),
-                required: false,
-            },
-        );
-        manifest.dev = Some(DevSection { env: Some(dev_env) });
-
         let pkg = manifest.generate_houdini_package();
         let env_list = pkg.env.unwrap();
         assert!(
             env_list.iter().all(|m| !m.contains_key("HOUDINI_DSO_PATH")),
-            "[dev.env] must not leak into the published Houdini manifest"
+            "dev-only entries must not leak into the published Houdini manifest"
         );
     }
 
     #[test]
-    fn env_none_when_absent() {
+    fn runtime_none_when_absent() {
         let toml_str = r#"
 [package]
 path = "studio/my-package"
@@ -1131,7 +1085,7 @@ name = "My Package"
 version = "0.1.0"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        assert!(manifest.env.is_none());
+        assert!(manifest.runtime.is_none());
     }
 
     #[test]
@@ -1145,8 +1099,8 @@ version = "0.1.0"
             None,
         );
 
-        let mut env = IndexMap::new();
-        env.insert(
+        let mut runtime = IndexMap::new();
+        runtime.insert(
             "MY_VAR".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Set,
@@ -1154,7 +1108,7 @@ version = "0.1.0"
                 required: false,
             },
         );
-        manifest.env = Some(env);
+        manifest.runtime = Some(runtime);
 
         let houdini_pkg = manifest.generate_houdini_package();
         assert_eq!(
@@ -1366,7 +1320,7 @@ houdini = ">=21.0"
 [dependencies]
 "studio/some-dep" = "1.0.0"
 
-[env]
+[runtime]
 MY_VAR = { method = "prepend", value = "$HPM_PACKAGE_ROOT/scripts" }
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
@@ -1733,8 +1687,8 @@ register = "linux-register"
             None,
             None,
         );
-        let mut env = IndexMap::new();
-        env.insert(
+        let mut runtime = IndexMap::new();
+        runtime.insert(
             "PATH_A".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Set,
@@ -1742,7 +1696,7 @@ register = "linux-register"
                 required: false,
             },
         );
-        env.insert(
+        runtime.insert(
             "PATH_B".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Append,
@@ -1750,7 +1704,7 @@ register = "linux-register"
                 required: false,
             },
         );
-        manifest.env = Some(env);
+        manifest.runtime = Some(runtime);
 
         let (_, pkg) = manifest.generate_houdini_native_package().unwrap();
 
@@ -1782,7 +1736,7 @@ path = "studio/multi-houdini"
 name = "Multi Houdini"
 version = "0.1.0"
 
-[env.PXR_PLUGINPATH_NAME]
+[runtime.PXR_PLUGINPATH_NAME]
 method = "prepend"
 value = [
   { when = { houdini = "^21" }, set = "$HPM_PACKAGE_ROOT/resolver/houdini21/r" },
@@ -1792,7 +1746,7 @@ value = [
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         manifest.validate().unwrap();
         let entry = manifest
-            .env
+            .runtime
             .as_ref()
             .unwrap()
             .get("PXR_PLUGINPATH_NAME")
@@ -1816,7 +1770,7 @@ path = "studio/multi"
 name = "Multi"
 version = "0.1.0"
 
-[env.PXR_PLUGINPATH_NAME]
+[runtime.PXR_PLUGINPATH_NAME]
 method = "prepend"
 value = [
   { when = { houdini = "^21" }, set = "$HPM_PACKAGE_ROOT/h21/r" },
@@ -1825,13 +1779,13 @@ value = [
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         let entry = manifest
-            .env
+            .runtime
             .as_ref()
             .unwrap()
             .get("PXR_PLUGINPATH_NAME")
             .unwrap();
         let lowered = entry
-            .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")])
+            .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false)
             .unwrap()
             .unwrap();
         match lowered {
@@ -1862,7 +1816,7 @@ path = "studio/multi-pkg"
 name = "Multi"
 version = "0.1.0"
 
-[env.PXR_PLUGINPATH_NAME]
+[runtime.PXR_PLUGINPATH_NAME]
 method = "prepend"
 value = [
   { when = { houdini = "^21" }, set = "$HPM_PACKAGE_ROOT/h21/r" },
@@ -1886,7 +1840,7 @@ path = "studio/bad"
 name = "Bad"
 version = "0.1.0"
 
-[env.X]
+[runtime.X]
 method = "set"
 value = [
   { when = { houdini = "garbage" }, set = "x" },
@@ -1908,7 +1862,7 @@ path = "studio/bad"
 name = "Bad"
 version = "0.1.0"
 
-[env.X]
+[runtime.X]
 method = "set"
 value = []
 "#;
@@ -1931,8 +1885,8 @@ value = []
             None,
             None,
         );
-        let mut env = IndexMap::new();
-        env.insert(
+        let mut runtime = IndexMap::new();
+        runtime.insert(
             "PXR_PLUGINPATH_NAME".to_string(),
             ManifestEnvEntry {
                 method: EnvMethod::Prepend,
@@ -1940,7 +1894,7 @@ value = []
                 required: false,
             },
         );
-        manifest.env = Some(env);
+        manifest.runtime = Some(runtime);
 
         let pkg = manifest.generate_houdini_package();
         let env_list = pkg.env.unwrap();

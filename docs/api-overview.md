@@ -63,9 +63,8 @@ codes and help hints.
 | `CompatConfig` | Contents of `[compat]`. `houdini: Option<String>` is a Cargo-style range. `houdini_min()` extracts the lower bound for Python ABI selection. |
 | `DependencySpec` | Untagged enum: `Simple(String) \| Url {..} \| Path {..} \| Registry {..}`. |
 | `PythonDependencySpec` | Untagged enum: `Simple(String) \| Detailed {..}`. |
-| `ManifestEnvEntry`, `EnvMethod` | `[env]` entries (method, optional value, `required` flag) and methods (`set`/`prepend`/`append`). `value` is `Option<EnvValueSpec>` — flat string or ordered variant list. `lower(substitutions)` is the single emit path. |
-| `EnvValueSpec`, `EnvValueVariant`, `WhenSelector` | Conditional `[env]` value support. Variants compile to Houdini's expression-object array via `compile_when` / `lower_conditional`. Axes: `houdini` (Cargo-style req), `os`, `python`. |
-| `DevSection` | Contents of `[dev]`. Carries `env: Option<IndexMap<String, ManifestEnvEntry>>` for `[dev.env]`. Same shape and validation as `[env]`; gating on `InstalledPackage::is_dev` happens in `hpm-core`, not in this crate. |
+| `ManifestEnvEntry`, `EnvMethod` | `[runtime]` entries (method, optional value, `required` flag) and methods (`set`/`prepend`/`append`). `value` is `Option<EnvValueSpec>` — flat string or ordered variant list. `lower(substitutions, is_dev)` is the single emit path; install-source-gated variants are filtered before lowering. |
+| `EnvValueSpec`, `EnvValueVariant`, `WhenSelector` | Conditional `[runtime]` value support. Variants compile to Houdini's expression-object array via `compile_when` / `lower_conditional`. Axes: `houdini` (Cargo-style req), `os`, `python` (all runtime-evaluated by Houdini), plus `install_source` (`"dev"` / `"registry"`, filtered by hpm at install time). |
 | `PackageScripts`, `PlatformScripts` | `[scripts]` table and per-OS overrides. Both store `IndexMap<String, ScriptEntry>`. |
 | `ScriptEntry`, `ScriptEnv` | Untagged enum: `Plain(String)` for the shorthand form, `WithEnv { cmd, python?, requirements? }` for the table form. Accessors `cmd()`, `python()`, `requirements()`, `needs_venv()` work on both arms. |
 | `NativeConfig`, `NativePlatformFiles` | `[native]` and per-platform file globs. |

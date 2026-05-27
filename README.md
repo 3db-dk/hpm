@@ -69,7 +69,7 @@ local-tools = { path = "../local-tools" }
 numpy = ">=1.20.0"
 requests = { version = ">=2.25.0", extras = ["security"] }
 
-[env]
+[runtime]
 MY_TOOLS_CONFIG = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
 HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
 

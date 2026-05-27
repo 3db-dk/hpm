@@ -508,8 +508,8 @@ houdini = ">=20.5, <22"      # explicit range
 
 The supported operators are `=`, `>=`, `>`, `<=`, `<`, `^`, `~`, and the
 bare-version shorthand (aliases caret). Multiple comparators combine with
-`and` when separated by commas. The same grammar is reused inside `[env]`
-conditional values (`when = { houdini = "^21" }`).
+`and` when separated by commas. The same grammar is reused inside
+`[runtime]` conditional values (`when = { houdini = "^21" }`).
 
 The lower bound of `[compat].houdini` on the **root** manifest drives the
 bundled Python version. A dependency package's range is a compatibility
@@ -566,13 +566,13 @@ Version constraints use PEP 440 syntax (same as pip/uv). See
 [Python guide](python-guide.md) for the Houdini→Python version mapping and
 venv sharing behavior.
 
-### `[env]`
+### `[runtime]`
 
-Environment variables to set when Houdini loads the package. The key is the
-variable name; the value is a `{ method, value }` pair:
+Environment variables to set when Houdini loads the package. The key is
+the variable name; the value is a `{ method, value }` pair:
 
 ```toml
-[env]
+[runtime]
 MY_PLUGIN_ROOT = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
 HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
 HOUDINI_AUDIT_LOG = { method = "append", value = "$HPM_PACKAGE_ROOT/logs/audit" }
@@ -590,42 +590,38 @@ entries when generating the Houdini manifest.
 
 #### Required env vars
 
-A package can declare an env var as required without giving it a value. Any
-project that depends on the package must then supply the value in its own
-`[env]` section in `hpm.toml`. `hpm install` (and project sync) errors out
-otherwise — the package isn't launchable without it.
+A package can declare an env var as required without giving it a value.
+Any project that depends on the package must then supply the value in its
+own `[runtime]` section in `hpm.toml`. `hpm install` (and project sync)
+errors out otherwise — the package isn't launchable without it.
 
 ```toml
 # In the package's hpm.toml
-[env]
+[runtime]
 PROJECT_ASSETS = { method = "set", required = true }
 ```
 
 ```toml
 # In the consuming project's hpm.toml
-[env]
+[runtime]
 PROJECT_ASSETS = { method = "set", value = "/mnt/studio/assets" }
 ```
 
-`required = true` may be combined with a `value`; the value then acts as a
-default and the project override becomes optional. Without a value, the entry
-is a hard placeholder.
+`required = true` may be combined with a `value`; the value then acts as
+a default and the project override becomes optional. Without a value, the
+entry is a hard placeholder.
 
 A consuming project can also override any package-declared env var by
-re-declaring the same key in its own `[env]` — the project's entry wins.
+re-declaring the same key in its own `[runtime]` — the project's entry wins.
 
-#### Conditional values (per Houdini version / OS / Python)
+#### Conditional values
 
-For env vars whose value depends on which Houdini is loading the package —
-typically per-major asset paths inside a single shipped archive — `value`
-accepts an ordered list of `{ when, set }` variants instead of a flat
-string. hpm lowers each branch into the conditional-object array shape that
-Houdini's `package.json` documents (see
-<https://www.sidefx.com/docs/houdini/ref/plugins.html>); Houdini evaluates
-the expressions at startup and applies the first match.
+`value` accepts either a flat string or an ordered list of `{ when, set }`
+variants. The variants are selected against four axes; the first match
+wins per the rules below.
 
 ```toml
-[env.PXR_PLUGINPATH_NAME]
+[runtime.PXR_PLUGINPATH_NAME]
 method = "prepend"
 value = [
   { when = { houdini = "^21" }, set = "$HPM_PACKAGE_ROOT/resolver/houdini21/r" },
@@ -633,82 +629,62 @@ value = [
 ]
 ```
 
-The selector axes are independent and combine with `and` when more than one
-is present in the same `when`:
+| Field | Form | Evaluated by | Compiles to |
+|-------|------|--------------|-------------|
+| `houdini` | Cargo-style req: `"^21"`, `"~21.5"`, `">=21, <22.5"`, `"21"` (alias for `^21`) | Houdini at startup | `houdini_version >= 'X' and houdini_version < 'Y'` |
+| `os` | `"linux"`, `"macos"`, `"windows"` | Houdini at startup | `houdini_os == '<os>'` |
+| `python` | `"3.11"`, `"python3.10"`, etc. | Houdini at startup | `houdini_python == 'python<v>'` |
+| `install_source` | `"dev"` (path dependency) or `"registry"` (registry/URL install) | hpm at install time | filtered out before emission |
 
-| Field | Form | Lowers to |
-|-------|------|-----------|
-| `houdini` | Cargo-style req: `"^21"`, `"~21.5"`, `">=21, <22.5"`, `"21"` (alias for `^21`) | `houdini_version >= 'X' and houdini_version < 'Y'` |
-| `os` | `"linux"`, `"macos"`, `"windows"` | `houdini_os == '<os>'` |
-| `python` | `"3.11"`, `"python3.10"`, etc. | `houdini_python == 'python<v>'` |
+The first three axes lower into Houdini's `package.json` expression form
+per <https://www.sidefx.com/docs/houdini/ref/plugins.html>. `install_source`
+is *install-time evaluated by hpm* — variants gated to a non-matching
+install source are dropped before the Houdini package.json is written, so
+a `"dev"` branch never ships to a registry consumer's manifest and a
+`"registry"` branch never fires in the dev's own Houdini.
 
-```toml
-# AND across axes:
-{ when = { houdini = "^22", os = "linux" }, set = "..." }
-# → houdini_version >= '22' and houdini_version < '23' and houdini_os == 'linux'
-```
+All present axes combine with `and` within a single `when`. Order matters:
+Houdini picks the first matching branch. An empty `when = {}` is the
+always-true fallback and should appear last. `$HPM_PACKAGE_ROOT` is
+substituted in each branch, just like in flat values; any other `$VAR`
+(e.g. `$HOUDINI_MAJOR_RELEASE`) passes through verbatim so Houdini's own
+variable expansion handles it.
 
-To express OR, write multiple variants. Order matters — Houdini picks the
-first matching branch. An empty `when = {}` is the always-true fallback and
-should appear last. `$HPM_PACKAGE_ROOT` is substituted in each branch, just
-like in flat values; any other `$VAR` (e.g. `$HOUDINI_MAJOR_RELEASE`) passes
-through verbatim so Houdini's own variable expansion handles it.
+Malformed selectors fail at manifest validation time, so authors find
+them before publish, not at install.
 
-Malformed selectors fail at manifest validation time, so authors find them
-before publish, not at install.
+#### HDK plugin pattern (dev-only paths)
 
-### `[dev.env]`
-
-Environment contributions that only fire when the package is loaded via a
-path dependency (`{ path = "...", link = true }` or `{ path = "..." }`).
-Same value shape as `[env]` — flat string, conditional `{ when, set }`
-variants, `$HPM_PACKAGE_ROOT` substitution all behave identically. The
-distinction is gating: a package's `[env]` ships to consumers of the
-published archive, while `[dev.env]` is for personal-machine paths that
-must not leak out of the developer's workstation.
-
-The motivating case is HDK plugin development. Your build artifact lives
-inside the package source tree, and the resulting `HOUDINI_DSO_PATH`
-contribution is package-relative, so it belongs on the package — but the
-build directory itself is a personal-machine concept that no downstream
-consumer would ever want.
+The canonical use of `install_source` is HDK plugin development: a
+build-tree path that must reach the dev's own Houdini but never leak to a
+registry consumer. Express this with a single `[runtime]` entry whose
+dev variant points at `build/` and whose fallback points at the staged
+artifact:
 
 ```toml
-[env]
-PYTHONPATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/python" }
-
-[dev.env]
-HOUDINI_DSO_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/build/Release" }
+[runtime.HOUDINI_DSO_PATH]
+method = "prepend"
+value = [
+  # While developing the package locally:
+  { when = { install_source = "dev", os = "windows" }, set = "$HPM_PACKAGE_ROOT/build/Release" },
+  { when = { install_source = "dev", os = "linux"   }, set = "$HPM_PACKAGE_ROOT/build/lib" },
+  { when = { install_source = "dev", os = "macos"   }, set = "$HPM_PACKAGE_ROOT/build/lib" },
+  # What ships in the published archive:
+  { when = {}, set = "$HPM_PACKAGE_ROOT/dso" },
+]
 ```
 
-Per-OS overrides slot in via the same conditional shape `[env]` uses:
-
-```toml
-[dev.env]
-HOUDINI_DSO_PATH = { method = "prepend", value = [
-  { when = { os = "windows" }, set = "$HPM_PACKAGE_ROOT/build/Release" },
-  { when = { os = "linux" },   set = "$HPM_PACKAGE_ROOT/build/lib" },
-  { when = { os = "macos" },   set = "$HPM_PACKAGE_ROOT/build/lib" },
-]}
-```
+When this package is consumed via `{ path = "..." }`, the dev variant fires
+and points Houdini at the live build directory. When it ships through a
+registry, hpm filters the dev variants out at install time, the fallback
+fires, and Houdini sees only the published `dso/` location. If you want
+the variable to disappear entirely for non-dev consumers, omit the
+fallback branch — an entry with no surviving variants is not emitted.
 
 Precedence when a key appears in more than one place (highest first):
 
-1. The consuming project's `[env]` override.
-2. The package's `[dev.env]` (when dev-installed).
-3. The package's `[env]`.
-
-`[dev.env]` *replaces* — it doesn't layer — for shared keys. Re-declaring
-`PYTHONPATH` in `[dev.env]` substitutes the dev path for the published
-one, rather than emitting both as `prepend` entries. Use distinct keys
-when you want layering.
-
-`[dev.env]` is gated on the install source, not on a global flag. Once a
-project switches a dependency from a path dep back to a registry version,
-`[dev.env]` stops firing for it without any further configuration. The
-table stays in `hpm.toml` and ships with the published archive, but it is
-inert for any install resolved from the registry CAS, so it never appears
-in the generated Houdini `package.json` for a published consumer.
+1. The consuming project's `[runtime]` override.
+2. The package's `[runtime]` entry (with surviving variants).
 
 ### `[native]`
 

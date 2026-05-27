@@ -9,7 +9,7 @@ use hpm_package::{
 };
 use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use indexmap::IndexMap;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -276,7 +276,7 @@ impl ProjectManager {
             }
         };
 
-        let project_env_overrides = project_manifest.env;
+        let project_env_overrides = project_manifest.runtime;
         let manifest_registries = project_manifest.registries;
         let dependencies = project_manifest.dependencies.unwrap_or_default();
 
@@ -650,57 +650,27 @@ impl ProjectManager {
             env.push(scripts_env);
         }
 
-        // Append user-defined env vars from [env], with [dev.env] layered on
-        // top for dev-installed packages and project [env] overrides on top
-        // of both. Precedence (highest first): project [env] override,
-        // package [dev.env] (only when is_dev), package [env]. A required-
-        // but-unsupplied placeholder that none of the higher-precedence
-        // sources fills surfaces as MissingRequiredEnv so a package is not
-        // silently launched without a value it depends on.
-        let user_env_opt = installed_package.manifest.env.as_ref();
-        let dev_env_opt = if installed_package.is_dev {
-            installed_package
-                .manifest
-                .dev
-                .as_ref()
-                .and_then(|d| d.env.as_ref())
-        } else {
-            None
-        };
+        // Append user-defined env vars from [runtime], with project-level
+        // [runtime] overrides winning per-key. Each entry's conditional
+        // variants are filtered by `is_dev` — branches gated to a
+        // non-matching `install_source` drop out, so dev-only contributions
+        // never reach a registry consumer's Houdini manifest and
+        // registry-only contributions never reach a dev install. A
+        // required-but-unsupplied placeholder (no value, no project
+        // override) surfaces as `MissingRequiredEnv`.
+        let user_runtime_opt = installed_package.manifest.runtime.as_ref();
 
-        if user_env_opt.is_some() || dev_env_opt.is_some() {
+        if let Some(user_runtime) = user_runtime_opt {
             let pkg_root = package_path.to_string_lossy().into_owned();
 
-            // Emission order: [env] keys in declared order, then any
-            // [dev.env]-only keys in their declared order. Stable order
-            // keeps the generated Houdini manifest diff-friendly.
-            let mut keys: Vec<&String> = Vec::new();
-            let mut seen: HashSet<&String> = HashSet::new();
-            if let Some(user_env) = user_env_opt {
-                for key in user_env.keys() {
-                    if seen.insert(key) {
-                        keys.push(key);
-                    }
-                }
-            }
-            if let Some(dev_env) = dev_env_opt {
-                for key in dev_env.keys() {
-                    if seen.insert(key) {
-                        keys.push(key);
-                    }
-                }
-            }
-
-            for key in keys {
+            for key in user_runtime.keys() {
                 let project_override = project_env_overrides
                     .as_ref()
                     .and_then(|overrides| overrides.get(key));
-                let dev_entry = dev_env_opt.and_then(|m| m.get(key));
-                let env_entry = user_env_opt.and_then(|m| m.get(key));
+                let pkg_entry = user_runtime.get(key);
                 let effective_entry = project_override
-                    .or(dev_entry)
-                    .or(env_entry)
-                    .expect("key originates from one of the env sources");
+                    .or(pkg_entry)
+                    .expect("key originates from package's [runtime]");
 
                 if effective_entry.value.is_none() {
                     return Err(ProjectError::MissingRequiredEnv {
@@ -709,14 +679,21 @@ impl ProjectManager {
                     });
                 }
 
-                let houdini_value = effective_entry
-                    .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)])
+                let lowered = effective_entry
+                    .lower(
+                        &[("$HPM_PACKAGE_ROOT", &pkg_root)],
+                        installed_package.is_dev,
+                    )
                     .map_err(|e| ProjectError::InvalidEnvExpression {
                         var: key.clone(),
                         package: installed_package.manifest.package.slug().to_string(),
                         message: e.to_string(),
-                    })?
-                    .expect("lower returns Some when value is set");
+                    })?;
+                let Some(houdini_value) = lowered else {
+                    // Every variant was install-source-filtered out for this
+                    // install context — the entry is inert here. Skip silently.
+                    continue;
+                };
                 let mut env_map = HashMap::new();
                 env_map.insert(key.clone(), houdini_value);
                 env.push(env_map);
@@ -1126,7 +1103,7 @@ pub enum ProjectError {
 
     #[error(
         "Required env var '{var}' for package '{package}' has no value. \
-         Set it in this project's [env] section in hpm.toml."
+         Set it in this project's [runtime] section in hpm.toml."
     )]
     MissingRequiredEnv { var: String, package: String },
 
@@ -1307,7 +1284,7 @@ mod tests {
                 required: false,
             },
         );
-        manifest.env = Some(pkg_env);
+        manifest.runtime = Some(pkg_env);
 
         let package_path = temp_dir.path().join("test-package@1.0.0");
         std::fs::create_dir_all(&package_path).unwrap();
@@ -1392,7 +1369,7 @@ mod tests {
                 required: true,
             },
         );
-        manifest.env = Some(pkg_env);
+        manifest.runtime = Some(pkg_env);
 
         let package_path = temp_dir.path().join("needs-config@1.0.0");
         std::fs::create_dir_all(&package_path).unwrap();
@@ -1445,7 +1422,7 @@ mod tests {
         }
     }
 
-    /// Helper: locate a single [env]-emitted entry by key.
+    /// Helper: locate a single [runtime]-emitted entry by key.
     fn find_env_entry<'a>(
         pkg: &'a hpm_package::HoudiniPackage,
         key: &str,
@@ -1453,8 +1430,25 @@ mod tests {
         pkg.env.as_ref()?.iter().find_map(|m| m.get(key))
     }
 
+    /// Build a `[runtime]` entry with conditional variants gated on
+    /// install_source. Mirrors the canonical HDK-plugin use case.
+    fn dev_only_runtime_entry(value: &str) -> ManifestEnvEntry {
+        use hpm_package::{EnvValueSpec, EnvValueVariant, WhenSelector};
+        ManifestEnvEntry {
+            method: hpm_package::EnvMethod::Prepend,
+            value: Some(EnvValueSpec::Conditional(vec![EnvValueVariant {
+                when: WhenSelector {
+                    install_source: Some("dev".to_string()),
+                    ..Default::default()
+                },
+                set: value.to_string(),
+            }])),
+            required: false,
+        }
+    }
+
     #[test]
-    fn dev_env_applied_only_when_is_dev() {
+    fn runtime_install_source_dev_gates_emission() {
         let temp_dir = TempDir::new().unwrap();
         let (config, storage_manager) = test_setup(temp_dir.path());
         let project_root = temp_dir.path().join("project");
@@ -1469,21 +1463,18 @@ mod tests {
             None,
             None,
         );
-        let mut dev_env = IndexMap::new();
-        dev_env.insert(
+        let mut runtime = IndexMap::new();
+        runtime.insert(
             "HOUDINI_DSO_PATH".to_string(),
-            ManifestEnvEntry {
-                method: hpm_package::EnvMethod::Prepend,
-                value: Some("$HPM_PACKAGE_ROOT/build/Release".into()),
-                required: false,
-            },
+            dev_only_runtime_entry("$HPM_PACKAGE_ROOT/build/Release"),
         );
-        manifest.dev = Some(hpm_package::DevSection { env: Some(dev_env) });
+        manifest.runtime = Some(runtime);
 
         let package_path = temp_dir.path().join("hdk-plugin@1.0.0");
         std::fs::create_dir_all(&package_path).unwrap();
 
-        // is_dev = false: [dev.env] must be skipped entirely.
+        // is_dev = false: the dev-only variant filters out, the entry has
+        // no surviving branches, so HOUDINI_DSO_PATH is not emitted at all.
         let non_dev = InstalledPackage {
             version: "1.0.0".to_string(),
             manifest: manifest.clone(),
@@ -1493,11 +1484,10 @@ mod tests {
         let pkg = project_manager.create_houdini_package(&non_dev).unwrap();
         assert!(
             find_env_entry(&pkg, "HOUDINI_DSO_PATH").is_none(),
-            "[dev.env] must not be emitted for non-dev installs"
+            "install_source = 'dev' must not be emitted for non-dev installs"
         );
 
-        // is_dev = true: [dev.env] entry is emitted with $HPM_PACKAGE_ROOT
-        // expanded to the install path.
+        // is_dev = true: the dev variant fires, $HPM_PACKAGE_ROOT expands.
         let dev = InstalledPackage {
             version: "1.0.0".to_string(),
             manifest,
@@ -1506,105 +1496,24 @@ mod tests {
         };
         let pkg = project_manager.create_houdini_package(&dev).unwrap();
         let entry = find_env_entry(&pkg, "HOUDINI_DSO_PATH")
-            .expect("[dev.env] must be emitted for dev installs");
+            .expect("dev-gated variant must be emitted for dev installs");
+        // Conditional values lower to DetailedConditional with one entry
+        // keyed by the runtime expression ("true" for an install-source-only
+        // gate, since install_source is stripped before compile_when).
         match entry {
-            hpm_package::HoudiniEnvValue::Detailed { method, value } => {
+            hpm_package::HoudiniEnvValue::DetailedConditional { method, value } => {
                 assert_eq!(method, "prepend");
-                // Build the expected string by literal concatenation rather
-                // than PathBuf::join: on Windows, `join("build/Release")`
-                // appends with a backslash separator but leaves the inner
-                // forward slash untouched, producing a mixed-separator
-                // string that doesn't match what $HPM_PACKAGE_ROOT
-                // substitution emits (backslash only at the package-root
-                // prefix, forward slashes from the toml literal afterward).
+                assert_eq!(value.len(), 1);
+                let v = value[0].values().next().unwrap();
                 let expected = format!("{}/build/Release", package_path.display());
-                assert_eq!(value, &expected);
+                assert_eq!(v, &expected);
             }
-            other => panic!("expected Detailed env value, got {other:?}"),
+            other => panic!("expected DetailedConditional env value, got {other:?}"),
         }
     }
 
     #[test]
-    fn dev_env_overrides_env_for_shared_key() {
-        let temp_dir = TempDir::new().unwrap();
-        let (config, storage_manager) = test_setup(temp_dir.path());
-        let project_root = temp_dir.path().join("project");
-        std::fs::create_dir_all(&project_root).unwrap();
-        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
-
-        let mut manifest = hpm_package::PackageManifest::new(
-            PackagePath::new("studio/with-shared-key").unwrap(),
-            "Shared Key".to_string(),
-            "1.0.0".to_string(),
-            None,
-            None,
-            None,
-        );
-        let mut env = IndexMap::new();
-        env.insert(
-            "PYTHONPATH".to_string(),
-            ManifestEnvEntry {
-                method: hpm_package::EnvMethod::Prepend,
-                value: Some("$HPM_PACKAGE_ROOT/published-python".into()),
-                required: false,
-            },
-        );
-        manifest.env = Some(env);
-        let mut dev_env = IndexMap::new();
-        dev_env.insert(
-            "PYTHONPATH".to_string(),
-            ManifestEnvEntry {
-                method: hpm_package::EnvMethod::Prepend,
-                value: Some("$HPM_PACKAGE_ROOT/dev-python".into()),
-                required: false,
-            },
-        );
-        manifest.dev = Some(hpm_package::DevSection { env: Some(dev_env) });
-
-        let package_path = temp_dir.path().join("with-shared-key@1.0.0");
-        std::fs::create_dir_all(&package_path).unwrap();
-
-        let installed = InstalledPackage {
-            version: "1.0.0".to_string(),
-            manifest,
-            install_path: package_path.clone(),
-            is_dev: true,
-        };
-        let pkg = project_manager.create_houdini_package(&installed).unwrap();
-
-        // Exactly one PYTHONPATH user entry — the [dev.env] value replaces
-        // the [env] value rather than layering both.
-        let user_pythonpath: Vec<_> = pkg
-            .env
-            .as_ref()
-            .unwrap()
-            .iter()
-            .filter_map(|m| m.get("PYTHONPATH"))
-            .filter(|v| match v {
-                hpm_package::HoudiniEnvValue::Detailed { value, .. } => {
-                    value.contains("python") && !value.ends_with("/python")
-                }
-                _ => false,
-            })
-            .collect();
-        assert_eq!(
-            user_pythonpath.len(),
-            1,
-            "[dev.env] must replace [env] for shared key, not layer"
-        );
-        match user_pythonpath[0] {
-            hpm_package::HoudiniEnvValue::Detailed { value, .. } => {
-                assert!(
-                    value.ends_with("dev-python"),
-                    "[dev.env] value must win: got {value}"
-                );
-            }
-            other => panic!("expected Detailed env value, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn project_override_wins_over_dev_env() {
+    fn project_override_wins_over_install_source_dev_variant() {
         let temp_dir = TempDir::new().unwrap();
         let (config, storage_manager) = test_setup(temp_dir.path());
         let project_root = temp_dir.path().join("project");
@@ -1619,16 +1528,12 @@ mod tests {
             None,
             None,
         );
-        let mut dev_env = IndexMap::new();
-        dev_env.insert(
+        let mut runtime = IndexMap::new();
+        runtime.insert(
             "HOUDINI_DSO_PATH".to_string(),
-            ManifestEnvEntry {
-                method: hpm_package::EnvMethod::Prepend,
-                value: Some("$HPM_PACKAGE_ROOT/build/Release".into()),
-                required: false,
-            },
+            dev_only_runtime_entry("$HPM_PACKAGE_ROOT/build/Release"),
         );
-        manifest.dev = Some(hpm_package::DevSection { env: Some(dev_env) });
+        manifest.runtime = Some(runtime);
 
         let package_path = temp_dir.path().join("overridable@1.0.0");
         std::fs::create_dir_all(&package_path).unwrap();
@@ -1653,7 +1558,7 @@ mod tests {
             .create_houdini_package_with_python(&installed, None, &Some(overrides))
             .unwrap();
         let entry = find_env_entry(&pkg, "HOUDINI_DSO_PATH")
-            .expect("dev-env key must still emit when overridden");
+            .expect("dev-gated key must still emit when project overrides it");
         match entry {
             hpm_package::HoudiniEnvValue::Detailed { value, .. } => {
                 assert_eq!(value, "/opt/forced/dso");
@@ -1809,72 +1714,25 @@ mod tests {
         );
     }
 
-    // ---- Property tests for [dev.env] merge --------------------------------
+    // ---- Property test for install_source filter --------------------------
 
     use proptest::prelude::*;
 
-    /// Fixed key pool keeps the same string identities in play across [env]
-    /// and [dev.env] draws so overlap (the interesting case) is frequent.
-    /// Deliberately avoids PYTHONPATH / HOUDINI_SCRIPT_PATH so the
-    /// hardcoded auto-emitted entries don't shadow the assertions.
-    const ENV_KEY_POOL: &[&str] = &[
-        "ALPHA_PATH",
-        "BETA_PATH",
-        "GAMMA_PATH",
-        "DELTA_PATH",
-        "EPSILON_PATH",
-        "ZETA_PATH",
-    ];
-
-    fn env_method_strategy() -> impl Strategy<Value = hpm_package::EnvMethod> {
-        prop_oneof![
-            Just(hpm_package::EnvMethod::Set),
-            Just(hpm_package::EnvMethod::Prepend),
-            Just(hpm_package::EnvMethod::Append),
-        ]
-    }
-
-    fn env_value_strategy() -> impl Strategy<Value = String> {
-        prop_oneof![
-            Just("$HPM_PACKAGE_ROOT/a".to_string()),
-            Just("$HPM_PACKAGE_ROOT/b".to_string()),
-            Just("$HPM_PACKAGE_ROOT/build/Release".to_string()),
-            Just("/abs/static/path".to_string()),
-            Just("relative/path".to_string()),
-        ]
-    }
-
-    fn env_entry_strategy() -> impl Strategy<Value = ManifestEnvEntry> {
-        (env_method_strategy(), env_value_strategy()).prop_map(|(method, value)| ManifestEnvEntry {
-            method,
-            value: Some(value.into()),
-            required: false,
-        })
-    }
-
-    fn env_table_strategy() -> impl Strategy<Value = IndexMap<String, ManifestEnvEntry>> {
-        prop::collection::vec((0..ENV_KEY_POOL.len(), env_entry_strategy()), 0..=4).prop_map(
-            |pairs| {
-                let mut map = IndexMap::new();
-                // Later pairs overwrite earlier ones at the same key, matching
-                // IndexMap's insertion semantics.
-                for (idx, entry) in pairs {
-                    map.insert(ENV_KEY_POOL[idx].to_string(), entry);
-                }
-                map
-            },
-        )
-    }
-
     proptest! {
-        /// Safety contract: [dev.env] never leaks into the Houdini manifest
-        /// for a non-dev install. For any [env] and [dev.env] combination,
-        /// the output with is_dev = false must equal the output produced
-        /// from a manifest where the [dev.env] table was never declared.
+        /// Safety contract: a `[runtime]` entry whose only variant is gated
+        /// `install_source = "dev"` never reaches the Houdini manifest for a
+        /// non-dev install. The is_dev=false output must match the output
+        /// produced from a manifest where the entry is absent.
         #[test]
-        fn prop_dev_env_inert_when_not_is_dev(
-            env_table in env_table_strategy(),
-            dev_env_table in env_table_strategy(),
+        fn prop_install_source_dev_inert_for_registry_install(
+            value in prop_oneof![
+                Just("$HPM_PACKAGE_ROOT/build/Release".to_string()),
+                Just("$HPM_PACKAGE_ROOT/dso".to_string()),
+                Just("/abs/static".to_string()),
+            ],
+            key in prop::sample::select(
+                vec!["ALPHA_PATH", "BETA_PATH", "GAMMA_PATH"]
+            ),
         ) {
             let temp_dir = TempDir::new().unwrap();
             let (config, storage_manager) = test_setup(temp_dir.path());
@@ -1890,118 +1748,34 @@ mod tests {
                 None,
                 None,
             );
-            with_dev.env = Some(env_table);
-            with_dev.dev = Some(hpm_package::DevSection {
-                env: Some(dev_env_table),
-            });
+            let mut runtime = IndexMap::new();
+            runtime.insert(key.to_string(), dev_only_runtime_entry(&value));
+            with_dev.runtime = Some(runtime);
 
-            let mut without_dev = with_dev.clone();
-            without_dev.dev = None;
+            let mut without = with_dev.clone();
+            without.runtime = None;
 
             let pkg_path = temp_dir.path().join("inertness@1.0.0");
             std::fs::create_dir_all(&pkg_path).unwrap();
 
-            let a = pm
-                .create_houdini_package(&InstalledPackage {
-                    version: "1.0.0".to_string(),
-                    manifest: with_dev,
-                    install_path: pkg_path.clone(),
-                    is_dev: false,
-                });
-            let b = pm
-                .create_houdini_package(&InstalledPackage {
-                    version: "1.0.0".to_string(),
-                    manifest: without_dev,
-                    install_path: pkg_path,
-                    is_dev: false,
-                });
-
-            // Compare via Debug to catch both Ok and Err shapes uniformly:
-            // a regression that fires [dev.env] for non-dev installs would
-            // diverge here even when neither side errors.
-            prop_assert_eq!(format!("{:?}", a), format!("{:?}", b));
-        }
-
-        /// Precedence + replacement: when is_dev = true, every user-supplied
-        /// key appears exactly once in the emitted env list with the value
-        /// from [dev.env] if present, otherwise from [env]. Keys absent from
-        /// both must not appear.
-        #[test]
-        fn prop_dev_env_replaces_env_for_shared_keys(
-            env_table in env_table_strategy(),
-            dev_env_table in env_table_strategy(),
-        ) {
-            let temp_dir = TempDir::new().unwrap();
-            let (config, storage_manager) = test_setup(temp_dir.path());
-            let project_root = temp_dir.path().join("project");
-            std::fs::create_dir_all(&project_root).unwrap();
-            let pm = ProjectManager::new(project_root, storage_manager, config).unwrap();
-
-            let mut manifest = hpm_package::PackageManifest::new(
-                PackagePath::new("studio/precedence").unwrap(),
-                "Precedence".to_string(),
-                "1.0.0".to_string(),
-                None,
-                None,
-                None,
-            );
-            manifest.env = Some(env_table.clone());
-            manifest.dev = Some(hpm_package::DevSection {
-                env: Some(dev_env_table.clone()),
+            let a = pm.create_houdini_package(&InstalledPackage {
+                version: "1.0.0".to_string(),
+                manifest: with_dev,
+                install_path: pkg_path.clone(),
+                is_dev: false,
+            });
+            let b = pm.create_houdini_package(&InstalledPackage {
+                version: "1.0.0".to_string(),
+                manifest: without,
+                install_path: pkg_path,
+                is_dev: false,
             });
 
-            let pkg_path = temp_dir.path().join("precedence@1.0.0");
-            std::fs::create_dir_all(&pkg_path).unwrap();
-            let pkg_root_str = pkg_path.to_string_lossy().into_owned();
-
-            let installed = InstalledPackage {
-                version: "1.0.0".to_string(),
-                manifest,
-                install_path: pkg_path,
-                is_dev: true,
-            };
-
-            let result = pm.create_houdini_package(&installed).unwrap();
-            // env is None when nothing was emitted at all — e.g. both
-            // tables drew zero keys. Treat that as the empty slice so
-            // the per-key assertion still runs (all keys must be absent).
-            let env_entries: &[std::collections::HashMap<String, hpm_package::HoudiniEnvValue>] =
-                result.env.as_deref().unwrap_or(&[]);
-
-            for key in ENV_KEY_POOL.iter().map(|k| k.to_string()) {
-                let expected_entry = dev_env_table.get(&key).or_else(|| env_table.get(&key));
-                let appearances: Vec<_> = env_entries
-                    .iter()
-                    .filter_map(|m| m.get(&key))
-                    .collect();
-
-                match expected_entry {
-                    None => prop_assert!(
-                        appearances.is_empty(),
-                        "key {} not in [env] or [dev.env] must not appear",
-                        key
-                    ),
-                    Some(entry) => {
-                        prop_assert_eq!(
-                            appearances.len(),
-                            1,
-                            "key {} must appear exactly once (replacement, not layering)",
-                            key.clone()
-                        );
-                        let expected_lowered = entry
-                            .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root_str)])
-                            .unwrap()
-                            .unwrap();
-                        // HoudiniEnvValue doesn't implement PartialEq, so
-                        // compare via Debug — sufficient since both arms
-                        // contain only strings.
-                        prop_assert_eq!(
-                            format!("{:?}", appearances[0]),
-                            format!("{:?}", &expected_lowered)
-                        );
-                    }
-                }
-            }
+            // Compare via Debug — HoudiniPackage / HoudiniEnvValue don't
+            // implement PartialEq, and a regression that fires the dev
+            // branch for is_dev=false would diverge here even when both
+            // sides succeed.
+            prop_assert_eq!(format!("{:?}", a), format!("{:?}", b));
         }
     }
 }

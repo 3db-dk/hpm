@@ -257,7 +257,7 @@ Before adding a dependency:
 
 - Verify the package is from the creator you expect.
 - Check the repository's recent activity — is it maintained?
-- Skim the manifest for scripts, native binaries, and `[env]` entries that do more than you want.
+- Skim the manifest for scripts, native binaries, and `[runtime]` entries that do more than you want.
 
 HPM gives you reproducible, verifiable installs of *whatever you asked for*.
 It cannot tell you whether what you asked for is trustworthy.

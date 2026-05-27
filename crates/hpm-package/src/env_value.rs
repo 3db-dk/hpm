@@ -1,4 +1,4 @@
-//! Conditional `[env]` value support: hpm.toml schema and lowering to
+//! Conditional `[runtime]` value support: hpm.toml schema and lowering to
 //! Houdini's `package.json` expression form.
 //!
 //! Authors can write a flat string (today's behaviour) or a list of
@@ -56,8 +56,14 @@ pub struct EnvValueVariant {
 
 /// Selector axes for a conditional env-value branch.
 ///
+/// The `houdini`, `os`, and `python` axes are *runtime-evaluated by Houdini*
+/// — they compile to a `package.json` expression that Houdini evaluates at
+/// startup. `install_source` is *install-time evaluated by hpm* — it filters
+/// out non-matching branches before the Houdini package.json is emitted, so
+/// it never appears in the runtime expression.
+///
 /// All present axes combine with `and`. An empty selector is "always-true"
-/// and produces a fallback branch that matches every Houdini.
+/// and produces a fallback branch.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WhenSelector {
@@ -72,19 +78,48 @@ pub struct WhenSelector {
     /// `houdini_python == 'python3.11'`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub python: Option<String>,
+    /// Install-source filter: `"dev"` (path dependency) or `"registry"`
+    /// (registry/URL install). Filtered at install time and never emitted to
+    /// Houdini — so a branch gated `install_source = "dev"` disappears
+    /// entirely from a published consumer's `package.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_source: Option<String>,
 }
 
 impl WhenSelector {
     pub fn is_empty(&self) -> bool {
-        self.houdini.is_none() && self.os.is_none() && self.python.is_none()
+        self.houdini.is_none()
+            && self.os.is_none()
+            && self.python.is_none()
+            && self.install_source.is_none()
+    }
+
+    /// True when this selector's `install_source` axis matches the given
+    /// install context. A `None` axis matches both. Other axes are ignored
+    /// here — those are evaluated by Houdini, not hpm.
+    ///
+    /// Errors on an unknown `install_source` value so the typo surfaces at
+    /// install time rather than silently dropping the variant.
+    pub fn matches_install_source(&self, is_dev: bool) -> Result<bool, ExpressionError> {
+        match self.install_source.as_deref() {
+            None => Ok(true),
+            Some("dev") => Ok(is_dev),
+            Some("registry") => Ok(!is_dev),
+            Some(other) => Err(ExpressionError::UnknownInstallSource(other.to_string())),
+        }
     }
 }
 
 /// Compile a `WhenSelector` into the Houdini-side expression string.
 ///
-/// Returns `Ok(None)` if the selector is empty (always-true). The caller
-/// decides how to encode that — typically as a literal `true` expression
-/// at the end of the conditional array.
+/// Returns `Ok(None)` if the selector contributes nothing to the runtime
+/// expression (empty selector, or `install_source`-only — that axis is
+/// filtered at install time, not by Houdini). The caller decides how to
+/// encode `None` — typically as a literal `true` expression at the end of
+/// the conditional array.
+///
+/// Also validates `install_source` is one of `"dev"` / `"registry"` —
+/// unknown values would otherwise silently drop the branch at install time.
 pub fn compile_when(selector: &WhenSelector) -> Result<Option<String>, ExpressionError> {
     let mut parts: Vec<String> = Vec::new();
 
@@ -96,6 +131,12 @@ pub fn compile_when(selector: &WhenSelector) -> Result<Option<String>, Expressio
     }
     if let Some(py) = &selector.python {
         parts.push(compile_python(py)?);
+    }
+    if let Some(src) = &selector.install_source {
+        match src.as_str() {
+            "dev" | "registry" => {}
+            _ => return Err(ExpressionError::UnknownInstallSource(src.clone())),
+        }
     }
 
     if parts.is_empty() {
@@ -320,21 +361,40 @@ pub enum ExpressionError {
     UnknownOs(String),
     #[error("invalid python identifier: {0}")]
     InvalidPython(String),
+    #[error("unknown install_source '{0}' (expected 'dev' or 'registry')")]
+    UnknownInstallSource(String),
 }
 
 /// Lower a `Conditional` env value into Houdini's `[{ "<expr>": "<val>" }, …]`
 /// shape, applying the supplied substitutions to each branch's `set` string.
 ///
+/// Variants whose `install_source` axis does not match `is_dev` are
+/// filtered out before lowering, so install-time gates never reach the
+/// Houdini-side expression. The `install_source` axis is also stripped
+/// from surviving variants when compiling the runtime `when` expression.
+///
+/// Returns an empty vec if every variant is filtered out. Callers that
+/// treat that as "no effective value" can short-circuit emission.
 /// Substitutions are applied verbatim with `String::replace`, mirroring the
 /// flat-value path. An empty `when` is encoded as the literal `"true"`
 /// expression so it acts as a fallback branch.
 pub fn lower_conditional(
     variants: &[EnvValueVariant],
     substitutions: &[(&str, &str)],
+    is_dev: bool,
 ) -> Result<Vec<HashMap<String, String>>, ExpressionError> {
     let mut out = Vec::with_capacity(variants.len());
     for variant in variants {
-        let expr = compile_when(&variant.when)?.unwrap_or_else(|| "true".to_string());
+        if !variant.when.matches_install_source(is_dev)? {
+            continue;
+        }
+        // Strip the install_source axis before compiling — it must not
+        // appear in the Houdini-side expression.
+        let runtime_when = WhenSelector {
+            install_source: None,
+            ..variant.when.clone()
+        };
+        let expr = compile_when(&runtime_when)?.unwrap_or_else(|| "true".to_string());
         let mut value = variant.set.clone();
         for (from, to) in substitutions {
             value = value.replace(from, to);
@@ -453,6 +513,7 @@ mod tests {
             houdini: Some("^21".to_string()),
             os: Some("linux".to_string()),
             python: None,
+            install_source: None,
         })
         .unwrap()
         .unwrap();
@@ -485,7 +546,8 @@ mod tests {
                 set: "$HPM_PACKAGE_ROOT/h22/x".to_string(),
             },
         ];
-        let lowered = lower_conditional(&variants, &[("$HPM_PACKAGE_ROOT", "/abs/pkg")]).unwrap();
+        let lowered =
+            lower_conditional(&variants, &[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false).unwrap();
         assert_eq!(lowered.len(), 2);
         let first = &lowered[0];
         let key = first.keys().next().unwrap();
@@ -499,9 +561,80 @@ mod tests {
             when: WhenSelector::default(),
             set: "default".to_string(),
         }];
-        let lowered = lower_conditional(&variants, &[]).unwrap();
+        let lowered = lower_conditional(&variants, &[], false).unwrap();
         assert_eq!(lowered.len(), 1);
         assert_eq!(lowered[0]["true"], "default");
+    }
+
+    #[test]
+    fn install_source_dev_filters_out_for_registry_install() {
+        let variants = vec![
+            EnvValueVariant {
+                when: WhenSelector {
+                    install_source: Some("dev".to_string()),
+                    ..Default::default()
+                },
+                set: "build/Release".to_string(),
+            },
+            EnvValueVariant {
+                when: WhenSelector::default(),
+                set: "dso".to_string(),
+            },
+        ];
+        // Registry install: dev variant drops.
+        let lowered = lower_conditional(&variants, &[], false).unwrap();
+        assert_eq!(lowered.len(), 1);
+        assert_eq!(lowered[0]["true"], "dso");
+        // Dev install: both fire, dev first.
+        let lowered = lower_conditional(&variants, &[], true).unwrap();
+        assert_eq!(lowered.len(), 2);
+        assert_eq!(lowered[0]["true"], "build/Release");
+        assert_eq!(lowered[1]["true"], "dso");
+    }
+
+    #[test]
+    fn install_source_strips_from_runtime_expression() {
+        // A dev branch that also has a Houdini constraint should emit only
+        // the Houdini constraint to the runtime expression — install_source
+        // is hpm-side, not Houdini-side.
+        let variants = vec![EnvValueVariant {
+            when: WhenSelector {
+                houdini: Some("^21".to_string()),
+                install_source: Some("dev".to_string()),
+                ..Default::default()
+            },
+            set: "x".to_string(),
+        }];
+        let lowered = lower_conditional(&variants, &[], true).unwrap();
+        assert_eq!(lowered.len(), 1);
+        let key = lowered[0].keys().next().unwrap();
+        assert!(key.contains("houdini_version"));
+        assert!(!key.contains("install_source"));
+    }
+
+    #[test]
+    fn install_source_registry_filters_out_for_dev_install() {
+        let variants = vec![EnvValueVariant {
+            when: WhenSelector {
+                install_source: Some("registry".to_string()),
+                ..Default::default()
+            },
+            set: "dso".to_string(),
+        }];
+        assert_eq!(lower_conditional(&variants, &[], true).unwrap().len(), 0);
+        assert_eq!(lower_conditional(&variants, &[], false).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn unknown_install_source_rejected() {
+        let variants = vec![EnvValueVariant {
+            when: WhenSelector {
+                install_source: Some("ci".to_string()),
+                ..Default::default()
+            },
+            set: "x".to_string(),
+        }];
+        assert!(lower_conditional(&variants, &[], true).is_err());
     }
 
     #[test]

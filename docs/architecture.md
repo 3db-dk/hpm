@@ -93,13 +93,8 @@ pub struct PackageManifest {
     pub registries: Option<Vec<RegistryConfig>>,
     pub dependencies: Option<IndexMap<String, DependencySpec>>,
     pub python_dependencies: Option<IndexMap<String, PythonDependencySpec>>,
-    pub env: Option<IndexMap<String, ManifestEnvEntry>>,
+    pub runtime: Option<IndexMap<String, ManifestEnvEntry>>,
     pub scripts: Option<PackageScripts>,
-    pub dev: Option<DevSection>,        // [dev.env] — fires only for path-dep installs
-}
-
-pub struct DevSection {
-    pub env: Option<IndexMap<String, ManifestEnvEntry>>,
 }
 
 pub struct PackageScripts {
@@ -472,15 +467,17 @@ on a Windows junction would recurse into and delete the user's workspace
 on the next sync or orphan sweep.
 
 Both styles set `InstalledPackage::is_dev = true`. That flag flows
-through to `create_houdini_package_with_python`, which uses it to gate
-the `[dev.env]` merge — a manifest's dev-only env contributions only
-land in the generated Houdini `package.json` when the install
-originated from a path dep. Registry-fetched installs ignore
-`[dev.env]` even when it is present in the bundled `hpm.toml`, so the
-published archive stays inert for downstream consumers. Precedence at
-emission time: project-level `[env]` override > package `[dev.env]` >
-package `[env]`, with `[dev.env]` keys *replacing* the same `[env]`
-key rather than layering.
+through to `create_houdini_package_with_python`, which forwards it to
+`ManifestEnvEntry::lower(.., is_dev)`. The `install_source` axis on each
+conditional `[runtime]` variant is filtered there: variants gated to
+`"dev"` only survive for path-installed packages, variants gated to
+`"registry"` only survive for registry/URL installs, and variants with no
+axis fire in both contexts. A registry-fetched install whose every
+matching variant is `install_source = "dev"` produces no entry for that
+key in the generated `package.json`, so dev-only paths never leak to a
+published consumer. Precedence at emission time: project-level
+`[runtime]` override > the package's `[runtime]` entry's surviving
+variants.
 
 ## Python integration
 
