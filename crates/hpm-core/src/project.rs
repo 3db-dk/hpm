@@ -1508,8 +1508,15 @@ mod tests {
         match entry {
             hpm_package::HoudiniEnvValue::Detailed { method, value } => {
                 assert_eq!(method, "prepend");
-                let expected = package_path.join("build/Release");
-                assert_eq!(value, &expected.to_string_lossy().to_string());
+                // Build the expected string by literal concatenation rather
+                // than PathBuf::join: on Windows, `join("build/Release")`
+                // appends with a backslash separator but leaves the inner
+                // forward slash untouched, producing a mixed-separator
+                // string that doesn't match what $HPM_PACKAGE_ROOT
+                // substitution emits (backslash only at the package-root
+                // prefix, forward slashes from the toml literal afterward).
+                let expected = format!("{}/build/Release", package_path.display());
+                assert_eq!(value, &expected);
             }
             other => panic!("expected Detailed env value, got {other:?}"),
         }
