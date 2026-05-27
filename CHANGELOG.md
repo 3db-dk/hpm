@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-05-27
+
 ### Added
 - **`[dev.env]` table in `hpm.toml` for dev-only environment contributions.**
   Mirrors the `[env]` value shape (flat string, conditional `{ when, set }`
