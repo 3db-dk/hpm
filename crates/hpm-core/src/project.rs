@@ -1799,4 +1799,205 @@ mod tests {
             "stale manifest must be swept even when the dep set is empty"
         );
     }
+
+    // ---- Property tests for [dev.env] merge --------------------------------
+
+    /// Fixed key pool keeps the same string identities in play across [env]
+    /// and [dev.env] draws so overlap (the interesting case) is frequent.
+    /// Deliberately avoids PYTHONPATH / HOUDINI_SCRIPT_PATH so the
+    /// hardcoded auto-emitted entries don't shadow the assertions.
+    const ENV_KEY_POOL: &[&str] = &[
+        "ALPHA_PATH",
+        "BETA_PATH",
+        "GAMMA_PATH",
+        "DELTA_PATH",
+        "EPSILON_PATH",
+        "ZETA_PATH",
+    ];
+
+    fn env_method_strategy() -> impl proptest::strategy::Strategy<Value = hpm_package::EnvMethod> {
+        use proptest::prelude::*;
+        prop_oneof![
+            Just(hpm_package::EnvMethod::Set),
+            Just(hpm_package::EnvMethod::Prepend),
+            Just(hpm_package::EnvMethod::Append),
+        ]
+    }
+
+    fn env_value_strategy() -> impl proptest::strategy::Strategy<Value = String> {
+        use proptest::prelude::*;
+        prop_oneof![
+            Just("$HPM_PACKAGE_ROOT/a".to_string()),
+            Just("$HPM_PACKAGE_ROOT/b".to_string()),
+            Just("$HPM_PACKAGE_ROOT/build/Release".to_string()),
+            Just("/abs/static/path".to_string()),
+            Just("relative/path".to_string()),
+        ]
+    }
+
+    fn env_entry_strategy() -> impl proptest::strategy::Strategy<Value = ManifestEnvEntry> {
+        use proptest::prelude::*;
+        (env_method_strategy(), env_value_strategy()).prop_map(|(method, value)| ManifestEnvEntry {
+            method,
+            value: Some(value.into()),
+            required: false,
+        })
+    }
+
+    fn env_table_strategy()
+    -> impl proptest::strategy::Strategy<Value = IndexMap<String, ManifestEnvEntry>> {
+        use proptest::prelude::*;
+        prop::collection::vec((0..ENV_KEY_POOL.len(), env_entry_strategy()), 0..=4).prop_map(
+            |pairs| {
+                let mut map = IndexMap::new();
+                // Later pairs overwrite earlier ones at the same key, matching
+                // IndexMap's insertion semantics.
+                for (idx, entry) in pairs {
+                    map.insert(ENV_KEY_POOL[idx].to_string(), entry);
+                }
+                map
+            },
+        )
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Safety contract: [dev.env] never leaks into the Houdini manifest
+        /// for a non-dev install. For any [env] and [dev.env] combination,
+        /// the output with is_dev = false must equal the output produced
+        /// from a manifest where the [dev.env] table was never declared.
+        #[test]
+        fn prop_dev_env_inert_when_not_is_dev(
+            env_table in env_table_strategy(),
+            dev_env_table in env_table_strategy(),
+        ) {
+            let temp_dir = TempDir::new().unwrap();
+            let (config, storage_manager) = test_setup(temp_dir.path());
+            let project_root = temp_dir.path().join("project");
+            std::fs::create_dir_all(&project_root).unwrap();
+            let pm = ProjectManager::new(project_root, storage_manager, config).unwrap();
+
+            let mut with_dev = hpm_package::PackageManifest::new(
+                PackagePath::new("studio/inertness").unwrap(),
+                "Inertness".to_string(),
+                "1.0.0".to_string(),
+                None,
+                None,
+                None,
+            );
+            with_dev.env = Some(env_table);
+            with_dev.dev = Some(hpm_package::DevSection {
+                env: Some(dev_env_table),
+            });
+
+            let mut without_dev = with_dev.clone();
+            without_dev.dev = None;
+
+            let pkg_path = temp_dir.path().join("inertness@1.0.0");
+            std::fs::create_dir_all(&pkg_path).unwrap();
+
+            let a = pm
+                .create_houdini_package(&InstalledPackage {
+                    version: "1.0.0".to_string(),
+                    manifest: with_dev,
+                    install_path: pkg_path.clone(),
+                    is_dev: false,
+                });
+            let b = pm
+                .create_houdini_package(&InstalledPackage {
+                    version: "1.0.0".to_string(),
+                    manifest: without_dev,
+                    install_path: pkg_path,
+                    is_dev: false,
+                });
+
+            // Compare via Debug to catch both Ok and Err shapes uniformly:
+            // a regression that fires [dev.env] for non-dev installs would
+            // diverge here even when neither side errors.
+            prop_assert_eq!(format!("{:?}", a), format!("{:?}", b));
+        }
+
+        /// Precedence + replacement: when is_dev = true, every user-supplied
+        /// key appears exactly once in the emitted env list with the value
+        /// from [dev.env] if present, otherwise from [env]. Keys absent from
+        /// both must not appear.
+        #[test]
+        fn prop_dev_env_replaces_env_for_shared_keys(
+            env_table in env_table_strategy(),
+            dev_env_table in env_table_strategy(),
+        ) {
+            let temp_dir = TempDir::new().unwrap();
+            let (config, storage_manager) = test_setup(temp_dir.path());
+            let project_root = temp_dir.path().join("project");
+            std::fs::create_dir_all(&project_root).unwrap();
+            let pm = ProjectManager::new(project_root, storage_manager, config).unwrap();
+
+            let mut manifest = hpm_package::PackageManifest::new(
+                PackagePath::new("studio/precedence").unwrap(),
+                "Precedence".to_string(),
+                "1.0.0".to_string(),
+                None,
+                None,
+                None,
+            );
+            manifest.env = Some(env_table.clone());
+            manifest.dev = Some(hpm_package::DevSection {
+                env: Some(dev_env_table.clone()),
+            });
+
+            let pkg_path = temp_dir.path().join("precedence@1.0.0");
+            std::fs::create_dir_all(&pkg_path).unwrap();
+            let pkg_root_str = pkg_path.to_string_lossy().into_owned();
+
+            let installed = InstalledPackage {
+                version: "1.0.0".to_string(),
+                manifest,
+                install_path: pkg_path,
+                is_dev: true,
+            };
+
+            let result = pm.create_houdini_package(&installed).unwrap();
+            // env is None when nothing was emitted at all — e.g. both
+            // tables drew zero keys. Treat that as the empty slice so
+            // the per-key assertion still runs (all keys must be absent).
+            let env_entries: &[std::collections::HashMap<String, hpm_package::HoudiniEnvValue>] =
+                result.env.as_deref().unwrap_or(&[]);
+
+            for key in ENV_KEY_POOL.iter().map(|k| k.to_string()) {
+                let expected_entry = dev_env_table.get(&key).or_else(|| env_table.get(&key));
+                let appearances: Vec<_> = env_entries
+                    .iter()
+                    .filter_map(|m| m.get(&key))
+                    .collect();
+
+                match expected_entry {
+                    None => prop_assert!(
+                        appearances.is_empty(),
+                        "key {} not in [env] or [dev.env] must not appear",
+                        key
+                    ),
+                    Some(entry) => {
+                        prop_assert_eq!(
+                            appearances.len(),
+                            1,
+                            "key {} must appear exactly once (replacement, not layering)",
+                            key.clone()
+                        );
+                        let expected_lowered = entry
+                            .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root_str)])
+                            .unwrap()
+                            .unwrap();
+                        // HoudiniEnvValue doesn't implement PartialEq, so
+                        // compare via Debug — sufficient since both arms
+                        // contain only strings.
+                        prop_assert_eq!(
+                            format!("{:?}", appearances[0]),
+                            format!("{:?}", &expected_lowered)
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
