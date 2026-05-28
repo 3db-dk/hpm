@@ -1,7 +1,7 @@
 //! Global storage layout: where HPM keeps packages, caches, and registry
 //! indexes on disk.
 
-use crate::user_home;
+use hpm_package::user_home;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

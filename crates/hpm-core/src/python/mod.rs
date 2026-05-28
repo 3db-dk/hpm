@@ -166,20 +166,6 @@ pub mod script_env;
 pub mod types;
 pub mod venv;
 
-/// Locate the user's home directory.
-///
-/// Avoids the `dirs` / `home` crates to keep the supply-chain surface small.
-pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("USERPROFILE").map(std::path::PathBuf::from)
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var_os("HOME").map(std::path::PathBuf::from)
-    }
-}
-
 /// The root HPM data directory (`~/.hpm`).
 ///
 /// Errors if the user's home directory cannot be determined — typically
@@ -188,18 +174,20 @@ pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
 /// which scattered uv binaries and venvs across whichever cwd hpm
 /// happened to run from. Hard error catches the misconfiguration up front.
 pub(crate) fn hpm_root() -> anyhow::Result<std::path::PathBuf> {
-    home_dir().map(|home| home.join(".hpm")).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Could not locate the user's home directory ({}). HPM stores \
+    hpm_package::user_home()
+        .map(|home| home.join(".hpm"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Could not locate the user's home directory ({}). HPM stores \
                  its tools, caches, and venvs under ~/.hpm — set the variable \
                  or run from a shell where it is available.",
-            if cfg!(windows) {
-                "%USERPROFILE%"
-            } else {
-                "$HOME"
-            }
-        )
-    })
+                if cfg!(windows) {
+                    "%USERPROFILE%"
+                } else {
+                    "$HOME"
+                }
+            )
+        })
 }
 
 // Dependency collection

@@ -2,7 +2,27 @@
 //! and glob matching — anywhere a path string must look the same on
 //! Windows and Unix.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Locate the user's home directory via the platform's canonical env var
+/// (`HOME` on Unix, `USERPROFILE` on Windows). Returns `None` when the
+/// variable is unset.
+///
+/// Sidesteps the `dirs` / `home` crates so the workspace doesn't grow a
+/// supply-chain dependency for a one-line lookup. Multiple crates need
+/// this (`hpm-config` for the user config directory, `hpm_core::python`
+/// for `~/.hpm/venvs/`), so it lives in `hpm-package` as the lowest
+/// shared layer.
+pub fn user_home() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("USERPROFILE").map(PathBuf::from)
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("HOME").map(PathBuf::from)
+    }
+}
 
 /// Render a relative path with `/` separators, regardless of host OS.
 ///

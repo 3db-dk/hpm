@@ -71,20 +71,6 @@ pub struct Config {
     pub signing: SigningConfig,
 }
 
-/// Locate the user's home directory.
-///
-/// Avoids the `dirs` / `home` crates to keep the supply-chain surface small.
-pub(crate) fn user_home() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("USERPROFILE").map(PathBuf::from)
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var_os("HOME").map(PathBuf::from)
-    }
-}
-
 impl Config {
     pub fn default_home_dir() -> PathBuf {
         storage::default_home_dir()

@@ -132,6 +132,7 @@ pub use manifest::{
     ScriptEnv, StageConfig, StagePlatformRules, ValidationLevel, ValidationReport,
 };
 pub use package_path::{PackagePath, PackagePathError};
+pub use path_util::user_home;
 pub use platform::Platform;
 pub use python::PythonDependencySpec;
 pub use template::PackageTemplate;
