@@ -11,10 +11,10 @@ pub struct PythonCleanupAnalyzer {
 }
 
 impl PythonCleanupAnalyzer {
-    pub fn new() -> Self {
-        Self {
-            venv_manager: VenvManager::new(),
-        }
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            venv_manager: VenvManager::new()?,
+        })
     }
 
     /// Construct an analyzer backed by an explicit `VenvManager`.
@@ -95,11 +95,9 @@ impl PythonCleanupAnalyzer {
     }
 }
 
-impl Default for PythonCleanupAnalyzer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// No `Default` impl: `Self::new()` is fallible (depends on `$HOME` /
+// `%USERPROFILE%`), and a defaulted analyzer that panics or silently
+// uses the wrong venvs dir would be worse than just calling `new`.
 
 /// Result of cleanup operations
 #[derive(Debug, Default)]
@@ -210,7 +208,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_python_cleanup_analyzer_creation() {
-        let _analyzer = PythonCleanupAnalyzer::new();
-        // Just test that it can be created without errors
+        let _analyzer = PythonCleanupAnalyzer::new().expect("home dir resolves under test env");
     }
 }

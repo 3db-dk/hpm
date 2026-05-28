@@ -111,7 +111,7 @@
 //! let resolved_sets = resolve_dependencies(&collected_deps).await?;
 //!
 //! // 4. Create virtual environment for the resolved dependencies
-//! let venv_manager = VenvManager::new();
+//! let venv_manager = VenvManager::new()?;
 //! let venv_path = venv_manager.ensure_virtual_environment(&resolved_sets).await?;
 //! println!("Virtual environment ready at: {:?}", venv_path);
 //! # Ok(())
@@ -125,7 +125,7 @@
 //! use hpm_python::cleanup::PythonCleanupAnalyzer;
 //!
 //! # async fn cleanup_example() -> anyhow::Result<()> {
-//! let analyzer = PythonCleanupAnalyzer::new();
+//! let analyzer = PythonCleanupAnalyzer::new()?;
 //! let active_packages = vec!["package-a@1.0.0".to_string()];
 //!
 //! // Find orphaned virtual environments
@@ -180,6 +180,28 @@ pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
     }
 }
 
+/// The root HPM data directory (`~/.hpm`).
+///
+/// Errors if the user's home directory cannot be determined — typically
+/// because `$HOME` (Unix) or `%USERPROFILE%` (Windows) is unset in the
+/// invoking environment. Previously this silently fell back to `"."`,
+/// which scattered uv binaries and venvs across whichever cwd hpm
+/// happened to run from. Hard error catches the misconfiguration up front.
+pub(crate) fn hpm_root() -> anyhow::Result<std::path::PathBuf> {
+    home_dir().map(|home| home.join(".hpm")).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Could not locate the user's home directory ({}). HPM stores \
+                 its tools, caches, and venvs under ~/.hpm — set the variable \
+                 or run from a shell where it is available.",
+            if cfg!(windows) {
+                "%USERPROFILE%"
+            } else {
+                "$HOME"
+            }
+        )
+    })
+}
+
 // Dependency collection
 pub use dependency::collect_python_dependencies;
 
@@ -231,53 +253,10 @@ pub async fn initialize() -> Result<()> {
     Ok(())
 }
 
-/// Get the HPM Python cache directory
+/// The HPM virtual environments directory (`~/.hpm/venvs/`).
 ///
-/// Returns the directory where UV stores its package cache. This is isolated from
-/// any system UV installation to prevent interference.
-///
-/// Default location: `~/.hpm/uv-cache/`
-///
-/// # Returns
-///
-/// PathBuf pointing to the UV cache directory within HPM's managed directory structure.
-pub fn get_python_cache_dir() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".hpm")
-        .join("uv-cache")
-}
-
-/// Get the HPM Python configuration directory
-///
-/// Returns the directory where UV configuration files are stored. This ensures
-/// UV's configuration is completely isolated from any system installation.
-///
-/// Default location: `~/.hpm/uv-config/`
-///
-/// # Returns
-///
-/// PathBuf pointing to the UV configuration directory within HPM's managed directory structure.
-pub fn get_python_config_dir() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".hpm")
-        .join("uv-config")
-}
-
-/// Get the HPM virtual environments directory
-///
-/// Returns the directory where all Python virtual environments are stored.
-/// Virtual environments are organized by content hash for sharing between packages
-/// with identical resolved dependencies.
-///
-/// Default location: `~/.hpm/venvs/`
-///
-/// # Returns
-///
-/// PathBuf pointing to the virtual environments directory within HPM's managed directory structure.
-///
-/// # Directory Structure
+/// All venvs are organized by content hash for sharing between packages
+/// with identical resolved dependencies:
 ///
 /// ```text
 /// ~/.hpm/venvs/
@@ -288,9 +267,8 @@ pub fn get_python_config_dir() -> PathBuf {
 /// └── e5f6g7h8/          # Another virtual environment
 ///     └── ...
 /// ```
-pub fn get_venvs_dir() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".hpm")
-        .join("venvs")
+///
+/// Errors via [`hpm_root`] when the user's home directory is unset.
+pub fn get_venvs_dir() -> anyhow::Result<PathBuf> {
+    hpm_root().map(|root| root.join("venvs"))
 }

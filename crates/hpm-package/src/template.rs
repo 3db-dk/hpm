@@ -102,53 +102,22 @@ impl PackageTemplate {
     }
 
     fn generate_manifest_toml(&self, manifest: &PackageManifest) -> String {
-        toml::to_string_pretty(manifest).unwrap_or_else(|_| {
-            // Fallback if serialization fails
-            format!(
-                r#"[package]
-path = "{}"
-name = "{}"
-version = "{}"
-description = "{}"
-authors = {}
-license = "{}"
-readme = "README.md"
-keywords = ["houdini"]
-
-[compat]
-houdini = "^21"
-"#,
-                manifest.package.path,
-                manifest.package.name,
-                manifest.package.version,
-                manifest
-                    .package
-                    .description
-                    .as_ref()
-                    .unwrap_or(&"".to_string()),
-                toml::to_string(&manifest.package.authors).unwrap_or("[]".to_string()),
-                manifest
-                    .package
-                    .license
-                    .as_ref()
-                    .unwrap_or(&"MIT".to_string())
-            )
-        })
+        // PackageManifest is a plain serde-derived struct with no custom
+        // serializers; `to_string_pretty` cannot fail on it. The prior
+        // `.unwrap_or_else` fallback emitted a *different* manifest, which
+        // would silently diverge from what the author asked for.
+        toml::to_string_pretty(manifest).expect("PackageManifest::Serialize cannot fail")
     }
 
     fn generate_houdini_package_json(&self, manifest: &PackageManifest) -> String {
-        let houdini_pkg = manifest.generate_houdini_package();
-        serde_json::to_string_pretty(&houdini_pkg).unwrap_or_else(|_| {
-            r#"{
-    "hpath": ["$HPM_PACKAGE_ROOT"],
-    "env": [
-        {"PYTHONPATH": {"method": "prepend", "value": "$HPM_PACKAGE_ROOT/python"}},
-        {"HOUDINI_SCRIPT_PATH": {"method": "prepend", "value": "$HPM_PACKAGE_ROOT/scripts"}}
-    ],
-    "enable": "houdini_version >= '20.5'"
-}"#
-            .to_string()
-        })
+        // `generate_houdini_package` errors only on malformed `[runtime]`
+        // conditional values or `[compat].houdini` — both rejected by
+        // `validate()` before the template is built. Same for the JSON
+        // serializer over `HoudiniPackage` (plain serde-derived struct).
+        let houdini_pkg = manifest
+            .generate_houdini_package()
+            .expect("template manifest passes validate()");
+        serde_json::to_string_pretty(&houdini_pkg).expect("HoudiniPackage::Serialize cannot fail")
     }
 
     fn generate_readme(&self, manifest: &PackageManifest) -> String {

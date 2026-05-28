@@ -93,12 +93,12 @@ impl ProjectManager {
     ) -> Result<Self, ProjectError> {
         let project_config = hpm_config::Config::load_project_config(&project_root);
 
-        // Fetcher staging lives next to the global CAS, not inside it.
-        let storage_root = config
-            .storage
-            .packages_dir
-            .parent()
-            .unwrap_or(std::path::Path::new("."));
+        // Fetcher staging lives next to the global CAS under ~/.hpm/.
+        // Drive both directories off `storage.home_dir` directly — using
+        // `packages_dir.parent()` was wrong when the user overrode
+        // `packages_dir` to a path outside `home_dir` (the cache then
+        // landed at the wrong place; the cwd fallback to "." was worse).
+        let storage_root = &config.storage.home_dir;
         let cache_dir = storage_root.join("cache");
         let fetch_packages_dir = storage_root.join("fetch");
         let fetcher = ArchiveFetcher::new(cache_dir, fetch_packages_dir)?;
@@ -573,7 +573,8 @@ impl ProjectManager {
         );
 
         // Ensure venv exists (content-addressable, shared across identical dep sets)
-        let venv_manager = VenvManager::new();
+        let venv_manager =
+            VenvManager::new().map_err(|e| ProjectError::PythonResolution(e.into()))?;
         let venv_path = venv_manager
             .ensure_virtual_environment(&resolved)
             .await

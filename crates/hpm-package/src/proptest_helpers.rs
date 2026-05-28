@@ -335,7 +335,9 @@ proptest! {
     /// Test that Houdini package generation is consistent and valid
     #[test]
     fn prop_houdini_package_generation(manifest in package_manifest_strategy()) {
-        let houdini_pkg = manifest.generate_houdini_package();
+        let houdini_pkg = manifest
+            .generate_houdini_package()
+            .expect("strategy yields valid manifests");
 
         // Generated package should always have hpath and env
         prop_assert!(houdini_pkg.hpath.is_some());
@@ -525,10 +527,15 @@ proptest! {
             scripts: None,
         };
 
-        // Houdini package generation should never panic, even with bad input
-        let houdini_pkg = manifest.generate_houdini_package();
+        // Houdini package generation either succeeds with a well-formed
+        // shape (always with hpath + env) or returns Err for malformed
+        // [compat].houdini — the latter is also a documented outcome so
+        // we accept both branches here. The strategy mixes malformed
+        // versions in for robustness coverage.
+        let Ok(houdini_pkg) = manifest.generate_houdini_package() else {
+            return Ok(());
+        };
 
-        // Should always generate basic structure
         prop_assert!(houdini_pkg.hpath.is_some());
         prop_assert!(houdini_pkg.env.is_some());
 

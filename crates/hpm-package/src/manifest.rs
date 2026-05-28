@@ -443,16 +443,21 @@ impl CompatConfig {
 
 impl ManifestEnvEntry {
     /// Convert to a Houdini environment variable value for a published
-    /// (non-dev) consumer. Returns `None` for required-but-unsupplied
-    /// placeholders, and for conditional values whose every branch is
-    /// gated to a non-matching `install_source`.
+    /// (non-dev) consumer.
+    ///
+    /// Returns `Ok(None)` for required-but-unsupplied placeholders, and
+    /// for conditional values whose every branch is gated to a
+    /// non-matching `install_source`. Returns `Err` for malformed
+    /// `when` selectors — the prior implementation silently dropped
+    /// these via `.ok().flatten()`, masking authoring mistakes that
+    /// validate would otherwise catch.
     ///
     /// No substitution is applied — the returned value reflects the
     /// manifest verbatim, so `$HPM_PACKAGE_ROOT` is preserved. Use
     /// [`Self::lower`] when you have a concrete package path and install
     /// context to substitute in.
-    pub fn to_houdini_env_value(&self) -> Option<HoudiniEnvValue> {
-        self.lower(&[], false).ok().flatten()
+    pub fn to_houdini_env_value(&self) -> Result<Option<HoudiniEnvValue>, ExpressionError> {
+        self.lower(&[], false)
     }
 
     /// Lower this entry into a Houdini env value, applying the supplied
@@ -729,7 +734,7 @@ impl PackageManifest {
     }
 
     /// Generate Houdini package.json from manifest
-    pub fn generate_houdini_package(&self) -> HoudiniPackage {
+    pub fn generate_houdini_package(&self) -> Result<HoudiniPackage, ExpressionError> {
         let mut hpath = vec![];
         let mut env = vec![];
 
@@ -768,7 +773,7 @@ impl PackageManifest {
         // overrides and errors if any remain unsupplied.
         if let Some(user_runtime) = &self.runtime {
             for (key, entry) in user_runtime {
-                let Some(houdini_value) = entry.to_houdini_env_value() else {
+                let Some(houdini_value) = entry.to_houdini_env_value()? else {
                     continue;
                 };
                 let mut env_map = HashMap::new();
@@ -782,17 +787,15 @@ impl PackageManifest {
             .as_ref()
             .and_then(|c| c.houdini.as_deref())
             .map(compile_houdini_req)
-            .transpose()
-            .ok()
-            .flatten();
+            .transpose()?;
 
-        HoudiniPackage {
+        Ok(HoudiniPackage {
             hpath: Some(hpath),
             env: Some(env),
             enable,
             requires: None,
             recommends: None,
-        }
+        })
     }
 
     /// Generate a Houdini-native package.json for direct use by Houdini's package system.
@@ -908,7 +911,9 @@ mod tests {
             platforms: Vec::new(),
         });
 
-        let houdini_pkg = manifest.generate_houdini_package();
+        let houdini_pkg = manifest
+            .generate_houdini_package()
+            .expect("test manifest produces valid Houdini expr");
         assert!(houdini_pkg.enable.is_none());
     }
 
@@ -924,7 +929,9 @@ version = "1.0.0"
 houdini = ">=20.5, <22"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let pkg = manifest.generate_houdini_package();
+        let pkg = manifest
+            .generate_houdini_package()
+            .expect("test manifest produces valid Houdini expr");
         assert_eq!(
             pkg.enable.as_deref(),
             Some("(houdini_version >= '20.5' and houdini_version < '22')")
@@ -1088,7 +1095,9 @@ LEAKED = { method = "set" }
         );
         manifest.runtime = Some(runtime);
 
-        let pkg = manifest.generate_houdini_package();
+        let pkg = manifest
+            .generate_houdini_package()
+            .expect("test manifest produces valid Houdini expr");
         let env_list = pkg.env.unwrap();
         // 2 hardcoded (PYTHONPATH, HOUDINI_SCRIPT_PATH) + WITH_VALUE only.
         assert_eq!(env_list.len(), 3);
@@ -1136,7 +1145,9 @@ value = [
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         assert!(manifest.validate().is_ok());
 
-        let pkg = manifest.generate_houdini_package();
+        let pkg = manifest
+            .generate_houdini_package()
+            .expect("test manifest produces valid Houdini expr");
         let env_list = pkg.env.unwrap();
         // The HOUDINI_DSO_PATH entry must appear, but only the fallback
         // variant should be present (dev gate dropped).
@@ -1173,7 +1184,9 @@ value = [
 ]
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let pkg = manifest.generate_houdini_package();
+        let pkg = manifest
+            .generate_houdini_package()
+            .expect("test manifest produces valid Houdini expr");
         let env_list = pkg.env.unwrap();
         assert!(
             env_list.iter().all(|m| !m.contains_key("HOUDINI_DSO_PATH")),
@@ -1215,7 +1228,9 @@ version = "0.1.0"
         );
         manifest.runtime = Some(runtime);
 
-        let houdini_pkg = manifest.generate_houdini_package();
+        let houdini_pkg = manifest
+            .generate_houdini_package()
+            .expect("test manifest produces valid Houdini expr");
         assert_eq!(
             houdini_pkg.hpath,
             Some(vec!["$HPM_PACKAGE_ROOT".to_string()])
@@ -2006,7 +2021,9 @@ value = []
         );
         manifest.runtime = Some(runtime);
 
-        let pkg = manifest.generate_houdini_package();
+        let pkg = manifest
+            .generate_houdini_package()
+            .expect("test manifest produces valid Houdini expr");
         let env_list = pkg.env.unwrap();
         let entry = env_list
             .iter()

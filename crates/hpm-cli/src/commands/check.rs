@@ -222,7 +222,16 @@ async fn validate_otls_directory(project_dir: &Path, result: &mut ValidationResu
 }
 
 fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut ValidationResult) {
-    let houdini_package = manifest.generate_houdini_package();
+    let houdini_package = match manifest.generate_houdini_package() {
+        Ok(pkg) => pkg,
+        Err(e) => {
+            result.add_error(format!(
+                "Failed to lower [runtime] / [compat] into Houdini package.json: {}",
+                e
+            ));
+            return;
+        }
+    };
 
     // Validate generated package.json structure
     match serde_json::to_string_pretty(&houdini_package) {

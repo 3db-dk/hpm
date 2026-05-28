@@ -56,21 +56,27 @@ fn create_dev_link(target: &std::path::Path, link: &std::path::Path) -> std::io:
 /// junction/symlink (Windows). Caller must have already verified the entry
 /// exists (typically by reading `symlink_metadata` themselves) — this helper
 /// is a pure file-type predicate that doesn't follow links.
-fn is_link_entry(meta: &std::fs::Metadata, path: &std::path::Path) -> bool {
+///
+/// Returns `Err` on Windows when `junction::exists` fails (typically a
+/// permission or FS error on the path the caller just stat'd). The error
+/// must propagate — silently treating "junction check failed" as "not a
+/// junction" would let `remove_dir_all` recurse into the user's workspace
+/// the next time around.
+fn is_link_entry(meta: &std::fs::Metadata, path: &std::path::Path) -> std::io::Result<bool> {
     if meta.file_type().is_symlink() {
-        return true;
+        return Ok(true);
     }
     #[cfg(windows)]
     {
         // Older Rust stdlib reports junctions as non-symlinks; ask the
         // junction crate directly so callers never accidentally fall through
         // to `remove_dir_all` on a reparse point.
-        junction::exists(path).unwrap_or(false)
+        junction::exists(path)
     }
     #[cfg(not(windows))]
     {
         let _ = path;
-        false
+        Ok(false)
     }
 }
 
@@ -87,7 +93,7 @@ fn remove_install_entry(
     name: &str,
     version: &str,
 ) -> Result<(), StorageError> {
-    if is_link_entry(meta, target_dir) {
+    if is_link_entry(meta, target_dir).map_err(StorageError::DirectoryRemoval)? {
         return remove_dev_link(target_dir).map_err(StorageError::DirectoryRemoval);
     }
     std::fs::remove_dir_all(target_dir).map_err(|e| {
@@ -125,7 +131,7 @@ fn clear_existing_install(
         Err(e) => return Err(StorageError::DirectoryRemoval(e)),
     };
 
-    if is_link_entry(&meta, target_dir) {
+    if is_link_entry(&meta, target_dir).map_err(StorageError::DirectoryRemoval)? {
         warn!(
             "replacing existing link install for {}@{} at {}",
             name,
@@ -489,26 +495,6 @@ impl StorageManager {
         }
 
         Ok(())
-    }
-
-    /// Find the best installed version matching a requirement
-    pub fn find_installed(&self, name: &str, version_req: &VersionReq) -> Option<InstalledPackage> {
-        let installed = self.list_installed().ok()?;
-        installed
-            .into_iter()
-            .filter(|pkg| {
-                pkg.manifest.package.slug() == name && pkg.is_compatible_with(version_req)
-            })
-            .max_by(|a, b| {
-                // Compare versions - prefer higher versions
-                match (
-                    semver::Version::parse(&a.version),
-                    semver::Version::parse(&b.version),
-                ) {
-                    (Ok(va), Ok(vb)) => va.cmp(&vb),
-                    _ => a.version.cmp(&b.version),
-                }
-            })
     }
 
     pub async fn remove_package(&self, name: &str, version: &str) -> Result<(), StorageError> {
@@ -898,7 +884,8 @@ impl StorageManager {
             .collect();
 
         // 4. Python virtual environment cleanup against the remaining set.
-        let python_analyzer = PythonCleanupAnalyzer::new();
+        let python_analyzer =
+            PythonCleanupAnalyzer::new().map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
         let orphaned_venvs = python_analyzer
             .analyze_orphaned_venvs(&remaining_packages)
             .await
@@ -939,7 +926,8 @@ impl StorageManager {
     pub async fn cleanup_python_only(&self, dry_run: bool) -> Result<CleanupResult, StorageError> {
         info!("Starting Python-only cleanup (dry_run: {})", dry_run);
 
-        let python_analyzer = PythonCleanupAnalyzer::new();
+        let python_analyzer =
+            PythonCleanupAnalyzer::new().map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
 
         // Get list of all active packages
         let active_packages = self

@@ -13,10 +13,8 @@ use tracing::{debug, info};
 
 const UV_VERSION: &str = "0.5.9";
 
-fn hpm_dir() -> PathBuf {
-    crate::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".hpm")
+fn hpm_dir() -> Result<PathBuf> {
+    crate::hpm_root()
 }
 
 /// Platform-specific UV release archive name (filename only).
@@ -69,9 +67,9 @@ fn uv_binary_name() -> &'static str {
 
 /// Env vars every UV invocation must run under so that UV never touches
 /// system caches or configuration.
-fn uv_env() -> [(&'static str, PathBuf); 6] {
-    let hpm = hpm_dir();
-    [
+fn uv_env() -> Result<[(&'static str, PathBuf); 6]> {
+    let hpm = hpm_dir()?;
+    Ok([
         ("UV_CACHE_DIR", hpm.join("uv-cache")),
         ("UV_CONFIG_FILE", hpm.join("uv-config/uv.toml")),
         ("UV_NO_SYNC", PathBuf::from("1")),
@@ -85,7 +83,7 @@ fn uv_env() -> [(&'static str, PathBuf); 6] {
         // without it, `pip compile` hard-fails on machines with no Python
         // anywhere (clean Windows installs).
         ("UV_PYTHON_DOWNLOADS", PathBuf::from("automatic")),
-    ]
+    ])
 }
 
 /// Ensure the bundled UV binary is downloaded and isolation configured.
@@ -93,7 +91,7 @@ fn uv_env() -> [(&'static str, PathBuf); 6] {
 /// Returns the path to the bundled UV binary. Errors if UV cannot be
 /// downloaded or the current platform is unsupported — no system-UV fallback.
 pub async fn ensure_uv_binary() -> Result<PathBuf> {
-    let hpm_dir = hpm_dir();
+    let hpm_dir = hpm_dir()?;
     let tools_dir = hpm_dir.join("tools");
     let uv_path = tools_dir.join(uv_binary_name());
 
@@ -303,7 +301,7 @@ pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output> {
 
     let mut cmd = tokio::process::Command::new(uv_path);
     cmd.args(args);
-    for (key, value) in uv_env() {
+    for (key, value) in uv_env()? {
         cmd.env(key, value);
     }
 
@@ -346,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_uv_env() {
-        let env = uv_env();
+        let env = uv_env().expect("home dir resolves under test env");
         let keys: Vec<_> = env.iter().map(|(k, _)| *k).collect();
         assert!(keys.contains(&"UV_CACHE_DIR"));
         assert!(keys.contains(&"UV_CONFIG_FILE"));

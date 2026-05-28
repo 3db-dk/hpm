@@ -20,7 +20,7 @@ use tracing::{debug, info, warn};
 /// use hpm_python::{VenvManager, ResolvedDependencySet, PythonVersion};
 ///
 /// # async fn example() -> anyhow::Result<()> {
-/// let manager = VenvManager::new();
+/// let manager = VenvManager::new()?;
 ///
 /// // Create a resolved dependency set
 /// let mut resolved = ResolvedDependencySet::new(PythonVersion::new(3, 9, None));
@@ -38,10 +38,15 @@ pub struct VenvManager {
 }
 
 impl VenvManager {
-    pub fn new() -> Self {
-        Self {
-            venvs_dir: get_venvs_dir(),
-        }
+    /// Construct a manager rooted at the default `~/.hpm/venvs/`.
+    ///
+    /// Errors when the user's home directory cannot be resolved (no
+    /// `$HOME` / `%USERPROFILE%`). Tests that want a controlled location
+    /// should use [`with_venvs_dir`](Self::with_venvs_dir) instead.
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            venvs_dir: get_venvs_dir()?,
+        })
     }
 
     /// Create a `VenvManager` rooted at an explicit venvs directory.
@@ -84,7 +89,7 @@ impl VenvManager {
     /// use hpm_python::{VenvManager, ResolvedDependencySet, PythonVersion};
     ///
     /// # async fn example() -> anyhow::Result<()> {
-    /// let manager = VenvManager::new();
+    /// let manager = VenvManager::new()?;
     /// let mut resolved = ResolvedDependencySet::new(PythonVersion::new(3, 9, None));
     /// resolved.add_package("numpy", "1.24.0");
     ///
@@ -506,11 +511,8 @@ fn normalize_pep503(name: &str) -> String {
     out
 }
 
-impl Default for VenvManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// `VenvManager::new()` is fallible (needs `$HOME` / `%USERPROFILE%`),
+// so the `Default` impl was removed — there is no sensible default.
 
 #[cfg(test)]
 mod tests {
@@ -518,13 +520,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_venv_manager_creation() {
-        let manager = VenvManager::new();
+        let manager = VenvManager::new().expect("home dir resolves under test env");
         assert!(manager.venvs_dir.ends_with(".hpm/venvs"));
     }
 
     #[tokio::test]
     async fn test_python_site_packages_path() {
-        let manager = VenvManager::new();
+        let manager = VenvManager::new().expect("home dir resolves under test env");
         let venv_path = PathBuf::from("/test/venv");
         let python = PythonVersion::new(3, 11, None);
         let site_packages = manager.get_python_site_packages_path(&venv_path, &python);

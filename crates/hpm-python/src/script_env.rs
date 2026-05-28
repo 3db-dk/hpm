@@ -67,7 +67,7 @@ pub async fn ensure_script_venv(
         resolve_raw_requirements(py_str, requirements, parsed).await?
     };
 
-    let manager = VenvManager::new();
+    let manager = VenvManager::new()?;
     manager.ensure_virtual_environment(&resolved).await
 }
 

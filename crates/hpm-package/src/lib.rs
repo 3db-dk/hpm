@@ -92,7 +92,8 @@
 //! );
 //!
 //! // Generate Houdini-compatible package.json
-//! let houdini_package = manifest.generate_houdini_package();
+//! let houdini_package = manifest.generate_houdini_package()
+//!     .expect("validated manifest produces a Houdini package");
 //!
 //! let json = serde_json::to_string_pretty(&houdini_package)
 //!     .expect("Should serialize to JSON");
