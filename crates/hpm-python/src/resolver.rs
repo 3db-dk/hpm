@@ -92,8 +92,7 @@ pub async fn resolve_dependencies(
     .context("Failed to run UV dependency resolution")?;
 
     // Parse resolved dependencies
-    let resolved = parse_resolved_dependencies(&output.stdout, python_version)
-        .context("Failed to parse resolved dependencies")?;
+    let resolved = ResolvedDependencySet::from_pip_compile_output(&output.stdout, python_version);
 
     info!("Resolved {} Python packages", resolved.packages.len());
     Ok(resolved)
@@ -131,31 +130,6 @@ fn create_requirements_file(dependencies: &PythonDependencies) -> Result<NamedTe
     Ok(temp_file)
 }
 
-/// Parse UV's resolved dependencies output
-fn parse_resolved_dependencies(
-    output: &[u8],
-    python_version: PythonVersion,
-) -> Result<ResolvedDependencySet> {
-    let output_str = String::from_utf8_lossy(output);
-    let mut resolved = ResolvedDependencySet::new(python_version);
-
-    for line in output_str.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        // Parse lines like "numpy==1.24.0"
-        if let Some((name, version)) = line.split_once("==") {
-            // Remove any extras specification like "requests[security]==2.28.0"
-            let clean_name = name.split('[').next().unwrap_or(name);
-            resolved.add_package(clean_name, version);
-        }
-    }
-
-    Ok(resolved)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,7 +143,7 @@ requests==2.28.0
 certifi==2022.12.7";
 
         let python_version = PythonVersion::new(3, 9, None);
-        let resolved = parse_resolved_dependencies(output, python_version).unwrap();
+        let resolved = ResolvedDependencySet::from_pip_compile_output(output, python_version);
 
         assert_eq!(resolved.packages.len(), 3);
         assert_eq!(resolved.packages.get("numpy"), Some(&"1.24.0".to_string()));

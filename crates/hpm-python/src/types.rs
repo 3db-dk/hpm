@@ -288,6 +288,29 @@ impl ResolvedDependencySet {
             .insert(crate::pep503::normalize(name.as_ref()), version.into());
     }
 
+    /// Parse `uv pip compile` stdout into a resolved set.
+    ///
+    /// `uv pip compile` emits one `name==version` per line, plus blank
+    /// lines and `#`-prefixed comments. Names may carry extras
+    /// (`requests[security]==2.28.0`), which are stripped before insertion.
+    /// Lines without `==` (warnings, info) are silently ignored.
+    pub fn from_pip_compile_output(output: &[u8], python_version: PythonVersion) -> Self {
+        let output_str = String::from_utf8_lossy(output);
+        let mut resolved = Self::new(python_version);
+        for line in output_str.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((name, version)) = line.split_once("==") else {
+                continue;
+            };
+            let clean_name = name.split('[').next().unwrap_or(name);
+            resolved.add_package(clean_name, version);
+        }
+        resolved
+    }
+
     /// Generate a unique hash for this dependency set
     pub fn hash(&self) -> String {
         let mut hasher = Sha256::new();

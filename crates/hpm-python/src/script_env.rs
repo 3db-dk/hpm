@@ -218,18 +218,7 @@ async fn resolve_raw_requirements(
     .await
     .context("Failed to resolve script requirements")?;
 
-    let mut resolved = ResolvedDependencySet::new(python_version);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some((name, version)) = line.split_once("==") {
-            let clean_name = name.split('[').next().unwrap_or(name);
-            resolved.add_package(clean_name, version);
-        }
-    }
+    let resolved = ResolvedDependencySet::from_pip_compile_output(&output.stdout, python_version);
 
     debug!(
         "Resolved {} packages for script venv",
