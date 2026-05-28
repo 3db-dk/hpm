@@ -25,15 +25,27 @@ check:
 test:
     cargo test --workspace --package hpm-cli -- --test-threads=1
     cargo test --workspace --exclude hpm-cli
+    cargo test --workspace --doc
 
 # Run tests with output
 test-verbose:
     cargo test --workspace --package hpm-cli -- --test-threads=1 --nocapture
     cargo test --workspace --exclude hpm-cli -- --nocapture
+    cargo test --workspace --doc -- --nocapture
 
 # Run integration tests only
 test-integration:
     cargo test --workspace --test '*'
+
+# Run only doctests
+test-doc:
+    cargo test --workspace --doc
+
+# Run #[ignore]'d tests (real uv/venv smoke tests in hpm-python; slow).
+# Not in the default `test` recipe because they shell out to the bundled
+# uv and download wheels — fine for nightly CI, painful for inner-loop dev.
+test-ignored:
+    cargo test --workspace -- --ignored
 
 # === CODE QUALITY ===
 
@@ -70,11 +82,11 @@ dev: fmt clippy test
 
 # Run all quality checks (CI equivalent)
 quality: fmt-check clippy test
-    @echo "✅ All quality checks passed!"
+    @echo "All quality checks passed."
 
 # Pre-commit checks (used by git hooks)
 pre-commit: fmt-check clippy
-    @echo "✅ Pre-commit checks completed successfully!"
+    @echo "Pre-commit checks passed."
 
 # === DEPENDENCIES ===
 
@@ -105,7 +117,7 @@ doc-check:
 # Run comprehensive release checks
 release-check: quality doc-check audit
     cargo build --release
-    @echo "✅ Release checks completed!"
+    @echo "Release checks completed."
 
 # === DEVELOPMENT TOOLS ===
 
@@ -157,7 +169,7 @@ new-crate name:
     mkdir -p crates/hpm-{{name}}/src
     echo '[package]\nname = "hpm-{{name}}"\nversion.workspace = true\nauthors.workspace = true\nedition.workspace = true\nlicense.workspace = true\nrepository.workspace = true\nhomepage.workspace = true\ndocumentation.workspace = true\nkeywords.workspace = true\ncategories.workspace = true\nrust-version.workspace = true\ndescription = "{{name}} functionality for HPM (Houdini Package Manager)"\n\n[dependencies]\n# Add dependencies as needed' > crates/hpm-{{name}}/Cargo.toml
     echo '// TODO: Implement hpm-{{name}} functionality' > crates/hpm-{{name}}/src/lib.rs
-    @echo "✅ Created new crate: hpm-{{name}}"
+    @echo "Created new crate: hpm-{{name}}"
     @echo "Don't forget to add it to the workspace members in Cargo.toml!"
 
 # Show workspace tree
