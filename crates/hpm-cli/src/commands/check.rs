@@ -300,33 +300,27 @@ async fn validate_best_practices(
 
     // Check for scripts
     if let Some(ref scripts) = manifest.scripts {
-        let mut total = scripts.commands.len();
-        if let Some(platform) = &scripts.platform {
-            total += platform.linux.as_ref().map_or(0, |m| m.len());
-            total += platform.macos.as_ref().map_or(0, |m| m.len());
-            total += platform.windows.as_ref().map_or(0, |m| m.len());
-        }
-        result.add_info(format!("[OK] Package defines {} script(s)", total));
+        result.add_info(format!(
+            "[OK] Package defines {} script(s)",
+            scripts.commands.len()
+        ));
 
-        let mut check_entry = |label: String, entry: &hpm_package::ScriptEntry| {
-            if entry.cmd().trim().is_empty() {
-                result.add_warning(format!("Script '{}' has empty command", label));
-            }
-        };
-
+        let host_os = hpm_package::Platform::current().and_then(|p| p.os_key().map(str::to_string));
         for (name, entry) in &scripts.commands {
-            check_entry(name.clone(), entry);
-        }
-        if let Some(platform) = &scripts.platform {
-            for (os, entries) in [
-                ("linux", &platform.linux),
-                ("macos", &platform.macos),
-                ("windows", &platform.windows),
-            ] {
-                if let Some(entries) = entries {
-                    for (name, entry) in entries {
-                        check_entry(format!("{}:{}", os, name), entry);
-                    }
+            let resolved = entry.resolve_cmd(host_os.as_deref());
+            match resolved {
+                Some(cmd) if cmd.trim().is_empty() => {
+                    result.add_warning(format!("Script '{}' has empty command", name));
+                }
+                Some(_) => {}
+                None => {
+                    // No variant matches the host — still legitimate (the
+                    // script just isn't available on this OS) but worth a
+                    // hint so authors notice typos in their `when` axes.
+                    result.add_info(format!(
+                        "Script '{}' has no command for host OS — only matches other platforms",
+                        name
+                    ));
                 }
             }
         }

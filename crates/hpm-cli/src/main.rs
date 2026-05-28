@@ -122,7 +122,7 @@
 //! - **`run`** - Execute a `[scripts]` entry from `hpm.toml`
 //!   - Forwards trailing arguments to the script
 //!   - Sets `HPM_PACKAGE_ROOT` to the manifest directory
-//!   - Honours `[scripts.platform.<os>]` overrides
+//!   - Picks the host-matching variant from conditional `cmd` values
 //!   - Materializes a uv-managed venv on demand for table-form entries
 //!     with `python` / `requirements` set
 //!

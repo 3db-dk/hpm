@@ -98,26 +98,20 @@ pub struct PackageManifest {
 }
 
 pub struct PackageScripts {
-    pub platform: Option<PlatformScripts>,        // [scripts.platform.<os>]
     pub commands: IndexMap<String, ScriptEntry>,  // flat entries under [scripts]
-}
-
-pub struct PlatformScripts {
-    pub linux: Option<IndexMap<String, ScriptEntry>>,
-    pub macos: Option<IndexMap<String, ScriptEntry>>,
-    pub windows: Option<IndexMap<String, ScriptEntry>>,
 }
 
 // Untagged: serialises as either a bare string ("cargo build") or a table
 // form { cmd, python?, requirements? }. The table form opts the script into
-// a uv-managed venv resolved on demand by `hpm run`.
+// a uv-managed venv resolved on demand by `hpm run`, and supports
+// conditional cmd values via the same `when` grammar `[runtime]` uses.
 pub enum ScriptEntry {
     Plain(String),
     WithEnv(ScriptEnv),
 }
 
 pub struct ScriptEnv {
-    pub cmd: String,
+    pub cmd: EnvValueSpec,             // flat string or [{ when = { os }, set }, ...]
     pub python: Option<String>,        // e.g. "3.11"
     pub requirements: Vec<String>,     // e.g. ["PySide6>=6.6"]
 }

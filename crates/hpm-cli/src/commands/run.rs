@@ -42,7 +42,15 @@ pub async fn run_script(
             )
         })?;
 
-    let cmd_string = build_command_string(entry.cmd(), extra_args);
+    let host_os = Platform::current().and_then(|p| p.os_key().map(str::to_string));
+    let resolved_cmd = entry.resolve_cmd(host_os.as_deref()).with_context(|| {
+        format!(
+            "Script '{}' has no command for host OS {} — its conditional cmd only matches other platforms",
+            script,
+            host_os.as_deref().unwrap_or("<unknown>")
+        )
+    })?;
+    let cmd_string = build_command_string(&resolved_cmd, extra_args);
     debug!("hpm run {}: {}", script, cmd_string);
 
     if entry.needs_venv() && !entry.requirements().is_empty() {

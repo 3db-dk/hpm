@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 
 use crate::dependency::DependencySpec;
 use crate::env_value::{
-    EnvValueSpec, ExpressionError, compile_houdini_req, houdini_req_lower_bound, lower_conditional,
+    EnvValueSpec, ExpressionError, WhenSelector, compile_houdini_req, houdini_req_lower_bound,
+    lower_conditional,
 };
 use crate::houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 use crate::package_path::PackagePath;
@@ -141,9 +142,15 @@ pub enum ScriptEntry {
 }
 
 /// The table form of [`ScriptEntry`].
+///
+/// `cmd` is an [`EnvValueSpec`] — either a flat string or an ordered list
+/// of `{ when, set }` variants. For scripts only the `os` axis of `when`
+/// is meaningful (HPM doesn't know the user's Houdini version or Python
+/// at `hpm run` time); other axes on a script variant are rejected at
+/// manifest validation time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScriptEnv {
-    pub cmd: String,
+    pub cmd: EnvValueSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub python: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -151,11 +158,22 @@ pub struct ScriptEnv {
 }
 
 impl ScriptEntry {
-    /// The raw shell command for this script.
-    pub fn cmd(&self) -> &str {
-        match self {
-            ScriptEntry::Plain(s) => s,
+    /// Resolve the command for the given host OS.
+    ///
+    /// Returns `None` only when the entry is conditional and no variant
+    /// matches the host (e.g. a `windows`-only command on a macOS host).
+    /// Plain entries always return `Some`.
+    pub fn resolve_cmd(&self, host_os: Option<&str>) -> Option<String> {
+        let spec = match self {
+            ScriptEntry::Plain(s) => return Some(s.clone()),
             ScriptEntry::WithEnv(env) => &env.cmd,
+        };
+        match spec {
+            EnvValueSpec::Flat(s) => Some(s.clone()),
+            EnvValueSpec::Conditional(variants) => variants
+                .iter()
+                .find(|v| script_when_matches(&v.when, host_os))
+                .map(|v| v.set.clone()),
         }
     }
 
@@ -181,6 +199,20 @@ impl ScriptEntry {
     }
 }
 
+/// Per-script `when` matching: only the `os` axis is honoured. The other
+/// axes (`houdini`, `python`, `install_source`) are rejected at manifest
+/// validate time; if they survive here, treat as a non-match.
+fn script_when_matches(when: &WhenSelector, host_os: Option<&str>) -> bool {
+    if when.houdini.is_some() || when.python.is_some() || when.install_source.is_some() {
+        return false;
+    }
+    match (&when.os, host_os) {
+        (None, _) => true,
+        (Some(req), Some(host)) => req == host,
+        (Some(_), None) => false,
+    }
+}
+
 impl From<String> for ScriptEntry {
     fn from(s: String) -> Self {
         ScriptEntry::Plain(s)
@@ -193,59 +225,22 @@ impl From<&str> for ScriptEntry {
     }
 }
 
-/// Platform-scoped script overrides.
-///
-/// Deserialized from `[scripts.platform.<os>]` sub-tables. Each entry is a map
-/// of script name → [`ScriptEntry`] that overrides the top-level `[scripts]`
-/// entry for the matching OS.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PlatformScripts {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub linux: Option<IndexMap<String, ScriptEntry>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub macos: Option<IndexMap<String, ScriptEntry>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub windows: Option<IndexMap<String, ScriptEntry>>,
-}
-
-impl PlatformScripts {
-    /// Entries for the given OS key (`"linux"`, `"macos"`, `"windows"`).
-    pub fn for_os(&self, os: &str) -> Option<&IndexMap<String, ScriptEntry>> {
-        match os {
-            "linux" => self.linux.as_ref(),
-            "macos" => self.macos.as_ref(),
-            "windows" => self.windows.as_ref(),
-            _ => None,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.linux.is_none() && self.macos.is_none() && self.windows.is_none()
-    }
-}
-
-fn platform_scripts_is_none_or_empty(p: &Option<PlatformScripts>) -> bool {
-    p.as_ref().is_none_or(PlatformScripts::is_empty)
-}
-
 /// Package-defined scripts from `[scripts]`.
 ///
-/// Top-level entries live in `commands` and apply to every platform. An
-/// optional `[scripts.platform.<os>]` sub-table supplies per-OS overrides;
-/// when a script name appears in both, the platform-specific entry wins for
-/// that OS.
+/// Each entry resolves to a single command for the host OS via
+/// [`ScriptEntry::resolve_cmd`]. Per-host variation lives inside the
+/// entry's `cmd` field as a list of `{ when, set }` variants — there is
+/// no separate `[scripts.platform.<os>]` table.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PackageScripts {
-    #[serde(default, skip_serializing_if = "platform_scripts_is_none_or_empty")]
-    pub platform: Option<PlatformScripts>,
     #[serde(flatten)]
     pub commands: IndexMap<String, ScriptEntry>,
 }
 
 impl PackageScripts {
-    /// True when neither top-level nor platform entries exist.
+    /// True when no entries exist.
     pub fn is_empty(&self) -> bool {
-        self.commands.is_empty() && platform_scripts_is_none_or_empty(&self.platform)
+        self.commands.is_empty()
     }
 }
 
@@ -586,51 +581,21 @@ impl PackageManifest {
         }
     }
 
-    /// Resolve the effective scripts for the given platform.
-    ///
-    /// Starts with the top-level `[scripts]` entries (which apply everywhere)
-    /// and overlays any `[scripts.platform.<os>]` entries for the current OS,
-    /// where platform-specific entries win on collision. Insertion order from
-    /// the manifest is preserved; platform-only scripts appear after the
-    /// top-level ones.
-    ///
-    /// Passing `None` (e.g. when the host platform cannot be identified)
-    /// yields only the top-level commands.
-    pub fn resolved_scripts(&self, platform: Option<Platform>) -> IndexMap<String, ScriptEntry> {
-        let Some(scripts) = &self.scripts else {
-            return IndexMap::new();
-        };
-
-        let mut out = scripts.commands.clone();
-
-        if let (Some(platform), Some(platform_scripts)) = (platform, &scripts.platform)
-            && let Some(os) = platform.os_key()
-            && let Some(entries) = platform_scripts.for_os(os)
-        {
-            for (name, entry) in entries {
-                out.insert(name.clone(), entry.clone());
-            }
+    /// Every `[scripts]` entry, in declaration order. Per-host variation
+    /// is resolved on-demand via [`ScriptEntry::resolve_cmd`] using the
+    /// entry's conditional `cmd` value — there is no merging at this layer.
+    pub fn resolved_scripts(&self, _platform: Option<Platform>) -> IndexMap<String, ScriptEntry> {
+        match &self.scripts {
+            Some(scripts) => scripts.commands.clone(),
+            None => IndexMap::new(),
         }
-
-        out
     }
 
-    /// Resolve a single script entry for the given platform.
-    ///
-    /// Same precedence rule as [`resolved_scripts`](Self::resolved_scripts):
-    /// platform override wins over the top-level entry.
-    pub fn script_for(&self, name: &str, platform: Option<Platform>) -> Option<ScriptEntry> {
-        let scripts = self.scripts.as_ref()?;
-
-        if let (Some(platform), Some(platform_scripts)) = (platform, &scripts.platform)
-            && let Some(os) = platform.os_key()
-            && let Some(entries) = platform_scripts.for_os(os)
-            && let Some(entry) = entries.get(name)
-        {
-            return Some(entry.clone());
-        }
-
-        scripts.commands.get(name).cloned()
+    /// Resolve a single script entry by name. The `platform` argument is
+    /// kept for API symmetry but no longer affects which entry is returned
+    /// — variation lives inside the entry's `cmd` value.
+    pub fn script_for(&self, name: &str, _platform: Option<Platform>) -> Option<ScriptEntry> {
+        self.scripts.as_ref()?.commands.get(name).cloned()
     }
 
     /// Validate the package manifest for common errors.
@@ -712,6 +677,46 @@ impl PackageManifest {
         // install/emit time.
         if let Some(runtime) = &self.runtime {
             validate_env_table("runtime", runtime)?;
+        }
+
+        // Validate [scripts] entries: a conditional `cmd` may only gate on
+        // the `os` axis. Other axes (`houdini`, `python`, `install_source`)
+        // require runtime context HPM doesn't have at `hpm run` time, so we
+        // reject them up front rather than silently dropping variants.
+        if let Some(scripts) = &self.scripts {
+            for (name, entry) in &scripts.commands {
+                let ScriptEntry::WithEnv(env) = entry else {
+                    continue;
+                };
+                let EnvValueSpec::Conditional(variants) = &env.cmd else {
+                    continue;
+                };
+                if variants.is_empty() {
+                    return Err(format!(
+                        "script '{}': conditional cmd list must not be empty",
+                        name
+                    ));
+                }
+                for variant in variants {
+                    if variant.when.houdini.is_some()
+                        || variant.when.python.is_some()
+                        || variant.when.install_source.is_some()
+                    {
+                        return Err(format!(
+                            "script '{}': only the `os` axis is supported in script `when` selectors; \
+                             `houdini`, `python`, and `install_source` axes have no meaning at `hpm run` time",
+                            name
+                        ));
+                    }
+                    if let Some(os) = &variant.when.os {
+                        crate::env_value::compile_when(&WhenSelector {
+                            os: Some(os.clone()),
+                            ..Default::default()
+                        })
+                        .map_err(|e| format!("script '{}': {}", name, e))?;
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -1492,9 +1497,14 @@ test = "cargo test"
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         let scripts = manifest.scripts.as_ref().unwrap();
         assert_eq!(scripts.commands.len(), 2);
-        assert_eq!(scripts.commands["build"].cmd(), "cargo build");
-        assert_eq!(scripts.commands["test"].cmd(), "cargo test");
-        assert!(scripts.platform.is_none());
+        assert_eq!(
+            scripts.commands["build"].resolve_cmd(None),
+            Some("cargo build".to_string())
+        );
+        assert_eq!(
+            scripts.commands["test"].resolve_cmd(None),
+            Some("cargo test".to_string())
+        );
 
         // Plain entries don't carry venv hints.
         assert!(!scripts.commands["build"].needs_venv());
@@ -1505,7 +1515,7 @@ test = "cargo test"
     }
 
     #[test]
-    fn scripts_platform_overrides_parse() {
+    fn scripts_conditional_cmd_resolves_per_host_os() {
         let toml_str = r#"
 [package]
 path = "studio/claudini"
@@ -1515,93 +1525,62 @@ version = "1.0.0"
 [scripts]
 build = "cargo build"
 
-[scripts.platform.windows]
-register = "\"$HPM_PACKAGE_ROOT/plugin/bin/claudini2.exe\" register"
-
-[scripts.platform.macos]
-register = "\"$HPM_PACKAGE_ROOT/plugin/bin/claudini2\" register"
+[scripts.register]
+cmd = [
+  { when = { os = "windows" }, set = "\"$HPM_PACKAGE_ROOT/plugin/bin/claudini2.exe\" register" },
+  { when = { os = "macos"   }, set = "\"$HPM_PACKAGE_ROOT/plugin/bin/claudini2\" register" },
+  { when = { os = "linux"   }, set = "\"$HPM_PACKAGE_ROOT/plugin/bin/claudini2\" register" },
+]
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        manifest.validate().unwrap();
+
         let scripts = manifest.scripts.as_ref().unwrap();
-        assert_eq!(scripts.commands["build"].cmd(), "cargo build");
-
-        let platform = scripts.platform.as_ref().unwrap();
-        assert!(platform.linux.is_none());
-        let win = platform.windows.as_ref().unwrap();
-        assert!(win["register"].cmd().contains("claudini2.exe"));
-        let mac = platform.macos.as_ref().unwrap();
+        // Plain shorthand resolves unconditionally.
         assert_eq!(
-            mac["register"].cmd(),
-            "\"$HPM_PACKAGE_ROOT/plugin/bin/claudini2\" register"
+            scripts.commands["build"].resolve_cmd(Some("linux")),
+            Some("cargo build".to_string())
         );
+        // Conditional cmd picks the host-specific variant.
+        let register = &scripts.commands["register"];
+        assert!(
+            register
+                .resolve_cmd(Some("windows"))
+                .unwrap()
+                .contains("claudini2.exe")
+        );
+        assert_eq!(
+            register.resolve_cmd(Some("macos")),
+            Some("\"$HPM_PACKAGE_ROOT/plugin/bin/claudini2\" register".to_string())
+        );
+        // No host OS supplied → no variant matches.
+        assert_eq!(register.resolve_cmd(None), None);
     }
 
     #[test]
-    fn scripts_resolve_merges_platform_over_flat() {
-        let toml_str = r#"
-[package]
-path = "studio/claudini"
-name = "Claudini"
-version = "1.0.0"
-
-[scripts]
-build = "cargo build"
-register = "fallback"
-
-[scripts.platform.windows]
-register = "windows-specific"
-unregister = "windows-only"
-"#;
-        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-
-        let resolved = manifest.resolved_scripts(Some(Platform::WindowsX86_64));
-        assert_eq!(resolved["build"].cmd(), "cargo build");
-        assert_eq!(resolved["register"].cmd(), "windows-specific");
-        assert_eq!(resolved["unregister"].cmd(), "windows-only");
-
-        // macOS has no platform entry — falls back to the flat map.
-        let resolved_mac = manifest.resolved_scripts(Some(Platform::MacosAarch64));
-        assert_eq!(resolved_mac["register"].cmd(), "fallback");
-        assert!(!resolved_mac.contains_key("unregister"));
-
-        // Unknown platform returns flat-only.
-        let resolved_none = manifest.resolved_scripts(None);
-        assert_eq!(resolved_none.len(), 2);
-        assert_eq!(resolved_none["register"].cmd(), "fallback");
-    }
-
-    #[test]
-    fn script_for_respects_platform_precedence() {
+    fn scripts_conditional_with_fallback_branch_matches_any_host() {
         let toml_str = r#"
 [package]
 path = "studio/tool"
 name = "Tool"
 version = "1.0.0"
 
-[scripts]
-register = "fallback"
-
-[scripts.platform.linux]
-register = "linux-specific"
+[scripts.register]
+cmd = [
+  { when = { os = "windows" }, set = "tool.exe register" },
+  { when = {},                  set = "tool register" },
+]
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-
+        let entry = &manifest.scripts.as_ref().unwrap().commands["register"];
         assert_eq!(
-            manifest
-                .script_for("register", Some(Platform::LinuxX86_64))
-                .map(|e| e.cmd().to_string()),
-            Some("linux-specific".to_string())
+            entry.resolve_cmd(Some("windows")),
+            Some("tool.exe register".to_string())
         );
+        // Empty `when = {}` matches any other host as a fallback.
         assert_eq!(
-            manifest
-                .script_for("register", Some(Platform::MacosAarch64))
-                .map(|e| e.cmd().to_string()),
-            Some("fallback".to_string())
-        );
-        assert!(
-            manifest
-                .script_for("missing", Some(Platform::LinuxX86_64))
-                .is_none()
+            entry.resolve_cmd(Some("macos")),
+            Some("tool register".to_string())
         );
     }
 
@@ -1624,13 +1603,17 @@ requirements = ["PySide6>=6.6"]
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         let scripts = manifest.scripts.as_ref().unwrap();
 
-        // Plain shorthand still parses.
-        assert_eq!(scripts.commands["build"].cmd(), "cargo build");
+        assert_eq!(
+            scripts.commands["build"].resolve_cmd(None),
+            Some("cargo build".to_string())
+        );
         assert!(!scripts.commands["build"].needs_venv());
 
-        // Table form carries the venv hints.
         let setup = &scripts.commands["tt_setup"];
-        assert_eq!(setup.cmd(), "python scripts/tt_setup.py");
+        assert_eq!(
+            setup.resolve_cmd(None),
+            Some("python scripts/tt_setup.py".to_string())
+        );
         assert_eq!(setup.python(), Some("3.11"));
         assert_eq!(setup.requirements(), &["PySide6>=6.6".to_string()]);
         assert!(setup.needs_venv());
@@ -1638,7 +1621,6 @@ requirements = ["PySide6>=6.6"]
 
     #[test]
     fn scripts_table_form_inline_object() {
-        // Inline table should parse the same as a [scripts.<name>] sub-table.
         let toml_str = r#"
 [package]
 path = "studio/tt"
@@ -1650,15 +1632,16 @@ tt_setup = { cmd = "python scripts/tt_setup.py", python = "3.11", requirements =
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         let setup = &manifest.scripts.as_ref().unwrap().commands["tt_setup"];
-        assert_eq!(setup.cmd(), "python scripts/tt_setup.py");
+        assert_eq!(
+            setup.resolve_cmd(None),
+            Some("python scripts/tt_setup.py".to_string())
+        );
         assert_eq!(setup.python(), Some("3.11"));
         assert_eq!(setup.requirements(), &["PySide6>=6.6".to_string()]);
     }
 
     #[test]
     fn scripts_table_form_without_venv_hints_is_legal() {
-        // A table form with just `cmd` and no python/requirements behaves
-        // like the shorthand — no venv work needed.
         let toml_str = r#"
 [package]
 path = "studio/tt"
@@ -1670,38 +1653,83 @@ cmd = "ruff ."
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         let lint = &manifest.scripts.as_ref().unwrap().commands["lint"];
-        assert_eq!(lint.cmd(), "ruff .");
+        assert_eq!(lint.resolve_cmd(None), Some("ruff .".to_string()));
         assert!(!lint.needs_venv());
     }
 
     #[test]
-    fn scripts_table_form_in_platform_overrides() {
+    fn scripts_conditional_cmd_with_python_hints() {
+        // The table form combines conditional cmd and venv hints.
         let toml_str = r#"
 [package]
 path = "studio/tt"
 name = "TT"
 version = "1.0.0"
 
-[scripts.platform.linux]
-tt_setup = { cmd = "python scripts/tt_setup.py", python = "3.11", requirements = ["PySide6>=6.6"] }
-
-[scripts.platform.windows]
-tt_setup = "py -3 scripts\\tt_setup.py"
+[scripts.regen]
+cmd = [
+  { when = { os = "windows" }, set = "python scripts\\regen.py" },
+  { when = {},                  set = "python scripts/regen.py" },
+]
+python = "3.11"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        manifest.validate().unwrap();
+        let regen = &manifest.scripts.as_ref().unwrap().commands["regen"];
+        assert!(regen.needs_venv());
+        assert_eq!(regen.python(), Some("3.11"));
+        assert!(
+            regen
+                .resolve_cmd(Some("linux"))
+                .unwrap()
+                .contains("scripts/regen.py")
+        );
+        assert!(
+            regen
+                .resolve_cmd(Some("windows"))
+                .unwrap()
+                .contains("scripts\\regen.py")
+        );
+    }
 
-        let linux = manifest
-            .script_for("tt_setup", Some(Platform::LinuxX86_64))
-            .unwrap();
-        assert!(linux.needs_venv());
-        assert_eq!(linux.python(), Some("3.11"));
+    #[test]
+    fn scripts_when_rejects_non_os_axes() {
+        // Only `os` is meaningful in script when selectors — HPM has no
+        // Houdini/python/install_source context at `hpm run` time.
+        let toml_str = r#"
+[package]
+path = "studio/tt"
+name = "TT"
+version = "1.0.0"
 
-        // Windows entry stays plain — different OSes can mix forms.
-        let win = manifest
-            .script_for("tt_setup", Some(Platform::WindowsX86_64))
-            .unwrap();
-        assert!(!win.needs_venv());
-        assert_eq!(win.cmd(), "py -3 scripts\\tt_setup.py");
+[scripts.bad]
+cmd = [
+  { when = { houdini = "^21" }, set = "x" },
+]
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        let err = manifest.validate().unwrap_err();
+        assert!(
+            err.contains("only the `os` axis"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn scripts_when_rejects_install_source() {
+        let toml_str = r#"
+[package]
+path = "studio/tt"
+name = "TT"
+version = "1.0.0"
+
+[scripts.bad]
+cmd = [
+  { when = { install_source = "dev" }, set = "x" },
+]
+"#;
+        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+        assert!(manifest.validate().is_err());
     }
 
     #[test]
@@ -1723,62 +1751,37 @@ version = "0.1.0"
     }
 
     #[test]
-    fn scripts_platform_only_no_flat() {
+    fn scripts_toml_roundtrip_preserves_conditional_cmd() {
         let toml_str = r#"
 [package]
-path = "studio/pkg"
-name = "Pkg"
-version = "0.1.0"
+path = "studio/tool"
+name = "Tool"
+version = "1.0.0"
 
-[scripts.platform.linux]
-register = "linux-register"
+[scripts]
+build = "cargo build"
+
+[scripts.register]
+cmd = [
+  { when = { os = "windows" }, set = "tool.exe register" },
+  { when = {},                  set = "tool register" },
+]
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let scripts = manifest.scripts.as_ref().unwrap();
-        assert!(scripts.commands.is_empty());
-        assert!(scripts.platform.as_ref().unwrap().linux.is_some());
-
-        let resolved = manifest.resolved_scripts(Some(Platform::LinuxX86_64));
-        assert_eq!(resolved["register"].cmd(), "linux-register");
-        let resolved_mac = manifest.resolved_scripts(Some(Platform::MacosAarch64));
-        assert!(resolved_mac.is_empty());
-    }
-
-    #[test]
-    fn scripts_toml_roundtrip_preserves_platform_table() {
-        let mut manifest = PackageManifest::new(
-            PackagePath::new("studio/tool").unwrap(),
-            "Tool".to_string(),
-            "1.0.0".to_string(),
-            None,
-            None,
-            None,
-        );
-        let mut commands = IndexMap::new();
-        commands.insert("build".to_string(), ScriptEntry::from("cargo build"));
-
-        let mut win = IndexMap::new();
-        win.insert(
-            "register".to_string(),
-            ScriptEntry::from("tool.exe register"),
-        );
-
-        manifest.scripts = Some(PackageScripts {
-            commands,
-            platform: Some(PlatformScripts {
-                linux: None,
-                macos: None,
-                windows: Some(win),
-            }),
-        });
-
-        let toml_str = toml::to_string(&manifest).unwrap();
-        let roundtripped: PackageManifest = toml::from_str(&toml_str).unwrap();
-        let scripts = roundtripped.scripts.unwrap();
-        assert_eq!(scripts.commands["build"].cmd(), "cargo build");
+        let roundtrip = toml::to_string(&manifest).unwrap();
+        let back: PackageManifest = toml::from_str(&roundtrip).unwrap();
+        let scripts = back.scripts.unwrap();
         assert_eq!(
-            scripts.platform.unwrap().windows.unwrap()["register"].cmd(),
-            "tool.exe register"
+            scripts.commands["build"].resolve_cmd(None),
+            Some("cargo build".to_string())
+        );
+        assert_eq!(
+            scripts.commands["register"].resolve_cmd(Some("windows")),
+            Some("tool.exe register".to_string())
+        );
+        assert_eq!(
+            scripts.commands["register"].resolve_cmd(Some("macos")),
+            Some("tool register".to_string())
         );
     }
 

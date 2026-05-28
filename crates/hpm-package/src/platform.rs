@@ -59,12 +59,11 @@ impl Platform {
         }
     }
 
-    /// Short OS identifier used for platform-scoped manifest sections
-    /// (e.g. `[scripts.platform.<os>]`).
+    /// Short OS identifier used by `when.os` selectors in `[runtime]`
+    /// conditional values and `[scripts.<name>].cmd` variants.
     ///
-    /// Returns `None` for [`Platform::Universal`], which has no OS to scope
-    /// against — platform-scoped script overrides simply don't apply to a
-    /// universal target.
+    /// Returns `None` for [`Platform::Universal`], which has no OS to
+    /// match against — universal targets never satisfy an `os = ...` gate.
     pub fn os_key(&self) -> Option<&'static str> {
         match self {
             Self::LinuxX86_64 | Self::LinuxAarch64 => Some("linux"),

@@ -314,12 +314,12 @@ hpm run <SCRIPT> [-- ARGS...]
 
 | Argument | Description |
 |----------|-------------|
-| `<SCRIPT>` | Name of the entry under `[scripts]` (or `[scripts.platform.<os>]`). |
+| `<SCRIPT>` | Name of the entry under `[scripts]`. |
 | `ARGS...` | Trailing arguments forwarded to the script verbatim, after shell-quoting. |
 
 Behaviour:
 
-- Looks up the script for the host platform; `[scripts.platform.<os>]` overrides win over `[scripts]` on matching hosts.
+- Looks up the named entry; if its `cmd` is a conditional list, the first variant whose `when.os` matches the host wins. Plain entries always match.
 - Sets `HPM_PACKAGE_ROOT` to the manifest directory and runs the command from that directory through the host shell (`sh -c` on Unix, `cmd /C` on Windows).
 - For [table-form entries](#per-script-python-environments) with `python` or `requirements`, materializes a uv-managed venv at `~/.hpm/venvs/<hash>/`, prepends its `bin/` (or `Scripts/` on Windows) to `PATH`, and sets `VIRTUAL_ENV`. Two scripts whose `python` + `requirements` resolve to the same closure share one venv on disk.
 - The script's exit code becomes `hpm`'s exit code, so `hpm run` is safe to chain in CI or wrap in a Houdini hook.
@@ -835,30 +835,40 @@ build = "python scripts/build.py"
 test = "python -m pytest tests/"
 ```
 
-Entries under `[scripts]` apply on every platform. For scripts whose
-command differs per OS (for example, calling a `.exe` on Windows but an
-extensionless binary elsewhere), add a `[scripts.platform.<os>]` sub-table.
-Valid OS keys are `linux`, `macos`, and `windows`; a platform-specific
-entry wins over the top-level one on the matching host, and the top-level
-entry is used as a fallback on OSes that aren't listed.
+#### Per-host variation
+
+Scripts whose command differs per OS use a conditional `cmd` value — the
+same `when`-grammar `[runtime]` uses, restricted to the `os` axis:
 
 ```toml
 [scripts]
-build = "cargo build"                        # runs on any platform
+build = "cargo build"                        # runs on any host
 
-[scripts.platform.windows]
-register   = "\"$HPM_PACKAGE_ROOT/plugin/bin/tool.exe\" register"
-unregister = "\"$HPM_PACKAGE_ROOT/plugin/bin/tool.exe\" unregister"
-
-[scripts.platform.macos]
-register = "\"$HPM_PACKAGE_ROOT/plugin/bin/tool\" register"
+[scripts.register]
+cmd = [
+  { when = { os = "windows" }, set = "\"$HPM_PACKAGE_ROOT/plugin/bin/tool.exe\" register" },
+  { when = { os = "macos"   }, set = "\"$HPM_PACKAGE_ROOT/plugin/bin/tool\" register" },
+  { when = { os = "linux"   }, set = "\"$HPM_PACKAGE_ROOT/plugin/bin/tool\" register" },
+]
 ```
+
+`hpm run` picks the first variant whose `when.os` matches the host. Add an
+empty `when = {}` branch as a last entry to declare a fallback that
+matches any host the explicit branches missed. A script with no matching
+variant on the current host is treated as absent — `hpm run` errors with a
+message that the script only matches other platforms.
+
+Only the `os` axis is meaningful for scripts: HPM has no Houdini-version
+or Python context at `hpm run` time, and `install_source` is irrelevant
+because scripts run against the dev's workspace, not an install. Setting
+any non-`os` axis in a script `when` is rejected at manifest validation
+time.
 
 #### Per-script Python environments
 
 A script that needs a pinned Python interpreter or extra packages can opt
-into a uv-managed virtual environment by switching from the shorthand string
-to the table form:
+into a uv-managed virtual environment by switching from the shorthand
+string to the table form:
 
 ```toml
 [scripts.tt_setup]
@@ -867,13 +877,28 @@ python       = "3.11"
 requirements = ["PySide6>=6.6"]
 ```
 
-`hpm run tt_setup` then resolves `requirements` through the same uv pipeline
-that backs `[python_dependencies]`, materializes a venv at
+`hpm run tt_setup` then resolves `requirements` through the same uv
+pipeline that backs `[python_dependencies]`, materialises a venv at
 `~/.hpm/venvs/<hash>/`, prepends its `bin/` (or `Scripts/` on Windows) to
 `PATH`, and sets `VIRTUAL_ENV` so `python` in the command resolves to the
-pinned interpreter. Two scripts whose `python` + `requirements` resolve to
-the same closure share one venv on disk. Plain-string entries keep their
-prior behaviour and execute against whatever `python` is on `PATH`.
+pinned interpreter. Two scripts whose `python` + `requirements` resolve
+to the same closure share one venv on disk. Plain-string entries keep
+their prior behaviour and execute against whatever `python` is on `PATH`.
+
+Conditional cmd + venv hints compose:
+
+```toml
+[scripts.regen]
+cmd = [
+  { when = { os = "windows" }, set = "python scripts\\regen.py" },
+  { when = {},                  set = "python scripts/regen.py" },
+]
+python       = "3.11"
+requirements = ["pyyaml"]
+```
+
+Both `python` and `requirements` are optional in the table form; omitting
+both yields a regular script with no venv overhead.
 
 The table form also accepts plain inline-table syntax:
 
@@ -882,14 +907,9 @@ The table form also accepts plain inline-table syntax:
 tt_setup = { cmd = "python scripts/tt_setup.py", python = "3.11", requirements = ["PySide6>=6.6"] }
 ```
 
-Both `python` and `requirements` are optional in the table form; omitting
-both yields a regular script with no venv overhead.
-
-Consumers resolve scripts through `PackageManifest::resolved_scripts(platform)`
-(all entries for the given host, merged) or `script_for(name, platform)`
-(single lookup), each returning [`ScriptEntry`] values. A script that is
-only defined under `[scripts.platform.*]` is simply absent on OSes without
-an entry — UIs can use this to hide menu items rather than fail at runtime.
+Consumers resolve scripts through `PackageManifest::script_for(name)` (or
+`resolved_scripts()`) which returns the [`ScriptEntry`] verbatim;
+call `ScriptEntry::resolve_cmd(host_os)` to pick the right variant.
 
 ## Global configuration
 
