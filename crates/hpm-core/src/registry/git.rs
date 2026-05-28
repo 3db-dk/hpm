@@ -25,6 +25,7 @@
 use super::types::{RegistryEntry, SearchResults};
 use super::{Registry, RegistryError};
 use async_trait::async_trait;
+use hpm_package::IoOp;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
@@ -105,7 +106,8 @@ impl GitRegistry {
             });
         }
 
-        let content = std::fs::read_to_string(&path)?;
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| IoOp::wrap("read registry index", &path, e))?;
         let mut entries = Vec::new();
         for (line_num, line) in content.lines().enumerate() {
             let line = line.trim();
@@ -164,7 +166,8 @@ impl GitRegistry {
                     display_name, remote_url
                 );
                 if let Some(parent) = cache_dir.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| IoOp::wrap("create registry cache parent", parent, e))?;
                 }
                 let mut cmd = std::process::Command::new("git");
                 cmd.args(["clone", "--depth=1", "-q", &remote_url])

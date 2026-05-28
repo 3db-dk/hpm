@@ -8,6 +8,7 @@ pub use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{Signer, VerifyingKey};
 use glob::Pattern;
+use hpm_package::IoOp;
 use hpm_package::manifest::StageConfig;
 use hpm_package::path_util::relative_path_to_forward_slash;
 use hpm_package::platform::Platform;
@@ -168,8 +169,8 @@ fn rewrite_archive_path(rel_path: &str, rule: &CompiledPlaceRule) -> String {
 /// Errors from packing operations.
 #[derive(Debug, thiserror::Error)]
 pub enum PackError {
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Io(#[from] IoOp),
 
     #[error("Zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
@@ -238,7 +239,13 @@ pub fn create_archive(
     // Collect (source path, archive path) pairs, sorted for determinism.
     let mut entries: Vec<(PathBuf, String)> = Vec::new();
     for entry in WalkDir::new(package_dir).sort_by_file_name() {
-        let entry = entry.map_err(|e| PackError::Io(std::io::Error::other(e)))?;
+        let entry = entry.map_err(|e| {
+            IoOp::wrap(
+                "walk package source tree",
+                package_dir,
+                std::io::Error::other(e),
+            )
+        })?;
 
         let path = entry.path();
         let relative = path.strip_prefix(package_dir).unwrap_or(path);
@@ -276,22 +283,27 @@ pub fn create_archive(
     }
 
     // Create zip
-    let file = fs::File::create(&archive_path)?;
+    let file = fs::File::create(&archive_path)
+        .map_err(|e| IoOp::wrap("create archive", &archive_path, e))?;
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     for (source, archive_name) in &entries {
         zip.start_file(archive_name.as_str(), options)?;
-        let mut f = fs::File::open(source)?;
+        let mut f =
+            fs::File::open(source).map_err(|e| IoOp::wrap("open source file", source, e))?;
         let mut buf = Vec::new();
-        f.read_to_end(&mut buf)?;
-        zip.write_all(&buf)?;
+        f.read_to_end(&mut buf)
+            .map_err(|e| IoOp::wrap("read source file", source, e))?;
+        zip.write_all(&buf)
+            .map_err(|e| IoOp::wrap("write zip entry to", &archive_path, e))?;
     }
 
     // Write injected files
     for (name, content) in inject_files {
         zip.start_file(name.as_str(), options)?;
-        zip.write_all(content)?;
+        zip.write_all(content)
+            .map_err(|e| IoOp::wrap("write injected zip entry to", &archive_path, e))?;
     }
 
     zip.finish()?;
@@ -300,7 +312,7 @@ pub fn create_archive(
 
 /// Compute SHA-256 checksum of a file, returning hex-encoded string.
 pub fn compute_archive_checksum(path: &Path) -> Result<String, PackError> {
-    let bytes = fs::read(path)?;
+    let bytes = fs::read(path).map_err(|e| IoOp::wrap("read archive for checksum", path, e))?;
     Ok(compute_bytes_checksum(&bytes))
 }
 
@@ -343,7 +355,7 @@ pub fn load_signing_key_from_pem(pem: &str) -> Result<SigningKey, PackError> {
 
 /// Sign an archive file, returning (base64 signature, hex key_id).
 pub fn sign_archive(path: &Path, signing_key: &SigningKey) -> Result<(String, String), PackError> {
-    let bytes = fs::read(path)?;
+    let bytes = fs::read(path).map_err(|e| IoOp::wrap("read archive for signing", path, e))?;
     Ok(sign_bytes(&bytes, signing_key))
 }
 

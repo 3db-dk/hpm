@@ -12,6 +12,7 @@ pub mod git;
 pub mod types;
 
 use async_trait::async_trait;
+use hpm_package::IoOp;
 use thiserror::Error;
 
 pub use api::ApiRegistry;
@@ -42,8 +43,8 @@ pub enum RegistryError {
     #[error("Failed to parse registry data: {0}")]
     ParseError(String),
 
-    #[error("Registry I/O error: {0}")]
-    IoError(#[from] std::io::Error),
+    #[error(transparent)]
+    Io(#[from] IoOp),
 
     #[error("Git operation failed: {0}")]
     GitError(String),
