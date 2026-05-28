@@ -160,6 +160,7 @@
 pub mod bundled;
 pub mod cleanup;
 pub mod collection;
+pub mod pep503;
 pub mod resolver;
 pub mod script_env;
 pub mod types;

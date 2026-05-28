@@ -279,8 +279,13 @@ impl ResolvedDependencySet {
         }
     }
 
-    pub fn add_package(&mut self, name: impl Into<String>, version: impl Into<String>) {
-        self.packages.insert(name.into(), version.into());
+    /// Insert a package with its resolved version. The name is canonicalized
+    /// per PEP 503 so the keys match the `*.dist-info/` directory names UV
+    /// will lay down, and so two inserts of `Foo-Bar` and `foo_bar` collapse
+    /// to one entry. See [`crate::pep503::normalize`].
+    pub fn add_package(&mut self, name: impl AsRef<str>, version: impl Into<String>) {
+        self.packages
+            .insert(crate::pep503::normalize(name.as_ref()), version.into());
     }
 
     /// Generate a unique hash for this dependency set

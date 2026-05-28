@@ -476,9 +476,9 @@ fn venv_python_executable(venv_path: &Path) -> PathBuf {
 }
 
 /// Verify that at least one resolved package has a `dist-info` directory in
-/// `site_packages`. PEP 503 canonicalization means the dist-info directory
-/// name uses lowercase and underscores (e.g. `foo-bar` installs as
-/// `foo_bar-1.0.dist-info`), so we normalize both sides before comparing.
+/// `site_packages`. Resolved-set keys are already PEP 503 canonical (see
+/// [`ResolvedDependencySet::add_package`]); we only need to canonicalize the
+/// dist-info directory name on the disk side before comparing.
 async fn any_package_present(site_packages: &Path, resolved_deps: &ResolvedDependencySet) -> bool {
     let Ok(mut entries) = fs::read_dir(site_packages).await else {
         return false;
@@ -489,26 +489,13 @@ async fn any_package_present(site_packages: &Path, resolved_deps: &ResolvedDepen
         if let Some(stem) = name.strip_suffix(".dist-info")
             && let Some((pkg_name, _version)) = stem.rsplit_once('-')
         {
-            dist_info_prefixes.push(normalize_pep503(pkg_name));
+            dist_info_prefixes.push(crate::pep503::normalize(pkg_name));
         }
     }
     resolved_deps
         .packages
         .keys()
-        .any(|pkg| dist_info_prefixes.contains(&normalize_pep503(pkg)))
-}
-
-/// PEP 503 name normalization: lowercase, and collapse `-`/`_`/`.` to `_`.
-fn normalize_pep503(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for c in name.chars() {
-        if c == '-' || c == '.' {
-            out.push('_');
-        } else {
-            out.push(c.to_ascii_lowercase());
-        }
-    }
-    out
+        .any(|pkg| dist_info_prefixes.contains(pkg))
 }
 
 // `VenvManager::new()` is fallible (needs `$HOME` / `%USERPROFILE%`),
