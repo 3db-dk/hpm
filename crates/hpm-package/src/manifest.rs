@@ -419,7 +419,7 @@ mod tests {
 
     // empty_name/empty_version validation tests removed - covered by
     // prop_malformed_package_names_rejected and prop_malformed_versions_rejected
-    // in proptest_helpers.rs which test validation with randomized inputs
+    // in tests/properties.rs which test validation with randomized inputs
 
     #[test]
     fn houdini_package_no_version_constraints() {

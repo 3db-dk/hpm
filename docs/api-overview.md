@@ -45,7 +45,7 @@ codes and help hints.
 | `LockError` | `Read`/`Parse`/`Write`/`Serialize` plus `ChecksumMismatch`, `PackageMissing { package, expected_dir }`, and `UnsupportedVersion`. |
 | `PackageSource` | URL-only struct `{ url, version }` — what `ArchiveFetcher` downloads. Path deps bypass the fetcher and use `LockedSource::Path` in the lockfile. |
 | `cas_install_dir(packages_dir, name, version)` | Canonical install path `<packages_dir>/<slug>@<version>` for a lockfile dep name. Used by `LockFile::verify_checksums` and any consumer that needs to find an installed package off the lockfile alone. |
-| `fetcher_install_dir(packages_dir, name, version)` | Staging path `<packages_dir>/<safe_name>-<version>` used by `ArchiveFetcher` while extracting; the result is then copied into the canonical CAS via `install_from_path`. |
+| `fetcher_install_dir(packages_dir, name, version)` | Staging path `<packages_dir>/<safe_name>-<version>` used by `ArchiveFetcher` while extracting; the result is then copied into the canonical CAS via `install_into_cas`. |
 | `Registry` (async trait) | Registry abstraction. `ApiRegistry` and `GitRegistry` implement it. |
 | `RegistrySet` | Composite that fans requests out to every configured registry. |
 | `ArchiveFetcher` | Downloads and extracts registry-hosted archives. |

@@ -1,6 +1,6 @@
-//! Property-based tests for hpm-package. Moved from src/proptest_helpers.rs
-//! so the strategies and proptest harness no longer compile as part of the
-//! library; they only build under `cargo test`.
+//! Property-based tests for hpm-package — proptest strategies plus the
+//! `proptest!` harness exercising manifest validation, TOML round-trips,
+//! Houdini package generation, and dependency-spec shape consistency.
 
 use proptest::prelude::*;
 

@@ -1054,7 +1054,7 @@ houdini = ">=20.5"
     }
 
     #[tokio::test]
-    async fn install_from_path_without_manifest_fails() {
+    async fn install_into_cas_without_manifest_fails() {
         let temp_dir = TempDir::new().unwrap();
         let storage_config = StorageConfig {
             home_dir: temp_dir.path().to_path_buf(),
@@ -1103,7 +1103,7 @@ houdini = ">=20.5"
     /// registry CAS. Otherwise a registry resolution at the same `(slug,
     /// version)` would pick up the dev content via the CAS short-circuit.
     #[tokio::test]
-    async fn install_from_path_dev_targets_dev_subtree() {
+    async fn install_as_dev_copy_targets_dev_subtree() {
         let temp_dir = TempDir::new().unwrap();
         let storage_config = StorageConfig {
             home_dir: temp_dir.path().to_path_buf(),
@@ -1224,7 +1224,7 @@ houdini = ">=20.5"
     /// `_dev/<slug>@<version>/`. Reading through the link must reach the
     /// workspace (this is the whole point of the feature).
     #[tokio::test]
-    async fn install_from_path_dev_link_creates_link_to_workspace() {
+    async fn install_as_dev_link_creates_link_to_workspace() {
         let temp_dir = TempDir::new().unwrap();
         let storage_config = StorageConfig {
             home_dir: temp_dir.path().to_path_buf(),

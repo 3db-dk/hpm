@@ -1,9 +1,6 @@
-//! Property-based tests for CLI argument parsing and validation.
-//!
-//! Moved from `src/cli_validation_tests.rs` to `tests/cli_validation.rs`
-//! once `Commands` (and friends) moved to the `hpm_cli` library — this
-//! file now compiles as a regular integration test against the public
-//! library surface.
+//! Property-based tests for CLI argument parsing and validation —
+//! `Commands` variant shape, problematic package names, path handling,
+//! and CLI-flag combinations exercised against the `hpm_cli` library.
 
 use hpm_cli::*;
 use proptest::prelude::*;

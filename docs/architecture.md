@@ -88,14 +88,18 @@ full list.
 ```rust
 pub struct PackageManifest {
     pub package: PackageInfo,
-    pub compat: Option<CompatConfig>,
-    pub stage: Option<StageConfig>,
-    pub registries: Option<Vec<RegistryConfig>>,
-    pub dependencies: Option<IndexMap<String, DependencySpec>>,
-    pub python_dependencies: Option<IndexMap<String, PythonDependencySpec>>,
-    pub runtime: Option<IndexMap<String, ManifestEnvEntry>>,
-    pub scripts: Option<PackageScripts>,
+    pub compat: CompatConfig,
+    pub stage: StageConfig,
+    pub registries: Vec<RegistryConfig>,
+    pub dependencies: IndexMap<String, DependencySpec>,
+    pub python_dependencies: IndexMap<String, PythonDependencySpec>,
+    pub runtime: IndexMap<String, ManifestEnvEntry>,
+    pub scripts: PackageScripts,
 }
+// All collections and section structs use `#[serde(default,
+// skip_serializing_if = ...)]` so an absent TOML section round-trips to
+// the same in-memory representation as an empty one. `Option` was
+// removed in 0.17 — see CHANGELOG.
 
 pub struct PackageScripts {
     pub commands: IndexMap<String, ScriptEntry>,  // flat entries under [scripts]
@@ -117,24 +121,24 @@ pub struct ScriptEnv {
 }
 
 pub struct PackageInfo {
-    pub path: String,              // "creator/slug"
+    pub path: PackagePath,         // "creator/slug", validated kebab-case
     pub name: String,              // freeform display name
     pub version: String,           // semver
     pub description: Option<String>,
-    pub authors: Option<Vec<String>>,
+    pub authors: Vec<String>,      // empty vec encodes "no authors declared"
     pub license: Option<String>,
     pub readme: Option<String>,
     pub homepage: Option<String>,
     pub repository: Option<String>,
     pub documentation: Option<String>,
-    pub keywords: Option<Vec<String>>,
-    pub categories: Option<Vec<String>>,
+    pub keywords: Vec<String>,
+    pub categories: Vec<String>,
 }
 
 pub enum DependencySpec {
     Simple(String),                                          // "1.0.0"
     Url { url: String, version: String, optional: bool },
-    Path { path: String, optional: bool },
+    Path { path: String, optional: bool, link: bool },       // link=true → symlink/junction install
     Registry { version: String, registry: Option<String>, optional: bool },
 }
 
@@ -264,15 +268,15 @@ clients run the same flow.
  │  3. Fetch + install in parallel (one task per dep, JoinSet):         │
  │       Simple/Registry → query registry, exact-version lookup         │
  │                       → ArchiveFetcher → ~/.hpm/fetch/               │
- │                       → install_from_path → ~/.hpm/packages/<slug>@<v>/ │
+ │                       → install_into_cas → ~/.hpm/packages/<slug>@<v>/ │
  │       Url             → ArchiveFetcher (no registry query)           │
- │                       → install_from_path                            │
- │       Path            → install_from_path_dev (or _dev_link if      │
- │                         { link = true })                             │
+ │                       → install_into_cas                             │
+ │       Path            → install_as_dev_copy (or install_as_dev_link  │
+ │                         if { link = true })                          │
  │                       → ~/.hpm/packages/_dev/<slug>@<v>/             │
  │                         (real dir for copy, symlink/junction for     │
  │                         link mode — both honor _dev/ CAS isolation)  │
- │     Already-in-CAS deps short-circuit (avoids the install_from_path  │
+ │     Already-in-CAS deps short-circuit (avoids the install_into_cas   │
  │     remove-and-recopy that breaks on Windows when Houdini is open).  │
  │  4. Merge [python_dependencies] from root + every dep manifest       │
  │     Python ABI = root manifest's [compat].houdini lower bound        │
@@ -370,7 +374,7 @@ layout is content-addressable where it helps:
 │           └── …                   # at the same (slug, version)
 ├── fetch/                          # ArchiveFetcher staging — extracted
 │   └── creator-slug-1.0.0/         # archives live here briefly before
-│                                   # install_from_path copies into packages/
+│                                   # install_into_cas copies into packages/
 ├── venvs/
 │   └── <12-char hash>/             # hash of resolved set + Python version
 │       ├── pyvenv.cfg
@@ -389,10 +393,10 @@ layout is content-addressable where it helps:
 
 Both `hpm install` and `hpm sync` route URL/registry deps through the same
 two-step flow: `ArchiveFetcher` downloads + extracts into `~/.hpm/fetch/`,
-then `StorageManager::install_from_path` copies into the canonical CAS at
+then `StorageManager::install_into_cas` copies into the canonical CAS at
 `~/.hpm/packages/<slug>@<version>/`. Path deps skip the fetcher entirely
 and go straight to `~/.hpm/packages/_dev/<slug>@<version>/` via
-`install_from_path_dev`.
+`install_as_dev_copy`.
 
 Per-project:
 
@@ -442,10 +446,10 @@ and `remove_package`, so link installs are unlinked without traversal.
 Path deps come in two install styles, selected by the `link` field on
 the manifest's `{ path = "...", link = ? }` spec:
 
-- **Copy** (default, `link = false`): `install_from_path_dev` snapshot-copies
+- **Copy** (default, `link = false`): `install_as_dev_copy` snapshot-copies
   the workspace into `_dev/<slug>@<version>/`. Subsequent working-tree
   edits don't reach the install until the next `hpm sync`.
-- **Link** (`link = true`): `install_from_path_dev_link` creates a symlink
+- **Link** (`link = true`): `install_as_dev_link` creates a symlink
   (Unix) or NTFS junction (Windows) at `_dev/<slug>@<version>/` pointing
   at the canonicalized workspace. Edits are live; Houdini's HPATH
   resolution follows the link transparently. Junctions on Windows side-step

@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bounded form (`"^21"`) or an explicit tested range
   (`">=20.5, <22"`). Pure-data / pure-Python packages (no
   `[compat].platforms`) are unaffected.
+- **`hpm-cli` now exposes a library target.** `Cli`, `Commands`,
+  `ColorChoiceArg`, `OutputFormatArg`, `RegistryAction`, and the
+  dispatch entry `pub async fn run() -> ExitCode` live in
+  `hpm_cli` so integration tests and embedded hosts can drive the
+  CLI without spawning the binary. The `hpm` binary is now a six-line
+  `#[tokio::main]` wrapper.
 
 ### Changed
 - **`hpm init` default `[compat].houdini` is now `"^21"`** (Houdini
@@ -23,6 +29,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   upper bound open, which is the wrong default for any package that
   ships native binaries. Authors of pure-data packages can widen the
   range explicitly after `hpm init`.
+- **`PackageManifest` collection fields drop `Option`.** `dependencies`,
+  `python_dependencies`, `runtime`, `registries`, `compat`, `stage`,
+  and `scripts` are now bare collections / section structs with
+  `#[serde(default, skip_serializing_if = ...)]`. An absent TOML
+  section and an empty one round-trip to the same in-memory
+  representation, which is what every caller already assumed.
+  `PackageInfo.authors`, `keywords`, and `categories` similarly drop
+  the `Option<Vec<_>>` wrapper. **API break:**
+  `PackageManifest::new` now takes `authors: Vec<String>` instead of
+  `authors: Option<Vec<String>>`; pass `Vec::new()` for the no-authors
+  case. Callers matching on these fields no longer pattern-match `Some`/
+  `None` — read the collection (or section) directly and check
+  `is_empty()` / `is_none()` on inner `Option<_>` fields where they
+  remain.
+- **`[compat].platforms` is now `Vec<Platform>` instead of `Vec<String>`.**
+  Unknown identifiers (`"linux-arm64"`, `"macos-universal"`, etc.) are
+  rejected at TOML parse time by `Platform`'s `TryFrom<String>` rather
+  than bubbling out of a separate validate pass.
+- **`StorageManager` install methods renamed for clarity:**
+  `install_from_path` → `install_into_cas`, `install_from_path_dev`
+  → `install_as_dev_copy`, `install_from_path_dev_link` →
+  `install_as_dev_link`. The path source is the same in all three;
+  the renames highlight the dimension that actually varies (CAS vs
+  `_dev/` and copy vs link).
+- **Type renames in `hpm-package`:** `EnvValueSpec` → `EnvValue`,
+  `EnvValueVariant` → `EnvValueBranch`, `WhenSelector` → `Condition`,
+  `compile_when` → `compile_condition`. The serde-facing `when`
+  field name in `hpm.toml` is preserved — no manifest schema change.
+- **`relative_path_to_forward_slash` moved from `hpm-core::path_util`
+  to `hpm-package::path_util`.** Path normalization for archive
+  entries, content hashes, and glob matching is now part of the
+  package-format layer; hpm-core depends on it rather than owning it.
+- **`DependencyError::StorageRead(String)` is now
+  `Storage(Box<StorageError>)`** carrying the typed source error, and
+  `StorageError::ProjectDiscovery(String)` is now
+  `ProjectDiscovery(#[from] DiscoveryError)`. Callers can now match
+  on the underlying error type instead of inspecting a stringified
+  display.
+
+### Internal
+- **Source files split for readability.** `hpm-config/lib.rs`,
+  `hpm-package/manifest.rs`, `hpm-core/storage.rs`, and
+  `hpm-core/project.rs` each grew past 1000 lines covering several
+  independent concerns. Section types now live in per-section
+  submodules; the parent files keep only the top-level type and its
+  impl. No public-API change beyond the renames already listed.
+- **`#[cfg(test)] mod proptest_helpers;` and `mod cli_validation_tests`
+  moved to integration tests** at `crates/hpm-package/tests/properties.rs`
+  and `crates/hpm-cli/tests/cli_validation.rs`. The strategies and
+  harnesses no longer compile as part of the library.
 
 ## [0.16.0] - 2026-05-28
 
