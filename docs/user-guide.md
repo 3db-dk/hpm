@@ -347,6 +347,58 @@ hpm search <QUERY>
 
 If no registries are configured, HPM prints instructions to add one.
 
+### `hpm build`
+
+Materialise the install image into a directory. Runs `[stage].prepack`
+scripts (compile DSO, collapse expanded HDAs, etc.), then copies workspace
+files into the output directory using the same include/exclude/place
+rules `hpm pack` would apply. The result is what a registry consumer's
+install would look like.
+
+```
+hpm build [OPTIONS]
+```
+
+`hpm build` is a one-shot CLI verb — it copies files and exits, with no
+background watcher. The output directory is yours to manage; common
+patterns:
+
+- **Single workstation, one Houdini at a time**: leave the default
+  `[stage].output_dir` (`dist/`), point Houdini at it, rerun `hpm build`
+  whenever you want a refresh.
+- **Multiple Houdini sessions in parallel**: pass `--output <tmpdir>` per
+  session and have each session's `HOUDINI_PACKAGE_PATH` reference its
+  own staging directory. Avoids cross-session DSO lock conflicts.
+
+**Options**
+
+| Flag | Description |
+|------|-------------|
+| `-m, --manifest <path>` | Path to `hpm.toml` or containing dir. Defaults to cwd. |
+| `-o, --output <dir>` | Override `[stage].output_dir`. Relative paths resolve against the manifest dir; absolute paths are used verbatim. |
+| `--platform <id>` | Target platform. Defaults to host when `[compat].platforms` is declared. Required when host is not in the declared list. |
+| `--no-prepack` | Skip `[stage].prepack` scripts. Use in CI when build steps already ran out-of-band. |
+| `--no-clean` | Keep existing output-dir contents instead of wiping first. |
+
+**Workflow notes — live editing and DSO rebuild**
+
+These are *user-level* concerns; HPM doesn't model them in the manifest:
+
+- **HDA editing.** Edits made inside Houdini save back to whatever path
+  Houdini loaded the HDA from. If you load from `dist/otls/foo.hda`
+  (collapsed by `hpm build`), saves go into the build output and get
+  clobbered on the next `hpm build`. If you want round-trip editing,
+  point Houdini at an unstaged expanded HDA dir during dev, and run
+  `hpm build` only when you want to produce the publishable form.
+- **DSO rebuild while Houdini is loaded.** On Windows, a loaded `.dll`
+  is locked. With `--output <tmpdir-A>` for session A and `--output
+  <tmpdir-B>` for session B, your `cmake --build` (writing to
+  `build/<plat>/`) doesn't hit either lock, and a fresh `hpm build
+  --output <tmpdir-C>` writes to a third location — you only hit the
+  lock when you try to rebuild *into* a directory a live Houdini still
+  has loaded. The typical workflow is one temp dir per Houdini
+  lifetime, thrown away on Houdini close.
+
 ### `hpm pack`
 
 Build a distributable archive from the current package.

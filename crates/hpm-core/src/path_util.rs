@@ -16,7 +16,7 @@ use std::path::Path;
 /// so this is only safe for relative paths inside a known tree — pass an
 /// absolute or `..`-laden path and you will get a sanitized result, not
 /// the original.
-pub(crate) fn relative_path_to_forward_slash(relative: &Path) -> String {
+pub fn relative_path_to_forward_slash(relative: &Path) -> String {
     relative
         .components()
         .filter_map(|c| match c {

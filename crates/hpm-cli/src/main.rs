@@ -493,6 +493,34 @@ enum Commands {
     },
     /// Validate package configuration
     Check,
+    /// Materialise the install image into a directory (defaults to
+    /// `[stage].output_dir`, typically `dist/`).
+    ///
+    /// Pass `--output <dir>` to stage into a different location — useful
+    /// when running multiple Houdini sessions side by side, each pointing
+    /// its `HOUDINI_PACKAGE_PATH` at its own freshly built directory.
+    Build {
+        /// Path to hpm.toml or its directory (defaults to cwd).
+        #[arg(short, long)]
+        manifest: Option<std::path::PathBuf>,
+        /// Override `[stage].output_dir`. Relative paths resolve against
+        /// the manifest directory; absolute paths are used verbatim.
+        #[arg(short = 'o', long)]
+        output: Option<std::path::PathBuf>,
+        /// Target platform; defaults to the host platform when
+        /// `[compat].platforms` is declared.
+        #[arg(long)]
+        platform: Option<String>,
+        /// Skip `[stage].prepack`. Useful in CI when the build steps already
+        /// ran out-of-band.
+        #[arg(long)]
+        no_prepack: bool,
+        /// Keep the existing output directory contents alongside the new
+        /// staging output. Default behavior wipes the output dir first to
+        /// avoid stale files surviving from a prior platform.
+        #[arg(long)]
+        no_clean: bool,
+    },
     /// Create a distributable package archive
     Pack {
         /// Path to Ed25519 signing key (PKCS#8 PEM). Overrides HPM_SIGNING_KEY env var.
@@ -817,6 +845,29 @@ async fn run_command(
             if output_format == OutputFormat::Human {
                 console.success("Package configuration is valid");
             }
+        }
+        Commands::Build {
+            manifest,
+            output,
+            platform,
+            no_prepack,
+            no_clean,
+        } => {
+            let options = commands::build::BuildOptions {
+                manifest: manifest.clone().or_else(|| directory.clone()),
+                output: output.clone(),
+                platform: platform.clone(),
+                no_prepack: *no_prepack,
+                clean: !*no_clean,
+            };
+            commands::build::build(options, console)
+                .await
+                .map_err(|e| {
+                    CliError::package(
+                        e,
+                        Some("Use 'hpm build --help' for usage information".to_string()),
+                    )
+                })?;
         }
         Commands::Pack {
             key,

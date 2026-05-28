@@ -821,6 +821,7 @@ dependencies = [
  "hpm-core",
  "hpm-package",
  "hpm-python",
+ "ignore",
  "indexmap",
  "indicatif",
  "proptest",
