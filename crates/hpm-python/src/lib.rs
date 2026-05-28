@@ -159,7 +159,7 @@
 
 pub mod bundled;
 pub mod cleanup;
-pub mod dependency;
+pub mod collection;
 pub mod resolver;
 pub mod script_env;
 pub mod types;
@@ -202,7 +202,7 @@ pub(crate) fn hpm_root() -> anyhow::Result<std::path::PathBuf> {
 }
 
 // Dependency collection
-pub use dependency::collect_python_dependencies;
+pub use collection::collect_python_dependencies;
 
 // UV resolver
 pub use resolver::resolve_dependencies;

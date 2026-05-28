@@ -8,8 +8,8 @@
 //! - [`dev_install`] — `_dev/` path-install primitives (link, copy, remove)
 //! - [`cleanup`] — [`ComprehensiveCleanupResult`] aggregate
 
-use crate::dependency::{DependencyResolver, PackageId};
 use crate::discovery::ProjectDiscovery;
+use crate::graph::{DependencyResolver, PackageId};
 use hpm_config::{ProjectsConfig, StorageConfig};
 use hpm_package::{IoOp, ManifestLoadError, PackageManifest};
 use hpm_python::cleanup::{CleanupResult, PythonCleanupAnalyzer};

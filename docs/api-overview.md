@@ -99,7 +99,7 @@ codes and help hints.
 | `ProjectsConfig` | `explicit_paths`, `search_roots`, `max_search_depth`, `ignore_patterns`. |
 | `RegistrySourceConfig`, `RegistryType` | Registry entries from `[[registries]]`. |
 | `SigningConfig` | `key_path` fallback for `hpm pack`. |
-| `ProjectConfig` | Per-project paths (`.hpm/packages/`, `hpm.lock`, `hpm.toml`). |
+| `ProjectPaths` | Per-project paths (`.hpm/packages/`, `hpm.lock`, `hpm.toml`). |
 
 ### hpm-cli
 

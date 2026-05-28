@@ -1,7 +1,7 @@
 //! [`StorageError`] — failures raised by the global package store.
 
-use crate::dependency::DependencyError;
 use crate::discovery::DiscoveryError;
+use crate::graph::DependencyError;
 use hpm_package::{IoOp, ManifestLoadError};
 
 #[derive(Debug, thiserror::Error)]

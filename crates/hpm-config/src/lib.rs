@@ -38,7 +38,7 @@
 pub mod builder;
 pub mod error;
 pub mod install;
-pub mod project;
+pub mod project_paths;
 pub mod projects;
 pub mod registry;
 pub mod signing;
@@ -47,7 +47,7 @@ pub mod storage;
 pub use builder::ConfigBuilder;
 pub use error::ConfigError;
 pub use install::InstallConfig;
-pub use project::ProjectConfig;
+pub use project_paths::ProjectPaths;
 pub use projects::ProjectsConfig;
 pub use registry::{RegistrySourceConfig, RegistryType};
 pub use signing::SigningConfig;
@@ -265,9 +265,9 @@ impl Config {
         ConfigBuilder::default()
     }
 
-    pub fn load_project_config(project_root: &Path) -> ProjectConfig {
+    pub fn project_paths(project_root: &Path) -> ProjectPaths {
         let hpm_dir = project_root.join(".hpm");
-        ProjectConfig {
+        ProjectPaths {
             packages_dir: hpm_dir.join("packages"),
             lock_file: project_root.join("hpm.lock"),
             manifest_file: project_root.join("hpm.toml"),
@@ -478,10 +478,10 @@ ignore_patterns = ["backup", ".cache", "temp"]
     }
 
     #[test]
-    fn project_config_package_manifest_path() {
+    fn project_paths_package_manifest_path() {
         let project_root = PathBuf::from("/test/project");
-        let project_config = Config::load_project_config(&project_root);
-        let manifest_path = project_config.package_manifest_path("test-package");
+        let project_paths = Config::project_paths(&project_root);
+        let manifest_path = project_paths.package_manifest_path("test-package");
         // Normalize path separators for cross-platform testing
         let manifest_path_str = manifest_path.to_string_lossy().replace('\\', "/");
         assert!(
@@ -492,12 +492,12 @@ ignore_patterns = ["backup", ".cache", "temp"]
     }
 
     #[test]
-    fn project_config_structure() {
+    fn project_paths_structure() {
         let project_root = PathBuf::from("/test/project");
-        let project_config = Config::load_project_config(&project_root);
+        let project_paths = Config::project_paths(&project_root);
 
         // Normalize path separators for cross-platform testing
-        let packages_dir_str = project_config
+        let packages_dir_str = project_paths
             .packages_dir
             .to_string_lossy()
             .replace('\\', "/");
@@ -507,13 +507,13 @@ ignore_patterns = ["backup", ".cache", "temp"]
             packages_dir_str
         );
         assert!(
-            project_config
+            project_paths
                 .lock_file
                 .to_string_lossy()
                 .ends_with("hpm.lock")
         );
         assert!(
-            project_config
+            project_paths
                 .manifest_file
                 .to_string_lossy()
                 .ends_with("hpm.toml")

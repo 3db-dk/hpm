@@ -10,7 +10,7 @@ use crate::archive_fetcher::ArchiveFetcher;
 use crate::lock::LockedSource;
 use crate::package_source::PackageSource;
 use crate::storage::{InstalledPackage, PackageSpec, StorageManager};
-use hpm_config::{Config, ProjectConfig};
+use hpm_config::{Config, ProjectPaths};
 use hpm_package::{HoudiniPackage, IoOp, ManifestEnvEntry, ManifestLoadError, PackageManifest};
 use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use indexmap::IndexMap;
@@ -29,7 +29,7 @@ pub use types::{InstallOutcome, ProjectDependency};
 #[derive(Debug)]
 pub struct ProjectManager {
     config: Arc<Config>,
-    project_config: ProjectConfig,
+    project_paths: ProjectPaths,
     storage_manager: Arc<StorageManager>,
     fetcher: ArchiveFetcher,
     auth_token: Option<String>,
@@ -76,7 +76,7 @@ impl ProjectManager {
         config: Arc<Config>,
         auth_token: Option<String>,
     ) -> Result<Self, ProjectError> {
-        let project_config = hpm_config::Config::load_project_config(&project_root);
+        let project_paths = hpm_config::Config::project_paths(&project_root);
 
         // Fetcher staging lives next to the global CAS under ~/.hpm/.
         // Drive both directories off `storage.home_dir` directly — using
@@ -90,7 +90,7 @@ impl ProjectManager {
 
         let manager = Self {
             config,
-            project_config,
+            project_paths,
             storage_manager,
             fetcher,
             auth_token,
@@ -101,13 +101,13 @@ impl ProjectManager {
     }
 
     fn ensure_directories(&self) -> Result<(), ProjectError> {
-        // ProjectConfig::ensure_directories does mkdir -p on the well-known
+        // ProjectPaths::ensure_directories does mkdir -p on the well-known
         // dirs; bubble io::Error along with the project root so the failure
         // names a path the user can reason about.
-        self.project_config.ensure_directories().map_err(|source| {
+        self.project_paths.ensure_directories().map_err(|source| {
             IoOp::wrap(
                 "create project packages directory",
-                &self.project_config.packages_dir,
+                &self.project_paths.packages_dir,
                 source,
             )
         })?;
@@ -116,7 +116,7 @@ impl ProjectManager {
     }
 
     pub fn load_project_manifest(&self) -> Result<Option<PackageManifest>, ProjectError> {
-        match PackageManifest::from_path(&self.project_config.manifest_file) {
+        match PackageManifest::from_path(&self.project_paths.manifest_file) {
             Ok(manifest) => Ok(Some(manifest)),
             Err(ManifestLoadError::NotFound { .. }) => Ok(None),
             Err(e) => Err(ProjectError::Manifest(e)),
@@ -237,7 +237,7 @@ impl ProjectManager {
         self.remove_from_project_manifest(name)?;
 
         // 2. Remove Houdini package manifest from project
-        let manifest_path = self.project_config.package_manifest_path(name);
+        let manifest_path = self.project_paths.package_manifest_path(name);
         if manifest_path.exists() {
             std::fs::remove_file(&manifest_path)
                 .map_err(|e| IoOp::wrap("remove Houdini manifest at", &manifest_path, e))?;
@@ -366,7 +366,7 @@ impl ProjectManager {
         &self,
         installed_packages: &[InstalledPackage],
     ) -> Result<(), ProjectError> {
-        let packages_dir = &self.project_config.packages_dir;
+        let packages_dir = &self.project_paths.packages_dir;
         if !packages_dir.exists() {
             return Ok(());
         }
@@ -447,7 +447,7 @@ impl ProjectManager {
             project_env_overrides,
         )?;
         let manifest_path = self
-            .project_config
+            .project_paths
             .package_manifest_path(installed_package.manifest.package.slug());
 
         // Atomic write: stage to <path>.tmp then rename. Houdini reads
@@ -696,7 +696,7 @@ impl ProjectManager {
     where
         F: FnOnce(&mut toml_edit::DocumentMut) -> Result<(), ProjectError>,
     {
-        let path = self.project_config.manifest_file.clone();
+        let path = self.project_paths.manifest_file.clone();
 
         let content = std::fs::read_to_string(&path).map_err(|source| {
             if source.kind() == std::io::ErrorKind::NotFound {
@@ -721,7 +721,7 @@ impl ProjectManager {
     }
 
     fn update_project_manifest(&self, spec: &PackageSpec) -> Result<(), ProjectError> {
-        let manifest_path = self.project_config.manifest_file.clone();
+        let manifest_path = self.project_paths.manifest_file.clone();
         if !manifest_path.exists() {
             return Err(ProjectError::Manifest(ManifestLoadError::NotFound {
                 path: manifest_path,
@@ -772,7 +772,7 @@ impl ProjectManager {
     }
 
     fn remove_from_project_manifest(&self, name: &str) -> Result<(), ProjectError> {
-        if !self.project_config.manifest_file.exists() {
+        if !self.project_paths.manifest_file.exists() {
             return Ok(()); // Nothing to remove
         }
 
@@ -794,14 +794,14 @@ impl ProjectManager {
     pub fn list_dependencies(&self) -> Result<Vec<ProjectDependency>, ProjectError> {
         let mut dependencies = vec![];
 
-        if !self.project_config.packages_dir.exists() {
+        if !self.project_paths.packages_dir.exists() {
             return Ok(dependencies);
         }
 
-        let entries = std::fs::read_dir(&self.project_config.packages_dir).map_err(|e| {
+        let entries = std::fs::read_dir(&self.project_paths.packages_dir).map_err(|e| {
             IoOp::wrap(
                 "read project packages directory",
-                &self.project_config.packages_dir,
+                &self.project_paths.packages_dir,
                 e,
             )
         })?;

@@ -516,7 +516,7 @@ fn sweep_stale_houdini_manifests_removes_orphaned_json() {
 
     // Simulate the prior sync's output: foo.json (current dep) and
     // stale.json (dep that left the set).
-    let pkg_dir = &project_manager.project_config.packages_dir;
+    let pkg_dir = &project_manager.project_paths.packages_dir;
     let foo_json = pkg_dir.join("foo.json");
     let stale_json = pkg_dir.join("stale.json");
     let unrelated = pkg_dir.join("README.md");
@@ -560,7 +560,7 @@ fn sweep_stale_houdini_manifests_empty_set_clears_all_json() {
     std::fs::create_dir_all(&project_root).unwrap();
     let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
-    let pkg_dir = &project_manager.project_config.packages_dir;
+    let pkg_dir = &project_manager.project_paths.packages_dir;
     let dev_only = pkg_dir.join("dev-only.json");
     std::fs::write(&dev_only, b"{}").unwrap();
 

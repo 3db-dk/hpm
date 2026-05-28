@@ -220,9 +220,9 @@
 //! - Generated manifests integrate with Houdini's environment system
 
 pub mod archive_fetcher;
-pub mod dependency;
 pub mod discovery;
 pub mod fetch_manifest;
+pub mod graph;
 pub mod lock;
 pub mod package_source;
 pub mod packer;
@@ -267,10 +267,8 @@ pub use lock::{
 // Project discovery and reachability — `hpm clean` machinery, but
 // re-exported for downstream tools that want to do orphan analysis
 // against a custom project set.
-pub use dependency::{
-    DependencyError, DependencyGraph, DependencyResolver, PackageId, PackageNode,
-};
 pub use discovery::{DiscoveredProject, DiscoveryError, ProjectDiscovery};
+pub use graph::{DependencyError, DependencyGraph, DependencyResolver, PackageId, PackageNode};
 
 // Lower-level building blocks. Used by the CLI's install + pack commands
 // today. Stay re-exported because the boundary between "library callers
