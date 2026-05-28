@@ -5,41 +5,19 @@ use crate::archive_fetcher::FetchError;
 use crate::package_source::PackageSourceError;
 use crate::registry::RegistryError;
 use crate::storage::StorageError;
-use hpm_package::ManifestLoadError;
+use hpm_package::{IoOp, ManifestLoadError};
 use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
-    /// Failed to create a directory the project depends on (`.hpm/packages`,
-    /// fetcher cache, etc.). Carries the typed `io::Error` so callers can
-    /// match on `ErrorKind` (e.g. `PermissionDenied`).
-    #[error("Failed to create directory {}", path.display())]
-    DirectoryCreation {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// Failed to read a directory the project depends on.
-    #[error("Failed to read directory {}", path.display())]
-    DirectoryRead {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
+    /// IO failure with the operation verb, path, and source `io::Error`.
+    /// Subsumes the prior DirectoryCreation / DirectoryRead / ManifestIo
+    /// variants — all three carried the same shape (op + path + io::Error).
+    #[error(transparent)]
+    Io(#[from] IoOp),
 
     #[error(transparent)]
     Manifest(#[from] ManifestLoadError),
-
-    /// I/O failure on a manifest file we own (hpm.toml or a per-package
-    /// Houdini JSON). `op` is a verb like "read", "write", or "remove".
-    #[error("Failed to {op} {}", path.display())]
-    ManifestIo {
-        op: &'static str,
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
 
     /// hpm.toml could not be parsed as an editable TOML document. Distinct
     /// from `Manifest(ManifestLoadError::Parse)` because the edit paths

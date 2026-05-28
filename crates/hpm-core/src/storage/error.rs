@@ -2,24 +2,18 @@
 
 use crate::dependency::DependencyError;
 use crate::discovery::DiscoveryError;
-use hpm_package::ManifestLoadError;
+use hpm_package::{IoOp, ManifestLoadError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
-    #[error("Directory creation failed: {0}")]
-    DirectoryCreation(#[source] std::io::Error),
-
-    #[error("Directory read failed: {0}")]
-    DirectoryRead(String),
-
-    #[error("Directory removal failed: {0}")]
-    DirectoryRemoval(#[source] std::io::Error),
+    /// IO failure with the operation verb, path, and source `io::Error`.
+    /// Subsumes the prior DirectoryCreation/DirectoryRead/DirectoryRemoval/
+    /// MetadataRead variants.
+    #[error(transparent)]
+    Io(#[from] IoOp),
 
     #[error(transparent)]
     Manifest(#[from] ManifestLoadError),
-
-    #[error("Metadata read failed: {0}")]
-    MetadataRead(#[source] std::io::Error),
 
     #[error("Package not found: {0}")]
     PackageNotFound(String),

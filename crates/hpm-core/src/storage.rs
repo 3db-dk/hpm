@@ -11,7 +11,7 @@
 use crate::dependency::{DependencyResolver, PackageId};
 use crate::discovery::ProjectDiscovery;
 use hpm_config::{ProjectsConfig, StorageConfig};
-use hpm_package::{ManifestLoadError, PackageManifest};
+use hpm_package::{IoOp, ManifestLoadError, PackageManifest};
 use hpm_python::cleanup::{CleanupResult, PythonCleanupAnalyzer};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -44,9 +44,9 @@ impl StorageManager {
     }
 
     fn ensure_directories(&self) -> Result<(), StorageError> {
-        self.config
-            .ensure_directories()
-            .map_err(StorageError::DirectoryCreation)?;
+        self.config.ensure_directories().map_err(|e| {
+            IoOp::wrap("create storage directories under", &self.config.home_dir, e)
+        })?;
         info!("Ensured storage directories exist");
         Ok(())
     }
@@ -90,8 +90,7 @@ impl StorageManager {
         dir: &std::path::Path,
         packages: &mut Vec<InstalledPackage>,
     ) -> Result<(), StorageError> {
-        let entries =
-            std::fs::read_dir(dir).map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
+        let entries = std::fs::read_dir(dir).map_err(|e| IoOp::wrap("read directory", dir, e))?;
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -242,24 +241,14 @@ impl StorageManager {
                 // Junctions need absolute paths; symlinks behave more
                 // predictably when absolute too. Canonicalize so the link
                 // survives changes to the project's working directory.
-                let absolute_source = std::fs::canonicalize(source_path).map_err(|e| {
-                    StorageError::DirectoryRead(format!(
-                        "Failed to canonicalize link source {}: {}",
-                        source_path.display(),
-                        e
-                    ))
-                })?;
+                let absolute_source = std::fs::canonicalize(source_path)
+                    .map_err(|e| IoOp::wrap("canonicalize link source", source_path, e))?;
                 if let Some(parent) = target_dir.parent() {
-                    std::fs::create_dir_all(parent).map_err(StorageError::DirectoryCreation)?;
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| IoOp::wrap("create dev parent directory", parent, e))?;
                 }
-                create_dev_link(&absolute_source, &target_dir).map_err(|e| {
-                    StorageError::DirectoryRead(format!(
-                        "Failed to create dev link {} -> {}: {}",
-                        target_dir.display(),
-                        absolute_source.display(),
-                        e
-                    ))
-                })?;
+                create_dev_link(&absolute_source, &target_dir)
+                    .map_err(|e| IoOp::wrap("create dev link at", &target_dir, e))?;
             }
         }
 
@@ -281,29 +270,34 @@ impl StorageManager {
         source: &std::path::Path,
         target: &std::path::Path,
     ) -> Result<(), StorageError> {
-        std::fs::create_dir_all(target).map_err(StorageError::DirectoryCreation)?;
+        std::fs::create_dir_all(target)
+            .map_err(|e| IoOp::wrap("create install target", target, e))?;
 
         for entry in walkdir::WalkDir::new(source)
             .min_depth(1)
             .into_iter()
             .filter_map(|e| e.ok())
         {
-            let relative_path = entry
-                .path()
-                .strip_prefix(source)
-                .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
+            let relative_path = entry.path().strip_prefix(source).map_err(|_| {
+                IoOp::wrap(
+                    "strip workspace prefix from",
+                    entry.path(),
+                    std::io::Error::other("path outside workspace"),
+                )
+            })?;
             let target_path = target.join(relative_path);
 
             if entry.file_type().is_dir() {
-                std::fs::create_dir_all(&target_path).map_err(StorageError::DirectoryCreation)?;
+                std::fs::create_dir_all(&target_path)
+                    .map_err(|e| IoOp::wrap("create subdirectory", &target_path, e))?;
             } else {
                 // Ensure parent directory exists
                 if let Some(parent) = target_path.parent() {
-                    std::fs::create_dir_all(parent).map_err(StorageError::DirectoryCreation)?;
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| IoOp::wrap("create file parent", parent, e))?;
                 }
-                std::fs::copy(entry.path(), &target_path).map_err(|e| {
-                    StorageError::DirectoryRead(format!("Failed to copy file: {}", e))
-                })?;
+                std::fs::copy(entry.path(), &target_path)
+                    .map_err(|e| IoOp::wrap("copy file to", &target_path, e))?;
             }
         }
 
@@ -324,7 +318,7 @@ impl StorageManager {
                     name, version
                 )));
             }
-            Err(e) => return Err(StorageError::DirectoryRemoval(e)),
+            Err(e) => return Err(IoOp::wrap("stat package directory", &package_dir, e).into()),
         };
 
         info!("Removing package: {}@{}", name, version);
@@ -480,8 +474,8 @@ impl StorageManager {
         }
 
         let mut out = Vec::new();
-        let entries =
-            std::fs::read_dir(&dev_root).map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
+        let entries = std::fs::read_dir(&dev_root)
+            .map_err(|e| IoOp::wrap("read dev install root", &dev_root, e))?;
         for entry in entries.flatten() {
             let path = entry.path();
             // Don't follow links — we want to know they exist, not what they
@@ -675,9 +669,7 @@ impl StorageManager {
         };
 
         // 3. Build the set of packages that remain (or would remain) after CAS cleanup.
-        let all_installed = self
-            .list_installed()
-            .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
+        let all_installed = self.list_installed()?;
         let remaining_packages: Vec<String> = all_installed
             .into_iter()
             .filter_map(|p| {
@@ -733,9 +725,7 @@ impl StorageManager {
             PythonCleanupAnalyzer::new().map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
 
         // Get list of all active packages
-        let active_packages = self
-            .list_installed()
-            .map_err(|e| StorageError::DirectoryRead(e.to_string()))?;
+        let active_packages = self.list_installed()?;
         let active_package_names: Vec<String> = active_packages
             .into_iter()
             .map(|p| format!("{}@{}", p.manifest.package.slug(), p.version))

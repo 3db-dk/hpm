@@ -6,6 +6,7 @@
 //! [`StorageManager`](super::StorageManager) impl can read top-down.
 
 use super::error::StorageError;
+use hpm_package::IoOp;
 use std::path::PathBuf;
 use tracing::warn;
 
@@ -139,8 +140,11 @@ pub(super) fn remove_install_entry(
     name: &str,
     version: &str,
 ) -> Result<(), StorageError> {
-    if is_link_entry(meta, target_dir).map_err(StorageError::DirectoryRemoval)? {
-        return remove_dev_link(target_dir).map_err(StorageError::DirectoryRemoval);
+    if is_link_entry(meta, target_dir)
+        .map_err(|e| IoOp::wrap("inspect install entry at", target_dir, e))?
+    {
+        return remove_dev_link(target_dir)
+            .map_err(|e| IoOp::wrap("remove dev link at", target_dir, e).into());
     }
     std::fs::remove_dir_all(target_dir).map_err(|e| {
         // On Windows, a running Houdini process holds open handles to files
@@ -154,7 +158,7 @@ pub(super) fn remove_install_entry(
                 source: e,
             }
         } else {
-            StorageError::DirectoryRemoval(e)
+            IoOp::wrap("remove install entry at", target_dir, e).into()
         }
     })
 }
@@ -174,10 +178,12 @@ pub(super) fn clear_existing_install(
     let meta = match std::fs::symlink_metadata(target_dir) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(StorageError::DirectoryRemoval(e)),
+        Err(e) => return Err(IoOp::wrap("stat install target", target_dir, e).into()),
     };
 
-    if is_link_entry(&meta, target_dir).map_err(StorageError::DirectoryRemoval)? {
+    if is_link_entry(&meta, target_dir)
+        .map_err(|e| IoOp::wrap("inspect install entry at", target_dir, e))?
+    {
         warn!(
             "replacing existing link install for {}@{} at {}",
             name,

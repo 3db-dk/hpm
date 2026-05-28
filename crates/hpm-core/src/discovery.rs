@@ -1,5 +1,5 @@
 use hpm_config::ProjectsConfig;
-use hpm_package::{ManifestLoadError, PackageManifest};
+use hpm_package::{IoOp, ManifestLoadError, PackageManifest};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
@@ -89,8 +89,7 @@ impl ProjectDiscovery {
             return Ok(projects);
         }
 
-        let entries = std::fs::read_dir(dir)
-            .map_err(|e| DiscoveryError::DirectoryRead(dir.clone(), e.to_string()))?;
+        let entries = std::fs::read_dir(dir).map_err(|e| IoOp::wrap("read search root", dir, e))?;
 
         for entry in entries.flatten() {
             let entry_path = entry.path();
@@ -144,8 +143,8 @@ impl ProjectDiscovery {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DiscoveryError {
-    #[error("Failed to read directory {0}: {1}")]
-    DirectoryRead(PathBuf, String),
+    #[error(transparent)]
+    Io(#[from] IoOp),
 
     #[error(transparent)]
     Manifest(#[from] ManifestLoadError),

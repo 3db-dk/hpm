@@ -107,6 +107,7 @@
 pub mod dependency;
 pub mod env_value;
 pub mod houdini;
+pub mod io_error;
 pub mod manifest;
 pub mod package_path;
 pub mod path_util;
@@ -121,6 +122,7 @@ pub use env_value::{
     compile_houdini_req, houdini_req_has_upper_bound, houdini_req_lower_bound, lower_conditional,
 };
 pub use houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
+pub use io_error::IoOp;
 pub use manifest::{
     CompatConfig, EnvMethod, ManifestEnvEntry, ManifestLoadError, PackageInfo, PackageManifest,
     PackageScripts, PlaceRule, PlatformStaging, RegistryConfig, RegistryType, ScriptEntry,

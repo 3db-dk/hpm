@@ -11,7 +11,7 @@ use crate::lock::LockedSource;
 use crate::package_source::PackageSource;
 use crate::storage::{InstalledPackage, PackageSpec, StorageManager};
 use hpm_config::{Config, ProjectConfig};
-use hpm_package::{HoudiniPackage, ManifestEnvEntry, ManifestLoadError, PackageManifest};
+use hpm_package::{HoudiniPackage, IoOp, ManifestEnvEntry, ManifestLoadError, PackageManifest};
 use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -105,10 +105,11 @@ impl ProjectManager {
         // dirs; bubble io::Error along with the project root so the failure
         // names a path the user can reason about.
         self.project_config.ensure_directories().map_err(|source| {
-            ProjectError::DirectoryCreation {
-                path: self.project_config.packages_dir.clone(),
+            IoOp::wrap(
+                "create project packages directory",
+                &self.project_config.packages_dir,
                 source,
-            }
+            )
         })?;
         info!("Ensured project directories exist");
         Ok(())
@@ -238,11 +239,8 @@ impl ProjectManager {
         // 2. Remove Houdini package manifest from project
         let manifest_path = self.project_config.package_manifest_path(name);
         if manifest_path.exists() {
-            std::fs::remove_file(&manifest_path).map_err(|source| ProjectError::ManifestIo {
-                op: "remove",
-                path: manifest_path.clone(),
-                source,
-            })?;
+            std::fs::remove_file(&manifest_path)
+                .map_err(|e| IoOp::wrap("remove Houdini manifest at", &manifest_path, e))?;
             debug!("Removed Houdini manifest: {:?}", manifest_path);
         }
 
@@ -378,11 +376,8 @@ impl ProjectManager {
             .map(|pkg| pkg.manifest.package.slug())
             .collect();
 
-        let entries =
-            std::fs::read_dir(packages_dir).map_err(|source| ProjectError::DirectoryRead {
-                path: packages_dir.clone(),
-                source,
-            })?;
+        let entries = std::fs::read_dir(packages_dir)
+            .map_err(|e| IoOp::wrap("read project packages directory", packages_dir, e))?;
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -463,12 +458,8 @@ impl ProjectManager {
         let tmp_path = PathBuf::from(tmp_path);
 
         {
-            let file =
-                std::fs::File::create(&tmp_path).map_err(|source| ProjectError::ManifestIo {
-                    op: "create",
-                    path: tmp_path.clone(),
-                    source,
-                })?;
+            let file = std::fs::File::create(&tmp_path)
+                .map_err(|e| IoOp::wrap("create temp Houdini manifest", &tmp_path, e))?;
             let mut writer = std::io::BufWriter::new(file);
             serde_json::to_writer_pretty(&mut writer, &houdini_package).map_err(|source| {
                 ProjectError::HoudiniManifestSerialize {
@@ -477,18 +468,13 @@ impl ProjectManager {
                 }
             })?;
             use std::io::Write;
-            writer.flush().map_err(|source| ProjectError::ManifestIo {
-                op: "flush",
-                path: tmp_path.clone(),
-                source,
-            })?;
+            writer
+                .flush()
+                .map_err(|e| IoOp::wrap("flush Houdini manifest write to", &tmp_path, e))?;
         }
 
-        std::fs::rename(&tmp_path, &manifest_path).map_err(|source| ProjectError::ManifestIo {
-            op: "rename",
-            path: manifest_path.clone(),
-            source,
-        })?;
+        std::fs::rename(&tmp_path, &manifest_path)
+            .map_err(|e| IoOp::wrap("rename Houdini manifest to", &manifest_path, e))?;
 
         debug!(
             "Generated Houdini manifest for {}",
@@ -716,11 +702,7 @@ impl ProjectManager {
             if source.kind() == std::io::ErrorKind::NotFound {
                 ProjectError::Manifest(ManifestLoadError::NotFound { path: path.clone() })
             } else {
-                ProjectError::ManifestIo {
-                    op: "read",
-                    path: path.clone(),
-                    source,
-                }
+                ProjectError::Io(IoOp::wrap("read project manifest", &path, source))
             }
         })?;
 
@@ -734,11 +716,8 @@ impl ProjectManager {
 
         f(&mut doc)?;
 
-        std::fs::write(&path, doc.to_string()).map_err(|source| ProjectError::ManifestIo {
-            op: "write",
-            path,
-            source,
-        })
+        std::fs::write(&path, doc.to_string())
+            .map_err(|e| IoOp::wrap("write project manifest", &path, e).into())
     }
 
     fn update_project_manifest(&self, spec: &PackageSpec) -> Result<(), ProjectError> {
@@ -819,11 +798,12 @@ impl ProjectManager {
             return Ok(dependencies);
         }
 
-        let entries = std::fs::read_dir(&self.project_config.packages_dir).map_err(|source| {
-            ProjectError::DirectoryRead {
-                path: self.project_config.packages_dir.clone(),
-                source,
-            }
+        let entries = std::fs::read_dir(&self.project_config.packages_dir).map_err(|e| {
+            IoOp::wrap(
+                "read project packages directory",
+                &self.project_config.packages_dir,
+                e,
+            )
         })?;
 
         let installed_packages = self.storage_manager.list_installed()?;
