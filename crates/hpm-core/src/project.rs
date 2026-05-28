@@ -4,9 +4,7 @@ use crate::package_source::{PackageSource, PackageSourceError};
 use crate::registry::RegistryError;
 use crate::storage::{InstalledPackage, PackageSpec, StorageError, StorageManager};
 use hpm_config::{Config, ProjectConfig};
-use hpm_package::{
-    HoudiniPackage, ManifestEnvEntry, ManifestLoadError, PackageManifest, compile_houdini_req,
-};
+use hpm_package::{HoudiniPackage, ManifestEnvEntry, ManifestLoadError, PackageManifest};
 use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -701,19 +699,15 @@ impl ProjectManager {
             }
         }
 
-        // Generate enable condition from [compat].houdini.
+        // Generate enable condition from [compat].houdini. The range is a
+        // `HoudiniRange` newtype that validated at parse time, so emitting
+        // the expression is infallible here.
         let enable = installed_package
             .manifest
             .compat
             .as_ref()
-            .and_then(|c| c.houdini.as_deref())
-            .map(|req| {
-                compile_houdini_req(req).map_err(|e| ProjectError::InvalidHoudiniCompat {
-                    package: installed_package.manifest.package.slug().to_string(),
-                    message: format!("'{}': {}", req, e),
-                })
-            })
-            .transpose()?;
+            .and_then(|c| c.houdini.as_ref())
+            .map(hpm_package::HoudiniRange::to_enable_expression);
 
         Ok(HoudiniPackage {
             hpath: if hpath.is_empty() { None } else { Some(hpath) },
@@ -1114,13 +1108,9 @@ pub enum ProjectError {
         package: String,
         message: String,
     },
-
-    /// `[compat].houdini` in a package manifest could not be parsed as a
-    /// Cargo-style range. `PackageManifest::validate` catches this at load
-    /// time, so reaching this variant means a manifest was constructed
-    /// programmatically and never validated.
-    #[error("Invalid [compat].houdini in package '{package}': {message}")]
-    InvalidHoudiniCompat { package: String, message: String },
+    // (`[compat].houdini` is now a `HoudiniRange` newtype that validates
+    // at deserialize time, so the prior `InvalidHoudiniCompat` variant is
+    // unreachable and has been removed.)
 }
 
 // Hand-written so call sites can `?` from the unboxed source error types.

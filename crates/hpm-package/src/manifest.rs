@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::dependency::DependencySpec;
 use crate::env_value::{
-    EnvValueSpec, ExpressionError, WhenSelector, compile_houdini_req, houdini_req_lower_bound,
-    lower_conditional,
+    EnvValueSpec, ExpressionError, HoudiniRange, WhenSelector, lower_conditional,
 };
 use crate::houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 use crate::package_path::PackagePath;
@@ -412,7 +411,7 @@ impl PackageInfo {
 ///
 /// `houdini` is a Cargo-style version requirement (`"20.5"`, `"^21"`,
 /// `">=20.5, <22"`). Bare versions alias caret semantics: `"20.5"` means
-/// `>=20.5, <21`. See [`compile_houdini_req`] for the supported grammar.
+/// `>=20.5, <21`. See [`HoudiniRange`] for the supported grammar.
 ///
 /// `platforms` declares which native platforms this package supports.
 /// Pure-data / pure-Python packages omit it (or use `["universal"]`);
@@ -425,7 +424,7 @@ impl PackageInfo {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompatConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub houdini: Option<String>,
+    pub houdini: Option<HoudiniRange>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub platforms: Vec<String>,
 }
@@ -437,7 +436,7 @@ impl CompatConfig {
 
     /// Lower bound of the Houdini range, used for Python ABI selection.
     pub fn houdini_min(&self) -> Option<String> {
-        self.houdini.as_deref().and_then(houdini_req_lower_bound)
+        self.houdini.as_ref().and_then(HoudiniRange::lower_bound)
     }
 }
 
@@ -580,7 +579,7 @@ impl PackageManifest {
                 // safe starting point; authors of pure-data / pure-
                 // Python packages can widen the range (e.g.
                 // `">=20.5, <23"`) after testing.
-                houdini: Some("^21".to_string()),
+                houdini: Some(HoudiniRange::parse("^21").expect("default range is well-formed")),
                 platforms: Vec::new(),
             }),
             stage: None,
@@ -627,16 +626,9 @@ impl PackageManifest {
             return Err("Package version must be valid semantic version".to_string());
         }
 
-        // Validate [compat].houdini is a parseable Cargo-style range. Empty
-        // string is treated as a malformed constraint rather than "no
-        // constraint" — authors who don't want a constraint omit the field.
-        if let Some(compat) = &self.compat
-            && let Some(req) = &compat.houdini
-        {
-            compile_houdini_req(req).map_err(|e| format!("[compat].houdini: {}", e))?;
-        }
-
-        // Validate [compat].platforms members are known.
+        // `[compat].houdini` parses at deserialize time via the
+        // `HoudiniRange` newtype, so no syntax check is needed here.
+        // Validate `[compat].platforms` members against the known set.
         if let Some(compat) = &self.compat {
             for platform_str in &compat.platforms {
                 platform_str
@@ -785,9 +777,8 @@ impl PackageManifest {
         let enable = self
             .compat
             .as_ref()
-            .and_then(|c| c.houdini.as_deref())
-            .map(compile_houdini_req)
-            .transpose()?;
+            .and_then(|c| c.houdini.as_ref())
+            .map(HoudiniRange::to_enable_expression);
 
         Ok(HoudiniPackage {
             hpath: Some(hpath),
@@ -843,9 +834,8 @@ impl PackageManifest {
         let enable = self
             .compat
             .as_ref()
-            .and_then(|c| c.houdini.as_deref())
-            .map(|req| compile_houdini_req(req).map_err(|e| e.to_string()))
-            .transpose()?;
+            .and_then(|c| c.houdini.as_ref())
+            .map(HoudiniRange::to_enable_expression);
 
         // Build requires from dependency keys (slug portion only)
         let requires = self.dependencies.as_ref().and_then(|deps| {
@@ -939,7 +929,9 @@ houdini = ">=20.5, <22"
     }
 
     #[test]
-    fn compat_houdini_invalid_range_rejected_by_validate() {
+    fn compat_houdini_invalid_range_rejected_at_parse() {
+        // HoudiniRange validates at deserialize time, so a malformed
+        // range fails the TOML parse rather than reaching validate().
         let toml_str = r#"
 [package]
 path = "studio/test"
@@ -949,20 +941,24 @@ version = "1.0.0"
 [compat]
 houdini = "not-a-version"
 "#;
-        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let err = manifest.validate().unwrap_err();
-        assert!(err.contains("[compat].houdini"), "error: {err}");
+        let err = toml::from_str::<PackageManifest>(toml_str)
+            .expect_err("invalid houdini range should fail at deserialize");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("houdini") || msg.contains("version requirement"),
+            "error must point at the houdini range: {msg}"
+        );
     }
 
     #[test]
     fn compat_houdini_min_extracts_lower_bound() {
         let compat = CompatConfig {
-            houdini: Some(">=20.5, <22".to_string()),
+            houdini: Some(HoudiniRange::parse(">=20.5, <22").unwrap()),
             platforms: Vec::new(),
         };
         assert_eq!(compat.houdini_min(), Some("20.5".to_string()));
         let compat = CompatConfig {
-            houdini: Some("^21".to_string()),
+            houdini: Some(HoudiniRange::parse("^21").unwrap()),
             platforms: Vec::new(),
         };
         assert_eq!(compat.houdini_min(), Some("21".to_string()));
@@ -1880,8 +1876,14 @@ value = [
         match entry.value.as_ref().unwrap() {
             EnvValueSpec::Conditional(v) => {
                 assert_eq!(v.len(), 2);
-                assert_eq!(v[0].when.houdini.as_deref(), Some("^21"));
-                assert_eq!(v[1].when.houdini.as_deref(), Some("^22"));
+                assert_eq!(
+                    v[0].when.houdini.as_ref().map(HoudiniRange::as_str),
+                    Some("^21")
+                );
+                assert_eq!(
+                    v[1].when.houdini.as_ref().map(HoudiniRange::as_str),
+                    Some("^22")
+                );
             }
             EnvValueSpec::Flat(_) => panic!("expected conditional"),
         }
@@ -1958,7 +1960,10 @@ value = [
     }
 
     #[test]
-    fn env_conditional_value_with_invalid_req_fails_validate() {
+    fn env_conditional_value_with_invalid_req_fails_at_parse() {
+        // WhenSelector.houdini is a HoudiniRange newtype that validates
+        // at deserialize, so a malformed range fails the TOML parse
+        // rather than reaching validate().
         let toml_str = r#"
 [package]
 path = "studio/bad"
@@ -1971,10 +1976,14 @@ value = [
   { when = { houdini = "garbage" }, set = "x" },
 ]
 "#;
-        let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let err = manifest.validate().unwrap_err();
-        assert!(err.contains("X"));
-        assert!(err.contains("garbage"));
+        // Untagged enum (EnvValueSpec) flattens the inner HoudiniRange
+        // error into a generic "did not match any variant" message, so we
+        // can only assert the parse fails — the specific error text is
+        // upstream and not stable.
+        assert!(
+            toml::from_str::<PackageManifest>(toml_str).is_err(),
+            "invalid houdini range should fail at deserialize"
+        );
     }
 
     #[test]

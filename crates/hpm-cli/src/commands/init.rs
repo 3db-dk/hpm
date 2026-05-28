@@ -73,7 +73,10 @@ pub async fn init_package(options: InitOptions) -> Result<String> {
     if let Some(houdini_req) = options.houdini
         && let Some(compat) = &mut manifest.compat
     {
-        compat.houdini = Some(houdini_req);
+        compat.houdini = Some(
+            hpm_package::HoudiniRange::parse(&houdini_req)
+                .with_context(|| format!("Invalid --houdini range '{}'", houdini_req))?,
+        );
     }
 
     // Validate manifest

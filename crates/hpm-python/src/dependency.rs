@@ -220,7 +220,7 @@ mod tests {
                 categories: None,
             },
             compat: Some(CompatConfig {
-                houdini: Some(">=20.5".to_string()),
+                houdini: Some(hpm_package::HoudiniRange::parse(">=20.5").unwrap()),
                 platforms: Vec::new(),
             }),
             stage: None,
@@ -272,7 +272,7 @@ mod tests {
                 categories: None,
             },
             compat: Some(CompatConfig {
-                houdini: Some(">=20.5".to_string()),
+                houdini: Some(hpm_package::HoudiniRange::parse(">=20.5").unwrap()),
                 platforms: Vec::new(),
             }),
             stage: None,
@@ -319,7 +319,10 @@ mod tests {
                     categories: None,
                 },
                 compat: Some(CompatConfig {
-                    houdini: Some(format!(">={}", min_houdini)),
+                    houdini: Some(
+                        hpm_package::HoudiniRange::parse(format!(">={}", min_houdini))
+                            .expect("test fixture range is valid"),
+                    ),
                     platforms: Vec::new(),
                 }),
                 stage: None,

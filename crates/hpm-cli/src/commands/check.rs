@@ -255,23 +255,18 @@ fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut Valid
         }
     }
 
-    // Validate [compat].houdini parses as a Cargo-style range. Manifest
-    // validate() already rejects malformed ranges, so this branch only
-    // surfaces an info line on the happy path.
+    // `[compat].houdini` is a `HoudiniRange` newtype that validates at
+    // deserialize time, so the manifest can't load with a malformed
+    // range. Here we just surface the compiled expression on the happy
+    // path and warn on the binary-package + unbounded-above footgun.
     if let Some(compat) = &manifest.compat
-        && let Some(req) = &compat.houdini
+        && let Some(range) = &compat.houdini
     {
-        match hpm_package::compile_houdini_req(req) {
-            Ok(expr) => {
-                result.add_info(format!(
-                    "[OK] Houdini compatibility: {} (compiles to `{}`)",
-                    req, expr
-                ));
-            }
-            Err(e) => {
-                result.add_error(format!("[compat].houdini '{}': {}", req, e));
-            }
-        }
+        result.add_info(format!(
+            "[OK] Houdini compatibility: {} (compiles to `{}`)",
+            range,
+            range.to_enable_expression()
+        ));
 
         // Native-binary packages that leave their Houdini range
         // unbounded above are a footgun: DSOs compiled against one
@@ -280,14 +275,14 @@ fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut Valid
         // crash at load. Surface it as a warning so the author can
         // either narrow the range or confirm they really mean to ship
         // platform-agnostic content.
-        if !compat.platforms.is_empty() && !hpm_package::houdini_req_has_upper_bound(req) {
+        if !compat.platforms.is_empty() && !range.has_upper_bound() {
             result.add_warning(format!(
                 "[compat].platforms is declared but [compat].houdini = \"{}\" \
                  has no upper bound. Native binaries compiled against one \
                  Houdini major typically won't load in the next. Consider \
                  \"^21\" (Houdini 21.x only) or an explicit range like \
                  \">=20.5, <22\".",
-                req
+                range
             ));
         }
     }

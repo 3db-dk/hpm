@@ -178,7 +178,9 @@ pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
                     categories: None,
                 },
                 compat: Some(CompatConfig {
-                    houdini: houdini_req,
+                    houdini: houdini_req.map(|r| {
+                        crate::HoudiniRange::parse(r).expect("strategy yields valid ranges")
+                    }),
                     platforms: Vec::new(),
                 }),
                 stage: None,
@@ -516,7 +518,8 @@ proptest! {
                 categories: None,
             },
             compat: Some(CompatConfig {
-                houdini: houdini_req,
+                houdini: houdini_req
+                    .map(|r| crate::HoudiniRange::parse(r).expect("strategy yields valid ranges")),
                 platforms: Vec::new(),
             }),
             stage: None,

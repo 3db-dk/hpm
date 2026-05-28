@@ -67,10 +67,12 @@ pub struct EnvValueVariant {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WhenSelector {
-    /// Cargo-style version requirement against `houdini_version`.
-    /// Examples: `"^21"`, `"~21.5"`, `">=21, <22.5"`, `"21"` (alias for `^21`).
+    /// Cargo-style version requirement against `houdini_version`. Same
+    /// grammar as `[compat].houdini`; parses to a [`HoudiniRange`] at
+    /// deserialize so malformed branches fail at manifest load, not at
+    /// install/emit time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub houdini: Option<String>,
+    pub houdini: Option<HoudiniRange>,
     /// Houdini OS keyword: `"linux"`, `"macos"`, or `"windows"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os: Option<String>,
@@ -123,8 +125,10 @@ impl WhenSelector {
 pub fn compile_when(selector: &WhenSelector) -> Result<Option<String>, ExpressionError> {
     let mut parts: Vec<String> = Vec::new();
 
-    if let Some(req) = &selector.houdini {
-        parts.push(compile_houdini_req(req)?);
+    if let Some(range) = &selector.houdini {
+        // Range parsed and validated at deserialize time; emission is
+        // infallible.
+        parts.push(range.to_enable_expression());
     }
     if let Some(os) = &selector.os {
         parts.push(compile_os(os)?);
@@ -162,6 +166,81 @@ fn compile_python(py: &str) -> Result<String, ExpressionError> {
         return Err(ExpressionError::InvalidPython(py.to_string()));
     }
     Ok(format!("houdini_python == 'python{}'", trimmed))
+}
+
+/// A validated Cargo-style Houdini version range, e.g. `"^21"`,
+/// `">=20.5, <22"`, or `"20.5"` (bare = caret).
+///
+/// Construction goes through [`Self::parse`], which compiles the range
+/// via [`compile_houdini_req`] to confirm it is syntactically valid. By
+/// the time you hold a `HoudiniRange`, you know:
+///
+/// - The range parses under the supported grammar.
+/// - [`Self::to_enable_expression`] and [`Self::lower_bound`] are
+///   infallible.
+///
+/// Stored as a String for cheap round-trips through TOML and so the
+/// human-authored form survives in error messages and round-trip
+/// serialization.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct HoudiniRange(String);
+
+impl HoudiniRange {
+    /// Parse and validate a houdini range string. Errors mirror
+    /// [`compile_houdini_req`]'s — the same parser drives both.
+    pub fn parse(req: impl Into<String>) -> Result<Self, ExpressionError> {
+        let req = req.into();
+        // Compile once to validate. We don't store the result because
+        // callers may want the original text (for round-trip
+        // serialization, error messages, etc.).
+        compile_houdini_req(&req)?;
+        Ok(Self(req))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Compile to the Houdini package.json `enable` expression.
+    ///
+    /// Infallible: parsing succeeded at construction time, so the
+    /// re-compile here cannot fail. Returns the canonical Houdini-side
+    /// expression string.
+    pub fn to_enable_expression(&self) -> String {
+        compile_houdini_req(&self.0).expect("HoudiniRange validated at parse time")
+    }
+
+    /// Lower bound of the range, if any clause implies one. See
+    /// [`houdini_req_lower_bound`] for the matrix.
+    pub fn lower_bound(&self) -> Option<String> {
+        houdini_req_lower_bound(&self.0)
+    }
+
+    /// Whether the range bounds above. See [`houdini_req_has_upper_bound`].
+    pub fn has_upper_bound(&self) -> bool {
+        houdini_req_has_upper_bound(&self.0)
+    }
+}
+
+impl std::str::FromStr for HoudiniRange {
+    type Err = ExpressionError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
+impl std::fmt::Display for HoudiniRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for HoudiniRange {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(de)?;
+        Self::parse(raw).map_err(serde::de::Error::custom)
+    }
 }
 
 /// Extract the lower bound of a Cargo-style houdini version requirement, if
@@ -561,7 +640,7 @@ mod tests {
     #[test]
     fn multiple_axes_combine_with_and() {
         let s = compile_when(&WhenSelector {
-            houdini: Some("^21".to_string()),
+            houdini: Some(HoudiniRange::parse("^21").unwrap()),
             os: Some("linux".to_string()),
             python: None,
             install_source: None,
@@ -584,14 +663,14 @@ mod tests {
         let variants = vec![
             EnvValueVariant {
                 when: WhenSelector {
-                    houdini: Some("^21".to_string()),
+                    houdini: Some(HoudiniRange::parse("^21").unwrap()),
                     ..Default::default()
                 },
                 set: "$HPM_PACKAGE_ROOT/h21/x".to_string(),
             },
             EnvValueVariant {
                 when: WhenSelector {
-                    houdini: Some("^22".to_string()),
+                    houdini: Some(HoudiniRange::parse("^22").unwrap()),
                     ..Default::default()
                 },
                 set: "$HPM_PACKAGE_ROOT/h22/x".to_string(),
@@ -650,7 +729,7 @@ mod tests {
         // is hpm-side, not Houdini-side.
         let variants = vec![EnvValueVariant {
             when: WhenSelector {
-                houdini: Some("^21".to_string()),
+                houdini: Some(HoudiniRange::parse("^21").unwrap()),
                 install_source: Some("dev".to_string()),
                 ..Default::default()
             },
@@ -716,7 +795,10 @@ value = [
             EnvValueSpec::Conditional(v) => {
                 assert_eq!(v.len(), 2);
                 assert_eq!(v[0].set, "a");
-                assert_eq!(v[1].when.houdini.as_deref(), Some("^22"));
+                assert_eq!(
+                    v[1].when.houdini.as_ref().map(HoudiniRange::as_str),
+                    Some("^22")
+                );
             }
             EnvValueSpec::Flat(_) => panic!("expected conditional"),
         }
