@@ -9,7 +9,7 @@
 //! - [`install`] — where packages land inside a project, download parallelism
 //! - [`storage`] — global on-disk layout (`~/.hpm/packages/`, caches)
 //! - [`projects`] — project-discovery roots and ignore patterns
-//! - [`project`] — per-project derived paths (`hpm.lock`, `hpm.toml`)
+//! - [`project_paths`] — per-project derived paths (`hpm.lock`, `hpm.toml`)
 //! - [`registry`] — registry source list
 //! - [`signing`] — package-signing key path
 //! - [`builder`] — programmatic [`Config`] construction
@@ -143,11 +143,8 @@ impl Config {
 
     /// Load configuration from a specific path.
     pub fn load_from_path(path: &Path) -> Result<Self, ConfigError> {
-        let content = std::fs::read_to_string(path).map_err(|e| ConfigError::Read {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
-
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| hpm_package::IoOp::wrap("read TOML file", path, e))?;
         Self::parse_toml(&content, path)
     }
 
@@ -224,21 +221,13 @@ impl Config {
 
     /// Save the configuration to a file.
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
-        // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| ConfigError::Write {
-                path: path.to_path_buf(),
-                source: e,
+            std::fs::create_dir_all(parent).map_err(|e| {
+                hpm_package::IoOp::wrap("create config parent directory", parent, e)
             })?;
         }
-
         let content = toml::to_string_pretty(self)?;
-
-        hpm_package::atomic_write(path, content).map_err(|op| ConfigError::Write {
-            path: op.path,
-            source: op.source,
-        })?;
-
+        hpm_package::atomic_write(path, content)?;
         info!("Saved configuration to {:?}", path);
         Ok(())
     }
@@ -423,7 +412,7 @@ ignore_patterns = ["backup", ".cache", "temp"]
     fn config_load_nonexistent_file() {
         let result = Config::load_from_path(Path::new("/nonexistent/config.toml"));
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigError::Read { .. }));
+        assert!(matches!(result.unwrap_err(), ConfigError::Io(_)));
     }
 
     #[test]

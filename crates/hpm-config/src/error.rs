@@ -1,30 +1,8 @@
 //! Error type for configuration loading and persistence.
+//!
+//! Configuration is just a TOML-on-disk file, with no failure modes beyond
+//! what `hpm_package::TomlFileError` already models. `ConfigError` is kept
+//! as a name for backwards source-level clarity at call sites but is the
+//! shared TOML file error.
 
-use std::path::PathBuf;
-
-#[derive(Debug, thiserror::Error)]
-pub enum ConfigError {
-    #[error("Failed to read config file: {path}")]
-    Read {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error("Failed to parse config file: {path}")]
-    Parse {
-        path: PathBuf,
-        #[source]
-        source: Box<toml::de::Error>,
-    },
-
-    #[error("Failed to serialize config")]
-    Serialize(#[from] toml::ser::Error),
-
-    #[error("Failed to write config file: {path}")]
-    Write {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-}
+pub use hpm_package::TomlFileError as ConfigError;

@@ -153,29 +153,10 @@ impl LockMetadata {
 /// Errors that can occur during lock file operations
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
-    #[error("Failed to read lock file: {path}")]
-    Read {
-        path: std::path::PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error("Failed to parse lock file: {path}")]
-    Parse {
-        path: std::path::PathBuf,
-        #[source]
-        source: Box<toml::de::Error>,
-    },
-
-    #[error("Failed to serialize lock file")]
-    Serialize(#[from] toml::ser::Error),
-
-    #[error("Failed to write lock file: {path}")]
-    Write {
-        path: std::path::PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
+    /// Read/parse/serialize/write failures on the on-disk lock file —
+    /// forwarded transparently from the shared TOML-file error shape.
+    #[error(transparent)]
+    File(#[from] hpm_package::TomlFileError),
 
     #[error("Checksum mismatch for {package}: expected {expected}, got {actual}")]
     ChecksumMismatch {
@@ -200,6 +181,21 @@ pub enum LockError {
     UnsupportedVersion { version: u32, max_supported: u32 },
 }
 
+// Bridge the workspace-canonical IoOp directly into LockError, so the
+// existing `?` operator at every `std::fs::*` call site keeps working
+// without going through TomlFileError construction explicitly.
+impl From<hpm_package::IoOp> for LockError {
+    fn from(op: hpm_package::IoOp) -> Self {
+        Self::File(op.into())
+    }
+}
+
+impl From<toml::ser::Error> for LockError {
+    fn from(err: toml::ser::Error) -> Self {
+        Self::File(err.into())
+    }
+}
+
 impl LockFile {
     /// Current lock file format version
     pub const CURRENT_VERSION: u32 = 1;
@@ -221,17 +217,15 @@ impl LockFile {
 
     /// Load a lock file from the given path
     pub fn load(path: &Path) -> Result<Self, LockError> {
-        let content = std::fs::read_to_string(path).map_err(|e| LockError::Read {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| hpm_package::IoOp::wrap("read TOML lock file", path, e))?;
 
-        let lock_file: Self = toml::from_str(&content).map_err(|e| LockError::Parse {
-            path: path.to_path_buf(),
-            source: Box::new(e),
-        })?;
+        let lock_file: Self =
+            toml::from_str(&content).map_err(|e| hpm_package::TomlFileError::Parse {
+                path: path.to_path_buf(),
+                source: Box::new(e),
+            })?;
 
-        // Check version compatibility
         if lock_file.version > Self::CURRENT_VERSION {
             return Err(LockError::UnsupportedVersion {
                 version: lock_file.version,
@@ -245,10 +239,7 @@ impl LockFile {
     /// Save the lock file to the given path
     pub fn save(&self, path: &Path) -> Result<(), LockError> {
         let content = self.to_toml()?;
-        hpm_package::atomic_write(path, content).map_err(|op| LockError::Write {
-            path: op.path,
-            source: op.source,
-        })?;
+        hpm_package::atomic_write(path, content)?;
         Ok(())
     }
 
@@ -463,10 +454,8 @@ fn compute_directory_checksum(dir: &Path) -> Result<String, LockError> {
         hasher.update(relative_path.as_bytes());
 
         // Hash file contents
-        let contents = std::fs::read(&path).map_err(|e| LockError::Read {
-            path: path.clone(),
-            source: e,
-        })?;
+        let contents = std::fs::read(&path)
+            .map_err(|e| hpm_package::IoOp::wrap("read package file for checksum", &path, e))?;
         hasher.update(&contents);
     }
 

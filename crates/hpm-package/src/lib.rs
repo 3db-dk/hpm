@@ -115,6 +115,7 @@ pub mod path_util;
 pub mod platform;
 pub mod python;
 pub mod template;
+pub mod toml_file_error;
 
 // Re-exports for convenient access
 pub use atomic_write::atomic_write;
@@ -134,3 +135,4 @@ pub use package_path::{PackagePath, PackagePathError};
 pub use platform::Platform;
 pub use python::PythonDependencySpec;
 pub use template::PackageTemplate;
+pub use toml_file_error::TomlFileError;
