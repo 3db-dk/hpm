@@ -131,62 +131,23 @@ impl LockMetadata {
     /// Calculate the number of days since the lock file was generated.
     ///
     /// Returns `None` if the timestamp is missing or cannot be parsed.
+    /// Parses ISO 8601 dates (the prefix `YYYY-MM-DD` of the stored
+    /// `YYYY-MM-DDTHH:MM:SSZ`) and uses julian-day arithmetic for the
+    /// difference, so the result is correct across month/year boundaries
+    /// without hand-rolled leap-year handling.
     pub fn days_since_generated(&self) -> Option<i64> {
-        use std::time::SystemTime;
-
         let generated = self.generated_at.as_ref()?;
-
-        // Parse ISO 8601 timestamp: YYYY-MM-DDTHH:MM:SSZ
-        // Extract date parts
         if generated.len() < 10 {
             return None;
         }
-
-        let year: i64 = generated[0..4].parse().ok()?;
-        let month: i64 = generated[5..7].parse().ok()?;
-        let day: i64 = generated[8..10].parse().ok()?;
-
-        // Calculate days since epoch for the generated date
-        let gen_days = ymd_to_days(year, month, day);
-
-        // Get current days since epoch
-        let now_secs = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .ok()?
-            .as_secs();
-        let now_days = (now_secs / 86400) as i64;
-
-        Some(now_days - gen_days)
+        let year: i32 = generated[0..4].parse().ok()?;
+        let month: u8 = generated[5..7].parse().ok()?;
+        let day: u8 = generated[8..10].parse().ok()?;
+        let gen_date =
+            time::Date::from_calendar_date(year, time::Month::try_from(month).ok()?, day).ok()?;
+        let today = time::OffsetDateTime::now_utc().date();
+        Some((today - gen_date).whole_days())
     }
-}
-
-/// Convert year/month/day to days since Unix epoch (Jan 1, 1970)
-fn ymd_to_days(year: i64, month: i64, day: i64) -> i64 {
-    // Simplified calculation - good enough for date comparison
-    let mut days = 0i64;
-
-    // Add days for complete years from 1970
-    for y in 1970..year {
-        days += if is_leap_year(y) { 366 } else { 365 };
-    }
-
-    // Add days for complete months
-    let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    for m in 1..month {
-        days += month_days[(m - 1) as usize] as i64;
-        if m == 2 && is_leap_year(year) {
-            days += 1;
-        }
-    }
-
-    // Add remaining days
-    days += day - 1;
-
-    days
-}
-
-fn is_leap_year(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 /// Errors that can occur during lock file operations
@@ -516,67 +477,15 @@ fn compute_directory_checksum(dir: &Path) -> Result<String, LockError> {
         .collect())
 }
 
-/// Get current timestamp in ISO 8601 format
+/// Get current UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` ISO 8601 form.
 fn chrono_now() -> String {
-    // Simple timestamp without external chrono dependency
-    use std::time::SystemTime;
-
-    let duration = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-
-    // Format as ISO 8601 (approximate, without full timezone)
-    let secs = duration.as_secs();
-    let days_since_epoch = secs / 86400;
-    let remaining_secs = secs % 86400;
-    let hours = remaining_secs / 3600;
-    let minutes = (remaining_secs % 3600) / 60;
-    let seconds = remaining_secs % 60;
-
-    // Calculate year/month/day from days since epoch (Jan 1, 1970)
-    let (year, month, day) = days_to_ymd(days_since_epoch);
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, hours, minutes, seconds
-    )
+    let now = time::OffsetDateTime::now_utc();
+    // ISO 8601 basic form, seconds resolution, explicit Z suffix.
+    let format =
+        time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
+    now.format(format)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
-
-/// Convert days since epoch to year/month/day
-fn days_to_ymd(days: u64) -> (u32, u32, u32) {
-    // Simplified date calculation
-    let mut remaining = days as i64;
-    let mut year: u32 = 1970;
-
-    loop {
-        let days_in_year = if is_leap_year(year as i64) { 366 } else { 365 };
-        if remaining < days_in_year {
-            break;
-        }
-        remaining -= days_in_year;
-        year += 1;
-    }
-
-    let leap = is_leap_year(year as i64);
-    let days_in_months: [i64; 12] = if leap {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut month = 1;
-    for days_in_month in days_in_months {
-        if remaining < days_in_month {
-            break;
-        }
-        remaining -= days_in_month;
-        month += 1;
-    }
-
-    (year, month, (remaining + 1) as u32)
-}
-
-// is_leap_year is defined above (line 156) with i64 signature
 
 /// Get the current platform identifier
 fn current_platform() -> String {
