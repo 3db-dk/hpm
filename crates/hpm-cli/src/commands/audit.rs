@@ -44,8 +44,11 @@ pub async fn audit_packages(config: &Config, manifest_path: Option<PathBuf>) -> 
     let mut passed: Vec<&str> = Vec::new();
 
     // Check 1: HTTP URLs
-    if let Some(deps) = &manifest.dependencies {
-        let http_deps: Vec<_> = deps
+    if manifest.dependencies.is_empty() {
+        passed.push("No dependencies to check");
+    } else {
+        let http_deps: Vec<_> = manifest
+            .dependencies
             .iter()
             .filter_map(|(name, spec)| {
                 if let hpm_package::DependencySpec::Url { url, .. } = spec {
@@ -64,8 +67,6 @@ pub async fn audit_packages(config: &Config, manifest_path: Option<PathBuf>) -> 
                 warnings.push(format!("{}: Uses insecure HTTP URL", name));
             }
         }
-    } else {
-        passed.push("No dependencies to check");
     }
 
     // Check 2: Lock file exists

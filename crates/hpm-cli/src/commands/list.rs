@@ -162,73 +162,60 @@ pub async fn list_dependencies_tree(manifest_path: Option<PathBuf>) -> Result<()
     );
 
     // Display HPM dependencies as tree
-    if let Some(dependencies) = &manifest.dependencies {
-        if !dependencies.is_empty() {
-            let count = dependencies.len();
-            for (idx, (name, spec)) in dependencies.iter().enumerate() {
-                let is_last = idx == count - 1;
-                let prefix = if is_last { "└── " } else { "├── " };
+    if !manifest.dependencies.is_empty() {
+        let count = manifest.dependencies.len();
+        for (idx, (name, spec)) in manifest.dependencies.iter().enumerate() {
+            let is_last = idx == count - 1;
+            let prefix = if is_last { "└── " } else { "├── " };
 
-                let source_info = format_tree_source_info(spec);
-                let optional_marker = if is_optional_dependency(spec) {
-                    style(" [optional]").dim().to_string()
-                } else {
-                    String::new()
-                };
+            let source_info = format_tree_source_info(spec);
+            let optional_marker = if is_optional_dependency(spec) {
+                style(" [optional]").dim().to_string()
+            } else {
+                String::new()
+            };
 
-                println!(
-                    "{}{}{}{}",
-                    style(prefix).dim(),
-                    style(name).green(),
-                    style(format!(" {}", source_info)).dim(),
-                    optional_marker
-                );
-            }
+            println!(
+                "{}{}{}{}",
+                style(prefix).dim(),
+                style(name).green(),
+                style(format!(" {}", source_info)).dim(),
+                optional_marker
+            );
         }
     }
 
     // Display Python dependencies as tree
-    if let Some(py_deps) = &manifest.python_dependencies {
-        if !py_deps.is_empty() {
-            println!();
-            println!("{}", style("Python dependencies:").yellow().bold());
+    if !manifest.python_dependencies.is_empty() {
+        println!();
+        println!("{}", style("Python dependencies:").yellow().bold());
 
-            let count = py_deps.len();
-            for (idx, (name, spec)) in py_deps.iter().enumerate() {
-                let is_last = idx == count - 1;
-                let prefix = if is_last { "└── " } else { "├── " };
+        let count = manifest.python_dependencies.len();
+        for (idx, (name, spec)) in manifest.python_dependencies.iter().enumerate() {
+            let is_last = idx == count - 1;
+            let prefix = if is_last { "└── " } else { "├── " };
 
-                let version_info = format_python_dependency_spec(spec);
-                let extras_info = format_python_extras(spec);
-                let optional_marker = if is_optional_python_dependency(spec) {
-                    style(" [optional]").dim().to_string()
-                } else {
-                    String::new()
-                };
+            let version_info = format_python_dependency_spec(spec);
+            let extras_info = format_python_extras(spec);
+            let optional_marker = if is_optional_python_dependency(spec) {
+                style(" [optional]").dim().to_string()
+            } else {
+                String::new()
+            };
 
-                println!(
-                    "{}{}{}{}{}",
-                    style(prefix).dim(),
-                    style(name).green(),
-                    style(format!(" {}", version_info)).dim(),
-                    extras_info,
-                    optional_marker
-                );
-            }
+            println!(
+                "{}{}{}{}{}",
+                style(prefix).dim(),
+                style(name).green(),
+                style(format!(" {}", version_info)).dim(),
+                extras_info,
+                optional_marker
+            );
         }
     }
 
     // Show message if no dependencies
-    let has_hpm_deps = manifest
-        .dependencies
-        .as_ref()
-        .is_some_and(|d| !d.is_empty());
-    let has_py_deps = manifest
-        .python_dependencies
-        .as_ref()
-        .is_some_and(|d| !d.is_empty());
-
-    if !has_hpm_deps && !has_py_deps {
+    if manifest.dependencies.is_empty() && manifest.python_dependencies.is_empty() {
         println!("{}", style("  (no dependencies)").dim());
     }
 
@@ -278,9 +265,7 @@ fn display_package_info(manifest: &PackageManifest) {
         println!("Description: {}", description);
     }
 
-    if let Some(compat) = &manifest.compat
-        && let Some(req) = &compat.houdini
-    {
+    if let Some(req) = &manifest.compat.houdini {
         println!("Houdini compatibility: {}", req);
     }
 
@@ -299,20 +284,17 @@ fn display_package_info(manifest: &PackageManifest) {
 fn display_hpm_dependencies(manifest: &PackageManifest) {
     println!("HPM Dependencies:");
 
-    match &manifest.dependencies {
-        Some(dependencies) if !dependencies.is_empty() => {
-            for (name, spec) in dependencies {
-                let version_info = format_dependency_spec(spec);
-                let optional_marker = if is_optional_dependency(spec) {
-                    " (optional)"
-                } else {
-                    ""
-                };
-                println!("  {} {}{}", name, version_info, optional_marker);
-            }
-        }
-        _ => {
-            println!("  (none)");
+    if manifest.dependencies.is_empty() {
+        println!("  (none)");
+    } else {
+        for (name, spec) in &manifest.dependencies {
+            let version_info = format_dependency_spec(spec);
+            let optional_marker = if is_optional_dependency(spec) {
+                " (optional)"
+            } else {
+                ""
+            };
+            println!("  {} {}{}", name, version_info, optional_marker);
         }
     }
 
@@ -330,24 +312,21 @@ fn display_hpm_dependencies(manifest: &PackageManifest) {
 fn display_python_dependencies(manifest: &PackageManifest) {
     println!("Python Dependencies:");
 
-    match &manifest.python_dependencies {
-        Some(dependencies) if !dependencies.is_empty() => {
-            for (name, spec) in dependencies {
-                let version_info = format_python_dependency_spec(spec);
-                let optional_marker = if is_optional_python_dependency(spec) {
-                    " (optional)"
-                } else {
-                    ""
-                };
-                let extras_info = format_python_extras(spec);
-                println!(
-                    "  {} {}{}{}",
-                    name, version_info, extras_info, optional_marker
-                );
-            }
-        }
-        _ => {
-            println!("  (none)");
+    if manifest.python_dependencies.is_empty() {
+        println!("  (none)");
+    } else {
+        for (name, spec) in &manifest.python_dependencies {
+            let version_info = format_python_dependency_spec(spec);
+            let optional_marker = if is_optional_python_dependency(spec) {
+                " (optional)"
+            } else {
+                ""
+            };
+            let extras_info = format_python_extras(spec);
+            println!(
+                "  {} {}{}{}",
+                name, version_info, extras_info, optional_marker
+            );
         }
     }
 }
@@ -502,10 +481,10 @@ mod tests {
         let manifest = result.unwrap();
         assert_eq!(manifest.package.name, "test-package");
         assert_eq!(manifest.package.version, "1.0.0");
-        assert!(manifest.dependencies.is_some());
-        assert!(manifest.python_dependencies.is_some());
-        assert_eq!(manifest.dependencies.as_ref().unwrap().len(), 2);
-        assert_eq!(manifest.python_dependencies.as_ref().unwrap().len(), 3);
+        assert!(!manifest.dependencies.is_empty());
+        assert!(!manifest.python_dependencies.is_empty());
+        assert_eq!(manifest.dependencies.len(), 2);
+        assert_eq!(manifest.python_dependencies.len(), 3);
     }
 
     #[test]

@@ -213,7 +213,7 @@ mod tests {
                 "Test Package".to_string(),
                 version.clone(),
                 None,
-                None,
+                Vec::new(),
                 None,
             );
 
@@ -242,7 +242,7 @@ mod tests {
                 "Test Package".to_string(),
                 package_version.clone(),
                 None,
-                None,
+                Vec::new(),
                 None,
             );
 
@@ -333,7 +333,7 @@ mod tests {
             "Test Package".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
 

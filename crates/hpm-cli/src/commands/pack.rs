@@ -33,11 +33,7 @@ pub async fn execute(
     // Resolve target platform. A package targets per-platform builds when
     // it declares `[compat].platforms`; pure-data / pure-Python packages
     // omit that and produce a single common archive.
-    let declared_platforms: Vec<String> = manifest
-        .compat
-        .as_ref()
-        .map(|c| c.platforms.clone())
-        .unwrap_or_default();
+    let declared_platforms = &manifest.compat.platforms;
     let has_platforms = !declared_platforms.is_empty();
 
     let platform = match (&platform_arg, has_platforms) {
@@ -115,7 +111,7 @@ pub async fn execute(
                 &output_dir,
                 signing_key.as_ref(),
                 platform.as_ref(),
-                stage_config.as_ref(),
+                &stage_config,
                 &inject_files,
             )
         }

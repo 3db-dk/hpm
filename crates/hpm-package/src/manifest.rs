@@ -328,10 +328,6 @@ pub struct PlaceRule {
     pub to: String,
 }
 
-fn stage_is_none_or_empty(s: &Option<StageConfig>) -> bool {
-    s.as_ref().is_none_or(StageConfig::is_empty)
-}
-
 /// A registry declared in hpm.toml's `[[registries]]` array.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryConfig {
@@ -345,29 +341,29 @@ pub struct RegistryConfig {
 ///
 /// Uses `IndexMap` for dependencies and python_dependencies to preserve
 /// insertion order during serialization, ensuring deterministic TOML output.
+// No `Default` impl: a manifest without a `package.path` is meaningless.
+// Construct via `PackageManifest::new` or full struct literal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageManifest {
     pub package: PackageInfo,
-    #[serde(default, skip_serializing_if = "compat_is_none_or_empty")]
-    pub compat: Option<CompatConfig>,
-    #[serde(default, skip_serializing_if = "stage_is_none_or_empty")]
-    pub stage: Option<StageConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registries: Option<Vec<RegistryConfig>>,
-    pub dependencies: Option<IndexMap<String, DependencySpec>>,
-    pub python_dependencies: Option<IndexMap<String, PythonDependencySpec>>,
+    #[serde(default, skip_serializing_if = "CompatConfig::is_empty")]
+    pub compat: CompatConfig,
+    #[serde(default, skip_serializing_if = "StageConfig::is_empty")]
+    pub stage: StageConfig,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub registries: Vec<RegistryConfig>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub dependencies: IndexMap<String, DependencySpec>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub python_dependencies: IndexMap<String, PythonDependencySpec>,
     /// `[runtime]` — env-var contributions to the generated Houdini
     /// `package.json`. Replaces the prior `[env]` + `[dev.env]` pair; the
     /// dev/registry distinction now lives in the `when.install_source` axis
     /// on individual conditional variants.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runtime: Option<IndexMap<String, ManifestEnvEntry>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scripts: Option<PackageScripts>,
-}
-
-fn compat_is_none_or_empty(c: &Option<CompatConfig>) -> bool {
-    c.as_ref().is_none_or(CompatConfig::is_empty)
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub runtime: IndexMap<String, ManifestEnvEntry>,
+    #[serde(default, skip_serializing_if = "PackageScripts::is_empty")]
+    pub scripts: PackageScripts,
 }
 
 /// Package metadata information
@@ -379,15 +375,24 @@ pub struct PackageInfo {
     /// Freeform display name (e.g. `TumbleRig`)
     pub name: String,
     pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    pub authors: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub documentation: Option<String>,
-    pub keywords: Option<Vec<String>>,
-    pub categories: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
 }
 
 impl PackageInfo {
@@ -549,12 +554,15 @@ impl PackageManifest {
     /// Takes a validated [`PackagePath`] — callers can use
     /// `PackagePath::new("creator/slug").unwrap()` for static identifiers
     /// in tests, or propagate the parse error in production code.
+    ///
+    /// Pass an empty `Vec` for `authors` when unknown — empty vec encodes
+    /// "no authors declared" exactly like the prior `None`.
     pub fn new(
         path: PackagePath,
         name: String,
         version: String,
         description: Option<String>,
-        authors: Option<Vec<String>>,
+        authors: Vec<String>,
         license: Option<String>,
     ) -> Self {
         Self {
@@ -569,10 +577,10 @@ impl PackageManifest {
                 homepage: None,
                 repository: None,
                 documentation: None,
-                keywords: Some(vec!["houdini".to_string()]),
-                categories: None,
+                keywords: vec!["houdini".to_string()],
+                categories: Vec::new(),
             },
-            compat: Some(CompatConfig {
+            compat: CompatConfig {
                 // Bounded-major default. `"^21"` lowers to
                 // `>=21, <22` — Houdini 21.x only. This gives authors
                 // who ship native binaries (`[compat].platforms`) a
@@ -581,13 +589,13 @@ impl PackageManifest {
                 // `">=20.5, <23"`) after testing.
                 houdini: Some(HoudiniRange::parse("^21").expect("default range is well-formed")),
                 platforms: Vec::new(),
-            }),
-            stage: None,
-            registries: None,
-            dependencies: None,
-            python_dependencies: None,
-            runtime: None,
-            scripts: None,
+            },
+            stage: StageConfig::default(),
+            registries: Vec::new(),
+            dependencies: IndexMap::new(),
+            python_dependencies: IndexMap::new(),
+            runtime: IndexMap::new(),
+            scripts: PackageScripts::default(),
         }
     }
 
@@ -595,17 +603,14 @@ impl PackageManifest {
     /// is resolved on-demand via [`ScriptEntry::resolve_cmd`] using the
     /// entry's conditional `cmd` value — there is no merging at this layer.
     pub fn resolved_scripts(&self) -> IndexMap<String, ScriptEntry> {
-        match &self.scripts {
-            Some(scripts) => scripts.commands.clone(),
-            None => IndexMap::new(),
-        }
+        self.scripts.commands.clone()
     }
 
     /// Look up a script entry by name. Per-host variation lives inside the
     /// returned [`ScriptEntry`]'s `cmd` value — call
     /// [`ScriptEntry::resolve_cmd`] on the result with the desired host OS.
     pub fn script_for(&self, name: &str) -> Option<ScriptEntry> {
-        self.scripts.as_ref()?.commands.get(name).cloned()
+        self.scripts.commands.get(name).cloned()
     }
 
     /// Validate the package manifest for common errors.
@@ -629,46 +634,37 @@ impl PackageManifest {
         // `[compat].houdini` parses at deserialize time via the
         // `HoudiniRange` newtype, so no syntax check is needed here.
         // Validate `[compat].platforms` members against the known set.
-        if let Some(compat) = &self.compat {
-            for platform_str in &compat.platforms {
-                platform_str
-                    .parse::<Platform>()
-                    .map_err(|e| e.to_string())?;
-            }
+        for platform_str in &self.compat.platforms {
+            platform_str
+                .parse::<Platform>()
+                .map_err(|e| e.to_string())?;
         }
 
         // Validate [stage]: per-platform keys must appear in [compat].platforms,
         // and place rules must declare both `from` and `to`. Place rules with
         // empty `from` would match nothing useful; reject those at load time.
-        if let Some(stage) = &self.stage {
-            let declared_platforms: Vec<String> = self
-                .compat
-                .as_ref()
-                .map(|c| c.platforms.clone())
-                .unwrap_or_default();
-            for (platform_str, rules) in &stage.platform.entries {
-                platform_str
-                    .parse::<Platform>()
-                    .map_err(|e| format!("[stage.platform.{}]: {}", platform_str, e))?;
-                if !declared_platforms.contains(platform_str) {
+        for (platform_str, rules) in &self.stage.platform.entries {
+            platform_str
+                .parse::<Platform>()
+                .map_err(|e| format!("[stage.platform.{}]: {}", platform_str, e))?;
+            if !self.compat.platforms.contains(platform_str) {
+                return Err(format!(
+                    "[stage.platform.{}] declared but '{}' not listed in [compat].platforms",
+                    platform_str, platform_str
+                ));
+            }
+            for (i, rule) in rules.place.iter().enumerate() {
+                if rule.from.trim().is_empty() {
                     return Err(format!(
-                        "[stage.platform.{}] declared but '{}' not listed in [compat].platforms",
-                        platform_str, platform_str
+                        "[stage.platform.{}].place[{}]: `from` must not be empty",
+                        platform_str, i
                     ));
                 }
-                for (i, rule) in rules.place.iter().enumerate() {
-                    if rule.from.trim().is_empty() {
-                        return Err(format!(
-                            "[stage.platform.{}].place[{}]: `from` must not be empty",
-                            platform_str, i
-                        ));
-                    }
-                    if rule.to.trim().is_empty() {
-                        return Err(format!(
-                            "[stage.platform.{}].place[{}]: `to` must not be empty (use \"./\" for the archive root)",
-                            platform_str, i
-                        ));
-                    }
+                if rule.to.trim().is_empty() {
+                    return Err(format!(
+                        "[stage.platform.{}].place[{}]: `to` must not be empty (use \"./\" for the archive root)",
+                        platform_str, i
+                    ));
                 }
             }
         }
@@ -678,16 +674,14 @@ impl PackageManifest {
         // Conditional values get every branch's `when` selector compiled here
         // so malformed expressions surface at manifest load time, not at
         // install/emit time.
-        if let Some(runtime) = &self.runtime {
-            validate_env_table("runtime", runtime)?;
-        }
+        validate_env_table("runtime", &self.runtime)?;
 
         // Validate [scripts] entries: a conditional `cmd` may only gate on
         // the `os` axis. Other axes (`houdini`, `python`, `install_source`)
         // require runtime context HPM doesn't have at `hpm run` time, so we
         // reject them up front rather than silently dropping variants.
-        if let Some(scripts) = &self.scripts {
-            for (name, entry) in &scripts.commands {
+        {
+            for (name, entry) in &self.scripts.commands {
                 let ScriptEntry::WithEnv(env) = entry else {
                     continue;
                 };
@@ -763,21 +757,19 @@ impl PackageManifest {
         // out, the rest go through. Required-but-unsupplied placeholders
         // are skipped — project sync supplies them via `[runtime]`
         // overrides and errors if any remain unsupplied.
-        if let Some(user_runtime) = &self.runtime {
-            for (key, entry) in user_runtime {
-                let Some(houdini_value) = entry.to_houdini_env_value()? else {
-                    continue;
-                };
-                let mut env_map = HashMap::new();
-                env_map.insert(key.clone(), houdini_value);
-                env.push(env_map);
-            }
+        for (key, entry) in &self.runtime {
+            let Some(houdini_value) = entry.to_houdini_env_value()? else {
+                continue;
+            };
+            let mut env_map = HashMap::new();
+            env_map.insert(key.clone(), houdini_value);
+            env.push(env_map);
         }
 
         let enable = self
             .compat
+            .houdini
             .as_ref()
-            .and_then(|c| c.houdini.as_ref())
             .map(HoudiniRange::to_enable_expression);
 
         Ok(HoudiniPackage {
@@ -817,39 +809,40 @@ impl PackageManifest {
         // generate_houdini_package). Conditional value branches each get the
         // same substitution applied before the conditional-object array is
         // emitted.
-        if let Some(user_runtime) = &self.runtime {
-            for (key, entry) in user_runtime {
-                let Some(houdini_value) = entry
-                    .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)], false)
-                    .map_err(|e| e.to_string())?
-                else {
-                    continue;
-                };
-                let mut env_map = HashMap::new();
-                env_map.insert(key.clone(), houdini_value);
-                env.push(env_map);
-            }
+        for (key, entry) in &self.runtime {
+            let Some(houdini_value) = entry
+                .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)], false)
+                .map_err(|e| e.to_string())?
+            else {
+                continue;
+            };
+            let mut env_map = HashMap::new();
+            env_map.insert(key.clone(), houdini_value);
+            env.push(env_map);
         }
 
         let enable = self
             .compat
+            .houdini
             .as_ref()
-            .and_then(|c| c.houdini.as_ref())
             .map(HoudiniRange::to_enable_expression);
 
         // Build requires from dependency keys (slug portion only)
-        let requires = self.dependencies.as_ref().and_then(|deps| {
-            let names: Vec<String> = deps
-                .keys()
-                .map(|key| {
-                    key.split_once('/')
-                        .map(|(_, s)| s)
-                        .unwrap_or(key)
-                        .to_string()
-                })
-                .collect();
-            if names.is_empty() { None } else { Some(names) }
-        });
+        let requires = if self.dependencies.is_empty() {
+            None
+        } else {
+            Some(
+                self.dependencies
+                    .keys()
+                    .map(|key| {
+                        key.split_once('/')
+                            .map(|(_, s)| s)
+                            .unwrap_or(key)
+                            .to_string()
+                    })
+                    .collect(),
+            )
+        };
 
         let filename = format!("{}.json", slug);
         let package = HoudiniNativePackage {
@@ -892,14 +885,14 @@ mod tests {
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
 
-        manifest.compat = Some(CompatConfig {
+        manifest.compat = CompatConfig {
             houdini: None,
             platforms: Vec::new(),
-        });
+        };
 
         let houdini_pkg = manifest
             .generate_houdini_package()
@@ -988,7 +981,7 @@ type = "git"
 "studio/test" = "0.2.0"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let registries = manifest.registries.unwrap();
+        let registries = manifest.registries;
         assert_eq!(registries.len(), 2);
         assert_eq!(registries[0].name, "houdinihub");
         assert_eq!(registries[0].registry_type, RegistryType::Api);
@@ -1009,7 +1002,7 @@ MY_PLUGIN_ROOT = { method = "set", value = "$HPM_PACKAGE_ROOT/config" }
 HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar" }
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let runtime = manifest.runtime.unwrap();
+        let runtime = manifest.runtime;
         assert_eq!(runtime.len(), 2);
         assert_eq!(runtime["MY_PLUGIN_ROOT"].method, EnvMethod::Set);
         assert_eq!(
@@ -1035,7 +1028,7 @@ version = "0.1.0"
 PROJECT_ROOT = { method = "set", required = true }
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let runtime = manifest.runtime.as_ref().unwrap();
+        let runtime = &manifest.runtime;
         assert_eq!(runtime["PROJECT_ROOT"].method, EnvMethod::Set);
         assert!(runtime["PROJECT_ROOT"].value.is_none());
         assert!(runtime["PROJECT_ROOT"].required);
@@ -1069,7 +1062,7 @@ LEAKED = { method = "set" }
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
         let mut runtime = IndexMap::new();
@@ -1089,7 +1082,7 @@ LEAKED = { method = "set" }
                 required: false,
             },
         );
-        manifest.runtime = Some(runtime);
+        manifest.runtime = runtime;
 
         let pkg = manifest
             .generate_houdini_package()
@@ -1199,7 +1192,7 @@ name = "My Package"
 version = "0.1.0"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        assert!(manifest.runtime.is_none());
+        assert!(manifest.runtime.is_empty());
     }
 
     #[test]
@@ -1209,7 +1202,7 @@ version = "0.1.0"
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
 
@@ -1222,7 +1215,7 @@ version = "0.1.0"
                 required: false,
             },
         );
-        manifest.runtime = Some(runtime);
+        manifest.runtime = runtime;
 
         let houdini_pkg = manifest
             .generate_houdini_package()
@@ -1273,9 +1266,9 @@ place = [
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         manifest.validate().unwrap();
-        let compat = manifest.compat.as_ref().unwrap();
+        let compat = manifest.compat;
         assert_eq!(compat.platforms.len(), 2);
-        let stage = manifest.stage.as_ref().unwrap();
+        let stage = &manifest.stage;
         assert_eq!(stage.prepack, vec!["build-dso".to_string()]);
         assert_eq!(stage.platform.entries.len(), 2);
         assert_eq!(
@@ -1286,7 +1279,7 @@ place = [
     }
 
     #[test]
-    fn stage_none_when_absent() {
+    fn stage_empty_when_absent() {
         let toml_str = r#"
 [package]
 path = "studio/my-package"
@@ -1294,7 +1287,7 @@ name = "My Package"
 version = "0.1.0"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        assert!(manifest.stage.is_none());
+        assert!(manifest.stage.is_empty());
     }
 
     #[test]
@@ -1304,13 +1297,13 @@ version = "0.1.0"
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
-        manifest.compat = Some(CompatConfig {
+        manifest.compat = CompatConfig {
             houdini: None,
             platforms: vec!["linux-arm64".to_string()],
-        });
+        };
         assert!(manifest.validate().is_err());
     }
 
@@ -1321,13 +1314,13 @@ version = "0.1.0"
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
-        manifest.compat = Some(CompatConfig {
+        manifest.compat = CompatConfig {
             houdini: None,
             platforms: vec!["linux-x86_64".to_string()],
-        });
+        };
         let mut entries = IndexMap::new();
         entries.insert(
             "windows-x86_64".to_string(),
@@ -1338,10 +1331,10 @@ version = "0.1.0"
                 }],
             },
         );
-        manifest.stage = Some(StageConfig {
+        manifest.stage = StageConfig {
             platform: PlatformStaging { entries },
             ..Default::default()
-        });
+        };
         let err = manifest.validate().unwrap_err();
         assert!(err.contains("not listed in [compat].platforms"), "{err}");
     }
@@ -1353,13 +1346,13 @@ version = "0.1.0"
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
-        manifest.compat = Some(CompatConfig {
+        manifest.compat = CompatConfig {
             houdini: None,
             platforms: vec!["linux-x86_64".to_string()],
-        });
+        };
         let mut entries = IndexMap::new();
         entries.insert(
             "linux-x86_64".to_string(),
@@ -1370,10 +1363,10 @@ version = "0.1.0"
                 }],
             },
         );
-        manifest.stage = Some(StageConfig {
+        manifest.stage = StageConfig {
             platform: PlatformStaging { entries },
             ..Default::default()
-        });
+        };
         let err = manifest.validate().unwrap_err();
         assert!(err.contains("`from` must not be empty"), "{err}");
     }
@@ -1388,14 +1381,14 @@ version = "0.1.0"
             name: "TumbleRig".to_string(),
             version: "1.0.0".to_string(),
             description: None,
-            authors: None,
+            authors: Vec::new(),
             license: None,
             readme: None,
             homepage: None,
             repository: None,
             documentation: None,
-            keywords: None,
-            categories: None,
+            keywords: Vec::new(),
+            categories: Vec::new(),
         };
         assert_eq!(info.identifier(), "tumblehead/tumble-rig");
         assert_eq!(info.creator(), "tumblehead");
@@ -1409,7 +1402,7 @@ version = "0.1.0"
             "TumbleRig".to_string(),
             "1.0.0".to_string(),
             Some("A rig tool".to_string()),
-            None,
+            Vec::new(),
             Some("MIT".to_string()),
         );
         let toml_str = toml::to_string(&manifest).unwrap();
@@ -1430,7 +1423,7 @@ name = "My Context"
 version = "0.1.0"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        assert!(manifest.registries.is_none());
+        assert!(manifest.registries.is_empty());
     }
 
     #[test]
@@ -1512,7 +1505,7 @@ build = "cargo build"
 test = "cargo test"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let scripts = manifest.scripts.as_ref().unwrap();
+        let scripts = manifest.scripts;
         assert_eq!(scripts.commands.len(), 2);
         assert_eq!(
             scripts.commands["build"].resolve_cmd(None),
@@ -1552,7 +1545,7 @@ cmd = [
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         manifest.validate().unwrap();
 
-        let scripts = manifest.scripts.as_ref().unwrap();
+        let scripts = manifest.scripts;
         // Plain shorthand resolves unconditionally.
         assert_eq!(
             scripts.commands["build"].resolve_cmd(Some("linux")),
@@ -1589,7 +1582,7 @@ cmd = [
 ]
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let entry = &manifest.scripts.as_ref().unwrap().commands["register"];
+        let entry = &manifest.scripts.commands["register"];
         assert_eq!(
             entry.resolve_cmd(Some("windows")),
             Some("tool.exe register".to_string())
@@ -1618,7 +1611,7 @@ python = "3.11"
 requirements = ["PySide6>=6.6"]
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let scripts = manifest.scripts.as_ref().unwrap();
+        let scripts = manifest.scripts;
 
         assert_eq!(
             scripts.commands["build"].resolve_cmd(None),
@@ -1648,7 +1641,7 @@ version = "1.0.0"
 tt_setup = { cmd = "python scripts/tt_setup.py", python = "3.11", requirements = ["PySide6>=6.6"] }
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let setup = &manifest.scripts.as_ref().unwrap().commands["tt_setup"];
+        let setup = &manifest.scripts.commands["tt_setup"];
         assert_eq!(
             setup.resolve_cmd(None),
             Some("python scripts/tt_setup.py".to_string())
@@ -1669,7 +1662,7 @@ version = "1.0.0"
 cmd = "ruff ."
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let lint = &manifest.scripts.as_ref().unwrap().commands["lint"];
+        let lint = &manifest.scripts.commands["lint"];
         assert_eq!(lint.resolve_cmd(None), Some("ruff .".to_string()));
         assert!(!lint.needs_venv());
     }
@@ -1692,7 +1685,7 @@ python = "3.11"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         manifest.validate().unwrap();
-        let regen = &manifest.scripts.as_ref().unwrap().commands["regen"];
+        let regen = &manifest.scripts.commands["regen"];
         assert!(regen.needs_venv());
         assert_eq!(regen.python(), Some("3.11"));
         assert!(
@@ -1758,7 +1751,7 @@ name = "Pkg"
 version = "0.1.0"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        assert!(manifest.scripts.is_none());
+        assert!(manifest.scripts.is_empty());
         assert!(manifest.resolved_scripts().is_empty());
         assert!(manifest.script_for("anything").is_none());
     }
@@ -1783,7 +1776,7 @@ cmd = [
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         let roundtrip = toml::to_string(&manifest).unwrap();
         let back: PackageManifest = toml::from_str(&roundtrip).unwrap();
-        let scripts = back.scripts.unwrap();
+        let scripts = back.scripts;
         assert_eq!(
             scripts.commands["build"].resolve_cmd(None),
             Some("cargo build".to_string())
@@ -1805,7 +1798,7 @@ cmd = [
             "Test".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
         let mut runtime = IndexMap::new();
@@ -1825,7 +1818,7 @@ cmd = [
                 required: false,
             },
         );
-        manifest.runtime = Some(runtime);
+        manifest.runtime = runtime;
 
         let (_, pkg) = manifest.generate_houdini_native_package().unwrap();
 
@@ -1866,12 +1859,7 @@ value = [
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         manifest.validate().unwrap();
-        let entry = manifest
-            .runtime
-            .as_ref()
-            .unwrap()
-            .get("PXR_PLUGINPATH_NAME")
-            .unwrap();
+        let entry = manifest.runtime.get("PXR_PLUGINPATH_NAME").unwrap();
         assert_eq!(entry.method, EnvMethod::Prepend);
         match entry.value.as_ref().unwrap() {
             EnvValueSpec::Conditional(v) => {
@@ -1905,12 +1893,7 @@ value = [
 ]
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-        let entry = manifest
-            .runtime
-            .as_ref()
-            .unwrap()
-            .get("PXR_PLUGINPATH_NAME")
-            .unwrap();
+        let entry = manifest.runtime.get("PXR_PLUGINPATH_NAME").unwrap();
         let lowered = entry
             .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false)
             .unwrap()
@@ -2016,7 +1999,7 @@ value = []
             "Passthrough".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
         let mut runtime = IndexMap::new();
@@ -2028,7 +2011,7 @@ value = []
                 required: false,
             },
         );
-        manifest.runtime = Some(runtime);
+        manifest.runtime = runtime;
 
         let pkg = manifest
             .generate_houdini_package()

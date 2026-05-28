@@ -276,7 +276,7 @@ impl ProjectManager {
 
         let project_env_overrides = project_manifest.runtime;
         let manifest_registries = project_manifest.registries;
-        let dependencies = project_manifest.dependencies.unwrap_or_default();
+        let dependencies = project_manifest.dependencies;
 
         // Build registry set once for any registry-resolved deps. A manifest
         // [[registries]] override beats the user's [registries] from config.
@@ -284,8 +284,9 @@ impl ProjectManager {
         let registry_set: Option<Arc<crate::registry::RegistrySet>> =
             if dependencies.values().any(|spec| spec.is_registry()) {
                 let registry_configs: Vec<hpm_config::RegistrySourceConfig> =
-                    if let Some(ref regs) = manifest_registries {
-                        regs.iter()
+                    if !manifest_registries.is_empty() {
+                        manifest_registries
+                            .iter()
                             .map(|r| hpm_config::RegistrySourceConfig {
                                 name: r.name.clone(),
                                 url: r.url.clone(),
@@ -449,14 +450,14 @@ impl ProjectManager {
         &self,
         installed_package: &InstalledPackage,
     ) -> Result<(), ProjectError> {
-        self.generate_houdini_manifest_with_python(installed_package, None, &None)
+        self.generate_houdini_manifest_with_python(installed_package, None, &IndexMap::new())
     }
 
     fn generate_houdini_manifest_with_python(
         &self,
         installed_package: &InstalledPackage,
         venv_site_packages: Option<&Path>,
-        project_env_overrides: &Option<IndexMap<String, ManifestEnvEntry>>,
+        project_env_overrides: &IndexMap<String, ManifestEnvEntry>,
     ) -> Result<(), ProjectError> {
         let houdini_package = self.create_houdini_package_with_python(
             installed_package,
@@ -517,7 +518,7 @@ impl ProjectManager {
     ) -> Result<Option<PathBuf>, ProjectError> {
         let has_python_deps = installed_packages
             .iter()
-            .any(|p| p.manifest.python_dependencies.is_some());
+            .any(|p| !p.manifest.python_dependencies.is_empty());
         if !has_python_deps {
             return Ok(None);
         }
@@ -545,7 +546,7 @@ impl ProjectManager {
             .load_project_manifest()
             .ok()
             .flatten()
-            .and_then(|m| m.compat.and_then(|c| c.houdini_min()));
+            .and_then(|m| m.compat.houdini_min());
         let collected = collect_python_dependencies(project_houdini_version.as_deref(), &manifests)
             .await
             .map_err(|e| ProjectError::PythonResolution(e.into()))?;
@@ -589,14 +590,14 @@ impl ProjectManager {
         &self,
         installed_package: &InstalledPackage,
     ) -> Result<HoudiniPackage, ProjectError> {
-        self.create_houdini_package_with_python(installed_package, None, &None)
+        self.create_houdini_package_with_python(installed_package, None, &IndexMap::new())
     }
 
     fn create_houdini_package_with_python(
         &self,
         installed_package: &InstalledPackage,
         venv_site_packages: Option<&Path>,
-        project_env_overrides: &Option<IndexMap<String, ManifestEnvEntry>>,
+        project_env_overrides: &IndexMap<String, ManifestEnvEntry>,
     ) -> Result<HoudiniPackage, ProjectError> {
         let package_path = &installed_package.install_path;
 
@@ -609,18 +610,18 @@ impl ProjectManager {
         let mut env = vec![];
 
         // Inject venv site-packages for packages that declare python_dependencies
-        if let Some(site_packages) = venv_site_packages {
-            if installed_package.manifest.python_dependencies.is_some() {
-                let mut python_env = HashMap::new();
-                python_env.insert(
-                    "PYTHONPATH".to_string(),
-                    hpm_package::HoudiniEnvValue::Detailed {
-                        method: "prepend".to_string(),
-                        value: site_packages.to_string_lossy().to_string(),
-                    },
-                );
-                env.push(python_env);
-            }
+        if let Some(site_packages) = venv_site_packages
+            && !installed_package.manifest.python_dependencies.is_empty()
+        {
+            let mut python_env = HashMap::new();
+            python_env.insert(
+                "PYTHONPATH".to_string(),
+                hpm_package::HoudiniEnvValue::Detailed {
+                    method: "prepend".to_string(),
+                    value: site_packages.to_string_lossy().to_string(),
+                },
+            );
+            env.push(python_env);
         }
 
         // Package's own python/ directory
@@ -657,15 +658,12 @@ impl ProjectManager {
         // registry-only contributions never reach a dev install. A
         // required-but-unsupplied placeholder (no value, no project
         // override) surfaces as `MissingRequiredEnv`.
-        let user_runtime_opt = installed_package.manifest.runtime.as_ref();
-
-        if let Some(user_runtime) = user_runtime_opt {
+        if !installed_package.manifest.runtime.is_empty() {
             let pkg_root = package_path.to_string_lossy().into_owned();
+            let user_runtime = &installed_package.manifest.runtime;
 
             for key in user_runtime.keys() {
-                let project_override = project_env_overrides
-                    .as_ref()
-                    .and_then(|overrides| overrides.get(key));
+                let project_override = project_env_overrides.get(key);
                 let pkg_entry = user_runtime.get(key);
                 let effective_entry = project_override
                     .or(pkg_entry)
@@ -705,8 +703,8 @@ impl ProjectManager {
         let enable = installed_package
             .manifest
             .compat
+            .houdini
             .as_ref()
-            .and_then(|c| c.houdini.as_ref())
             .map(hpm_package::HoudiniRange::to_enable_expression);
 
         Ok(HoudiniPackage {
@@ -1223,7 +1221,7 @@ mod tests {
             "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("A test package".to_string()),
-            None,
+            Vec::new(),
             None,
         );
 
@@ -1263,7 +1261,7 @@ mod tests {
             "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("A test package".to_string()),
-            None,
+            Vec::new(),
             None,
         );
         let mut pkg_env = IndexMap::new();
@@ -1275,7 +1273,7 @@ mod tests {
                 required: false,
             },
         );
-        manifest.runtime = Some(pkg_env);
+        manifest.runtime = pkg_env;
 
         let package_path = temp_dir.path().join("test-package@1.0.0");
         std::fs::create_dir_all(&package_path).unwrap();
@@ -1319,7 +1317,7 @@ mod tests {
         );
 
         let houdini_package = project_manager
-            .create_houdini_package_with_python(&installed_package, None, &Some(project_overrides))
+            .create_houdini_package_with_python(&installed_package, None, &project_overrides)
             .unwrap();
         let env_entries = houdini_package.env.as_ref().unwrap();
         let my_config_entry = env_entries
@@ -1348,7 +1346,7 @@ mod tests {
             "Needs Config".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
         let mut pkg_env = IndexMap::new();
@@ -1360,7 +1358,7 @@ mod tests {
                 required: true,
             },
         );
-        manifest.runtime = Some(pkg_env);
+        manifest.runtime = pkg_env;
 
         let package_path = temp_dir.path().join("needs-config@1.0.0");
         std::fs::create_dir_all(&package_path).unwrap();
@@ -1395,7 +1393,7 @@ mod tests {
             },
         );
         let pkg = project_manager
-            .create_houdini_package_with_python(&installed_package, None, &Some(overrides))
+            .create_houdini_package_with_python(&installed_package, None, &overrides)
             .unwrap();
         let entry = pkg
             .env
@@ -1451,7 +1449,7 @@ mod tests {
             "HDK Plugin".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
         let mut runtime = IndexMap::new();
@@ -1459,7 +1457,7 @@ mod tests {
             "HOUDINI_DSO_PATH".to_string(),
             dev_only_runtime_entry("$HPM_PACKAGE_ROOT/build/Release"),
         );
-        manifest.runtime = Some(runtime);
+        manifest.runtime = runtime;
 
         let package_path = temp_dir.path().join("hdk-plugin@1.0.0");
         std::fs::create_dir_all(&package_path).unwrap();
@@ -1516,7 +1514,7 @@ mod tests {
             "Overridable".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
         let mut runtime = IndexMap::new();
@@ -1524,7 +1522,7 @@ mod tests {
             "HOUDINI_DSO_PATH".to_string(),
             dev_only_runtime_entry("$HPM_PACKAGE_ROOT/build/Release"),
         );
-        manifest.runtime = Some(runtime);
+        manifest.runtime = runtime;
 
         let package_path = temp_dir.path().join("overridable@1.0.0");
         std::fs::create_dir_all(&package_path).unwrap();
@@ -1546,7 +1544,7 @@ mod tests {
             },
         );
         let pkg = project_manager
-            .create_houdini_package_with_python(&installed, None, &Some(overrides))
+            .create_houdini_package_with_python(&installed, None, &overrides)
             .unwrap();
         let entry = find_env_entry(&pkg, "HOUDINI_DSO_PATH")
             .expect("dev-gated key must still emit when project overrides it");
@@ -1565,7 +1563,7 @@ mod tests {
             "Claudini 2".to_string(),
             "0.4.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
         let pkg = InstalledPackage {
@@ -1603,7 +1601,7 @@ mod tests {
             "Tumblepipe".to_string(),
             "1.1.20".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
         let installed = InstalledPackage {
@@ -1662,7 +1660,7 @@ mod tests {
             "Foo".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
         let installed = InstalledPackage {
@@ -1736,15 +1734,14 @@ mod tests {
                 "Inertness".to_string(),
                 "1.0.0".to_string(),
                 None,
-                None,
-                None,
-            );
+                Vec::new(),
+                None);
             let mut runtime = IndexMap::new();
             runtime.insert(key.to_string(), dev_only_runtime_entry(&value));
-            with_dev.runtime = Some(runtime);
+            with_dev.runtime = runtime;
 
             let mut without = with_dev.clone();
-            without.runtime = None;
+            without.runtime = Default::default();
 
             let pkg_path = temp_dir.path().join("inertness@1.0.0");
             std::fs::create_dir_all(&pkg_path).unwrap();

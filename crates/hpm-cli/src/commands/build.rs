@@ -60,10 +60,10 @@ pub async fn build(options: BuildOptions, console: &mut Console) -> Result<()> {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let stage = manifest
-        .stage
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Package has no [stage] section — nothing to build"))?;
+    let stage = &manifest.stage;
+    if stage.is_empty() {
+        anyhow::bail!("Package has no [stage] section — nothing to build");
+    }
 
     let platform = resolve_target_platform(&manifest, options.platform.as_deref())?;
 
@@ -151,11 +151,7 @@ fn resolve_target_platform(
     manifest: &PackageManifest,
     requested: Option<&str>,
 ) -> Result<Option<Platform>> {
-    let declared: Vec<String> = manifest
-        .compat
-        .as_ref()
-        .map(|c| c.platforms.clone())
-        .unwrap_or_default();
+    let declared = &manifest.compat.platforms;
     match (requested, declared.is_empty()) {
         (Some(_), true) => {
             bail!("--platform was specified but package has no [compat].platforms")

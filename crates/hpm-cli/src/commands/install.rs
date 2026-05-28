@@ -176,16 +176,14 @@ fn build_lock_file(
         );
     }
 
-    if let Some(python_deps) = &manifest.python_dependencies {
-        for (name, spec) in python_deps {
-            let version = match spec {
-                PythonDependencySpec::Simple(v) => v.clone(),
-                PythonDependencySpec::Detailed { version, .. } => {
-                    version.clone().unwrap_or_else(|| "*".to_string())
-                }
-            };
-            lock.add_python_dependency(name.to_string(), LockedPythonDependency::new(version));
-        }
+    for (name, spec) in &manifest.python_dependencies {
+        let version = match spec {
+            PythonDependencySpec::Simple(v) => v.clone(),
+            PythonDependencySpec::Detailed { version, .. } => {
+                version.clone().unwrap_or_else(|| "*".to_string())
+            }
+        };
+        lock.add_python_dependency(name.to_string(), LockedPythonDependency::new(version));
     }
 
     lock
@@ -236,8 +234,8 @@ mod tests {
         let manifest = load_manifest(&manifest_path).expect("manifest should load");
         assert_eq!(manifest.package.name, "test-package");
         assert_eq!(manifest.package.version, "1.0.0");
-        assert!(manifest.dependencies.is_some());
-        assert!(manifest.python_dependencies.is_some());
+        assert!(!manifest.dependencies.is_empty());
+        assert!(!manifest.python_dependencies.is_empty());
     }
 
     #[test]

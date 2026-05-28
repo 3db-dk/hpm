@@ -219,11 +219,7 @@ impl DependencyResolver {
         graph: &mut DependencyGraph,
         visited: &mut HashSet<&'a str>,
     ) -> Result<(), DependencyError> {
-        let Some(dependencies) = &project.manifest.dependencies else {
-            return Ok(());
-        };
-
-        for (dep_name, dep_spec) in dependencies {
+        for (dep_name, dep_spec) in &project.manifest.dependencies {
             if visited.contains(dep_name.as_str()) {
                 continue;
             }
@@ -271,11 +267,7 @@ impl DependencyResolver {
         visited: &mut HashSet<&'a str>,
         parent_id: &PackageId,
     ) -> Result<(), DependencyError> {
-        let Some(dependencies) = &package.manifest.dependencies else {
-            return Ok(());
-        };
-
-        for (dep_name, dep_spec) in dependencies {
+        for (dep_name, dep_spec) in &package.manifest.dependencies {
             if visited.contains(dep_name.as_str()) {
                 continue;
             }

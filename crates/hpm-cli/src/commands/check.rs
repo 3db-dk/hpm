@@ -114,21 +114,20 @@ fn validate_manifest_content(manifest: &PackageManifest, result: &mut Validation
         );
     }
 
-    if manifest.package.authors.is_none() || manifest.package.authors.as_ref().unwrap().is_empty() {
+    if manifest.package.authors.is_empty() {
         result.add_warning(
             "Package authors are missing - consider adding author information".to_string(),
         );
     }
 
-    if manifest.package.keywords.is_none() || manifest.package.keywords.as_ref().unwrap().is_empty()
-    {
+    if manifest.package.keywords.is_empty() {
         result.add_warning(
             "Package keywords are missing - consider adding keywords for better discoverability"
                 .to_string(),
         );
     }
 
-    if manifest.compat.as_ref().is_none_or(|c| c.houdini.is_none()) {
+    if manifest.compat.houdini.is_none() {
         result.add_warning(
             "[compat].houdini is missing - consider declaring a Houdini version range".to_string(),
         );
@@ -259,9 +258,7 @@ fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut Valid
     // deserialize time, so the manifest can't load with a malformed
     // range. Here we just surface the compiled expression on the happy
     // path and warn on the binary-package + unbounded-above footgun.
-    if let Some(compat) = &manifest.compat
-        && let Some(range) = &compat.houdini
-    {
+    if let Some(range) = &manifest.compat.houdini {
         result.add_info(format!(
             "[OK] Houdini compatibility: {} (compiles to `{}`)",
             range,
@@ -275,7 +272,7 @@ fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut Valid
         // crash at load. Surface it as a warning so the author can
         // either narrow the range or confirm they really mean to ship
         // platform-agnostic content.
-        if !compat.platforms.is_empty() && !range.has_upper_bound() {
+        if !manifest.compat.platforms.is_empty() && !range.has_upper_bound() {
             result.add_warning(format!(
                 "[compat].platforms is declared but [compat].houdini = \"{}\" \
                  has no upper bound. Native binaries compiled against one \
@@ -321,14 +318,14 @@ async fn validate_best_practices(
     }
 
     // Check for scripts
-    if let Some(ref scripts) = manifest.scripts {
+    if !manifest.scripts.commands.is_empty() {
         result.add_info(format!(
             "[OK] Package defines {} script(s)",
-            scripts.commands.len()
+            manifest.scripts.commands.len()
         ));
 
         let host_os = hpm_package::Platform::current().and_then(|p| p.os_key().map(str::to_string));
-        for (name, entry) in &scripts.commands {
+        for (name, entry) in &manifest.scripts.commands {
             let resolved = entry.resolve_cmd(host_os.as_deref());
             match resolved {
                 Some(cmd) if cmd.trim().is_empty() => {

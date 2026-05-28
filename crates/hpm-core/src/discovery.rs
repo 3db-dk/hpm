@@ -133,10 +133,8 @@ impl ProjectDiscovery {
         let mut dependencies = HashSet::new();
 
         for project in projects {
-            if let Some(deps) = &project.manifest.dependencies {
-                for dep_name in deps.keys() {
-                    dependencies.insert(dep_name.clone());
-                }
+            for dep_name in project.manifest.dependencies.keys() {
+                dependencies.insert(dep_name.clone());
             }
         }
 
@@ -294,7 +292,7 @@ description = "Test project {}"
             "Project 1".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
 
@@ -303,7 +301,7 @@ description = "Test project {}"
             "Project 2".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
 
@@ -326,7 +324,7 @@ description = "Test project {}"
                 link: false,
             },
         );
-        manifest2.dependencies = Some(deps);
+        manifest2.dependencies = deps;
 
         let projects = vec![
             DiscoveredProject {

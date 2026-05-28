@@ -157,7 +157,7 @@ pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
         package_name_strategy(),
         version_strategy(),
         prop::option::of("[A-Za-z0-9 ]{10,100}"),
-        prop::option::of(prop::collection::vec(author_strategy(), 1..4)),
+        prop::collection::vec(author_strategy(), 0..4),
         prop::option::of(license_strategy()),
         prop::option::of(houdini_version_strategy()),
     )
@@ -174,21 +174,21 @@ pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
                     homepage: None,
                     repository: None,
                     documentation: None,
-                    keywords: Some(vec!["houdini".to_string()]),
-                    categories: None,
+                    keywords: vec!["houdini".to_string()],
+                    categories: Vec::new(),
                 },
-                compat: Some(CompatConfig {
+                compat: CompatConfig {
                     houdini: houdini_req.map(|r| {
                         crate::HoudiniRange::parse(r).expect("strategy yields valid ranges")
                     }),
                     platforms: Vec::new(),
-                }),
-                stage: None,
-                registries: None,
-                dependencies: None,
-                python_dependencies: None,
-                runtime: None,
-                scripts: None,
+                },
+                stage: Default::default(),
+                registries: Vec::new(),
+                dependencies: indexmap::IndexMap::new(),
+                python_dependencies: indexmap::IndexMap::new(),
+                runtime: indexmap::IndexMap::new(),
+                scripts: Default::default(),
             },
         )
 }
@@ -346,10 +346,8 @@ proptest! {
         prop_assert!(houdini_pkg.env.is_some());
 
         // If [compat].houdini is set, the enable expression should be derived.
-        if let Some(compat) = &manifest.compat {
-            if compat.houdini.is_some() {
-                prop_assert!(houdini_pkg.enable.is_some());
-            }
+        if manifest.compat.houdini.is_some() {
+            prop_assert!(houdini_pkg.enable.is_some());
         }
 
         // hpath should be exactly the package root so Houdini auto-discovers
@@ -382,7 +380,7 @@ proptest! {
             "Test Package".to_string(),
             valid_version,
             None,
-            None,
+            Vec::new(),
             None,
         );
         prop_assert!(valid_manifest.validate().is_ok());
@@ -393,7 +391,7 @@ proptest! {
             "Test Package".to_string(),
             invalid_version.clone(),
             None,
-            None,
+            Vec::new(),
             None,
         );
 
@@ -421,7 +419,7 @@ proptest! {
             "Test Package".to_string(),
             malformed_version.clone(),
             None,
-            None,
+            Vec::new(),
             None,
         );
 
@@ -508,26 +506,26 @@ proptest! {
                 name,
                 version,
                 description: None,
-                authors: None,
+                authors: Vec::new(),
                 license: None,
                 readme: None,
                 homepage: None,
                 repository: None,
                 documentation: None,
-                keywords: None,
-                categories: None,
+                keywords: Vec::new(),
+                categories: Vec::new(),
             },
-            compat: Some(CompatConfig {
+            compat: CompatConfig {
                 houdini: houdini_req
                     .map(|r| crate::HoudiniRange::parse(r).expect("strategy yields valid ranges")),
                 platforms: Vec::new(),
-            }),
-            stage: None,
-            registries: None,
-            dependencies: None,
-            python_dependencies: None,
-            runtime: None,
-            scripts: None,
+            },
+            stage: Default::default(),
+            registries: Vec::new(),
+            dependencies: indexmap::IndexMap::new(),
+            python_dependencies: indexmap::IndexMap::new(),
+            runtime: indexmap::IndexMap::new(),
+            scripts: Default::default(),
         };
 
         // Houdini package generation either succeeds with a well-formed
@@ -606,7 +604,7 @@ proptest! {
             "Test Package".to_string(),
             "1.0.0".to_string(),
             None,
-            Some(vec![author_string.clone()]),
+            vec![author_string.clone()],
             None,
         );
 

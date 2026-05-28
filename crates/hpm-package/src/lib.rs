@@ -35,7 +35,7 @@
 //!     "Geometry Tools".to_string(),
 //!     "2.1.0".to_string(),
 //!     Some("Advanced geometry tools for Houdini".to_string()),
-//!     Some(vec!["Studio Artist <artist@studio.com>".to_string()]),
+//!     vec!["Studio Artist <artist@studio.com>".to_string()],
 //!     Some("MIT".to_string()),
 //! );
 //!
@@ -56,7 +56,9 @@
 //!     PackagePath::new("studio/my-package").unwrap(),
 //!     "My Package".to_string(),
 //!     "1.0.0".to_string(),
-//!     None, None, None,
+//!     None,
+//!     Vec::new(),
+//!     None,
 //! );
 //!
 //! // Add HPM dependencies
@@ -68,7 +70,7 @@
 //!         "1.0.0"
 //!     )
 //! );
-//! manifest.dependencies = Some(deps);
+//! manifest.dependencies = deps;
 //!
 //! // Add Python dependencies
 //! let mut py_deps = IndexMap::new();
@@ -76,7 +78,7 @@
 //!     "numpy".to_string(),
 //!     PythonDependencySpec::Simple(">=1.20.0".to_string())
 //! );
-//! manifest.python_dependencies = Some(py_deps);
+//! manifest.python_dependencies = py_deps;
 //! ```
 //!
 //! ## Generating Houdini package.json
@@ -88,7 +90,9 @@
 //!     PackagePath::new("studio/my-package").unwrap(),
 //!     "My Package".to_string(),
 //!     "1.0.0".to_string(),
-//!     None, None, None,
+//!     None,
+//!     Vec::new(),
+//!     None,
 //! );
 //!
 //! // Generate Houdini-compatible package.json

@@ -130,13 +130,12 @@ async fn collect_candidates(
     existing_lock: Option<&LockFile>,
     filter: &HashSet<&str>,
 ) -> Result<Vec<Candidate>> {
-    let dependencies = match &manifest.dependencies {
-        Some(d) => d,
-        None => return Ok(Vec::new()),
-    };
+    if manifest.dependencies.is_empty() {
+        return Ok(Vec::new());
+    }
 
     let mut candidates = Vec::new();
-    for (name, spec) in dependencies {
+    for (name, spec) in &manifest.dependencies {
         if !filter.is_empty() && !filter.contains(name.as_str()) {
             continue;
         }
@@ -262,11 +261,8 @@ fn print_candidates(candidates: &[Candidate], output: OutputFormat) {
 /// `Registry { version, .. }` retains its `registry` / `optional` fields
 /// with `version` replaced.
 fn apply_updates(manifest: &mut hpm_package::PackageManifest, candidates: &[Candidate]) {
-    let Some(deps) = manifest.dependencies.as_mut() else {
-        return;
-    };
     for c in candidates {
-        let Some(spec) = deps.get_mut(&c.name) else {
+        let Some(spec) = manifest.dependencies.get_mut(&c.name) else {
             continue;
         };
         match spec {
@@ -302,7 +298,7 @@ mod tests {
             "project".to_string(),
             "1.0.0".to_string(),
             None,
-            None,
+            Vec::new(),
             None,
         );
         let mut deps = IndexMap::new();
@@ -315,7 +311,7 @@ mod tests {
                 optional: false,
             },
         );
-        manifest.dependencies = Some(deps);
+        manifest.dependencies = deps;
 
         let candidates = vec![
             Candidate {
@@ -334,7 +330,7 @@ mod tests {
 
         apply_updates(&mut manifest, &candidates);
 
-        let deps = manifest.dependencies.as_ref().unwrap();
+        let deps = &manifest.dependencies;
         match &deps["foo"] {
             DependencySpec::Simple(v) => assert_eq!(v, "1.0.5"),
             other => panic!("expected Simple, got {:?}", other),

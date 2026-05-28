@@ -68,18 +68,14 @@ pub async fn remove_package(
     let mut manifest = load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
 
-    // Check if dependencies section exists
-    if manifest.dependencies.is_none() {
+    if manifest.dependencies.is_empty() {
         anyhow::bail!(
             "No dependencies found in manifest. Package '{}' is not a dependency.",
             package_name
         );
     }
 
-    let dependencies = manifest
-        .dependencies
-        .as_mut()
-        .expect("dependencies existence checked above");
+    let dependencies = &mut manifest.dependencies;
 
     // Check if the dependency exists
     if !dependencies.contains_key(&package_name) {
@@ -153,8 +149,8 @@ mod tests {
         let manifest = result.unwrap();
         assert_eq!(manifest.package.name, "test-package");
         assert_eq!(manifest.package.version, "1.0.0");
-        assert!(manifest.dependencies.is_some());
-        assert_eq!(manifest.dependencies.unwrap().len(), 2);
+        assert!(!manifest.dependencies.is_empty());
+        assert_eq!(manifest.dependencies.len(), 2);
     }
 
     #[test]
@@ -167,7 +163,7 @@ mod tests {
             "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("Test description".to_string()),
-            Some(vec!["Author <test@example.com>".to_string()]),
+            vec!["Author <test@example.com>".to_string()],
             Some("MIT".to_string()),
         );
 
@@ -189,7 +185,7 @@ mod tests {
                 link: false,
             },
         );
-        manifest.dependencies = Some(dependencies);
+        manifest.dependencies = dependencies;
 
         let manifest_path = temp_dir.path().join("hpm.toml");
 
@@ -198,14 +194,13 @@ mod tests {
 
         // Load, remove dependency, and save again
         let mut loaded_manifest = load_manifest(&manifest_path).unwrap();
-        let deps = loaded_manifest.dependencies.as_mut().unwrap();
-        deps.shift_remove("remove-me");
+        loaded_manifest.dependencies.shift_remove("remove-me");
 
         save_manifest(&loaded_manifest, &manifest_path).unwrap();
 
         // Load again and verify
         let final_manifest = load_manifest(&manifest_path).unwrap();
-        let final_deps = final_manifest.dependencies.unwrap();
+        let final_deps = final_manifest.dependencies;
 
         assert!(final_deps.contains_key("keep-me"));
         assert!(!final_deps.contains_key("remove-me"));
@@ -237,10 +232,8 @@ mod tests {
 
         let manifest = load_manifest(&manifest_path).unwrap();
 
-        if let Some(dependencies) = &manifest.dependencies {
-            assert!(!dependencies.contains_key("utility-nodes"));
-            assert!(dependencies.contains_key("material-library"));
-        }
+        assert!(!manifest.dependencies.contains_key("utility-nodes"));
+        assert!(manifest.dependencies.contains_key("material-library"));
     }
 
     #[tokio::test]

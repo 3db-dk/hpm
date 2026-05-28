@@ -34,25 +34,25 @@ async fn test_end_to_end_python_workflow() {
             name: "Package A".to_string(),
             version: "1.0.0".to_string(),
             description: Some("Package A with Python deps".to_string()),
-            authors: None,
+            authors: Vec::new(),
             license: None,
             readme: None,
             homepage: None,
             repository: None,
             documentation: None,
-            keywords: None,
-            categories: None,
+            keywords: Vec::new(),
+            categories: Vec::new(),
         },
-        compat: Some(CompatConfig {
+        compat: CompatConfig {
             houdini: Some(hpm_package::HoudiniRange::parse(">=20.5").unwrap()),
             platforms: Vec::new(),
-        }),
-        stage: None,
-        registries: None,
-        dependencies: None,
-        python_dependencies: Some(python_deps_a),
-        runtime: None,
-        scripts: None,
+        },
+        stage: Default::default(),
+        registries: Vec::new(),
+        dependencies: indexmap::IndexMap::new(),
+        python_dependencies: python_deps_a,
+        runtime: indexmap::IndexMap::new(),
+        scripts: Default::default(),
     };
 
     let mut python_deps_b = IndexMap::new();
@@ -75,25 +75,25 @@ async fn test_end_to_end_python_workflow() {
             name: "Package B".to_string(),
             version: "2.0.0".to_string(),
             description: Some("Package B with Python deps".to_string()),
-            authors: None,
+            authors: Vec::new(),
             license: None,
             readme: None,
             homepage: None,
             repository: None,
             documentation: None,
-            keywords: None,
-            categories: None,
+            keywords: Vec::new(),
+            categories: Vec::new(),
         },
-        compat: Some(CompatConfig {
+        compat: CompatConfig {
             houdini: Some(hpm_package::HoudiniRange::parse(">=20.5").unwrap()), // Same as A
             platforms: Vec::new(),
-        }),
-        stage: None,
-        registries: None,
-        dependencies: None,
-        python_dependencies: Some(python_deps_b),
-        runtime: None,
-        scripts: None,
+        },
+        stage: Default::default(),
+        registries: Vec::new(),
+        dependencies: indexmap::IndexMap::new(),
+        python_dependencies: python_deps_b,
+        runtime: indexmap::IndexMap::new(),
+        scripts: Default::default(),
     };
 
     let manifests = vec![manifest_a, manifest_b];
@@ -266,34 +266,41 @@ async fn test_houdini_python_version_mapping_edge_cases() {
     use hpm_package::{PackageInfo, PackagePath};
     use indexmap::IndexMap;
 
-    let make_manifest = |version: &str| PackageManifest {
-        package: PackageInfo {
-            path: PackagePath::new("studio/test-package").unwrap(),
-            name: "Test Package".to_string(),
-            version: "1.0.0".to_string(),
-            description: None,
-            authors: None,
-            license: None,
-            readme: None,
-            homepage: None,
-            repository: None,
-            documentation: None,
-            keywords: None,
-            categories: None,
-        },
-        compat: Some(CompatConfig {
-            houdini: Some(
-                hpm_package::HoudiniRange::parse(format!(">={}", version))
-                    .expect("test fixture range is valid"),
-            ),
-            platforms: Vec::new(),
-        }),
-        stage: None,
-        registries: None,
-        dependencies: None,
-        python_dependencies: Some(IndexMap::new()),
-        runtime: None,
-        scripts: None,
+    let make_manifest = |version: &str| {
+        let mut python_deps = IndexMap::new();
+        python_deps.insert(
+            "numpy".to_string(),
+            PythonDependencySpec::Simple(">=1.20.0".to_string()),
+        );
+        PackageManifest {
+            package: PackageInfo {
+                path: PackagePath::new("studio/test-package").unwrap(),
+                name: "Test Package".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                authors: Vec::new(),
+                license: None,
+                readme: None,
+                homepage: None,
+                repository: None,
+                documentation: None,
+                keywords: Vec::new(),
+                categories: Vec::new(),
+            },
+            compat: CompatConfig {
+                houdini: Some(
+                    hpm_package::HoudiniRange::parse(format!(">={}", version))
+                        .expect("test fixture range is valid"),
+                ),
+                platforms: Vec::new(),
+            },
+            stage: Default::default(),
+            registries: Vec::new(),
+            dependencies: indexmap::IndexMap::new(),
+            python_dependencies: python_deps,
+            runtime: indexmap::IndexMap::new(),
+            scripts: Default::default(),
+        }
     };
 
     // A syntactically invalid `[compat].houdini` is caught earlier by

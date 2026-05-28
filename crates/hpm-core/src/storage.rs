@@ -744,10 +744,7 @@ impl StorageManager {
 
         let mut needed: HashSet<(String, String)> = HashSet::new();
         for project in &projects {
-            let Some(deps) = &project.manifest.dependencies else {
-                continue;
-            };
-            for (dep_name, spec) in deps {
+            for (dep_name, spec) in &project.manifest.dependencies {
                 let hpm_package::DependencySpec::Path { path, .. } = spec else {
                     continue;
                 };

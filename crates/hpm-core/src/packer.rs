@@ -369,15 +369,12 @@ pub fn pack(
     output_dir: &Path,
     signing_key: Option<&SigningKey>,
     platform: Option<&Platform>,
-    stage_config: Option<&StageConfig>,
+    stage_config: &StageConfig,
     inject_files: &[(String, Vec<u8>)],
 ) -> Result<PackResult, PackError> {
     let ignore = build_ignore_rules(package_dir)?;
 
-    let stage_filter = match stage_config {
-        Some(stage) => Some(StageFilter::new(stage, platform)?),
-        None => None,
-    };
+    let stage_filter = StageFilter::new(stage_config, platform)?;
 
     let archive_path = create_archive(
         package_dir,
@@ -386,7 +383,7 @@ pub fn pack(
         output_dir,
         &ignore,
         platform,
-        stage_filter.as_ref(),
+        Some(&stage_filter),
         inject_files,
     )?;
     let checksum = compute_archive_checksum(&archive_path)?;
@@ -665,7 +662,7 @@ version = "1.0.0"
             output_dir.path(),
             None,
             None,
-            None,
+            &StageConfig::default(),
             &[],
         )
         .unwrap();
@@ -692,7 +689,7 @@ version = "1.0.0"
             output_dir.path(),
             Some(&signing_key),
             None,
-            None,
+            &StageConfig::default(),
             &[],
         )
         .unwrap();
@@ -749,7 +746,7 @@ version = "1.0.0"
             output_dir.path(),
             None,
             Some(&platform),
-            Some(&stage_config),
+            &stage_config,
             &[],
         )
         .unwrap();
@@ -777,7 +774,7 @@ version = "1.0.0"
             output_dir.path(),
             None,
             Some(&platform),
-            Some(&stage_config),
+            &stage_config,
             &[],
         )
         .unwrap();
@@ -846,7 +843,7 @@ version = "1.0.0"
                 output_dir.path(),
                 None,
                 Some(&platform),
-                Some(&stage_config),
+                &stage_config,
                 &[],
             )
             .unwrap();
@@ -917,7 +914,7 @@ version = "1.0.0"
             output_dir.path(),
             None,
             Some(&hpm_package::platform::Platform::LinuxX86_64),
-            Some(&stage_config),
+            &stage_config,
             &[],
         )
         .unwrap();
@@ -944,7 +941,7 @@ version = "1.0.0"
             output_dir.path(),
             None,
             None,
-            None,
+            &StageConfig::default(),
             &[],
         )
         .unwrap();
@@ -974,7 +971,7 @@ version = "1.0.0"
             output_dir.path(),
             None,
             None,
-            None,
+            &StageConfig::default(),
             &inject,
         )
         .unwrap();

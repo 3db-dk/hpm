@@ -257,7 +257,7 @@ mod tests {
             "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("Test description".to_string()),
-            Some(vec!["Author <test@example.com>".to_string()]),
+            vec!["Author <test@example.com>".to_string()],
             Some("MIT".to_string()),
         );
 
@@ -271,7 +271,7 @@ mod tests {
                 optional: false,
             },
         );
-        manifest.dependencies = Some(dependencies);
+        manifest.dependencies = dependencies;
 
         let manifest_path = temp_dir.path().join("hpm.toml");
 
@@ -283,10 +283,8 @@ mod tests {
 
         assert_eq!(loaded_manifest.package.name, manifest.package.name);
         assert_eq!(loaded_manifest.package.version, manifest.package.version);
-        assert!(loaded_manifest.dependencies.is_some());
-
-        let loaded_deps = loaded_manifest.dependencies.unwrap();
-        assert!(loaded_deps.contains_key("test-dep"));
+        assert!(!loaded_manifest.dependencies.is_empty());
+        assert!(loaded_manifest.dependencies.contains_key("test-dep"));
     }
 
     #[test]

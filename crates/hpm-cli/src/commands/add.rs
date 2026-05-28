@@ -37,7 +37,6 @@ use anyhow::{Context, Result, bail};
 use hpm_config::Config;
 use hpm_core::registry::RegistrySet;
 use hpm_package::DependencySpec;
-use indexmap::IndexMap;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
@@ -97,12 +96,7 @@ pub async fn add_packages(
     let mut manifest = load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
 
-    // Add to dependencies
-    if manifest.dependencies.is_none() {
-        manifest.dependencies = Some(IndexMap::new());
-    }
-
-    let dependencies = manifest.dependencies.as_mut().unwrap();
+    let dependencies = &mut manifest.dependencies;
 
     // Add each package
     for package_name in &package_names {
@@ -370,7 +364,7 @@ mod tests {
                 package_name.clone(),
                 "1.0.0".to_string(),
                 Some("Test package".to_string()),
-                Some(vec!["Author <test@example.com>".to_string()]),
+                vec!["Author <test@example.com>".to_string()],
                 Some("MIT".to_string()),
             );
 
@@ -487,7 +481,7 @@ mod tests {
                 package_name.clone(),
                 version.clone(),
                 Some("Test package".to_string()),
-                None,
+                Vec::new(),
                 None,
             );
 

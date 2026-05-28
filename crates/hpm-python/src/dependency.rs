@@ -90,27 +90,21 @@ fn extract_python_dependencies(
     manifest: &PackageManifest,
     project_overrides_python_version: bool,
 ) -> Result<Option<PythonDependencies>> {
-    if let Some(python_deps_spec) = &manifest.python_dependencies {
-        let mut deps = PythonDependencies::new();
-
-        if !project_overrides_python_version
-            && let Some(compat) = &manifest.compat
-            && let Some(min_version) = compat.houdini_min()
-        {
-            let python_version = map_houdini_to_python_version(&min_version)?;
-            deps.set_python_version(python_version);
-        }
-
-        // Process Python dependencies
-        for (name, spec) in python_deps_spec {
-            let dependency = convert_spec_to_dependency(name, spec)?;
-            deps.add_dependency(dependency);
-        }
-
-        Ok(Some(deps))
-    } else {
-        Ok(None)
+    if manifest.python_dependencies.is_empty() {
+        return Ok(None);
     }
+    let mut deps = PythonDependencies::new();
+
+    if !project_overrides_python_version && let Some(min_version) = manifest.compat.houdini_min() {
+        let python_version = map_houdini_to_python_version(&min_version)?;
+        deps.set_python_version(python_version);
+    }
+
+    for (name, spec) in &manifest.python_dependencies {
+        deps.add_dependency(convert_spec_to_dependency(name, spec)?);
+    }
+
+    Ok(Some(deps))
 }
 
 /// Convert PythonDependencySpec to PythonDependency
@@ -210,25 +204,25 @@ mod tests {
                 name: "Test Package".to_string(),
                 version: "1.0.0".to_string(),
                 description: None,
-                authors: None,
+                authors: Vec::new(),
                 license: None,
                 readme: None,
                 homepage: None,
                 repository: None,
                 documentation: None,
-                keywords: None,
-                categories: None,
+                keywords: Vec::new(),
+                categories: Vec::new(),
             },
-            compat: Some(CompatConfig {
+            compat: CompatConfig {
                 houdini: Some(hpm_package::HoudiniRange::parse(">=20.5").unwrap()),
                 platforms: Vec::new(),
-            }),
-            stage: None,
-            registries: None,
-            dependencies: None,
-            python_dependencies: Some(python_deps),
-            runtime: None,
-            scripts: None,
+            },
+            stage: Default::default(),
+            registries: Vec::new(),
+            dependencies: indexmap::IndexMap::new(),
+            python_dependencies: python_deps,
+            runtime: indexmap::IndexMap::new(),
+            scripts: Default::default(),
         };
 
         let packages = vec![manifest];
@@ -262,25 +256,25 @@ mod tests {
                 name: "Test Package".to_string(),
                 version: "1.0.0".to_string(),
                 description: None,
-                authors: None,
+                authors: Vec::new(),
                 license: None,
                 readme: None,
                 homepage: None,
                 repository: None,
                 documentation: None,
-                keywords: None,
-                categories: None,
+                keywords: Vec::new(),
+                categories: Vec::new(),
             },
-            compat: Some(CompatConfig {
+            compat: CompatConfig {
                 houdini: Some(hpm_package::HoudiniRange::parse(">=20.5").unwrap()),
                 platforms: Vec::new(),
-            }),
-            stage: None,
-            registries: None,
-            dependencies: None,
-            python_dependencies: Some(python_deps),
-            runtime: None,
-            scripts: None,
+            },
+            stage: Default::default(),
+            registries: Vec::new(),
+            dependencies: indexmap::IndexMap::new(),
+            python_dependencies: python_deps,
+            runtime: indexmap::IndexMap::new(),
+            scripts: Default::default(),
         };
 
         let result = collect_python_dependencies(Some("22.0.307"), &[manifest])
@@ -309,28 +303,28 @@ mod tests {
                     name: slug.to_string(),
                     version: "1.0.0".to_string(),
                     description: None,
-                    authors: None,
+                    authors: Vec::new(),
                     license: None,
                     readme: None,
                     homepage: None,
                     repository: None,
                     documentation: None,
-                    keywords: None,
-                    categories: None,
+                    keywords: Vec::new(),
+                    categories: Vec::new(),
                 },
-                compat: Some(CompatConfig {
+                compat: CompatConfig {
                     houdini: Some(
                         hpm_package::HoudiniRange::parse(format!(">={}", min_houdini))
                             .expect("test fixture range is valid"),
                     ),
                     platforms: Vec::new(),
-                }),
-                stage: None,
-                registries: None,
-                dependencies: None,
-                python_dependencies: Some(python_deps),
-                runtime: None,
-                scripts: None,
+                },
+                stage: Default::default(),
+                registries: Vec::new(),
+                dependencies: indexmap::IndexMap::new(),
+                python_dependencies: python_deps,
+                runtime: indexmap::IndexMap::new(),
+                scripts: Default::default(),
             }
         };
 

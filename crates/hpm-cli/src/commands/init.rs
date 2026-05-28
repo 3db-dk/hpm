@@ -52,9 +52,12 @@ pub async fn init_package(options: InitOptions) -> Result<String> {
     }
 
     // Determine author from git config if not provided
-    let author = match options.author {
-        Some(author) => Some(vec![author]),
-        None => get_git_author().await.map(|a| vec![a]),
+    let authors: Vec<String> = match options.author {
+        Some(author) => vec![author],
+        None => match get_git_author().await {
+            Some(a) => vec![a],
+            None => Vec::new(),
+        },
     };
 
     // Create package manifest
@@ -65,15 +68,13 @@ pub async fn init_package(options: InitOptions) -> Result<String> {
         package_name.clone(),
         options.version,
         options.description,
-        author,
+        authors,
         Some(options.license),
     );
 
     // Override the template's default [compat].houdini range, if requested.
-    if let Some(houdini_req) = options.houdini
-        && let Some(compat) = &mut manifest.compat
-    {
-        compat.houdini = Some(
+    if let Some(houdini_req) = options.houdini {
+        manifest.compat.houdini = Some(
             hpm_package::HoudiniRange::parse(&houdini_req)
                 .with_context(|| format!("Invalid --houdini range '{}'", houdini_req))?,
         );

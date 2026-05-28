@@ -246,7 +246,7 @@ mod tests {
             "Test Package".to_string(),
             "1.0.0".to_string(),
             Some("Test package".to_string()),
-            None,
+            Vec::new(),
             Some("MIT".to_string()),
         );
 
@@ -268,7 +268,7 @@ mod tests {
             "Test Bare".to_string(),
             "1.0.0".to_string(),
             Some("Test bare package".to_string()),
-            None,
+            Vec::new(),
             Some("MIT".to_string()),
         );
 
@@ -287,7 +287,7 @@ mod tests {
             "Test Bare Pkg".to_string(),
             "1.0.0".to_string(),
             Some("A test bare package".to_string()),
-            Some(vec!["Test Author <test@example.com>".to_string()]),
+            vec!["Test Author <test@example.com>".to_string()],
             Some("MIT".to_string()),
         );
 
@@ -324,7 +324,7 @@ mod tests {
             "Test Standard Pkg".to_string(),
             "2.0.0".to_string(),
             Some("A comprehensive test package".to_string()),
-            Some(vec!["Test Author <test@example.com>".to_string()]),
+            vec!["Test Author <test@example.com>".to_string()],
             Some("Apache-2.0".to_string()),
         );
 
