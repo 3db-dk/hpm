@@ -7,6 +7,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-05-28
+
+Manifest 2.0. Five sections of `hpm.toml` change shape; older manifests
+will not parse. The redesign was driven by making the source/built
+distinction first-class — the underlying motivation is documented in
+the user guide's `[stage]` and "Workflow notes" sections.
+
+### Added
+- **`[stage]` section: how the install image is derived from the
+  workspace.** Replaces the `[native]`-only filter model with a more
+  general placement model. Fields: `output_dir` (default `"dist"`),
+  `prepack` (list of `[scripts]` entries run before staging),
+  `include` / `exclude` (gitignore-style globs on top of `.gitignore`
+  and `.hpmignore`), and `[stage.platform.<plat>].place = [{ from, to }]`
+  per-platform placement rules. Each `from` is a workspace-relative
+  glob; `to` is either a directory (ends with `/`, basename appended)
+  or a literal archive path. Useful for HDK plugins whose `.dylib`
+  lives at `build/Release/foo.dylib` in the workspace but should ship
+  at `dso/macos-aarch64/foo.dylib`. See `[stage]` in the user guide.
+
+- **`hpm build` command.** Materialises the install image into a
+  directory. Runs `[stage].prepack` scripts in sequence, then copies
+  workspace files into the output dir using the same rules `hpm pack`
+  applies. `--output <dir>` overrides `[stage].output_dir` per
+  invocation — users running multiple Houdini sessions in parallel
+  point each at its own `--output <tmpdir>`, so rebuilding one
+  session's image never fights another session's loaded DSOs on
+  Windows. Other flags: `--platform`, `--no-prepack`, `--no-clean`.
+
+- **`[compat].platforms` field.** Declares the platforms this package
+  supports. `[stage.platform.<plat>]` entries must reference a platform
+  listed here.
+
+- **`install_source` axis on `[runtime]` conditional variants.**
+  Filters a branch by install context: `"dev"` matches path-installed
+  packages, `"registry"` matches registry/URL installs, absence
+  matches both. The axis is hpm-side: branches gated to a non-matching
+  install source are filtered out *before* the Houdini package.json is
+  generated, so they never appear in the runtime expression.
+
+### Changed
+- **`[houdini]` → `[compat].houdini`.** The `min_version` /
+  `max_version` pair collapses into a single Cargo-style range string
+  (`">=20.5"`, `"^21"`, `">=20.5, <22"`; bare versions alias caret).
+  Same grammar `when = { houdini = ... }` already used inside
+  conditional `[runtime]` values, so the manifest now speaks one
+  Houdini-version vocabulary. Python ABI selection extracts the lower
+  bound. CLI: `--houdini-min` / `--houdini-max` collapse into
+  `--houdini <range>`.
+
+- **`[env]` + `[dev.env]` → `[runtime]`.** A single table. The
+  dev/registry distinction now lives on the `when.install_source` axis
+  of each conditional variant. A typical HDK pattern:
+
+      [runtime.HOUDINI_DSO_PATH]
+      method = "prepend"
+      value = [
+        { when = { install_source = "dev" }, set = "$HPM_PACKAGE_ROOT/build/Release" },
+        { when = {}, set = "$HPM_PACKAGE_ROOT/dso" },
+      ]
+
+- **`[native]` → `[stage]`.** Per-platform filtering moves into
+  `[stage.platform.<plat>].place` rules with explicit `from` / `to`
+  paths. The platforms list moves to `[compat].platforms`.
+
+- **`[scripts.platform.<os>]` → conditional `cmd` inside the script
+  entry.** Per-host script variation uses the same `when`-grammar as
+  `[runtime]`, restricted to the `os` axis:
+
+      [scripts.register]
+      cmd = [
+        { when = { os = "windows" }, set = "tool.exe register" },
+        { when = {}, set = "tool register" },
+      ]
+
+  Other axes on a script `when` are rejected at manifest validate time
+  — HPM has no Houdini-version or Python context at `hpm run` time.
+
+### Removed
+- `[houdini]` section. Use `[compat].houdini`.
+- `[env]` and `[dev.env]` tables. Use `[runtime]` with `install_source`
+  on conditional variants.
+- `[native]` section. Use `[compat].platforms` and `[stage]`.
+- `[scripts.platform.<os>]` sub-tables. Use conditional `cmd` values
+  on individual script entries.
+- `HoudiniConfig`, `NativeConfig`, `NativePlatformFiles`, `DevSection`,
+  and `PlatformScripts` types are gone from the public API. The
+  replacements are `CompatConfig`, `StageConfig`, `PlatformStaging`,
+  `StagePlatformRules`, and `PlaceRule`.
+- `ScriptEntry::cmd() -> &str`. Conditional entries need a host OS to
+  resolve; use `ScriptEntry::resolve_cmd(host_os)` instead.
+- `--houdini-min` and `--houdini-max` flags on `hpm init`. Use
+  `--houdini <range>`.
+
+### Migration
+There is no automatic migration — manifests must be rewritten by hand
+to the new shape. Each section's rewrite is mechanical:
+
+| Old | New |
+|-----|-----|
+| `[houdini]` `min_version = "20.5"` | `[compat]` `houdini = ">=20.5"` |
+| `[env]` entry + `[dev.env]` entry on the same key | One `[runtime]` entry whose conditional `value` has one variant per `install_source`. |
+| `[native]` `platforms = [...]` + `[native.<plat>]` `files = [...]` | `[compat]` `platforms = [...]` + `[stage.platform.<plat>]` `place = [{ from, to }]`. |
+| `[scripts.platform.<os>]` `name = "cmd"` | `[scripts.<name>]` `cmd = [{ when = { os = "<os>" }, set = "cmd" }]`. |
+
 ## [0.15.0] - 2026-05-27
 
 ### Added
