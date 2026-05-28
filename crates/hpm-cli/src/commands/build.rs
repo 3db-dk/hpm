@@ -195,7 +195,7 @@ async fn run_prepack(
     console: &mut Console,
 ) -> Result<()> {
     for name in names {
-        if manifest.script_for(name, Platform::current()).is_none() {
+        if manifest.script_for(name).is_none() {
             bail!(
                 "[stage].prepack references '{}' but no such [scripts] entry exists",
                 name

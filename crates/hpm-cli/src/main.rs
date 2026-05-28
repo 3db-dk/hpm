@@ -194,15 +194,14 @@
 //! # Create standard package with full structure
 //! hpm init my-houdini-tools --author "Artist <artist@studio.com>"
 //!
-//! # Create minimal package structure
-//! hpm init --bare minimal-package --houdini-min 20.5
+//! # Create minimal package structure (Houdini 21.x only — the default)
+//! hpm init --bare minimal-package
 //!
-//! # Initialize with custom metadata
+//! # Initialize with custom metadata, widening the Houdini range
 //! hpm init advanced-tools \
 //!   --description "Advanced geometry manipulation tools" \
 //!   --license Apache-2.0 \
-//!   --houdini-min 20.5 \
-//!   --houdini-max 22.0
+//!   --houdini ">=20.5, <22"
 //! ```
 //!
 //! ### Dependency Management

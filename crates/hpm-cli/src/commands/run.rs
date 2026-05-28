@@ -32,15 +32,13 @@ pub async fn run_script(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let entry = manifest
-        .script_for(script, Platform::current())
-        .with_context(|| {
-            format!(
-                "No script '{}' defined in {}",
-                script,
-                manifest_path.display()
-            )
-        })?;
+    let entry = manifest.script_for(script).with_context(|| {
+        format!(
+            "No script '{}' defined in {}",
+            script,
+            manifest_path.display()
+        )
+    })?;
 
     let host_os = Platform::current().and_then(|p| p.os_key().map(str::to_string));
     let resolved_cmd = entry.resolve_cmd(host_os.as_deref()).with_context(|| {

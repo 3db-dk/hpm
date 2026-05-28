@@ -7,9 +7,11 @@ use std::path::PathBuf;
 /// duplicating them on the wrapper type.
 ///
 /// `is_dev` records whether this entry was installed from a local path
-/// dependency (either copied or symlinked under `_dev/`). It gates the
-/// `[dev.env]` merge at Houdini manifest generation time so personal-machine
-/// env contributions only fire for dev-overridden packages.
+/// dependency (either copied or symlinked under `_dev/`). It feeds the
+/// `install_source` axis on `[runtime]` conditional variants at Houdini
+/// manifest generation time, so a variant gated `install_source = "dev"`
+/// only fires for path-installed packages and a variant gated
+/// `install_source = "registry"` only fires for registry/URL installs.
 #[derive(Debug, Clone)]
 pub struct InstalledPackage {
     pub version: String,

@@ -590,17 +590,17 @@ impl PackageManifest {
     /// Every `[scripts]` entry, in declaration order. Per-host variation
     /// is resolved on-demand via [`ScriptEntry::resolve_cmd`] using the
     /// entry's conditional `cmd` value — there is no merging at this layer.
-    pub fn resolved_scripts(&self, _platform: Option<Platform>) -> IndexMap<String, ScriptEntry> {
+    pub fn resolved_scripts(&self) -> IndexMap<String, ScriptEntry> {
         match &self.scripts {
             Some(scripts) => scripts.commands.clone(),
             None => IndexMap::new(),
         }
     }
 
-    /// Resolve a single script entry by name. The `platform` argument is
-    /// kept for API symmetry but no longer affects which entry is returned
-    /// — variation lives inside the entry's `cmd` value.
-    pub fn script_for(&self, name: &str, _platform: Option<Platform>) -> Option<ScriptEntry> {
+    /// Look up a script entry by name. Per-host variation lives inside the
+    /// returned [`ScriptEntry`]'s `cmd` value — call
+    /// [`ScriptEntry::resolve_cmd`] on the result with the desired host OS.
+    pub fn script_for(&self, name: &str) -> Option<ScriptEntry> {
         self.scripts.as_ref()?.commands.get(name).cloned()
     }
 
@@ -1748,12 +1748,8 @@ version = "0.1.0"
 "#;
         let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
         assert!(manifest.scripts.is_none());
-        assert!(
-            manifest
-                .resolved_scripts(Some(Platform::LinuxX86_64))
-                .is_empty()
-        );
-        assert!(manifest.script_for("anything", None).is_none());
+        assert!(manifest.resolved_scripts().is_empty());
+        assert!(manifest.script_for("anything").is_none());
     }
 
     #[test]
