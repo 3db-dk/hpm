@@ -432,7 +432,7 @@ pub struct CompatConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub houdini: Option<HoudiniRange>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub platforms: Vec<String>,
+    pub platforms: Vec<Platform>,
 }
 
 impl CompatConfig {
@@ -632,23 +632,19 @@ impl PackageManifest {
             return Err("Package version must be valid semantic version".to_string());
         }
 
-        // `[compat].houdini` parses at deserialize time via the
-        // `HoudiniRange` newtype, so no syntax check is needed here.
-        // Validate `[compat].platforms` members against the known set.
-        for platform_str in &self.compat.platforms {
-            platform_str
-                .parse::<Platform>()
-                .map_err(|e| e.to_string())?;
-        }
+        // `[compat].houdini` and `[compat].platforms` both validate at
+        // deserialize time — `HoudiniRange` via its newtype, and
+        // `Vec<Platform>` via `Platform`'s `TryFrom<String>` — so neither
+        // needs a syntax check here.
 
         // Validate [stage]: per-platform keys must appear in [compat].platforms,
         // and place rules must declare both `from` and `to`. Place rules with
         // empty `from` would match nothing useful; reject those at load time.
         for (platform_str, rules) in &self.stage.platform.entries {
-            platform_str
+            let platform = platform_str
                 .parse::<Platform>()
                 .map_err(|e| format!("[stage.platform.{}]: {}", platform_str, e))?;
-            if !self.compat.platforms.contains(platform_str) {
+            if !self.compat.platforms.contains(&platform) {
                 return Err(format!(
                     "[stage.platform.{}] declared but '{}' not listed in [compat].platforms",
                     platform_str, platform_str
@@ -1293,19 +1289,20 @@ version = "0.1.0"
 
     #[test]
     fn compat_platforms_unknown_rejected() {
-        let mut manifest = PackageManifest::new(
-            PackagePath::new("studio/test").unwrap(),
-            "Test".to_string(),
-            "1.0.0".to_string(),
-            None,
-            Vec::new(),
-            None,
-        );
-        manifest.compat = CompatConfig {
-            houdini: None,
-            platforms: vec!["linux-arm64".to_string()],
-        };
-        assert!(manifest.validate().is_err());
+        // Unknown platform identifiers are rejected at deserialize time
+        // by `Platform::TryFrom<String>`, so the manifest fails to parse
+        // before validate ever runs.
+        let toml_str = r#"
+[package]
+path = "studio/test"
+name = "Test"
+version = "1.0.0"
+
+[compat]
+platforms = ["linux-arm64"]
+"#;
+        let err = toml::from_str::<PackageManifest>(toml_str).unwrap_err();
+        assert!(err.to_string().contains("linux-arm64"));
     }
 
     #[test]
@@ -1320,7 +1317,7 @@ version = "0.1.0"
         );
         manifest.compat = CompatConfig {
             houdini: None,
-            platforms: vec!["linux-x86_64".to_string()],
+            platforms: vec![Platform::LinuxX86_64],
         };
         let mut entries = IndexMap::new();
         entries.insert(
@@ -1352,7 +1349,7 @@ version = "0.1.0"
         );
         manifest.compat = CompatConfig {
             houdini: None,
-            platforms: vec!["linux-x86_64".to_string()],
+            platforms: vec![Platform::LinuxX86_64],
         };
         let mut entries = IndexMap::new();
         entries.insert(

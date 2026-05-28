@@ -158,7 +158,7 @@ fn resolve_target_platform(
         }
         (Some(p), false) => {
             let platform: Platform = p.parse().map_err(|e: String| anyhow::anyhow!(e))?;
-            if !declared.contains(&platform.to_string()) {
+            if !declared.contains(&platform) {
                 bail!(
                     "Platform '{}' is not declared in [compat].platforms: {:?}",
                     platform,
@@ -170,7 +170,7 @@ fn resolve_target_platform(
         (None, false) => {
             let detected = Platform::current()
                 .context("Could not detect host platform; pass --platform explicitly")?;
-            if !declared.contains(&detected.to_string()) {
+            if !declared.contains(&detected) {
                 bail!(
                     "Host platform '{}' is not declared in [compat].platforms: {:?}. \
                      Pass --platform to target a different one.",

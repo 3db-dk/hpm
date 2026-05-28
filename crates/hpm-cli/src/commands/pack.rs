@@ -52,7 +52,7 @@ pub async fn execute(
 
     // Validate platform is declared in [compat].platforms
     if let Some(p) = &platform
-        && !declared_platforms.contains(&p.to_string())
+        && !declared_platforms.contains(p)
     {
         bail!(
             "Platform '{}' is not declared in [compat].platforms: {:?}",
