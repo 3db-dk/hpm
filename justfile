@@ -41,7 +41,7 @@ test-integration:
 test-doc:
     cargo test --workspace --doc
 
-# Run #[ignore]'d tests (real uv/venv smoke tests in hpm-python; slow).
+# Run #[ignore]'d tests (real uv/venv smoke tests in hpm_core::python; slow).
 # Not in the default `test` recipe because they shell out to the bundled
 # uv and download wheels — fine for nightly CI, painful for inner-loop dev.
 test-ignored:

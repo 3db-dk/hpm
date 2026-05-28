@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Runs fast quality gates before a commit lands.
-# The canonical recipe lives in the justfile so `just pre-commit` works
-# both locally and here; keep this hook a one-liner that delegates.
+# Fast quality gates before a commit lands. Mirror of `just pre-commit`
+# (kept self-contained so contributors don't need `just` on PATH; if you
+# change the gates here, update the `pre-commit` recipe in justfile too).
 
 set -euo pipefail
 
-if ! command -v just >/dev/null 2>&1; then
-    echo "error: 'just' is required to run pre-commit checks." >&2
-    echo "install it with 'cargo install just' or 'brew install just'." >&2
-    exit 1
-fi
+# Run from the repo root regardless of where `git commit` was invoked.
+cd "$(git rev-parse --show-toplevel)"
 
-exec just pre-commit
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
