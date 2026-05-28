@@ -284,21 +284,9 @@ impl LockFile {
     /// Save the lock file to the given path
     pub fn save(&self, path: &Path) -> Result<(), LockError> {
         let content = self.to_toml()?;
-
-        // Atomic write: stage to <path>.tmp, then rename. A crash mid-write
-        // otherwise leaves a truncated `hpm.lock` — every subsequent
-        // `install` warns and regenerates, which is visible churn for
-        // something the user didn't do wrong.
-        let mut tmp_path = path.as_os_str().to_os_string();
-        tmp_path.push(".tmp");
-        let tmp_path = std::path::PathBuf::from(tmp_path);
-        std::fs::write(&tmp_path, content).map_err(|e| LockError::Write {
-            path: tmp_path.clone(),
-            source: e,
-        })?;
-        std::fs::rename(&tmp_path, path).map_err(|e| LockError::Write {
-            path: path.to_path_buf(),
-            source: e,
+        hpm_package::atomic_write(path, content).map_err(|op| LockError::Write {
+            path: op.path,
+            source: op.source,
         })?;
         Ok(())
     }

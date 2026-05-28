@@ -104,6 +104,7 @@
 //! ```
 
 // Module declarations
+pub mod atomic_write;
 pub mod dependency;
 pub mod env_value;
 pub mod houdini;
@@ -116,6 +117,7 @@ pub mod python;
 pub mod template;
 
 // Re-exports for convenient access
+pub use atomic_write::atomic_write;
 pub use dependency::DependencySpec;
 pub use env_value::{
     Condition, EnvValue, EnvValueBranch, ExpressionError, HoudiniRange, compile_condition,

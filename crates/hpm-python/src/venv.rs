@@ -316,20 +316,15 @@ impl VenvManager {
 
         metadata.last_used = Some(std::time::SystemTime::now());
 
-        // Atomic write: stage to <path>.tmp then rename. The self-heal
-        // path rebuilds the entire venv on a truncated metadata.json,
-        // which is expensive — avoid triggering it on a crash mid-write.
         let metadata_json =
             serde_json::to_string_pretty(&metadata).context("Failed to serialize metadata")?;
-        let mut tmp_path = metadata_path.as_os_str().to_os_string();
-        tmp_path.push(".tmp");
-        let tmp_path = PathBuf::from(tmp_path);
-        fs::write(&tmp_path, metadata_json)
-            .await
-            .context("Failed to write metadata file")?;
-        fs::rename(&tmp_path, &metadata_path)
-            .await
-            .context("Failed to commit metadata file")?;
+        let metadata_path_owned = metadata_path.clone();
+        tokio::task::spawn_blocking(move || {
+            hpm_package::atomic_write(&metadata_path_owned, metadata_json)
+        })
+        .await
+        .context("Failed to join metadata write task")?
+        .context("Failed to atomically write metadata file")?;
 
         Ok(())
     }

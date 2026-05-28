@@ -450,31 +450,13 @@ impl ProjectManager {
             .project_paths
             .package_manifest_path(installed_package.manifest.package.slug());
 
-        // Atomic write: stage to <path>.tmp then rename. Houdini reads
-        // these manifests on launch; a crash or interrupt mid-write leaves
-        // a truncated JSON that Houdini chokes on and blocks the project.
-        let mut tmp_path = manifest_path.as_os_str().to_os_string();
-        tmp_path.push(".tmp");
-        let tmp_path = PathBuf::from(tmp_path);
-
-        {
-            let file = std::fs::File::create(&tmp_path)
-                .map_err(|e| IoOp::wrap("create temp Houdini manifest", &tmp_path, e))?;
-            let mut writer = std::io::BufWriter::new(file);
-            serde_json::to_writer_pretty(&mut writer, &houdini_package).map_err(|source| {
-                ProjectError::HoudiniManifestSerialize {
-                    path: tmp_path.clone(),
-                    source,
-                }
-            })?;
-            use std::io::Write;
-            writer
-                .flush()
-                .map_err(|e| IoOp::wrap("flush Houdini manifest write to", &tmp_path, e))?;
-        }
-
-        std::fs::rename(&tmp_path, &manifest_path)
-            .map_err(|e| IoOp::wrap("rename Houdini manifest to", &manifest_path, e))?;
+        let content = serde_json::to_vec_pretty(&houdini_package).map_err(|source| {
+            ProjectError::HoudiniManifestSerialize {
+                path: manifest_path.clone(),
+                source,
+            }
+        })?;
+        hpm_package::atomic_write(&manifest_path, content)?;
 
         debug!(
             "Generated Houdini manifest for {}",

@@ -840,6 +840,7 @@ dependencies = [
 name = "hpm-config"
 version = "0.16.0"
 dependencies = [
+ "hpm-package",
  "serde",
  "serde_json",
  "tempfile",
