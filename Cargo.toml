@@ -51,9 +51,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 console = { version = "0.16", features = ["std"] }
 indicatif = "0.18"
 
-# Testing
-tokio-test = "0.4"
-
 # Date/time
 time = { version = "0.3", default-features = false, features = ["parsing", "formatting", "macros"] }
 

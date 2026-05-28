@@ -15,7 +15,6 @@ description = "Configuration management for HPM (Houdini Package Manager)"
 [dependencies]
 serde.workspace = true
 toml.workspace = true
-thiserror.workspace = true
 tracing.workspace = true
 hpm-package = { path = "../hpm-package" }
 
