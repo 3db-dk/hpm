@@ -1422,11 +1422,11 @@ mod tests {
     /// Build a `[runtime]` entry with conditional variants gated on
     /// install_source. Mirrors the canonical HDK-plugin use case.
     fn dev_only_runtime_entry(value: &str) -> ManifestEnvEntry {
-        use hpm_package::{EnvValueSpec, EnvValueVariant, WhenSelector};
+        use hpm_package::{Condition, EnvValue, EnvValueBranch};
         ManifestEnvEntry {
             method: hpm_package::EnvMethod::Prepend,
-            value: Some(EnvValueSpec::Conditional(vec![EnvValueVariant {
-                when: WhenSelector {
+            value: Some(EnvValue::Conditional(vec![EnvValueBranch {
+                when: Condition {
                     install_source: Some("dev".to_string()),
                     ..Default::default()
                 },
@@ -1488,7 +1488,7 @@ mod tests {
             .expect("dev-gated variant must be emitted for dev installs");
         // Conditional values lower to DetailedConditional with one entry
         // keyed by the runtime expression ("true" for an install-source-only
-        // gate, since install_source is stripped before compile_when).
+        // gate, since install_source is stripped before compile_condition).
         match entry {
             hpm_package::HoudiniEnvValue::DetailedConditional { method, value } => {
                 assert_eq!(method, "prepend");

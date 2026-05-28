@@ -111,7 +111,7 @@ pub enum ScriptEntry {
 }
 
 pub struct ScriptEnv {
-    pub cmd: EnvValueSpec,             // flat string or [{ when = { os }, set }, ...]
+    pub cmd: EnvValue,             // flat string or [{ when = { os }, set }, ...]
     pub python: Option<String>,        // e.g. "3.11"
     pub requirements: Vec<String>,     // e.g. ["PySide6>=6.6"]
 }

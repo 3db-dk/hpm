@@ -9,9 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::dependency::DependencySpec;
-use crate::env_value::{
-    EnvValueSpec, ExpressionError, HoudiniRange, WhenSelector, lower_conditional,
-};
+use crate::env_value::{Condition, EnvValue, ExpressionError, HoudiniRange, lower_conditional};
 use crate::houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 use crate::package_path::PackagePath;
 use crate::platform::Platform;
@@ -68,7 +66,7 @@ pub enum EnvMethod {
 /// with that value.
 ///
 /// `value` accepts either a flat string or a list of `{ when, set }`
-/// variants — see [`EnvValueSpec`]. Conditional variants may gate on
+/// variants — see [`EnvValue`]. Conditional variants may gate on
 /// `install_source = "dev"` / `"registry"` (filtered by hpm at install
 /// time) or on `houdini` / `os` / `python` (compiled into Houdini's
 /// expression form per <https://www.sidefx.com/docs/houdini/ref/plugins.html>).
@@ -76,7 +74,7 @@ pub enum EnvMethod {
 pub struct ManifestEnvEntry {
     pub method: EnvMethod,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<EnvValueSpec>,
+    pub value: Option<EnvValue>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub required: bool,
 }
@@ -100,15 +98,15 @@ fn validate_env_table(
                     ));
                 }
             }
-            Some(EnvValueSpec::Flat(_)) => {}
-            Some(EnvValueSpec::Conditional(variants)) => {
+            Some(EnvValue::Flat(_)) => {}
+            Some(EnvValue::Conditional(variants)) => {
                 if variants.is_empty() {
                     return Err(format!(
                         "{section} var '{key}' has an empty conditional value list"
                     ));
                 }
                 for variant in variants {
-                    crate::env_value::compile_when(&variant.when)
+                    crate::env_value::compile_condition(&variant.when)
                         .map_err(|e| format!("{section} var '{key}': {e}"))?;
                 }
             }
@@ -142,14 +140,14 @@ pub enum ScriptEntry {
 
 /// The table form of [`ScriptEntry`].
 ///
-/// `cmd` is an [`EnvValueSpec`] — either a flat string or an ordered list
+/// `cmd` is an [`EnvValue`] — either a flat string or an ordered list
 /// of `{ when, set }` variants. For scripts only the `os` axis of `when`
 /// is meaningful (HPM doesn't know the user's Houdini version or Python
 /// at `hpm run` time); other axes on a script variant are rejected at
 /// manifest validation time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScriptEnv {
-    pub cmd: EnvValueSpec,
+    pub cmd: EnvValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub python: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -168,10 +166,10 @@ impl ScriptEntry {
             ScriptEntry::WithEnv(env) => &env.cmd,
         };
         match spec {
-            EnvValueSpec::Flat(s) => Some(s.clone()),
-            EnvValueSpec::Conditional(variants) => variants
+            EnvValue::Flat(s) => Some(s.clone()),
+            EnvValue::Conditional(variants) => variants
                 .iter()
-                .find(|v| script_when_matches(&v.when, host_os))
+                .find(|v| script_condition_matches(&v.when, host_os))
                 .map(|v| v.set.clone()),
         }
     }
@@ -201,11 +199,14 @@ impl ScriptEntry {
 /// Per-script `when` matching: only the `os` axis is honoured. The other
 /// axes (`houdini`, `python`, `install_source`) are rejected at manifest
 /// validate time; if they survive here, treat as a non-match.
-fn script_when_matches(when: &WhenSelector, host_os: Option<&str>) -> bool {
-    if when.houdini.is_some() || when.python.is_some() || when.install_source.is_some() {
+fn script_condition_matches(condition: &Condition, host_os: Option<&str>) -> bool {
+    if condition.houdini.is_some()
+        || condition.python.is_some()
+        || condition.install_source.is_some()
+    {
         return false;
     }
-    match (&when.os, host_os) {
+    match (&condition.os, host_os) {
         (None, _) => true,
         (Some(req), Some(host)) => req == host,
         (Some(_), None) => false,
@@ -488,7 +489,7 @@ impl ManifestEnvEntry {
         };
         let method = self.method.as_str();
         let lowered = match value {
-            EnvValueSpec::Flat(s) => {
+            EnvValue::Flat(s) => {
                 let mut out = s.clone();
                 for (from, to) in substitutions {
                     out = out.replace(from, to);
@@ -498,7 +499,7 @@ impl ManifestEnvEntry {
                     value: out,
                 }
             }
-            EnvValueSpec::Conditional(variants) => {
+            EnvValue::Conditional(variants) => {
                 let lowered = lower_conditional(variants, substitutions, is_dev)?;
                 if lowered.is_empty() {
                     // Every branch filtered out by install_source — treat
@@ -685,7 +686,7 @@ impl PackageManifest {
                 let ScriptEntry::WithEnv(env) = entry else {
                     continue;
                 };
-                let EnvValueSpec::Conditional(variants) = &env.cmd else {
+                let EnvValue::Conditional(variants) = &env.cmd else {
                     continue;
                 };
                 if variants.is_empty() {
@@ -706,7 +707,7 @@ impl PackageManifest {
                         ));
                     }
                     if let Some(os) = &variant.when.os {
-                        crate::env_value::compile_when(&WhenSelector {
+                        crate::env_value::compile_condition(&Condition {
                             os: Some(os.clone()),
                             ..Default::default()
                         })
@@ -1009,7 +1010,7 @@ HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar"
             runtime["MY_PLUGIN_ROOT"]
                 .value
                 .as_ref()
-                .and_then(EnvValueSpec::as_flat),
+                .and_then(EnvValue::as_flat),
             Some("$HPM_PACKAGE_ROOT/config")
         );
         assert!(!runtime["MY_PLUGIN_ROOT"].required);
@@ -1862,7 +1863,7 @@ value = [
         let entry = manifest.runtime.get("PXR_PLUGINPATH_NAME").unwrap();
         assert_eq!(entry.method, EnvMethod::Prepend);
         match entry.value.as_ref().unwrap() {
-            EnvValueSpec::Conditional(v) => {
+            EnvValue::Conditional(v) => {
                 assert_eq!(v.len(), 2);
                 assert_eq!(
                     v[0].when.houdini.as_ref().map(HoudiniRange::as_str),
@@ -1873,7 +1874,7 @@ value = [
                     Some("^22")
                 );
             }
-            EnvValueSpec::Flat(_) => panic!("expected conditional"),
+            EnvValue::Flat(_) => panic!("expected conditional"),
         }
     }
 
@@ -1944,7 +1945,7 @@ value = [
 
     #[test]
     fn env_conditional_value_with_invalid_req_fails_at_parse() {
-        // WhenSelector.houdini is a HoudiniRange newtype that validates
+        // Condition.houdini is a HoudiniRange newtype that validates
         // at deserialize, so a malformed range fails the TOML parse
         // rather than reaching validate().
         let toml_str = r#"
@@ -1959,7 +1960,7 @@ value = [
   { when = { houdini = "garbage" }, set = "x" },
 ]
 "#;
-        // Untagged enum (EnvValueSpec) flattens the inner HoudiniRange
+        // Untagged enum (EnvValue) flattens the inner HoudiniRange
         // error into a generic "did not match any variant" message, so we
         // can only assert the parse fails — the specific error text is
         // upstream and not stable.

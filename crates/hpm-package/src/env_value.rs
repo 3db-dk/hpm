@@ -18,39 +18,39 @@ use std::collections::HashMap;
 /// whose `when` matches the running Houdini wins.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
-pub enum EnvValueSpec {
+pub enum EnvValue {
     Flat(String),
-    Conditional(Vec<EnvValueVariant>),
+    Conditional(Vec<EnvValueBranch>),
 }
 
-impl EnvValueSpec {
+impl EnvValue {
     /// The flat value, if any. Returns `None` for the conditional shape.
     pub fn as_flat(&self) -> Option<&str> {
         match self {
-            EnvValueSpec::Flat(s) => Some(s.as_str()),
-            EnvValueSpec::Conditional(_) => None,
+            EnvValue::Flat(s) => Some(s.as_str()),
+            EnvValue::Conditional(_) => None,
         }
     }
 }
 
-impl From<String> for EnvValueSpec {
+impl From<String> for EnvValue {
     fn from(s: String) -> Self {
-        EnvValueSpec::Flat(s)
+        EnvValue::Flat(s)
     }
 }
 
-impl From<&str> for EnvValueSpec {
+impl From<&str> for EnvValue {
     fn from(s: &str) -> Self {
-        EnvValueSpec::Flat(s.to_string())
+        EnvValue::Flat(s.to_string())
     }
 }
 
 /// One branch of a conditional value: a selector plus the string to use when
 /// it matches.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct EnvValueVariant {
-    #[serde(default, skip_serializing_if = "WhenSelector::is_empty")]
-    pub when: WhenSelector,
+pub struct EnvValueBranch {
+    #[serde(default, skip_serializing_if = "Condition::is_empty")]
+    pub when: Condition,
     pub set: String,
 }
 
@@ -66,7 +66,7 @@ pub struct EnvValueVariant {
 /// and produces a fallback branch.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct WhenSelector {
+pub struct Condition {
     /// Cargo-style version requirement against `houdini_version`. Same
     /// grammar as `[compat].houdini`; parses to a [`HoudiniRange`] at
     /// deserialize so malformed branches fail at manifest load, not at
@@ -88,7 +88,7 @@ pub struct WhenSelector {
     pub install_source: Option<String>,
 }
 
-impl WhenSelector {
+impl Condition {
     pub fn is_empty(&self) -> bool {
         self.houdini.is_none()
             && self.os.is_none()
@@ -112,7 +112,7 @@ impl WhenSelector {
     }
 }
 
-/// Compile a `WhenSelector` into the Houdini-side expression string.
+/// Compile a `Condition` into the Houdini-side expression string.
 ///
 /// Returns `Ok(None)` if the selector contributes nothing to the runtime
 /// expression (empty selector, or `install_source`-only — that axis is
@@ -122,7 +122,7 @@ impl WhenSelector {
 ///
 /// Also validates `install_source` is one of `"dev"` / `"registry"` —
 /// unknown values would otherwise silently drop the branch at install time.
-pub fn compile_when(selector: &WhenSelector) -> Result<Option<String>, ExpressionError> {
+pub fn compile_condition(selector: &Condition) -> Result<Option<String>, ExpressionError> {
     let mut parts: Vec<String> = Vec::new();
 
     if let Some(range) = &selector.houdini {
@@ -488,7 +488,7 @@ pub enum ExpressionError {
 /// flat-value path. An empty `when` is encoded as the literal `"true"`
 /// expression so it acts as a fallback branch.
 pub fn lower_conditional(
-    variants: &[EnvValueVariant],
+    variants: &[EnvValueBranch],
     substitutions: &[(&str, &str)],
     is_dev: bool,
 ) -> Result<Vec<HashMap<String, String>>, ExpressionError> {
@@ -499,11 +499,11 @@ pub fn lower_conditional(
         }
         // Strip the install_source axis before compiling — it must not
         // appear in the Houdini-side expression.
-        let runtime_when = WhenSelector {
+        let runtime_when = Condition {
             install_source: None,
             ..variant.when.clone()
         };
-        let expr = compile_when(&runtime_when)?.unwrap_or_else(|| "true".to_string());
+        let expr = compile_condition(&runtime_when)?.unwrap_or_else(|| "true".to_string());
         let mut value = variant.set.clone();
         for (from, to) in substitutions {
             value = value.replace(from, to);
@@ -594,7 +594,7 @@ mod tests {
     #[test]
     fn os_translates_to_houdini_os() {
         assert_eq!(
-            compile_when(&WhenSelector {
+            compile_condition(&Condition {
                 os: Some("linux".to_string()),
                 ..Default::default()
             })
@@ -607,7 +607,7 @@ mod tests {
     #[test]
     fn unknown_os_rejected() {
         assert!(
-            compile_when(&WhenSelector {
+            compile_condition(&Condition {
                 os: Some("bsd".to_string()),
                 ..Default::default()
             })
@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn python_translates_with_or_without_python_prefix() {
         assert_eq!(
-            compile_when(&WhenSelector {
+            compile_condition(&Condition {
                 python: Some("3.11".to_string()),
                 ..Default::default()
             })
@@ -627,7 +627,7 @@ mod tests {
             "houdini_python == 'python3.11'"
         );
         assert_eq!(
-            compile_when(&WhenSelector {
+            compile_condition(&Condition {
                 python: Some("python3.10".to_string()),
                 ..Default::default()
             })
@@ -639,7 +639,7 @@ mod tests {
 
     #[test]
     fn multiple_axes_combine_with_and() {
-        let s = compile_when(&WhenSelector {
+        let s = compile_condition(&Condition {
             houdini: Some(HoudiniRange::parse("^21").unwrap()),
             os: Some("linux".to_string()),
             python: None,
@@ -655,21 +655,21 @@ mod tests {
 
     #[test]
     fn empty_when_compiles_to_none() {
-        assert!(compile_when(&WhenSelector::default()).unwrap().is_none());
+        assert!(compile_condition(&Condition::default()).unwrap().is_none());
     }
 
     #[test]
     fn lower_conditional_substitutes_pkg_root_per_branch() {
         let variants = vec![
-            EnvValueVariant {
-                when: WhenSelector {
+            EnvValueBranch {
+                when: Condition {
                     houdini: Some(HoudiniRange::parse("^21").unwrap()),
                     ..Default::default()
                 },
                 set: "$HPM_PACKAGE_ROOT/h21/x".to_string(),
             },
-            EnvValueVariant {
-                when: WhenSelector {
+            EnvValueBranch {
+                when: Condition {
                     houdini: Some(HoudiniRange::parse("^22").unwrap()),
                     ..Default::default()
                 },
@@ -687,8 +687,8 @@ mod tests {
 
     #[test]
     fn empty_when_lowered_as_true_branch() {
-        let variants = vec![EnvValueVariant {
-            when: WhenSelector::default(),
+        let variants = vec![EnvValueBranch {
+            when: Condition::default(),
             set: "default".to_string(),
         }];
         let lowered = lower_conditional(&variants, &[], false).unwrap();
@@ -699,15 +699,15 @@ mod tests {
     #[test]
     fn install_source_dev_filters_out_for_registry_install() {
         let variants = vec![
-            EnvValueVariant {
-                when: WhenSelector {
+            EnvValueBranch {
+                when: Condition {
                     install_source: Some("dev".to_string()),
                     ..Default::default()
                 },
                 set: "build/Release".to_string(),
             },
-            EnvValueVariant {
-                when: WhenSelector::default(),
+            EnvValueBranch {
+                when: Condition::default(),
                 set: "dso".to_string(),
             },
         ];
@@ -727,8 +727,8 @@ mod tests {
         // A dev branch that also has a Houdini constraint should emit only
         // the Houdini constraint to the runtime expression — install_source
         // is hpm-side, not Houdini-side.
-        let variants = vec![EnvValueVariant {
-            when: WhenSelector {
+        let variants = vec![EnvValueBranch {
+            when: Condition {
                 houdini: Some(HoudiniRange::parse("^21").unwrap()),
                 install_source: Some("dev".to_string()),
                 ..Default::default()
@@ -744,8 +744,8 @@ mod tests {
 
     #[test]
     fn install_source_registry_filters_out_for_dev_install() {
-        let variants = vec![EnvValueVariant {
-            when: WhenSelector {
+        let variants = vec![EnvValueBranch {
+            when: Condition {
                 install_source: Some("registry".to_string()),
                 ..Default::default()
             },
@@ -757,8 +757,8 @@ mod tests {
 
     #[test]
     fn unknown_install_source_rejected() {
-        let variants = vec![EnvValueVariant {
-            when: WhenSelector {
+        let variants = vec![EnvValueBranch {
+            when: Condition {
                 install_source: Some("ci".to_string()),
                 ..Default::default()
             },
@@ -768,18 +768,18 @@ mod tests {
     }
 
     #[test]
-    fn env_value_spec_round_trips_flat() {
+    fn env_value_round_trips_flat() {
         let toml_str = r#"value = "hello""#;
         #[derive(Deserialize, Serialize)]
         struct Holder {
-            value: EnvValueSpec,
+            value: EnvValue,
         }
         let h: Holder = toml::from_str(toml_str).unwrap();
         assert_eq!(h.value.as_flat(), Some("hello"));
     }
 
     #[test]
-    fn env_value_spec_round_trips_conditional() {
+    fn env_value_round_trips_conditional() {
         let toml_str = r#"
 value = [
   { when = { houdini = "^21" }, set = "a" },
@@ -788,11 +788,11 @@ value = [
 "#;
         #[derive(Deserialize)]
         struct Holder {
-            value: EnvValueSpec,
+            value: EnvValue,
         }
         let h: Holder = toml::from_str(toml_str).unwrap();
         match h.value {
-            EnvValueSpec::Conditional(v) => {
+            EnvValue::Conditional(v) => {
                 assert_eq!(v.len(), 2);
                 assert_eq!(v[0].set, "a");
                 assert_eq!(
@@ -800,7 +800,7 @@ value = [
                     Some("^22")
                 );
             }
-            EnvValueSpec::Flat(_) => panic!("expected conditional"),
+            EnvValue::Flat(_) => panic!("expected conditional"),
         }
     }
 
@@ -814,7 +814,7 @@ value = [
         #[derive(Deserialize)]
         struct Holder {
             #[allow(dead_code)]
-            value: EnvValueSpec,
+            value: EnvValue,
         }
         let res: Result<Holder, _> = toml::from_str(toml_str);
         assert!(res.is_err(), "deny_unknown_fields should reject 'weather'");
