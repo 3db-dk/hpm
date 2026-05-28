@@ -114,9 +114,6 @@ pub mod platform;
 pub mod python;
 pub mod template;
 
-#[cfg(test)]
-mod proptest_helpers;
-
 // Re-exports for convenient access
 pub use dependency::DependencySpec;
 pub use env_value::{

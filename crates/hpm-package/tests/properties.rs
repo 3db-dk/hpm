@@ -1,15 +1,14 @@
-//! Property-based testing strategies for package types.
-//!
-//! This module provides proptest strategies for generating test data
-//! across the hpm-package crate.
+//! Property-based tests for hpm-package. Moved from src/proptest_helpers.rs
+//! so the strategies and proptest harness no longer compile as part of the
+//! library; they only build under `cargo test`.
 
 use proptest::prelude::*;
 
-use crate::dependency::DependencySpec;
-use crate::houdini::HoudiniEnvValue;
-use crate::manifest::{CompatConfig, PackageInfo, PackageManifest};
-use crate::package_path::PackagePath;
-use crate::python::PythonDependencySpec;
+use hpm_package::DependencySpec;
+use hpm_package::HoudiniEnvValue;
+use hpm_package::{CompatConfig, PackageInfo, PackageManifest};
+use hpm_package::PackagePath;
+use hpm_package::PythonDependencySpec;
 
 /// Strategy to generate valid slug segments (kebab-case)
 pub fn slug_strategy() -> impl Strategy<Value = String> {
@@ -179,7 +178,7 @@ pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
                 },
                 compat: CompatConfig {
                     houdini: houdini_req.map(|r| {
-                        crate::HoudiniRange::parse(r).expect("strategy yields valid ranges")
+                        hpm_package::HoudiniRange::parse(r).expect("strategy yields valid ranges")
                     }),
                     platforms: Vec::new(),
                 },
@@ -517,7 +516,7 @@ proptest! {
             },
             compat: CompatConfig {
                 houdini: houdini_req
-                    .map(|r| crate::HoudiniRange::parse(r).expect("strategy yields valid ranges")),
+                    .map(|r| hpm_package::HoudiniRange::parse(r).expect("strategy yields valid ranges")),
                 platforms: Vec::new(),
             },
             stage: Default::default(),
