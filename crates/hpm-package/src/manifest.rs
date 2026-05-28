@@ -1,342 +1,49 @@
 //! Package manifest types and implementation.
 //!
-//! This module defines the core `PackageManifest` type that represents an `hpm.toml` file,
-//! along with related configuration types for package metadata and Houdini integration.
+//! `PackageManifest` is the in-memory representation of `hpm.toml`. The
+//! section types live in submodules under [`crate::manifest`]:
+//!
+//! - [`compat`] — `[compat]` (Houdini range, supported platforms)
+//! - [`env`] — `[runtime]` entries and `EnvMethod`
+//! - [`error`] — load-time errors
+//! - [`info`] — `[package]` metadata
+//! - [`registry`] — `[[registries]]` entries
+//! - [`scripts`] — `[scripts]` entries
+//! - [`stage`] — `[stage]` and per-platform place rules
+//!
+//! Submodule items are re-exported here so downstream callers reach for
+//! `hpm_package::manifest::CompatConfig` without needing to know which
+//! submodule it lives in.
+
+pub mod compat;
+pub mod env;
+pub mod error;
+pub mod info;
+pub mod registry;
+pub mod scripts;
+pub mod stage;
+
+pub use compat::CompatConfig;
+pub use env::{EnvMethod, ManifestEnvEntry};
+pub use error::ManifestLoadError;
+pub use info::PackageInfo;
+pub use registry::{RegistryConfig, RegistryType};
+pub use scripts::{PackageScripts, ScriptEntry, ScriptEnv};
+pub use stage::{PlaceRule, PlatformStaging, StageConfig, StagePlatformRules};
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::dependency::DependencySpec;
-use crate::env_value::{Condition, EnvValue, ExpressionError, HoudiniRange, lower_conditional};
+use crate::env_value::{Condition, EnvValue, ExpressionError, HoudiniRange};
 use crate::houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 use crate::package_path::PackagePath;
 use crate::platform::Platform;
 use crate::python::PythonDependencySpec;
 
-/// Errors that can occur while loading a [`PackageManifest`] from disk.
-///
-/// Each variant carries the source path so error messages stay actionable
-/// when manifest loading is buried inside multi-package operations
-/// (`list_installed`, registry installs, project sync).
-#[derive(Debug, thiserror::Error)]
-pub enum ManifestLoadError {
-    #[error("manifest not found: {}", .path.display())]
-    NotFound { path: PathBuf },
-
-    #[error("failed to read manifest at {}: {source}", .path.display())]
-    Read {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error("failed to parse manifest at {}: {source}", .path.display())]
-    Parse {
-        path: PathBuf,
-        #[source]
-        source: toml::de::Error,
-    },
-}
-
-/// The type of registry backend.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum RegistryType {
-    Api,
-    Git,
-}
-
-/// Method for applying an environment variable value.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum EnvMethod {
-    Set,
-    Prepend,
-    Append,
-}
-
-/// An environment variable entry declared in `[runtime]`.
-///
-/// `required = true` with no `value` declares a placeholder that the
-/// consuming project's `[runtime]` must override; otherwise the package
-/// fails to install. `required = true` alongside a `value` is allowed (the
-/// value acts as a default) and behaves the same as a non-required entry
-/// with that value.
-///
-/// `value` accepts either a flat string or a list of `{ when, set }`
-/// variants — see [`EnvValue`]. Conditional variants may gate on
-/// `install_source = "dev"` / `"registry"` (filtered by hpm at install
-/// time) or on `houdini` / `os` / `python` (compiled into Houdini's
-/// expression form per <https://www.sidefx.com/docs/houdini/ref/plugins.html>).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ManifestEnvEntry {
-    pub method: EnvMethod,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<EnvValue>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub required: bool,
-}
-
-fn is_false(b: &bool) -> bool {
-    !*b
-}
-
-/// Validate a `[runtime]`-shaped table. The `section` label is used
-/// verbatim in error messages so the source is obvious to authors.
-fn validate_env_table(
-    section: &str,
-    env: &IndexMap<String, ManifestEnvEntry>,
-) -> Result<(), String> {
-    for (key, entry) in env {
-        match &entry.value {
-            None => {
-                if !entry.required {
-                    return Err(format!(
-                        "{section} var '{key}' has no value and is not marked required = true"
-                    ));
-                }
-            }
-            Some(EnvValue::Flat(_)) => {}
-            Some(EnvValue::Conditional(variants)) => {
-                if variants.is_empty() {
-                    return Err(format!(
-                        "{section} var '{key}' has an empty conditional value list"
-                    ));
-                }
-                for variant in variants {
-                    crate::env_value::compile_condition(&variant.when)
-                        .map_err(|e| format!("{section} var '{key}': {e}"))?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// A single `[scripts]` entry.
-///
-/// The shorthand form is a bare command string. The table form opts the
-/// script into a uv-managed Python environment scoped to that script:
-///
-/// ```toml
-/// [scripts.tt_setup]
-/// cmd = "python scripts/tt_setup.py"
-/// python = "3.11"
-/// requirements = ["PySide6>=6.6"]
-/// ```
-///
-/// `python` and `requirements` are both optional; when either is set, hpm
-/// resolves them through the same uv pipeline that backs `[python_dependencies]`
-/// and runs `cmd` with the resolved interpreter on PATH. When both are absent,
-/// the table form behaves identically to the shorthand.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ScriptEntry {
-    Plain(String),
-    WithEnv(ScriptEnv),
-}
-
-/// The table form of [`ScriptEntry`].
-///
-/// `cmd` is an [`EnvValue`] — either a flat string or an ordered list
-/// of `{ when, set }` variants. For scripts only the `os` axis of `when`
-/// is meaningful (HPM doesn't know the user's Houdini version or Python
-/// at `hpm run` time); other axes on a script variant are rejected at
-/// manifest validation time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScriptEnv {
-    pub cmd: EnvValue,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub python: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requirements: Vec<String>,
-}
-
-impl ScriptEntry {
-    /// Resolve the command for the given host OS.
-    ///
-    /// Returns `None` only when the entry is conditional and no variant
-    /// matches the host (e.g. a `windows`-only command on a macOS host).
-    /// Plain entries always return `Some`.
-    pub fn resolve_cmd(&self, host_os: Option<&str>) -> Option<String> {
-        let spec = match self {
-            ScriptEntry::Plain(s) => return Some(s.clone()),
-            ScriptEntry::WithEnv(env) => &env.cmd,
-        };
-        match spec {
-            EnvValue::Flat(s) => Some(s.clone()),
-            EnvValue::Conditional(variants) => variants
-                .iter()
-                .find(|v| script_condition_matches(&v.when, host_os))
-                .map(|v| v.set.clone()),
-        }
-    }
-
-    /// Pinned Python version (e.g. `"3.11"`), if the entry requested one.
-    pub fn python(&self) -> Option<&str> {
-        match self {
-            ScriptEntry::Plain(_) => None,
-            ScriptEntry::WithEnv(env) => env.python.as_deref(),
-        }
-    }
-
-    /// Inline requirement specifiers (e.g. `"PySide6>=6.6"`), if any.
-    pub fn requirements(&self) -> &[String] {
-        match self {
-            ScriptEntry::Plain(_) => &[],
-            ScriptEntry::WithEnv(env) => &env.requirements,
-        }
-    }
-
-    /// True when this script needs a uv-managed environment.
-    pub fn needs_venv(&self) -> bool {
-        self.python().is_some() || !self.requirements().is_empty()
-    }
-}
-
-/// Per-script `when` matching: only the `os` axis is honoured. The other
-/// axes (`houdini`, `python`, `install_source`) are rejected at manifest
-/// validate time; if they survive here, treat as a non-match.
-fn script_condition_matches(condition: &Condition, host_os: Option<&str>) -> bool {
-    if condition.houdini.is_some()
-        || condition.python.is_some()
-        || condition.install_source.is_some()
-    {
-        return false;
-    }
-    match (&condition.os, host_os) {
-        (None, _) => true,
-        (Some(req), Some(host)) => req == host,
-        (Some(_), None) => false,
-    }
-}
-
-impl From<String> for ScriptEntry {
-    fn from(s: String) -> Self {
-        ScriptEntry::Plain(s)
-    }
-}
-
-impl From<&str> for ScriptEntry {
-    fn from(s: &str) -> Self {
-        ScriptEntry::Plain(s.to_string())
-    }
-}
-
-/// Package-defined scripts from `[scripts]`.
-///
-/// Each entry resolves to a single command for the host OS via
-/// [`ScriptEntry::resolve_cmd`]. Per-host variation lives inside the
-/// entry's `cmd` field as a list of `{ when, set }` variants — there is
-/// no separate `[scripts.platform.<os>]` table.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PackageScripts {
-    #[serde(flatten)]
-    pub commands: IndexMap<String, ScriptEntry>,
-}
-
-impl PackageScripts {
-    /// True when no entries exist.
-    pub fn is_empty(&self) -> bool {
-        self.commands.is_empty()
-    }
-}
-
-/// Staging configuration: how the install image is derived from the workspace.
-///
-/// `[stage]` is the single source of truth for what ends up in a published
-/// archive and in a path-dependency install image. It replaces the prior
-/// `[native]`-only filter model with a more general "where does each file
-/// go" model — useful for HDK plugins whose `.dylib` lives at
-/// `build/Release/foo.dylib` in the workspace but should be installed at
-/// `dso/macos-aarch64/foo.dylib`.
-///
-/// Fields:
-/// - `output_dir` (default `"dist"`) — where `hpm build` materialises the
-///   install image on disk. Unused by `hpm pack` alone, which streams
-///   directly from the workspace.
-/// - `prepack` — list of `[scripts]` entries to run before staging
-///   (compile DSO, collapse expanded HDAs, etc.). Sequential, fail-fast.
-/// - `include` / `exclude` — gitignore-style glob lists applied on top of
-///   `.gitignore` and `.hpmignore`. Empty `include` means "everything not
-///   excluded". Always-excluded: `.git/`, `.hpm/`.
-/// - `[stage.platform.<plat>]` — per-platform `place` rules: copy files
-///   matching a workspace-relative `from` glob into the install image at a
-///   rewritten `to` path. Files matched only by another platform's `place`
-///   rule are excluded from this platform's archive; files matched by no
-///   `place` rule ship as common content at their workspace-relative path.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct StageConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_dir: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub prepack: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub include: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exclude: Vec<String>,
-    /// Per-platform place rules. Deserialized from
-    /// `[stage.platform.<plat>]` sub-tables.
-    #[serde(default, skip_serializing_if = "PlatformStaging::is_empty")]
-    pub platform: PlatformStaging,
-}
-
-impl StageConfig {
-    pub fn is_empty(&self) -> bool {
-        self.output_dir.is_none()
-            && self.prepack.is_empty()
-            && self.include.is_empty()
-            && self.exclude.is_empty()
-            && self.platform.is_empty()
-    }
-
-    /// Effective output directory ("dist" by default).
-    pub fn effective_output_dir(&self) -> &str {
-        self.output_dir.as_deref().unwrap_or("dist")
-    }
-}
-
-/// `[stage.platform.*]` table. Each entry is a list of place rules for a
-/// single platform key (`"linux-x86_64"`, `"macos-aarch64"`, etc.).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PlatformStaging {
-    #[serde(flatten)]
-    pub entries: IndexMap<String, StagePlatformRules>,
-}
-
-impl PlatformStaging {
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-}
-
-/// Place rules for a single platform.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct StagePlatformRules {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub place: Vec<PlaceRule>,
-}
-
-/// A single `from → to` placement: copy workspace files matching the `from`
-/// glob into the install image at `to`. If `to` ends with `/`, files keep
-/// their original basename; otherwise `to` is the literal archive path
-/// (use when relocating a single file).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlaceRule {
-    pub from: String,
-    pub to: String,
-}
-
-/// A registry declared in hpm.toml's `[[registries]]` array.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RegistryConfig {
-    pub name: String,
-    pub url: String,
-    #[serde(rename = "type")]
-    pub registry_type: RegistryType,
-}
+use env::validate_env_table;
 
 /// HPM package manifest (hpm.toml)
 ///
@@ -365,166 +72,6 @@ pub struct PackageManifest {
     pub runtime: IndexMap<String, ManifestEnvEntry>,
     #[serde(default, skip_serializing_if = "PackageScripts::is_empty")]
     pub scripts: PackageScripts,
-}
-
-/// Package metadata information
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackageInfo {
-    /// Scoped package path: `creator-slug/package-slug` (e.g. `tumblehead/tumble-rig`).
-    /// Validated kebab-case at deserialization — see [`PackagePath`].
-    pub path: PackagePath,
-    /// Freeform display name (e.g. `TumbleRig`)
-    pub name: String,
-    pub version: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub authors: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub license: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub readme: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub homepage: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repository: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub documentation: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub keywords: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub categories: Vec<String>,
-}
-
-impl PackageInfo {
-    /// Returns the scoped path (the canonical identifier).
-    pub fn identifier(&self) -> &str {
-        self.path.as_str()
-    }
-
-    /// Returns the creator segment, e.g. `tumblehead`.
-    pub fn creator(&self) -> &str {
-        self.path.creator()
-    }
-
-    /// Returns the slug segment, e.g. `tumble-rig`.
-    pub fn slug(&self) -> &str {
-        self.path.slug()
-    }
-}
-
-/// Target-environment compatibility for the package.
-///
-/// `houdini` is a Cargo-style version requirement (`"20.5"`, `"^21"`,
-/// `">=20.5, <22"`). Bare versions alias caret semantics: `"20.5"` means
-/// `>=20.5, <21`. See [`HoudiniRange`] for the supported grammar.
-///
-/// `platforms` declares which native platforms this package supports.
-/// Pure-data / pure-Python packages omit it (or use `["universal"]`);
-/// HDK or DSO packages list the platforms they ship binaries for. The
-/// per-platform staging rules live under `[stage.platform.<plat>]`.
-///
-/// An absent `[compat]` section, or an absent `houdini` field, leaves the
-/// package's Houdini compatibility unconstrained — the generated package
-/// manifest emits no `enable` clause.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct CompatConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub houdini: Option<HoudiniRange>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub platforms: Vec<Platform>,
-}
-
-impl CompatConfig {
-    pub fn is_empty(&self) -> bool {
-        self.houdini.is_none() && self.platforms.is_empty()
-    }
-
-    /// Lower bound of the Houdini range, used for Python ABI selection.
-    pub fn houdini_min(&self) -> Option<String> {
-        self.houdini.as_ref().and_then(HoudiniRange::lower_bound)
-    }
-}
-
-impl ManifestEnvEntry {
-    /// Convert to a Houdini environment variable value for a published
-    /// (non-dev) consumer.
-    ///
-    /// Returns `Ok(None)` for required-but-unsupplied placeholders, and
-    /// for conditional values whose every branch is gated to a
-    /// non-matching `install_source`. Returns `Err` for malformed
-    /// `when` selectors — the prior implementation silently dropped
-    /// these via `.ok().flatten()`, masking authoring mistakes that
-    /// validate would otherwise catch.
-    ///
-    /// No substitution is applied — the returned value reflects the
-    /// manifest verbatim, so `$HPM_PACKAGE_ROOT` is preserved. Use
-    /// [`Self::lower`] when you have a concrete package path and install
-    /// context to substitute in.
-    pub fn to_houdini_env_value(&self) -> Result<Option<HoudiniEnvValue>, ExpressionError> {
-        self.lower(&[], false)
-    }
-
-    /// Lower this entry into a Houdini env value, applying the supplied
-    /// substitutions to each value branch.
-    ///
-    /// `is_dev` controls the install-source filter for conditional
-    /// variants: `true` means a path-installed (dev) package; `false`
-    /// means a registry/URL-installed (published) consumer. Variants
-    /// gated to a non-matching `install_source` are dropped before
-    /// emission.
-    ///
-    /// Returns `Ok(None)` when the effective value is empty — either the
-    /// entry was a required-but-unsupplied placeholder, or every branch
-    /// of a conditional value got filtered out by `install_source`. Callers
-    /// in publish/scaffold paths skip those; project-sync paths surface a
-    /// hard error for the placeholder case via their own checks.
-    pub fn lower(
-        &self,
-        substitutions: &[(&str, &str)],
-        is_dev: bool,
-    ) -> Result<Option<HoudiniEnvValue>, ExpressionError> {
-        let Some(value) = self.value.as_ref() else {
-            return Ok(None);
-        };
-        let method = self.method.as_str();
-        let lowered = match value {
-            EnvValue::Flat(s) => {
-                let mut out = s.clone();
-                for (from, to) in substitutions {
-                    out = out.replace(from, to);
-                }
-                HoudiniEnvValue::Detailed {
-                    method: method.to_string(),
-                    value: out,
-                }
-            }
-            EnvValue::Conditional(variants) => {
-                let lowered = lower_conditional(variants, substitutions, is_dev)?;
-                if lowered.is_empty() {
-                    // Every branch filtered out by install_source — treat
-                    // the entry as inert in this install context.
-                    return Ok(None);
-                }
-                HoudiniEnvValue::DetailedConditional {
-                    method: method.to_string(),
-                    value: lowered,
-                }
-            }
-        };
-        Ok(Some(lowered))
-    }
-}
-
-impl EnvMethod {
-    /// String form used in Houdini's package.json (`"set"`, `"prepend"`, `"append"`).
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            EnvMethod::Set => "set",
-            EnvMethod::Prepend => "prepend",
-            EnvMethod::Append => "append",
-        }
-    }
 }
 
 impl PackageManifest {
