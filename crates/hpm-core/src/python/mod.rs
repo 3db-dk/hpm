@@ -85,7 +85,7 @@
 //!
 //! - [`bundled`] - UV binary management and isolated execution
 //! - [`venv`] - Virtual environment creation, management, and sharing
-//! - [`dependency`] - Dependency collection and conflict detection
+//! - [`collection`] - Dependency collection from manifests, Houdini-to-Python mapping
 //! - [`resolver`] - UV-powered dependency resolution
 //! - [`script_env`] - Per-script venvs for table-form `[scripts]` entries
 //! - [`cleanup`] - Orphaned virtual environment detection and cleanup

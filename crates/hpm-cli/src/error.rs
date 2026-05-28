@@ -179,7 +179,7 @@ pub fn help_for(command: &str) -> String {
 }
 
 /// Extension trait that promotes a `Result<T, E: Into<anyhow::Error>>` into
-/// a [`CliResult`] with the standard "Use 'hpm <cmd> --help' …" hint.
+/// a [`CliResult`] with the standard `Use 'hpm <cmd> --help' …` hint.
 ///
 /// Replaces the repeated map_err boilerplate that lived in [`crate::run`]
 /// for every subcommand:
