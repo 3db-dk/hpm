@@ -53,8 +53,9 @@ pub struct LockedDependency {
 
     /// Where the package came from at install time. URL deps record the
     /// resolved download URL; path deps record the local source directory.
-    /// Distinct from [`PackageSource`] (which is URL-only and feeds the
-    /// fetcher) so the lockfile can faithfully reproduce both flavours.
+    /// Distinct from [`PackageSource`](crate::package_source::PackageSource)
+    /// (which is URL-only and feeds the fetcher) so the lockfile can
+    /// faithfully reproduce both flavours.
     pub source: LockedSource,
 
     /// Transitive dependencies (just names, versions are in the main dependencies map)

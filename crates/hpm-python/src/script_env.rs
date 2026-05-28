@@ -169,7 +169,7 @@ fn compose_path(prefix: &Path, existing: &str) -> String {
 ///
 /// Surfaces `ensure_script_venv` failures (uv bootstrap, interpreter
 /// download, dependency resolve). Callers typically wrap the error with
-/// a "preparing script venv for <name>" context.
+/// a `"preparing script venv for <name>"` context.
 pub async fn prepare_script_env(entry: &ScriptEntry) -> Result<ScriptEnvHandle> {
     if !entry.needs_venv() {
         return Ok(ScriptEnvHandle::default());

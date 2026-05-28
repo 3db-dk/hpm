@@ -1,4 +1,5 @@
-//! Public data types returned by [`ProjectManager`] operations.
+//! Public data types returned by
+//! [`ProjectManager`](crate::project::ProjectManager) operations.
 
 use crate::lock::LockedSource;
 use crate::storage::InstalledPackage;

@@ -182,7 +182,7 @@ impl StorageManager {
     /// junction (Windows). Working-tree edits at `source_path` become visible
     /// to a live Houdini session immediately, with no re-sync.
     ///
-    /// Same namespace isolation as [`install_as_dev_copy`]: the link entry
+    /// Same namespace isolation as [`Self::install_as_dev_copy`]: the link entry
     /// lives at `<packages_dir>/_dev/<slug>@<version>/`, never in the registry
     /// CAS. Registry resolutions at the same coordinate are unaffected.
     pub async fn install_as_dev_link(

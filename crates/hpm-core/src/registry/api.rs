@@ -17,11 +17,11 @@ use tracing::{debug, info};
 /// - `GET {base_url}/packages/{creator}/{slug}` -> VersionsResponse
 /// - `GET {base_url}/packages/{creator}/{slug}/{version}` -> BuildsResponse
 ///   (one or more platform-specific entries; the client picks the build that
-///   matches the host platform — see [`select_build`])
+///   matches the host platform — see `select_build`)
 pub struct ApiRegistry {
     /// Display name for this registry
     display_name: String,
-    /// Base URL (e.g., "https://api.3db.dk/v1/registry")
+    /// Base URL (e.g., `https://api.3db.dk/v1/registry`).
     base_url: String,
     /// HTTP client
     client: reqwest::Client,

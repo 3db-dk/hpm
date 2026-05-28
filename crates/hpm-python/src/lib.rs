@@ -88,7 +88,6 @@
 //! - [`dependency`] - Dependency collection and conflict detection
 //! - [`resolver`] - UV-powered dependency resolution
 //! - [`script_env`] - Per-script venvs for table-form `[scripts]` entries
-//! - [`integration`] - Houdini package.json generation and PYTHONPATH setup
 //! - [`cleanup`] - Orphaned virtual environment detection and cleanup
 //! - [`types`] - Core types for Python versions, dependencies, and metadata
 //!
@@ -268,7 +267,7 @@ pub async fn initialize() -> Result<()> {
 ///     └── ...
 /// ```
 ///
-/// Errors via [`hpm_root`] when the user's home directory is unset.
+/// Errors via `hpm_root` when the user's home directory is unset.
 pub fn get_venvs_dir() -> anyhow::Result<PathBuf> {
     hpm_root().map(|root| root.join("venvs"))
 }
