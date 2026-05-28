@@ -27,14 +27,17 @@ failures.
 
 Property tests are concentrated in the crates with the most value-shaped
 logic: manifest parsing, Python version handling, storage types. Exact
-counts shift over time — run `grep -rh "fn prop_" crates/*/src | wc -l`
-for the current number.
+counts shift over time — run
+`grep -rh "fn prop_" crates/*/src crates/*/tests | wc -l` for the
+current number (the manifest strategies live in
+`crates/hpm-package/tests/properties.rs` and the CLI strategies in
+`crates/hpm-cli/tests/cli_validation.rs`).
 
 | Crate | Focus |
 |-------|-------|
-| `hpm-cli` | Argument parsing, output format round-trips. |
+| `hpm-cli` | Argument parsing, output format round-trips (in `tests/cli_validation.rs`). |
 | `hpm-core` | Storage types, package specs, lockfile round-trips, env merge contracts. |
-| `hpm-package` | Manifest validation, TOML round-trips, native configs. |
+| `hpm-package` | Manifest validation, TOML round-trips, native configs (in `tests/properties.rs`). |
 | `hpm-python` | Python versions, dependency resolution, content hashing. |
 
 ## Running tests
