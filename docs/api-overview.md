@@ -56,7 +56,8 @@ codes and help hints.
 
 | Type | Purpose |
 |------|---------|
-| `PackageManifest` | Parsed `hpm.toml` (every section). `PackageManifest::from_path` reads + parses, returning `ManifestLoadError` with the offending path. |
+| `PackageManifest` | Parsed `hpm.toml` (every section). `PackageManifest::from_path` reads + parses, returning `ManifestLoadError` with the offending path. `validate()` returns the first structural error; `validate_with(ValidationLevel)` returns a `ValidationReport { errors, warnings }` separating hard errors from publish-quality advisories. |
+| `ValidationLevel`, `ValidationReport` | `Strict` runs structural checks only; `Publish` adds advisory warnings on missing description / authors / keywords / `[compat].houdini`. `hpm check` consumes the report; a future `hpm publish` can promote warnings to errors. |
 | `ManifestLoadError` | `NotFound { path }` / `Read { path, source }` / `Parse { path, source }`. Re-exported by `hpm-core`'s `StorageError`, `ProjectError`, `DiscoveryError`, and `FetchManifestError`. |
 | `PackagePath`, `PackagePathError` | Validated `creator/slug` newtype. Kebab-case enforced at deserialization, so `creator()` and `slug()` return `&str` — no `Option`. |
 | `PackageInfo` | Contents of `[package]`. `path: PackagePath` is the canonical identifier; `name`, `version`, etc. are user-facing metadata. |

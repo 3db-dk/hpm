@@ -22,6 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hpm_cli` so integration tests and embedded hosts can drive the
   CLI without spawning the binary. The `hpm` binary is now a six-line
   `#[tokio::main]` wrapper.
+- **`hpm_package::ValidationLevel` / `ValidationReport` lift the soft
+  publish-quality checks out of `hpm check`.**
+  `PackageManifest::validate()` still returns the first structural
+  error; the new `validate_with(level)` returns a report that
+  separates errors from advisory warnings. `Publish` level adds
+  warnings for missing `description`, `authors`, `keywords`, and
+  `[compat].houdini`. `hpm check` now consumes the report; future
+  `hpm publish` can promote those warnings to errors.
+- **`hpm_package::IoOp` shared across error enums.** Every
+  IO-shaped variant in `StorageError`, `ProjectError`, and
+  `DiscoveryError` collapses to a single `Io(IoOp)` carrying
+  `{ op, path, source }`. The verbose
+  `.map_err(|e| DirectoryRead(e.to_string()))` pattern is replaced
+  by `IoOp::wrap("read directory", &path, e)` at call sites; the
+  underlying `io::Error` is preserved as `#[source]` for chain
+  walkers.
 
 ### Changed
 - **`hpm init` default `[compat].houdini` is now `"^21"`** (Houdini

@@ -22,6 +22,7 @@ pub mod info;
 pub mod registry;
 pub mod scripts;
 pub mod stage;
+pub mod validation;
 
 pub use compat::CompatConfig;
 pub use env::{EnvMethod, ManifestEnvEntry};
@@ -30,6 +31,7 @@ pub use info::PackageInfo;
 pub use registry::{RegistryConfig, RegistryType};
 pub use scripts::{PackageScripts, ScriptEntry, ScriptEnv};
 pub use stage::{PlaceRule, PlatformStaging, StageConfig, StagePlatformRules};
+pub use validation::{ValidationLevel, ValidationReport};
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -161,22 +163,60 @@ impl PackageManifest {
         self.scripts.commands.get(name).cloned()
     }
 
-    /// Validate the package manifest for common errors.
+    /// Validate the package manifest for structural correctness.
+    ///
+    /// This is the strict gate: errors here mean the manifest is not
+    /// well-formed and downstream operations cannot proceed. For
+    /// publish-quality advisory warnings (missing description, authors,
+    /// keywords, `[compat].houdini`), use [`Self::validate_with`] with
+    /// [`ValidationLevel::Publish`].
     ///
     /// Note: `package.path` is a [`PackagePath`] and was already validated
     /// at deserialization, so it isn't checked again here.
     pub fn validate(&self) -> Result<(), String> {
+        let report = self.validate_with(ValidationLevel::Strict);
+        match report.errors.into_iter().next() {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
+
+    /// Validate at the requested level, returning a [`ValidationReport`]
+    /// that separates hard errors from advisory warnings.
+    ///
+    /// At [`ValidationLevel::Strict`] only structural errors are produced
+    /// (no warnings). At [`ValidationLevel::Publish`] the same errors run,
+    /// plus advisory warnings on publish-quality fields that are absent:
+    /// `package.description`, `package.authors`, `package.keywords`, and
+    /// `[compat].houdini`. `hpm check` shows the warnings; a future
+    /// `hpm publish` can promote them to errors.
+    pub fn validate_with(&self, level: ValidationLevel) -> ValidationReport {
+        let mut report = ValidationReport::default();
+        self.collect_structural_errors(&mut report);
+        if matches!(level, ValidationLevel::Publish) {
+            self.collect_publish_warnings(&mut report);
+        }
+        report
+    }
+
+    fn collect_structural_errors(&self, report: &mut ValidationReport) {
+        // Stop at the first structural error per top-level concern so a
+        // bad name doesn't drown out an unrelated bad stage entry — but
+        // unrelated concerns still run independently so the report covers
+        // as much of the manifest as possible in one pass.
         if self.package.name.is_empty() {
-            return Err("Package name cannot be empty".to_string());
+            report
+                .errors
+                .push("Package name cannot be empty".to_string());
         }
-
         if self.package.version.is_empty() {
-            return Err("Package version cannot be empty".to_string());
-        }
-
-        // Basic semver validation
-        if !self.is_valid_semver(&self.package.version) {
-            return Err("Package version must be valid semantic version".to_string());
+            report
+                .errors
+                .push("Package version cannot be empty".to_string());
+        } else if !self.is_valid_semver(&self.package.version) {
+            report
+                .errors
+                .push("Package version must be valid semantic version".to_string());
         }
 
         // `[compat].houdini` and `[compat].platforms` both validate at
@@ -188,24 +228,30 @@ impl PackageManifest {
         // and place rules must declare both `from` and `to`. Place rules with
         // empty `from` would match nothing useful; reject those at load time.
         for (platform_str, rules) in &self.stage.platform.entries {
-            let platform = platform_str
-                .parse::<Platform>()
-                .map_err(|e| format!("[stage.platform.{}]: {}", platform_str, e))?;
+            let platform = match platform_str.parse::<Platform>() {
+                Ok(p) => p,
+                Err(e) => {
+                    report
+                        .errors
+                        .push(format!("[stage.platform.{}]: {}", platform_str, e));
+                    continue;
+                }
+            };
             if !self.compat.platforms.contains(&platform) {
-                return Err(format!(
+                report.errors.push(format!(
                     "[stage.platform.{}] declared but '{}' not listed in [compat].platforms",
                     platform_str, platform_str
                 ));
             }
             for (i, rule) in rules.place.iter().enumerate() {
                 if rule.from.trim().is_empty() {
-                    return Err(format!(
+                    report.errors.push(format!(
                         "[stage.platform.{}].place[{}]: `from` must not be empty",
                         platform_str, i
                     ));
                 }
                 if rule.to.trim().is_empty() {
-                    return Err(format!(
+                    report.errors.push(format!(
                         "[stage.platform.{}].place[{}]: `to` must not be empty (use \"./\" for the archive root)",
                         platform_str, i
                     ));
@@ -218,49 +264,76 @@ impl PackageManifest {
         // Conditional values get every branch's `when` selector compiled here
         // so malformed expressions surface at manifest load time, not at
         // install/emit time.
-        validate_env_table("runtime", &self.runtime)?;
+        if let Err(e) = validate_env_table("runtime", &self.runtime) {
+            report.errors.push(e);
+        }
 
         // Validate [scripts] entries: a conditional `cmd` may only gate on
         // the `os` axis. Other axes (`houdini`, `python`, `install_source`)
         // require runtime context HPM doesn't have at `hpm run` time, so we
         // reject them up front rather than silently dropping variants.
-        {
-            for (name, entry) in &self.scripts.commands {
-                let ScriptEntry::WithEnv(env) = entry else {
-                    continue;
-                };
-                let EnvValue::Conditional(variants) = &env.cmd else {
-                    continue;
-                };
-                if variants.is_empty() {
-                    return Err(format!(
-                        "script '{}': conditional cmd list must not be empty",
+        for (name, entry) in &self.scripts.commands {
+            let ScriptEntry::WithEnv(env) = entry else {
+                continue;
+            };
+            let EnvValue::Conditional(variants) = &env.cmd else {
+                continue;
+            };
+            if variants.is_empty() {
+                report.errors.push(format!(
+                    "script '{}': conditional cmd list must not be empty",
+                    name
+                ));
+                continue;
+            }
+            for variant in variants {
+                if variant.when.houdini.is_some()
+                    || variant.when.python.is_some()
+                    || variant.when.install_source.is_some()
+                {
+                    report.errors.push(format!(
+                        "script '{}': only the `os` axis is supported in script `when` selectors; \
+                         `houdini`, `python`, and `install_source` axes have no meaning at `hpm run` time",
                         name
                     ));
+                    continue;
                 }
-                for variant in variants {
-                    if variant.when.houdini.is_some()
-                        || variant.when.python.is_some()
-                        || variant.when.install_source.is_some()
-                    {
-                        return Err(format!(
-                            "script '{}': only the `os` axis is supported in script `when` selectors; \
-                             `houdini`, `python`, and `install_source` axes have no meaning at `hpm run` time",
-                            name
-                        ));
-                    }
-                    if let Some(os) = &variant.when.os {
-                        crate::env_value::compile_condition(&Condition {
-                            os: Some(os.clone()),
-                            ..Default::default()
-                        })
-                        .map_err(|e| format!("script '{}': {}", name, e))?;
-                    }
+                if let Some(os) = &variant.when.os
+                    && let Err(e) = crate::env_value::compile_condition(&Condition {
+                        os: Some(os.clone()),
+                        ..Default::default()
+                    })
+                {
+                    report.errors.push(format!("script '{}': {}", name, e));
                 }
             }
         }
+    }
 
-        Ok(())
+    fn collect_publish_warnings(&self, report: &mut ValidationReport) {
+        if self.package.description.is_none() {
+            report.warnings.push(
+                "Package description is missing - consider adding one for better discoverability"
+                    .to_string(),
+            );
+        }
+        if self.package.authors.is_empty() {
+            report.warnings.push(
+                "Package authors are missing - consider adding author information".to_string(),
+            );
+        }
+        if self.package.keywords.is_empty() {
+            report.warnings.push(
+                "Package keywords are missing - consider adding keywords for better discoverability"
+                    .to_string(),
+            );
+        }
+        if self.compat.houdini.is_none() {
+            report.warnings.push(
+                "[compat].houdini is missing - consider declaring a Houdini version range"
+                    .to_string(),
+            );
+        }
     }
 
     /// Generate Houdini package.json from manifest
@@ -420,6 +493,41 @@ mod tests {
     // empty_name/empty_version validation tests removed - covered by
     // prop_malformed_package_names_rejected and prop_malformed_versions_rejected
     // in tests/properties.rs which test validation with randomized inputs
+
+    #[test]
+    fn validate_with_publish_emits_warnings_for_missing_metadata() {
+        // A manifest that's structurally valid but missing the
+        // publish-quality fields should pass Strict and emit warnings
+        // at Publish level — not errors.
+        let mut manifest = PackageManifest::new(
+            PackagePath::new("studio/test").unwrap(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            None,
+            Vec::new(),
+            None,
+        );
+        // Clear the publish-quality fields the constructor pre-populates.
+        manifest.package.keywords = Vec::new();
+        manifest.compat = CompatConfig::default();
+
+        let strict = manifest.validate_with(ValidationLevel::Strict);
+        assert!(strict.is_ok());
+        assert!(strict.warnings.is_empty(), "strict level emits no warnings");
+
+        let publish = manifest.validate_with(ValidationLevel::Publish);
+        assert!(publish.is_ok());
+        assert_eq!(publish.warnings.len(), 4, "{:?}", publish.warnings);
+        assert!(publish.warnings.iter().any(|w| w.contains("description")));
+        assert!(publish.warnings.iter().any(|w| w.contains("authors")));
+        assert!(publish.warnings.iter().any(|w| w.contains("keywords")));
+        assert!(
+            publish
+                .warnings
+                .iter()
+                .any(|w| w.contains("[compat].houdini"))
+        );
+    }
 
     #[test]
     fn houdini_package_no_version_constraints() {

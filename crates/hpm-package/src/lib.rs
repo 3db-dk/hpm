@@ -126,7 +126,7 @@ pub use io_error::IoOp;
 pub use manifest::{
     CompatConfig, EnvMethod, ManifestEnvEntry, ManifestLoadError, PackageInfo, PackageManifest,
     PackageScripts, PlaceRule, PlatformStaging, RegistryConfig, RegistryType, ScriptEntry,
-    ScriptEnv, StageConfig, StagePlatformRules,
+    ScriptEnv, StageConfig, StagePlatformRules, ValidationLevel, ValidationReport,
 };
 pub use package_path::{PackagePath, PackagePathError};
 pub use platform::Platform;

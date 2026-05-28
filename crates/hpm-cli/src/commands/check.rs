@@ -103,40 +103,15 @@ async fn validate_manifest_file(
 }
 
 fn validate_manifest_content(manifest: &PackageManifest, result: &mut ValidationResult) {
-    match manifest.validate() {
-        Ok(_) => {
-            result.add_info("[OK] Package manifest validation passed".to_string());
-        }
-        Err(e) => {
-            result.add_error(format!("Manifest validation failed: {}", e));
-        }
+    let report = manifest.validate_with(hpm_package::ValidationLevel::Publish);
+    if report.is_ok() {
+        result.add_info("[OK] Package manifest validation passed".to_string());
     }
-
-    // Additional validations beyond basic manifest validation
-    if manifest.package.description.is_none() {
-        result.add_warning(
-            "Package description is missing - consider adding one for better discoverability"
-                .to_string(),
-        );
+    for err in report.errors {
+        result.add_error(format!("Manifest validation failed: {}", err));
     }
-
-    if manifest.package.authors.is_empty() {
-        result.add_warning(
-            "Package authors are missing - consider adding author information".to_string(),
-        );
-    }
-
-    if manifest.package.keywords.is_empty() {
-        result.add_warning(
-            "Package keywords are missing - consider adding keywords for better discoverability"
-                .to_string(),
-        );
-    }
-
-    if manifest.compat.houdini.is_none() {
-        result.add_warning(
-            "[compat].houdini is missing - consider declaring a Houdini version range".to_string(),
-        );
+    for warning in report.warnings {
+        result.add_warning(warning);
     }
 }
 
