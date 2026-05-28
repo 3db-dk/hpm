@@ -1,7 +1,20 @@
+//! Dependency graph for HPM packages.
+//!
+//! Backed by [`petgraph::graph::DiGraph`]: node data is `PackageNode`,
+//! edges are unlabelled (`()`) and run from a package to one of its
+//! dependencies. A `PackageId -> NodeIndex` side map provides O(1)
+//! lookup from the public key type.
+//!
+//! Reachability (used by `hpm clean` orphan detection) and cycle
+//! detection (used to warn on cyclic dependency declarations) reuse
+//! `petgraph::visit::Bfs` and `petgraph::algo::tarjan_scc` rather
+//! than hand-rolled DFS.
 use crate::discovery::DiscoveredProject;
 use crate::storage::{InstalledPackage, StorageManager};
 use hpm_package::DependencySpec;
-use std::collections::{HashMap, HashSet, VecDeque};
+use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::Bfs;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
@@ -38,120 +51,107 @@ pub struct PackageNode {
     pub is_root: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct DependencyGraph {
-    nodes: HashMap<PackageId, PackageNode>,
-    edges: HashMap<PackageId, HashSet<PackageId>>, // package -> its dependencies
-}
-
-impl Default for DependencyGraph {
-    fn default() -> Self {
-        Self::new()
-    }
+    graph: DiGraph<PackageNode, ()>,
+    index_of: HashMap<PackageId, NodeIndex>,
 }
 
 impl DependencyGraph {
     pub fn new() -> Self {
-        Self {
-            nodes: HashMap::new(),
-            edges: HashMap::new(),
+        Self::default()
+    }
+
+    /// Insert a node, or no-op if a node with the same `PackageId` already
+    /// exists. Existing nodes are *not* replaced — the graph's node data is
+    /// considered immutable from outside; updates happen via mutable access
+    /// in `node_mut`.
+    pub fn add_node(&mut self, node: PackageNode) {
+        if self.index_of.contains_key(&node.id) {
+            return;
+        }
+        let id = node.id.clone();
+        let idx = self.graph.add_node(node);
+        self.index_of.insert(id, idx);
+    }
+
+    /// Add a directed edge `package -> dependency`. Both endpoints must
+    /// already be present as nodes; missing endpoints are silently skipped,
+    /// preserving the pre-petgraph behaviour where `add_dependency` couldn't
+    /// fail.
+    pub fn add_dependency(&mut self, package: &PackageId, dependency: &PackageId) {
+        let (Some(&from), Some(&to)) = (self.index_of.get(package), self.index_of.get(dependency))
+        else {
+            return;
+        };
+        if !self.graph.contains_edge(from, to) {
+            self.graph.add_edge(from, to, ());
         }
     }
 
-    pub fn add_node(&mut self, node: PackageNode) {
-        let id = node.id.clone();
-        self.nodes.insert(id.clone(), node);
-        self.edges.entry(id).or_default();
+    /// Mark a node as a root, recording the project that pulls it in.
+    /// Used internally by [`DependencyResolver`] when the same package
+    /// surfaces as both a transitive dep and a direct project dep.
+    pub fn node_mut(&mut self, id: &PackageId) -> Option<&mut PackageNode> {
+        self.index_of.get(id).map(|&idx| &mut self.graph[idx])
     }
 
-    pub fn add_dependency(&mut self, package: &PackageId, dependency: &PackageId) {
-        self.edges
-            .entry(package.clone())
-            .or_default()
-            .insert(dependency.clone());
-    }
-
+    /// BFS from each root, returning every `PackageId` reachable along
+    /// dependency edges. The roots themselves are included.
     pub fn mark_reachable_from_roots(&self, roots: &[PackageId]) -> HashSet<PackageId> {
         let mut reachable = HashSet::new();
-        let mut queue = VecDeque::from(roots.to_vec());
-
-        while let Some(package_id) = queue.pop_front() {
-            if reachable.insert(package_id.clone()) {
-                // Add all dependencies to the queue
-                if let Some(dependencies) = self.edges.get(&package_id) {
-                    for dep in dependencies {
-                        if !reachable.contains(dep) {
-                            queue.push_back(dep.clone());
-                        }
-                    }
-                }
+        for root in roots {
+            let Some(&start) = self.index_of.get(root) else {
+                continue;
+            };
+            let mut bfs = Bfs::new(&self.graph, start);
+            while let Some(idx) = bfs.next(&self.graph) {
+                reachable.insert(self.graph[idx].id.clone());
             }
         }
-
         reachable
     }
 
     pub fn get_orphaned_packages(&self, needed_packages: &HashSet<PackageId>) -> Vec<PackageId> {
-        self.nodes
-            .keys()
+        self.graph
+            .node_weights()
+            .map(|node| &node.id)
             .filter(|id| !needed_packages.contains(id))
             .cloned()
             .collect()
     }
 
-    pub fn nodes(&self) -> &HashMap<PackageId, PackageNode> {
-        &self.nodes
+    pub fn node_count(&self) -> usize {
+        self.graph.node_count()
     }
 
+    pub fn nodes(&self) -> impl Iterator<Item = &PackageNode> {
+        self.graph.node_weights()
+    }
+
+    /// Strongly connected components of size > 1 (and self-loops) are cycles.
+    /// Returned cycles list `PackageId`s in the order petgraph emits them
+    /// inside each SCC; we don't promise the cycle is rotated to any
+    /// particular starting node.
     pub fn has_cycles(&self) -> Vec<Vec<PackageId>> {
-        let mut cycles = Vec::new();
-        let mut visited = HashSet::new();
-        let mut rec_stack = HashSet::new();
-        let mut path = Vec::new();
-
-        for package_id in self.nodes.keys() {
-            if !visited.contains(package_id) {
-                self.dfs_cycle_detection(
-                    package_id,
-                    &mut visited,
-                    &mut rec_stack,
-                    &mut path,
-                    &mut cycles,
-                );
-            }
-        }
-
-        cycles
-    }
-
-    fn dfs_cycle_detection(
-        &self,
-        package_id: &PackageId,
-        visited: &mut HashSet<PackageId>,
-        rec_stack: &mut HashSet<PackageId>,
-        path: &mut Vec<PackageId>,
-        cycles: &mut Vec<Vec<PackageId>>,
-    ) {
-        visited.insert(package_id.clone());
-        rec_stack.insert(package_id.clone());
-        path.push(package_id.clone());
-
-        if let Some(dependencies) = self.edges.get(package_id) {
-            for dep in dependencies {
-                if !visited.contains(dep) {
-                    self.dfs_cycle_detection(dep, visited, rec_stack, path, cycles);
-                } else if rec_stack.contains(dep) {
-                    // Found a cycle - extract it from the path
-                    if let Some(cycle_start) = path.iter().position(|p| p == dep) {
-                        let cycle = path[cycle_start..].to_vec();
-                        cycles.push(cycle);
-                    }
+        petgraph::algo::tarjan_scc(&self.graph)
+            .into_iter()
+            .filter_map(|component| {
+                let is_cycle = component.len() > 1
+                    || component
+                        .first()
+                        .is_some_and(|&n| self.graph.contains_edge(n, n));
+                if !is_cycle {
+                    return None;
                 }
-            }
-        }
-
-        rec_stack.remove(package_id);
-        path.pop();
+                Some(
+                    component
+                        .into_iter()
+                        .map(|idx| self.graph[idx].id.clone())
+                        .collect(),
+                )
+            })
+            .collect()
     }
 }
 
@@ -208,7 +208,10 @@ impl DependencyResolver {
             }
         }
 
-        info!("Built dependency graph with {} packages", graph.nodes.len());
+        info!(
+            "Built dependency graph with {} packages",
+            graph.node_count()
+        );
         Ok(graph)
     }
 
@@ -274,10 +277,9 @@ impl DependencyResolver {
 
             let (dep_id, dep_package) = self.resolve_dependency(dep_name, dep_spec, installed_map);
 
-            // Add dependency edge from parent
-            graph.add_dependency(parent_id, &dep_id);
-
-            // Add node if not exists (transitive deps are not roots)
+            // Add node if not exists (transitive deps are not roots). Node
+            // must exist before add_dependency, which silently skips edges
+            // with missing endpoints.
             self.ensure_node(
                 graph,
                 dep_id.clone(),
@@ -285,6 +287,7 @@ impl DependencyResolver {
                 None,  // no project path for transitive deps
                 false, // not a root
             );
+            graph.add_dependency(parent_id, &dep_id);
 
             if let Some(dep_pkg) = dep_package {
                 // Recursively process with cycle prevention
@@ -333,25 +336,22 @@ impl DependencyResolver {
         project_path: Option<&PathBuf>,
         is_root: bool,
     ) {
-        if let Some(existing) = graph.nodes.get_mut(&id) {
-            // Update existing node
+        if let Some(existing) = graph.node_mut(&id) {
             if is_root {
                 existing.is_root = true;
             }
-            if let Some(path) = project_path {
-                if !existing.required_by_projects.contains(path) {
-                    existing.required_by_projects.push(path.clone());
-                }
+            if let Some(path) = project_path
+                && !existing.required_by_projects.contains(path)
+            {
+                existing.required_by_projects.push(path.clone());
             }
         } else {
-            // Create new node
-            let node = PackageNode {
+            graph.add_node(PackageNode {
                 id: id.clone(),
                 installed_package,
                 required_by_projects: project_path.map(|p| vec![p.clone()]).unwrap_or_default(),
                 is_root,
-            };
-            graph.add_node(node);
+            });
         }
     }
 
@@ -396,6 +396,15 @@ mod tests {
         std::sync::Arc::new(StorageManager::new(storage_config).unwrap())
     }
 
+    fn make_node(name: &str, version: &str, is_root: bool) -> PackageNode {
+        PackageNode {
+            id: PackageId::new(name.to_string(), version.to_string()),
+            installed_package: None,
+            required_by_projects: vec![],
+            is_root,
+        }
+    }
+
     #[test]
     fn package_id_creation() {
         let package_id = PackageId::new("test-package".to_string(), "1.0.0".to_string());
@@ -409,25 +418,11 @@ mod tests {
         let pkg1 = PackageId::new("package1".to_string(), "1.0.0".to_string());
         let pkg2 = PackageId::new("package2".to_string(), "1.0.0".to_string());
 
-        let node1 = PackageNode {
-            id: pkg1.clone(),
-            installed_package: None,
-            required_by_projects: vec![],
-            is_root: true,
-        };
-
-        let node2 = PackageNode {
-            id: pkg2.clone(),
-            installed_package: None,
-            required_by_projects: vec![],
-            is_root: false,
-        };
-
-        graph.add_node(node1);
-        graph.add_node(node2);
+        graph.add_node(make_node("package1", "1.0.0", true));
+        graph.add_node(make_node("package2", "1.0.0", false));
         graph.add_dependency(&pkg1, &pkg2);
 
-        assert_eq!(graph.nodes.len(), 2);
+        assert_eq!(graph.node_count(), 2);
 
         let reachable = graph.mark_reachable_from_roots(std::slice::from_ref(&pkg1));
         assert_eq!(reachable.len(), 2);
@@ -438,26 +433,11 @@ mod tests {
     #[test]
     fn dependency_graph_orphan_detection() {
         let mut graph = DependencyGraph::new();
-
         let pkg1 = PackageId::new("needed".to_string(), "1.0.0".to_string());
         let pkg2 = PackageId::new("orphan".to_string(), "1.0.0".to_string());
 
-        let node1 = PackageNode {
-            id: pkg1.clone(),
-            installed_package: None,
-            required_by_projects: vec![],
-            is_root: true,
-        };
-
-        let node2 = PackageNode {
-            id: pkg2.clone(),
-            installed_package: None,
-            required_by_projects: vec![],
-            is_root: false,
-        };
-
-        graph.add_node(node1);
-        graph.add_node(node2);
+        graph.add_node(make_node("needed", "1.0.0", true));
+        graph.add_node(make_node("orphan", "1.0.0", false));
 
         let needed = vec![pkg1].into_iter().collect();
         let orphans = graph.get_orphaned_packages(&needed);
@@ -469,27 +449,35 @@ mod tests {
     #[test]
     fn dependency_graph_cycle_detection() {
         let mut graph = DependencyGraph::new();
-
         let pkg1 = PackageId::new("package1".to_string(), "1.0.0".to_string());
         let pkg2 = PackageId::new("package2".to_string(), "1.0.0".to_string());
 
-        // Create nodes
-        for pkg in [&pkg1, &pkg2] {
-            let node = PackageNode {
-                id: pkg.clone(),
-                installed_package: None,
-                required_by_projects: vec![],
-                is_root: false,
-            };
-            graph.add_node(node);
-        }
+        graph.add_node(make_node("package1", "1.0.0", false));
+        graph.add_node(make_node("package2", "1.0.0", false));
 
         // Create cycle: pkg1 -> pkg2 -> pkg1
         graph.add_dependency(&pkg1, &pkg2);
         graph.add_dependency(&pkg2, &pkg1);
 
         let cycles = graph.has_cycles();
-        assert!(!cycles.is_empty());
+        // tarjan_scc reports the cycle as a single SCC of size 2.
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0].len(), 2);
+    }
+
+    #[test]
+    fn dependency_graph_acyclic_chain_has_no_cycle() {
+        // A -> B -> C is one SCC per node but no cycles.
+        let mut graph = DependencyGraph::new();
+        let a = PackageId::new("a".to_string(), "1.0.0".to_string());
+        let b = PackageId::new("b".to_string(), "1.0.0".to_string());
+        let c = PackageId::new("c".to_string(), "1.0.0".to_string());
+        graph.add_node(make_node("a", "1.0.0", true));
+        graph.add_node(make_node("b", "1.0.0", false));
+        graph.add_node(make_node("c", "1.0.0", false));
+        graph.add_dependency(&a, &b);
+        graph.add_dependency(&b, &c);
+        assert!(graph.has_cycles().is_empty());
     }
 
     #[tokio::test]
@@ -500,6 +488,6 @@ mod tests {
         let projects = vec![];
         let graph = resolver.build_dependency_graph(&projects).await.unwrap();
 
-        assert_eq!(graph.nodes.len(), 0);
+        assert_eq!(graph.node_count(), 0);
     }
 }

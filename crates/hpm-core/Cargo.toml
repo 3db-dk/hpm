@@ -40,6 +40,7 @@ ignore.workspace = true
 base64.workspace = true
 glob = "0.3"
 time.workspace = true
+petgraph.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # NTFS junctions for dev-link installs. Junctions work without Developer

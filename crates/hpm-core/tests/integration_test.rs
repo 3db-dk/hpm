@@ -93,7 +93,6 @@ package-a = { url = "https://example.com/packages/package-a/1.0.0/package-a-1.0.
     // Package A should be marked as needed (root dependency)
     let root_packages: Vec<_> = dependency_graph
         .nodes()
-        .values()
         .filter(|node| node.is_root)
         .collect();
 

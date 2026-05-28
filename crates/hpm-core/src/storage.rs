@@ -368,7 +368,6 @@ impl StorageManager {
         // 4. Collect root packages (directly required by projects)
         let root_packages: Vec<PackageId> = dependency_graph
             .nodes()
-            .values()
             .filter(|node| node.is_root)
             .map(|node| node.id.clone())
             .collect();
