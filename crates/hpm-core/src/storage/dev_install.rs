@@ -101,11 +101,18 @@ pub(super) fn create_dev_link(
 /// exists (typically by reading `symlink_metadata` themselves) — this helper
 /// is a pure file-type predicate that doesn't follow links.
 ///
-/// Returns `Err` on Windows when `junction::exists` fails (typically a
-/// permission or FS error on the path the caller just stat'd). The error
-/// must propagate — silently treating "junction check failed" as "not a
-/// junction" would let `remove_dir_all` recurse into the user's workspace
-/// the next time around.
+/// Returns `Err` on Windows when `junction::exists` fails for a *genuine*
+/// reason (permission denied, FS error). The error must propagate —
+/// silently treating "junction check failed" as "not a junction" would let
+/// `remove_dir_all` recurse into the user's workspace the next time around.
+///
+/// `ERROR_NOT_A_REPARSE_POINT` (Windows error 4390) is *not* a genuine
+/// failure — it is how the underlying `DeviceIoControl(FSCTL_GET_REPARSE_POINT)`
+/// reports "this exists but isn't a reparse point", i.e. the negative
+/// answer for our predicate. Map it to `Ok(false)`. Without this, every
+/// `_dev/<slug>@<version>/` install made with `install_as_dev_copy`
+/// (a plain directory, no reparse point) raises an IoOp on
+/// inspection, breaking orphan detection and the copy→link switch path.
 pub(super) fn is_link_entry(
     meta: &std::fs::Metadata,
     path: &std::path::Path,
@@ -118,7 +125,12 @@ pub(super) fn is_link_entry(
         // Older Rust stdlib reports junctions as non-symlinks; ask the
         // junction crate directly so callers never accidentally fall through
         // to `remove_dir_all` on a reparse point.
-        junction::exists(path)
+        const ERROR_NOT_A_REPARSE_POINT: i32 = 4390;
+        match junction::exists(path) {
+            Ok(b) => Ok(b),
+            Err(e) if e.raw_os_error() == Some(ERROR_NOT_A_REPARSE_POINT) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
     #[cfg(not(windows))]
     {
@@ -197,4 +209,50 @@ pub(super) fn clear_existing_install(
         );
     }
     remove_install_entry(target_dir, &meta, name, version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for the Windows reparse-point bug: a plain directory
+    /// (a `DevCopy` install) must inspect as "not a link", not as
+    /// an `ERROR_NOT_A_REPARSE_POINT` IoOp.
+    ///
+    /// The bug only surfaced on Windows (where `junction::exists` rides
+    /// over a FSCTL ioctl that reports 4390 for non-reparse entries),
+    /// but the *contract* — `is_link_entry` on a real directory returns
+    /// `Ok(false)` — is platform-independent. Asserting it on every host
+    /// keeps the contract from quietly re-regressing under future tightenings.
+    #[test]
+    fn plain_directory_inspects_as_non_link() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("dev_copy_install");
+        std::fs::create_dir(&dir).unwrap();
+        let meta = std::fs::symlink_metadata(&dir).unwrap();
+
+        let result = is_link_entry(&meta, &dir);
+        assert!(
+            matches!(result, Ok(false)),
+            "expected Ok(false) for a plain directory, got {:?}",
+            result
+        );
+    }
+
+    /// On Unix, a symlink to a directory must inspect as a link. The
+    /// Windows `junction` branch isn't exercised by this test (the entry
+    /// is a symlink, so the early return fires first); pair with a manual
+    /// Windows-side smoke test for full coverage.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_inspects_as_link() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let link = tmp.path().join("the_link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let meta = std::fs::symlink_metadata(&link).unwrap();
+
+        assert!(matches!(is_link_entry(&meta, &link), Ok(true)));
+    }
 }
