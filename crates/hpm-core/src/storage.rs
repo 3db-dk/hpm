@@ -353,9 +353,7 @@ impl StorageManager {
 
         // 2. Discover projects using project configuration
         let project_discovery = ProjectDiscovery::new(projects_config.clone());
-        let projects = project_discovery
-            .find_projects()
-            .map_err(|e| StorageError::ProjectDiscovery(e.to_string()))?;
+        let projects = project_discovery.find_projects()?;
 
         if projects.is_empty() {
             warn!(
@@ -371,10 +369,7 @@ impl StorageManager {
 
         // 3. Build dependency graph from discovered projects
         let resolver = DependencyResolver::new(Arc::new(self.clone()));
-        let dependency_graph = resolver
-            .build_dependency_graph(&projects)
-            .await
-            .map_err(|e| StorageError::DependencyResolution(e.to_string()))?;
+        let dependency_graph = resolver.build_dependency_graph(&projects).await?;
 
         // 4. Collect root packages (directly required by projects)
         let root_packages: Vec<PackageId> = dependency_graph
@@ -544,9 +539,7 @@ impl StorageManager {
         }
 
         let project_discovery = ProjectDiscovery::new(projects_config.clone());
-        let projects = project_discovery
-            .find_projects()
-            .map_err(|e| StorageError::ProjectDiscovery(e.to_string()))?;
+        let projects = project_discovery.find_projects()?;
 
         if projects.is_empty() {
             warn!(

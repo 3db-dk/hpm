@@ -1,5 +1,7 @@
 //! [`StorageError`] — failures raised by the global package store.
 
+use crate::dependency::DependencyError;
+use crate::discovery::DiscoveryError;
 use hpm_package::ManifestLoadError;
 
 #[derive(Debug, thiserror::Error)]
@@ -25,11 +27,11 @@ pub enum StorageError {
     #[error("Feature not implemented: {0}")]
     NotImplemented(String),
 
-    #[error("Project discovery failed: {0}")]
-    ProjectDiscovery(String),
+    #[error(transparent)]
+    ProjectDiscovery(#[from] DiscoveryError),
 
-    #[error("Dependency resolution failed: {0}")]
-    DependencyResolution(String),
+    #[error(transparent)]
+    DependencyResolution(Box<DependencyError>),
 
     #[error("Python cleanup failed: {0}")]
     PythonCleanup(String),
@@ -44,4 +46,10 @@ pub enum StorageError {
         #[source]
         source: std::io::Error,
     },
+}
+
+impl From<DependencyError> for StorageError {
+    fn from(err: DependencyError) -> Self {
+        Self::DependencyResolution(Box::new(err))
+    }
 }

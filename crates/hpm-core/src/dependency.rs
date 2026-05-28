@@ -173,7 +173,7 @@ impl DependencyResolver {
         let installed_packages = self
             .storage_manager
             .list_installed()
-            .map_err(|e| DependencyError::StorageRead(e.to_string()))?;
+            .map_err(DependencyError::from)?;
 
         info!("Building dependency graph from {} projects", projects.len());
 
@@ -367,11 +367,14 @@ impl DependencyResolver {
 
 #[derive(Debug, thiserror::Error)]
 pub enum DependencyError {
-    #[error("Storage read error: {0}")]
-    StorageRead(String),
+    #[error(transparent)]
+    Storage(#[from] Box<crate::storage::StorageError>),
+}
 
-    #[error("Dependency resolution error: {0}")]
-    ResolutionError(String),
+impl From<crate::storage::StorageError> for DependencyError {
+    fn from(err: crate::storage::StorageError) -> Self {
+        Self::Storage(Box::new(err))
+    }
 }
 
 #[cfg(test)]
