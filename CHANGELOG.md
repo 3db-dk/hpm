@@ -96,6 +96,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `crates/hpm-cli/tests/cli_validation.rs`. The strategies and
   harnesses no longer compile as part of the library.
 
+### Refactor pass (post-0.16.0)
+
+Workspace-wide consolidation pass — structural cleanup, no behavioural
+regressions intended. Item-by-item changes:
+
+#### Removed
+
+- **`hpm-python` crate.** Its only consumers were `hpm-core` and
+  `hpm-cli`, both internal to this workspace. Folded into
+  `hpm-core` as the `hpm_core::python` submodule. External callers
+  rewrite `use hpm_python::X` to `use hpm_core::python::X`. The
+  workspace goes from five crates to four; `ProjectError::PythonResolution`
+  keeps its `Box<dyn Error>` source but the dep-graph rationale for it
+  (avoiding anyhow in hpm-core) no longer applies.
+- **`.pre-commit-config.yaml`.** Duplicated the `.githooks/pre-commit`
+  native hook with a Python tool prerequisite. The native hook is now
+  self-contained (no `just` dependency either) and remains the one
+  install path: `git config core.hooksPath .githooks`.
+- **Unused workspace `tokio-test` and `thiserror`-in-hpm-config deps**
+  (`cargo machete`).
+
+#### Renamed
+
+- **`hpm_config::ProjectConfig` → `ProjectPaths`**, file
+  `crates/hpm-config/src/project.rs` → `project_paths.rs`. The type
+  carries per-project derived paths (`packages_dir`, `lock_file`,
+  `manifest_file`), not user-facing config; the new name says so.
+  `Config::load_project_config(root)` → `Config::project_paths(root)`
+  (no `load_` because it derives paths from a project root, no disk
+  read).
+- **`hpm_python::dependency` → `hpm_core::python::collection`** and
+  **`hpm_core::dependency` → `hpm_core::graph`.** Three crates each had
+  a `dependency.rs` module covering different concerns (manifest specs,
+  Python collection, runtime graph). Renames eliminate the grep
+  collisions; `hpm_package::dependency` (the foundational spec
+  module) keeps its name.
+
+#### Changed
+
+- **`LockError` reshape.** The `Read`/`Parse`/`Serialize`/`Write`
+  variants — structurally identical to `ConfigError`'s — collapse into
+  a single `File(#[from] hpm_package::TomlFileError)` variant. Callers
+  matching `LockError::Read { path, source }` etc. must now match
+  `LockError::File(TomlFileError::Io(IoOp { path, source, .. }))` or
+  similar; the underlying data is unchanged.
+- **`hpm_config::ConfigError`** is now a name re-export of
+  `hpm_package::TomlFileError`. The four old variants are gone for
+  the same reason; same migration path.
+- **`RegistryError::IoError(std::io::Error)` and `PackError::Io(io::Error)`**
+  now wrap `hpm_package::IoOp` for consistency with the rest of the
+  workspace's IO error shape. Display goes from `"I/O error: ..."` to
+  `"failed to <verb> <path>"`.
+- **`DependencyGraph::nodes()`** returns
+  `impl Iterator<Item = &PackageNode>` instead of
+  `&HashMap<PackageId, PackageNode>`. Internally backed by
+  `petgraph::DiGraph`; cycle detection switched to
+  `petgraph::algo::tarjan_scc` and now reports each cycle once as an
+  SCC. `add_node` is idempotent on `PackageId`; mutating an existing
+  node goes through the new `node_mut(&id)`. `add_dependency` for a
+  missing endpoint is a no-op (formerly created a phantom edges entry).
+- **`ResolvedDependencySet::add_package`** now canonicalizes the name
+  per PEP 503 on insert. Previously two paths could feed `Foo-Bar` and
+  `foo_bar` and produce two entries with two distinct content hashes
+  (one of them mismatched against the dist-info on disk). The fix
+  closes that latent venv-rebuild bug.
+
+#### Added
+
+- **`hpm_package::TomlFileError`** — shared `Read`/`Parse`/`Serialize`/
+  `Write` shape for TOML-on-disk files; consumed by `ConfigError` and
+  by `LockError`'s `File` variant.
+- **`hpm_package::atomic_write(path, content) -> Result<(), IoOp>`** —
+  stage-and-rename helper. Four pre-existing crash-safe writes (Config,
+  LockFile, Houdini manifest, venv metadata) collapse to one
+  implementation site.
+- **`hpm_package::user_home()`** — `$HOME`/`%USERPROFILE%` lookup.
+  Replaces byte-identical `pub(crate)` helpers that lived in
+  hpm-config and (formerly) hpm-python.
+- **`hpm_core::python::pep503::normalize`** — exposed PEP 503 name
+  canonicalization (used by `add_package` and venv presence checks).
+- **`ResolvedDependencySet::from_pip_compile_output(output, py_version)`** —
+  named constructor parsing `uv pip compile` stdout. Replaces two
+  near-identical parsers in `resolver` and `script_env`.
+- **`hpm_cli::error::CliResultExt`** — extension trait with
+  `.cli_package(cmd)` / `.cli_network(cmd)` / `.cli_config(cmd)` /
+  `.cli_io(cmd)` that lift a `Result<T, E>` into a `CliResult<T>` with
+  the standard `Use 'hpm <cmd> --help' …` hint. Fifteen identical
+  map_err blocks in the CLI dispatch loop collapse to one method call
+  each.
+
+#### Internal
+
+- **All `#[cfg(test)] mod tests { ... }` blocks longer than ~300 lines
+  pulled into sibling `<file>_tests.rs` files**, included via
+  `#[cfg(test)] #[path = "<file>_tests.rs"] mod tests;`. Source files
+  now reflect actual code surface: `manifest.rs` 1850 → 492,
+  `storage.rs` 1761 → 766, `project.rs` 1606 → 969, `env_value.rs`
+  822 → 521 lines.
+- **`time` crate replaces hand-rolled date math.** `lock.rs` had
+  ~70 lines of leap-year accounting in `ymd_to_days` / `days_to_ymd` /
+  `is_leap_year`. Replaced with `time::Date::from_calendar_date` +
+  `OffsetDateTime::now_utc()` and `format_description!`.
+- **`.githooks/pre-commit` is now self-contained** (`cargo fmt --check`
+  + `cargo clippy` directly), no `just` prerequisite. The
+  `pre-commit` recipe in justfile stays as a manual-invocation CLI.
+
 ## [0.16.0] - 2026-05-28
 
 Manifest 2.0. Five sections of `hpm.toml` change shape; older manifests
