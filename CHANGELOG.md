@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`hpm check` warns when a native-binary package leaves its Houdini
+  range unbounded above.** A package declaring `[compat].platforms`
+  ships DSOs whose ABI is coupled to one Houdini major; an unbounded
+  range like `">=21"` lets the package install cleanly on a newer
+  Houdini and then crash at load. The warning suggests either a
+  bounded form (`"^21"`) or an explicit tested range
+  (`">=20.5, <22"`). Pure-data / pure-Python packages (no
+  `[compat].platforms`) are unaffected.
+
+### Changed
+- **`hpm init` default `[compat].houdini` is now `"^21"`** (Houdini
+  21.x only) instead of `">=20.5"`. The previous default left the
+  upper bound open, which is the wrong default for any package that
+  ships native binaries. Authors of pure-data packages can widen the
+  range explicitly after `hpm init`.
+
 ## [0.16.0] - 2026-05-28
 
 Manifest 2.0. Five sections of `hpm.toml` change shape; older manifests

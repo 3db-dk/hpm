@@ -569,7 +569,13 @@ impl PackageManifest {
                 categories: None,
             },
             compat: Some(CompatConfig {
-                houdini: Some(">=20.5".to_string()),
+                // Bounded-major default. `"^21"` lowers to
+                // `>=21, <22` — Houdini 21.x only. This gives authors
+                // who ship native binaries (`[compat].platforms`) a
+                // safe starting point; authors of pure-data / pure-
+                // Python packages can widen the range (e.g.
+                // `">=20.5, <23"`) after testing.
+                houdini: Some("^21".to_string()),
                 platforms: Vec::new(),
             }),
             stage: None,

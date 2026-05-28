@@ -206,6 +206,36 @@ pub fn houdini_req_lower_bound(req: &str) -> Option<String> {
     None
 }
 
+/// Whether a Cargo-style houdini version requirement has an upper bound.
+///
+/// Returns `true` if any comma-separated clause implies an upper bound
+/// (`<`, `<=`, `=`, `==`, `^`, `~`, or a bare version — bare aliases
+/// caret). Pure lower-bound clauses (`>=`, `>`) do not contribute.
+///
+/// Used by `hpm check` to flag packages that ship native binaries (have
+/// `[compat].platforms` declared) yet leave their Houdini range
+/// unbounded above — a footgun, since DSOs compiled against one Houdini
+/// major typically won't load in the next.
+pub fn houdini_req_has_upper_bound(req: &str) -> bool {
+    req.trim()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .any(|p| {
+            // Lower-only forms — these don't bound above.
+            if let Some(rest) = p.strip_prefix(">=") {
+                return !is_simple_version(rest.trim());
+            }
+            if let Some(rest) = p.strip_prefix('>') {
+                return !is_simple_version(rest.trim());
+            }
+            // Everything else implies an upper bound when it parses:
+            //   <X, <=X (explicit upper), =X, ==X (exact),
+            //   ^X, ~X, bare X (semver compatibility ranges).
+            true
+        })
+}
+
 /// Translate a Cargo-style version requirement into a Houdini expression.
 ///
 /// Each comma-separated comparator becomes one `houdini_version <op> '<v>'`
@@ -432,6 +462,27 @@ mod tests {
     fn comma_separated_comparators_combine_with_and() {
         let s = compile_houdini_req(">=21, <22.5").unwrap();
         assert_eq!(s, "(houdini_version >= '21' and houdini_version < '22.5')");
+    }
+
+    #[test]
+    fn houdini_upper_bound_detection() {
+        // Lower-only forms — no upper bound.
+        assert!(!houdini_req_has_upper_bound(">=20.5"));
+        assert!(!houdini_req_has_upper_bound(">21"));
+        assert!(!houdini_req_has_upper_bound(">=20.5, >=21"));
+        // Everything else has an upper bound.
+        assert!(houdini_req_has_upper_bound("^21"));
+        assert!(houdini_req_has_upper_bound("~21.5"));
+        assert!(houdini_req_has_upper_bound("21"));
+        assert!(houdini_req_has_upper_bound("=21"));
+        assert!(houdini_req_has_upper_bound("==21"));
+        assert!(houdini_req_has_upper_bound("<22"));
+        assert!(houdini_req_has_upper_bound("<=21.5"));
+        // Mixed — any upper-bounding clause is enough.
+        assert!(houdini_req_has_upper_bound(">=20.5, <22"));
+        assert!(houdini_req_has_upper_bound(">=20.5, ^21"));
+        // Empty / unparseable — no upper bound.
+        assert!(!houdini_req_has_upper_bound(""));
     }
 
     #[test]

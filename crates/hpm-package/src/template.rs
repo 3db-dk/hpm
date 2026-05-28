@@ -116,7 +116,7 @@ readme = "README.md"
 keywords = ["houdini"]
 
 [compat]
-houdini = ">=20.5"
+houdini = "^21"
 "#,
                 manifest.package.path,
                 manifest.package.name,

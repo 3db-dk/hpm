@@ -166,7 +166,7 @@ hpm init [OPTIONS] [NAME]
 | `--author <name>` | `git config user.*` if set | Author (`"Name <email>"`). |
 | `--version <v>` | `0.1.0` | Initial version. |
 | `--license <id>` | `MIT` | License identifier. |
-| `--houdini <range>` | `>=20.5` | `[compat].houdini` Cargo-style range (e.g. `">=20.5"`, `"^21"`, `">=20.5, <22"`). |
+| `--houdini <range>` | `^21` | `[compat].houdini` Cargo-style range (e.g. `"^21"`, `">=20.5, <22"`, `">=21"`). Default is bounded to a single Houdini major — see [`[compat]`](#compat) for why. |
 | `--bare` | off | Skip standard directories; create only `hpm.toml` and `README.md`. |
 | `--vcs <vcs>` | `git` | `git` or `none`. |
 
@@ -546,16 +546,21 @@ All sections, in the order they appear in practice:
 
 ### `[compat]`
 
-Target-environment compatibility for the package. Currently exposes one
-axis — `houdini` — as a Cargo-style version requirement string:
+Target-environment compatibility for the package. Two axes:
+
+- `houdini` — a Cargo-style version requirement string.
+- `platforms` — the native platforms this package supports. Omit (or
+  use `["universal"]`) for pure-data / pure-Python packages; list the
+  platforms the package ships binaries for otherwise.
 
 ```toml
 [compat]
-houdini = ">=20.5, <22"      # explicit range
-# houdini = "^21"             # caret: >=21, <22
-# houdini = "~21.5"           # tilde: >=21.5, <21.6
-# houdini = "20.5"            # bare = caret = >=20.5, <21
-# houdini = ">=20.5"          # unbounded above
+houdini = "^21"                                # default — Houdini 21.x only
+# houdini = ">=20.5, <22"                       # explicit range
+# houdini = "~21.5"                             # tilde: >=21.5, <21.6
+# houdini = "21"                                # bare = caret = ^21
+# houdini = ">=20.5"                            # unbounded above — only safe for pure-data
+platforms = ["linux-x86_64", "macos-aarch64"]   # omit for pure-data
 ```
 
 The supported operators are `=`, `>=`, `>`, `<=`, `<`, `^`, `~`, and the
@@ -566,6 +571,21 @@ bare-version shorthand (aliases caret). Multiple comparators combine with
 The lower bound of `[compat].houdini` on the **root** manifest drives the
 bundled Python version. A dependency package's range is a compatibility
 floor only and does not influence the venv ABI. See [Python guide](python-guide.md).
+
+#### Why the default is bounded above
+
+Houdini's binary compatibility doesn't survive a major-version bump.
+A DSO compiled against the Houdini 21 SDK won't load in Houdini 22;
+some Python module signatures shift between majors too. The init
+template defaults to `houdini = "^21"` (Houdini 21.x only) for that
+reason — authors who ship binaries get a safe starting point, and
+authors of pure-data / pure-Python packages can widen the range
+explicitly after testing on the next major.
+
+`hpm check` warns when `[compat].platforms` is non-empty but
+`[compat].houdini` is unbounded above (e.g. `">=21"`). That catches
+the failure mode where a native-binary package installs cleanly on a
+newer Houdini and then crashes at load.
 
 ### `[dependencies]`
 

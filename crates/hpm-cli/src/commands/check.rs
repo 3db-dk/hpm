@@ -263,6 +263,24 @@ fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut Valid
                 result.add_error(format!("[compat].houdini '{}': {}", req, e));
             }
         }
+
+        // Native-binary packages that leave their Houdini range
+        // unbounded above are a footgun: DSOs compiled against one
+        // Houdini major typically won't load in the next, so the
+        // package will install cleanly on a newer Houdini and then
+        // crash at load. Surface it as a warning so the author can
+        // either narrow the range or confirm they really mean to ship
+        // platform-agnostic content.
+        if !compat.platforms.is_empty() && !hpm_package::houdini_req_has_upper_bound(req) {
+            result.add_warning(format!(
+                "[compat].platforms is declared but [compat].houdini = \"{}\" \
+                 has no upper bound. Native binaries compiled against one \
+                 Houdini major typically won't load in the next. Consider \
+                 \"^21\" (Houdini 21.x only) or an explicit range like \
+                 \">=20.5, <22\".",
+                req
+            ));
+        }
     }
 }
 
@@ -480,5 +498,115 @@ houdini = ">=20.5"
         assert!(manifest.is_some());
         assert!(result.is_valid);
         assert_eq!(result.info_messages.len(), 2); // Found + valid syntax
+    }
+
+    #[tokio::test]
+    async fn warns_when_platforms_declared_with_unbounded_houdini() {
+        // A package declaring [compat].platforms but leaving the houdini
+        // range unbounded above ships DSOs that will likely fail to load
+        // on the next Houdini major. `hpm check` must flag this.
+        let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path();
+        let manifest_path = project_dir.join("hpm.toml");
+        std::fs::write(
+            &manifest_path,
+            r#"
+[package]
+path = "studio/needs-bound"
+name = "Needs Bound"
+version = "1.0.0"
+
+[compat]
+houdini = ">=21"
+platforms = ["linux-x86_64"]
+"#,
+        )
+        .unwrap();
+
+        let mut result = ValidationResult::new();
+        let manifest = validate_manifest_file(&manifest_path, &mut result)
+            .await
+            .unwrap()
+            .expect("manifest parses");
+        super::validate_houdini_compatibility(&manifest, &mut result);
+
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("no upper bound") && w.contains("Native binaries")),
+            "expected upper-bound warning, got: {:?}",
+            result.warnings
+        );
+    }
+
+    #[tokio::test]
+    async fn no_warning_when_platforms_declared_with_bounded_houdini() {
+        // Same shape but with a bounded houdini range — no warning.
+        let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path();
+        let manifest_path = project_dir.join("hpm.toml");
+        std::fs::write(
+            &manifest_path,
+            r#"
+[package]
+path = "studio/bounded"
+name = "Bounded"
+version = "1.0.0"
+
+[compat]
+houdini = "^21"
+platforms = ["linux-x86_64"]
+"#,
+        )
+        .unwrap();
+
+        let mut result = ValidationResult::new();
+        let manifest = validate_manifest_file(&manifest_path, &mut result)
+            .await
+            .unwrap()
+            .expect("manifest parses");
+        super::validate_houdini_compatibility(&manifest, &mut result);
+
+        assert!(
+            !result.warnings.iter().any(|w| w.contains("no upper bound")),
+            "expected no upper-bound warning, got: {:?}",
+            result.warnings
+        );
+    }
+
+    #[tokio::test]
+    async fn no_warning_when_no_platforms_declared() {
+        // Pure-data / pure-Python package — unbounded houdini range is
+        // fine, no warning.
+        let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path();
+        let manifest_path = project_dir.join("hpm.toml");
+        std::fs::write(
+            &manifest_path,
+            r#"
+[package]
+path = "studio/pure"
+name = "Pure"
+version = "1.0.0"
+
+[compat]
+houdini = ">=21"
+"#,
+        )
+        .unwrap();
+
+        let mut result = ValidationResult::new();
+        let manifest = validate_manifest_file(&manifest_path, &mut result)
+            .await
+            .unwrap()
+            .expect("manifest parses");
+        super::validate_houdini_compatibility(&manifest, &mut result);
+
+        assert!(
+            !result.warnings.iter().any(|w| w.contains("no upper bound")),
+            "expected no warning for pure-data package, got: {:?}",
+            result.warnings
+        );
     }
 }
