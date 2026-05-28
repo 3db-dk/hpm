@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-05-28
+
 ### Added
 - **`hpm check` warns when a native-binary package leaves its Houdini
   range unbounded above.** A package declaring `[compat].platforms`
