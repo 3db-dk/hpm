@@ -12,6 +12,10 @@ categories.workspace = true
 rust-version.workspace = true
 description = "HPM (Houdini Package Manager) command-line interface"
 
+[lib]
+name = "hpm_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "hpm"
 path = "src/main.rs"

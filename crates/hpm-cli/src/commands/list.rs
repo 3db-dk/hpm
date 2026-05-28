@@ -90,6 +90,7 @@ use tracing::info;
 ///
 /// ```no_run
 /// use std::path::PathBuf;
+/// use hpm_cli::commands::list::list_dependencies;
 /// # async fn example() -> anyhow::Result<()> {
 /// // List from current directory
 /// list_dependencies(None).await?;

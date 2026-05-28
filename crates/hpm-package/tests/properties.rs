@@ -6,9 +6,9 @@ use proptest::prelude::*;
 
 use hpm_package::DependencySpec;
 use hpm_package::HoudiniEnvValue;
-use hpm_package::{CompatConfig, PackageInfo, PackageManifest};
 use hpm_package::PackagePath;
 use hpm_package::PythonDependencySpec;
+use hpm_package::{CompatConfig, PackageInfo, PackageManifest};
 
 /// Strategy to generate valid slug segments (kebab-case)
 pub fn slug_strategy() -> impl Strategy<Value = String> {

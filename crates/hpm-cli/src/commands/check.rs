@@ -12,6 +12,12 @@ pub struct ValidationResult {
     pub info_messages: Vec<String>,
 }
 
+impl Default for ValidationResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ValidationResult {
     pub fn new() -> Self {
         Self {
