@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-05-28
+
+### Fixed
+
+- **Windows `_dev/` install handling.** `is_link_entry` propagated
+  `ERROR_NOT_A_REPARSE_POINT` (Windows error 4390) from
+  `junction::exists` as a hard IoOp, breaking every code path that
+  inspected a `DevCopy` install (plain directory, not a junction).
+  Symptoms on Windows: dev installs never showed up in orphan
+  detection (`cleanup_comprehensive_reports_dev_orphans`,
+  `unreferenced_dev_install_is_orphan`,
+  `unresolvable_path_dep_does_not_block_cleanup`), and switching a
+  dev install from copy to link raised an IoOp instead of replacing
+  the entry. Regression introduced when 0.17.0's `b756c36 refactor:
+  remove silent-fallback patterns that hid bugs` tightened the prior
+  `junction::exists(path).unwrap_or(false)` into a propagating call —
+  the tightening dropped a legitimate negative answer along with the
+  failure cases. Fix: match on `junction::exists`, route 4390 to
+  `Ok(false)`, propagate everything else. Linux and macOS were never
+  affected.
+
 ## [0.17.0] - 2026-05-28
 
 ### Added
