@@ -4,7 +4,7 @@
 //! section types live in submodules under [`crate::manifest`]:
 //!
 //! - [`compat`] — `[compat]` (Houdini range, supported platforms)
-//! - [`env`] — `[runtime]` entries and `EnvMethod`
+//! - [`env`][mod@env] — `[runtime]` entries and `EnvMethod`
 //! - [`error`] — load-time errors
 //! - [`info`] — `[package]` metadata
 //! - [`registry`] — `[[registries]]` entries
@@ -490,9 +490,171 @@ impl PackageManifest {
 mod tests {
     use super::*;
 
-    // empty_name/empty_version validation tests removed - covered by
-    // prop_malformed_package_names_rejected and prop_malformed_versions_rejected
-    // in tests/properties.rs which test validation with randomized inputs
+    fn make_manifest() -> PackageManifest {
+        PackageManifest::new(
+            PackagePath::new("studio/test").unwrap(),
+            "Test".to_string(),
+            "1.0.0".to_string(),
+            None,
+            Vec::new(),
+            None,
+        )
+    }
+
+    #[test]
+    fn strict_rejects_empty_name_and_version() {
+        // Both `name` and `version` empty: independent concerns, so the
+        // strict pass should collect both errors in one report rather than
+        // short-circuiting on the first.
+        let mut m = make_manifest();
+        m.package.name = String::new();
+        m.package.version = String::new();
+        let report = m.validate_with(ValidationLevel::Strict);
+        assert!(!report.is_ok());
+        assert!(
+            report.errors.iter().any(|e| e.contains("name")),
+            "missing name error: {:?}",
+            report.errors
+        );
+        assert!(
+            report.errors.iter().any(|e| e.contains("version")),
+            "missing version error: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn strict_rejects_non_semver_version() {
+        let mut m = make_manifest();
+        m.package.version = "not.a.version".to_string();
+        let report = m.validate_with(ValidationLevel::Strict);
+        assert!(!report.is_ok());
+        assert!(
+            report.errors.iter().any(|e| e.contains("semantic version")),
+            "{:?}",
+            report.errors
+        );
+        // validate() collapses the report to its first error.
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn strict_rejects_place_rule_with_empty_from_or_to() {
+        let mut m = make_manifest();
+        m.compat.platforms = vec![Platform::LinuxX86_64];
+        m.stage.platform.entries.insert(
+            "linux-x86_64".to_string(),
+            StagePlatformRules {
+                place: vec![
+                    PlaceRule {
+                        from: "   ".to_string(),
+                        to: "dso/foo.so".to_string(),
+                    },
+                    PlaceRule {
+                        from: "build/foo.so".to_string(),
+                        to: String::new(),
+                    },
+                ],
+            },
+        );
+        let report = m.validate_with(ValidationLevel::Strict);
+        assert_eq!(
+            report.errors.len(),
+            2,
+            "one error per malformed rule: {:?}",
+            report.errors
+        );
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("place[0]") && e.contains("`from`")),
+            "{:?}",
+            report.errors
+        );
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("place[1]") && e.contains("`to`")),
+            "{:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn strict_rejects_unknown_stage_platform_key() {
+        let mut m = make_manifest();
+        m.stage
+            .platform
+            .entries
+            .insert("not-a-platform".to_string(), StagePlatformRules::default());
+        let report = m.validate_with(ValidationLevel::Strict);
+        assert!(!report.is_ok());
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("[stage.platform.not-a-platform]")),
+            "{:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn strict_rejects_empty_conditional_cmd_list() {
+        let mut m = make_manifest();
+        m.scripts.commands.insert(
+            "tt".to_string(),
+            ScriptEntry::WithEnv(ScriptEnv {
+                cmd: EnvValue::Conditional(Vec::new()),
+                python: None,
+                requirements: Vec::new(),
+            }),
+        );
+        let report = m.validate_with(ValidationLevel::Strict);
+        assert!(!report.is_ok());
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("tt") && e.contains("must not be empty")),
+            "{:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn strict_accepts_plain_script_entries() {
+        // Regression: the script-validation loop must early-return for
+        // `ScriptEntry::Plain` and `EnvValue::Flat` rather than complain.
+        let mut m = make_manifest();
+        m.scripts.commands.insert(
+            "setup".to_string(),
+            ScriptEntry::Plain("echo hi".to_string()),
+        );
+        m.scripts.commands.insert(
+            "build".to_string(),
+            ScriptEntry::WithEnv(ScriptEnv {
+                cmd: EnvValue::Flat("cargo build".to_string()),
+                python: None,
+                requirements: Vec::new(),
+            }),
+        );
+        let report = m.validate_with(ValidationLevel::Strict);
+        assert!(report.is_ok(), "{:?}", report.errors);
+    }
+
+    #[test]
+    fn publish_level_still_runs_structural_errors() {
+        // Publish layers warnings on top of strict — it must not drop the
+        // hard errors from the strict pass.
+        let mut m = make_manifest();
+        m.package.name = String::new();
+        let report = m.validate_with(ValidationLevel::Publish);
+        assert!(!report.is_ok(), "structural error should be retained");
+        assert!(report.errors.iter().any(|e| e.contains("name")));
+    }
 
     #[test]
     fn validate_with_publish_emits_warnings_for_missing_metadata() {
