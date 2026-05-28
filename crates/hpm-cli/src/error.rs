@@ -171,6 +171,57 @@ impl CliError {
 
 pub type CliResult<T = ()> = Result<T, CliError>;
 
+/// Build the standard `"Use 'hpm <cmd> --help' for usage information"`
+/// help string. Exposed so test fixtures and ad-hoc call sites can produce
+/// identical text without re-typing it.
+pub fn help_for(command: &str) -> String {
+    format!("Use 'hpm {command} --help' for usage information")
+}
+
+/// Extension trait that promotes a `Result<T, E: Into<anyhow::Error>>` into
+/// a [`CliResult`] with the standard "Use 'hpm <cmd> --help' …" hint.
+///
+/// Replaces the repeated map_err boilerplate that lived in [`crate::run`]
+/// for every subcommand:
+///
+/// ```ignore
+/// commands::add::add(...)
+///     .await
+///     .map_err(|e| CliError::package(e, Some("Use 'hpm add --help' …".into())))?;
+/// ```
+///
+/// becomes
+///
+/// ```ignore
+/// commands::add::add(...).await.cli_package("add")?;
+/// ```
+pub trait CliResultExt<T> {
+    /// Lift the error into [`CliError::Package`] with the standard
+    /// `"Use 'hpm <cmd> --help' …"` hint.
+    fn cli_package(self, command: &str) -> CliResult<T>;
+    /// Lift the error into [`CliError::Network`] with the standard hint.
+    fn cli_network(self, command: &str) -> CliResult<T>;
+    /// Lift the error into [`CliError::Config`] with the standard hint.
+    fn cli_config(self, command: &str) -> CliResult<T>;
+    /// Lift the error into [`CliError::Io`] with the standard hint.
+    fn cli_io(self, command: &str) -> CliResult<T>;
+}
+
+impl<T, E: Into<anyhow::Error>> CliResultExt<T> for Result<T, E> {
+    fn cli_package(self, command: &str) -> CliResult<T> {
+        self.map_err(|e| CliError::package(e, Some(help_for(command))))
+    }
+    fn cli_network(self, command: &str) -> CliResult<T> {
+        self.map_err(|e| CliError::network(e, Some(help_for(command))))
+    }
+    fn cli_config(self, command: &str) -> CliResult<T> {
+        self.map_err(|e| CliError::config(e, Some(help_for(command))))
+    }
+    fn cli_io(self, command: &str) -> CliResult<T> {
+        self.map_err(|e| CliError::io(e, Some(help_for(command))))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

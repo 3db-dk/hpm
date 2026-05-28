@@ -299,7 +299,7 @@ pub mod output;
 pub mod progress;
 use commands::init_package;
 pub use console::{ColorChoice, Console, Verbosity};
-use error::{CliError, CliResult, ExitStatus};
+use error::{CliError, CliResult, CliResultExt, ExitStatus};
 pub use output::OutputFormat;
 #[derive(Parser)]
 #[command(name = "hpm", version, about = "HPM - Houdini Package Manager")]
@@ -672,12 +672,7 @@ async fn run_command(
                 base_dir: directory.clone(), // Use directory from CLI flag
             };
 
-            let package_name = init_package(options).await.map_err(|e| {
-                CliError::package(
-                    e,
-                    Some("Try 'hpm init --help' for usage information".to_string()),
-                )
-            })?;
+            let package_name = init_package(options).await.cli_package("init")?;
 
             if output_format == OutputFormat::Human {
                 console.success(format!(
@@ -703,12 +698,7 @@ async fn run_command(
                 *optional,
             )
             .await
-            .map_err(|e| {
-                CliError::package(
-                    e,
-                    Some("Use 'hpm add --help' for usage information".to_string()),
-                )
-            })?;
+            .cli_package("add")?;
 
             if output_format == OutputFormat::Human {
                 let msg = if packages.len() == 1 {
@@ -723,12 +713,7 @@ async fn run_command(
             let config = load_cli_config()?;
             commands::remove::remove_package(&config, package.clone(), manifest.clone())
                 .await
-                .map_err(|e| {
-                    CliError::package(
-                        e,
-                        Some("Use 'hpm remove --help' for usage information".to_string()),
-                    )
-                })?;
+                .cli_package("remove")?;
 
             if output_format == OutputFormat::Human {
                 console.success(format!("Removed dependency '{}'", package));
@@ -751,12 +736,7 @@ async fn run_command(
             let config = load_cli_config()?;
             commands::update::update_packages(&config, options)
                 .await
-                .map_err(|e| {
-                    CliError::package(
-                        e,
-                        Some("Use 'hpm update --help' for usage information".to_string()),
-                    )
-                })?;
+                .cli_package("update")?;
 
             if output_format == OutputFormat::Human {
                 console.success("Package update completed");
@@ -766,21 +746,11 @@ async fn run_command(
             if *tree {
                 commands::list::list_dependencies_tree(manifest.clone())
                     .await
-                    .map_err(|e| {
-                        CliError::package(
-                            e,
-                            Some("Use 'hpm list --help' for usage information".to_string()),
-                        )
-                    })?;
+                    .cli_package("list")?;
             } else {
                 commands::list::list_dependencies(manifest.clone())
                     .await
-                    .map_err(|e| {
-                        CliError::package(
-                            e,
-                            Some("Use 'hpm list --help' for usage information".to_string()),
-                        )
-                    })?;
+                    .cli_package("list")?;
             }
         }
         Commands::Search { query } => {
@@ -788,22 +758,12 @@ async fn run_command(
             let config = load_cli_config()?;
             commands::search::search_packages(&config, query.clone(), None, json_output)
                 .await
-                .map_err(|e| {
-                    CliError::network(
-                        e,
-                        Some("Use 'hpm search --help' for usage information".to_string()),
-                    )
-                })?;
+                .cli_network("search")?;
         }
         Commands::Run { script, args } => {
             let exit_code = commands::run::run_script(script, args, directory.clone(), console)
                 .await
-                .map_err(|e| {
-                    CliError::package(
-                        e,
-                        Some("Use 'hpm run --help' for usage information".to_string()),
-                    )
-                })?;
+                .cli_package("run")?;
             return Ok(if exit_code == 0 {
                 ExitStatus::Success
             } else {
@@ -818,12 +778,7 @@ async fn run_command(
             let config = load_cli_config()?;
             commands::install::install_dependencies(&config, manifest.clone(), *frozen_lockfile)
                 .await
-                .map_err(|e| {
-                    CliError::package(
-                        e,
-                        Some("Use 'hpm install --help' for usage information".to_string()),
-                    )
-                })?;
+                .cli_package("install")?;
 
             if output_format == OutputFormat::Human {
                 console.success("Dependencies installed successfully");
@@ -832,12 +787,7 @@ async fn run_command(
         Commands::Check => {
             commands::check::check_package(directory.clone())
                 .await
-                .map_err(|e| {
-                    CliError::package(
-                        e,
-                        Some("Use 'hpm check --help' for usage information".to_string()),
-                    )
-                })?;
+                .cli_package("check")?;
 
             if output_format == OutputFormat::Human {
                 console.success("Package configuration is valid");
@@ -859,12 +809,7 @@ async fn run_command(
             };
             commands::build::build(options, console)
                 .await
-                .map_err(|e| {
-                    CliError::package(
-                        e,
-                        Some("Use 'hpm build --help' for usage information".to_string()),
-                    )
-                })?;
+                .cli_package("build")?;
         }
         Commands::Pack {
             key,
@@ -883,23 +828,13 @@ async fn run_command(
                 console,
             )
             .await
-            .map_err(|e| {
-                CliError::package(
-                    e,
-                    Some("Use 'hpm pack --help' for usage information".to_string()),
-                )
-            })?;
+            .cli_package("pack")?;
         }
         Commands::Audit { manifest } => {
             let config = load_cli_config()?;
             commands::audit::audit_packages(&config, manifest.clone())
                 .await
-                .map_err(|e| {
-                    CliError::package(
-                        e,
-                        Some("Use 'hpm audit --help' for usage information".to_string()),
-                    )
-                })?;
+                .cli_package("audit")?;
         }
         Commands::Registry { action } => match action {
             RegistryAction::Add {
@@ -915,12 +850,7 @@ async fn run_command(
                     registry_type.clone(),
                 )
                 .await
-                .map_err(|e| {
-                    CliError::config(
-                        e,
-                        Some("Use 'hpm registry add --help' for usage information".to_string()),
-                    )
-                })?;
+                .cli_config("registry add")?;
             }
             RegistryAction::List => {
                 let config = load_cli_config()?;
@@ -932,15 +862,7 @@ async fn run_command(
                 let config = load_cli_config()?;
                 commands::registry::remove_registry(config, name.clone())
                     .await
-                    .map_err(|e| {
-                        CliError::config(
-                            e,
-                            Some(
-                                "Use 'hpm registry remove --help' for usage information"
-                                    .to_string(),
-                            ),
-                        )
-                    })?;
+                    .cli_config("registry remove")?;
             }
             RegistryAction::Update => {
                 let config = load_cli_config()?;
@@ -958,12 +880,7 @@ async fn run_command(
             let config = load_cli_config()?;
             commands::clean::execute_clean(&config, args)
                 .await
-                .map_err(|e| {
-                    CliError::package(
-                        e,
-                        Some("Use 'hpm clean --help' for usage information".to_string()),
-                    )
-                })?;
+                .cli_package("clean")?;
 
             if output_format == OutputFormat::Human {
                 console.success("Cleanup completed successfully");
