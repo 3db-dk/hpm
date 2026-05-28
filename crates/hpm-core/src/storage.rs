@@ -163,8 +163,7 @@ impl StorageManager {
         &self,
         source_path: &std::path::Path,
     ) -> Result<InstalledPackage, StorageError> {
-        self.install_inner(source_path, InstallStyle::CasCopy)
-            .await
+        self.install_inner(source_path, InstallStyle::CasCopy).await
     }
 
     /// Install a path-dependency into the dev subtree
@@ -177,8 +176,7 @@ impl StorageManager {
         &self,
         source_path: &std::path::Path,
     ) -> Result<InstalledPackage, StorageError> {
-        self.install_inner(source_path, InstallStyle::DevCopy)
-            .await
+        self.install_inner(source_path, InstallStyle::DevCopy).await
     }
 
     /// Install a path-dependency into the dev subtree as a symlink (Unix) or
@@ -192,8 +190,7 @@ impl StorageManager {
         &self,
         source_path: &std::path::Path,
     ) -> Result<InstalledPackage, StorageError> {
-        self.install_inner(source_path, InstallStyle::DevLink)
-            .await
+        self.install_inner(source_path, InstallStyle::DevLink).await
     }
 
     async fn install_inner(
@@ -1126,10 +1123,7 @@ houdini = ">=20.5"
         let source = temp_dir.path().join("dev-source");
         write_source_package(&source, "creator/foo", "1.0.0", "from-dev-source");
 
-        let installed = storage_manager
-            .install_as_dev_copy(&source)
-            .await
-            .unwrap();
+        let installed = storage_manager.install_as_dev_copy(&source).await.unwrap();
 
         let expected = temp_dir
             .path()
@@ -1174,10 +1168,7 @@ houdini = ">=20.5"
         // Independent registry-style install of bar@2.0.0
         let reg_source = temp_dir.path().join("reg-source");
         write_source_package(&reg_source, "creator/bar", "2.0.0", "registry");
-        storage_manager
-            .install_into_cas(&reg_source)
-            .await
-            .unwrap();
+        storage_manager.install_into_cas(&reg_source).await.unwrap();
 
         let listed = storage_manager.list_installed().unwrap();
         let names: Vec<&str> = listed.iter().map(|p| p.manifest.package.slug()).collect();
@@ -1216,10 +1207,7 @@ houdini = ">=20.5"
 
         let reg_source = temp_dir.path().join("reg-source");
         write_source_package(&reg_source, "creator/foo", "1.0.0", "registry-content");
-        storage_manager
-            .install_into_cas(&reg_source)
-            .await
-            .unwrap();
+        storage_manager.install_into_cas(&reg_source).await.unwrap();
 
         let dev_marker = temp_dir
             .path()
@@ -1256,10 +1244,7 @@ houdini = ">=20.5"
         let source = temp_dir.path().join("link-source");
         write_source_package(&source, "creator/foo", "1.0.0", "link-content");
 
-        let installed = storage_manager
-            .install_as_dev_link(&source)
-            .await
-            .unwrap();
+        let installed = storage_manager.install_as_dev_link(&source).await.unwrap();
 
         let expected = temp_dir
             .path()
@@ -1305,10 +1290,7 @@ houdini = ">=20.5"
 
         let source = temp_dir.path().join("live-source");
         write_source_package(&source, "creator/foo", "1.0.0", "initial");
-        let installed = storage_manager
-            .install_as_dev_link(&source)
-            .await
-            .unwrap();
+        let installed = storage_manager.install_as_dev_link(&source).await.unwrap();
 
         // Simulate a working-tree edit after install.
         std::fs::write(source.join("new_file.txt"), "edited-after-install").unwrap();
@@ -1339,14 +1321,8 @@ houdini = ">=20.5"
         write_source_package(&source, "creator/foo", "1.0.0", "workspace-marker");
         std::fs::write(source.join("user-script.py"), "# user authored").unwrap();
 
-        storage_manager
-            .install_as_dev_link(&source)
-            .await
-            .unwrap();
-        storage_manager
-            .install_as_dev_link(&source)
-            .await
-            .unwrap();
+        storage_manager.install_as_dev_link(&source).await.unwrap();
+        storage_manager.install_as_dev_link(&source).await.unwrap();
 
         // Workspace files must survive — both the marker and the user file.
         assert_eq!(
@@ -1379,17 +1355,11 @@ houdini = ">=20.5"
         write_source_package(&source, "creator/foo", "1.0.0", "ws");
 
         // First: copy install lays down a real directory at the dev path.
-        storage_manager
-            .install_as_dev_copy(&source)
-            .await
-            .unwrap();
+        storage_manager.install_as_dev_copy(&source).await.unwrap();
 
         // Then: link install must replace the real dir without traversing
         // into the workspace.
-        storage_manager
-            .install_as_dev_link(&source)
-            .await
-            .unwrap();
+        storage_manager.install_as_dev_link(&source).await.unwrap();
 
         assert_eq!(
             std::fs::read_to_string(source.join("MARKER")).unwrap(),
@@ -1397,10 +1367,7 @@ houdini = ">=20.5"
         );
 
         // And the reverse: link → copy.
-        storage_manager
-            .install_as_dev_copy(&source)
-            .await
-            .unwrap();
+        storage_manager.install_as_dev_copy(&source).await.unwrap();
         assert_eq!(
             std::fs::read_to_string(source.join("MARKER")).unwrap(),
             "ws"
@@ -1429,10 +1396,7 @@ houdini = ">=20.5"
 
         let reg_source = temp_dir.path().join("reg-source");
         write_source_package(&reg_source, "creator/foo", "1.0.0", "registry-content");
-        storage_manager
-            .install_into_cas(&reg_source)
-            .await
-            .unwrap();
+        storage_manager.install_into_cas(&reg_source).await.unwrap();
 
         let link_marker = temp_dir
             .path()
@@ -1521,10 +1485,7 @@ houdini = ">=20.5"
         // Plant a dev install for `studio/orphan@1.0.0`.
         let source = temp_dir.path().join("orphan-source");
         write_source_package(&source, "studio/orphan", "1.0.0", "orphan-marker");
-        storage_manager
-            .install_as_dev_copy(&source)
-            .await
-            .unwrap();
+        storage_manager.install_as_dev_copy(&source).await.unwrap();
         let dev_path = temp_dir
             .path()
             .join("packages")
@@ -1574,10 +1535,7 @@ houdini = ">=20.5"
         // Plant a dev install for `studio/keep@2.0.0`.
         let source = temp_dir.path().join("keep-source");
         write_source_package(&source, "studio/keep", "2.0.0", "keep-marker");
-        storage_manager
-            .install_as_dev_copy(&source)
-            .await
-            .unwrap();
+        storage_manager.install_as_dev_copy(&source).await.unwrap();
         let dev_path = temp_dir
             .path()
             .join("packages")
@@ -1748,10 +1706,7 @@ houdini = ">=20.5"
 
         let source = temp_dir.path().join("orphan-src");
         write_source_package(&source, "studio/orphan", "1.0.0", "orphan");
-        storage_manager
-            .install_as_dev_copy(&source)
-            .await
-            .unwrap();
+        storage_manager.install_as_dev_copy(&source).await.unwrap();
         let dev_path = temp_dir
             .path()
             .join("packages")

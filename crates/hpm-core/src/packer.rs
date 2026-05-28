@@ -3,13 +3,13 @@
 //! Produces a `{name}-{version}.zip` from a package directory, with SHA-256
 //! checksum and optional Ed25519 signature.
 
-use crate::path_util::relative_path_to_forward_slash;
 use base64::Engine;
 pub use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{Signer, VerifyingKey};
 use glob::Pattern;
 use hpm_package::manifest::StageConfig;
+use hpm_package::path_util::relative_path_to_forward_slash;
 use hpm_package::platform::Platform;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use sha2::{Digest, Sha256};

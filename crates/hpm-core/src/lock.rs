@@ -5,7 +5,7 @@
 //! across different machines and time.
 
 use crate::archive_fetcher::cas_install_dir;
-use crate::path_util::relative_path_to_forward_slash;
+use hpm_package::path_util::relative_path_to_forward_slash;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;

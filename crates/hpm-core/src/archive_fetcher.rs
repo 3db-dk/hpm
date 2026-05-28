@@ -4,8 +4,8 @@
 //! direct URLs provided by the registry.
 
 use crate::package_source::{PackageSource, PackageSourceError};
-use crate::path_util::relative_path_to_forward_slash;
 use flate2::read::GzDecoder;
+use hpm_package::path_util::relative_path_to_forward_slash;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};

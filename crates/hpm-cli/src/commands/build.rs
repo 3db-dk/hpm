@@ -19,7 +19,7 @@
 
 use anyhow::{Context, Result, bail};
 use hpm_core::packer::StageFilter;
-use hpm_core::path_util::relative_path_to_forward_slash;
+use hpm_package::path_util::relative_path_to_forward_slash;
 use hpm_package::{PackageManifest, Platform};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::fs;

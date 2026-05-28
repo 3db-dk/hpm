@@ -76,9 +76,7 @@ pub async fn fetch_manifest(
 
     let fetcher = build_fetcher(storage)?;
     let fetch_result = fetcher.fetch(&source, name).await?;
-    let installed = storage
-        .install_into_cas(&fetch_result.package_path)
-        .await?;
+    let installed = storage.install_into_cas(&fetch_result.package_path).await?;
 
     info!(
         "fetch_manifest: installed {}@{} into CAS",

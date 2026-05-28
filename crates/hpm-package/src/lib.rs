@@ -109,6 +109,7 @@ pub mod env_value;
 pub mod houdini;
 pub mod manifest;
 pub mod package_path;
+pub mod path_util;
 pub mod platform;
 pub mod python;
 pub mod template;
