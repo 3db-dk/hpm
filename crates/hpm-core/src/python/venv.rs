@@ -1,8 +1,8 @@
 //! Virtual environment management
 
-use crate::bundled::{ensure_managed_python, run_uv_command};
-use crate::get_venvs_dir;
-use crate::types::{OrphanedVenv, PythonVersion, ResolvedDependencySet, VenvMetadata};
+use super::bundled::{ensure_managed_python, run_uv_command};
+use super::get_venvs_dir;
+use super::types::{OrphanedVenv, PythonVersion, ResolvedDependencySet, VenvMetadata};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 /// # Example Usage
 ///
 /// ```rust,no_run
-/// use hpm_python::{VenvManager, ResolvedDependencySet, PythonVersion};
+/// use hpm_core::python::{VenvManager, ResolvedDependencySet, PythonVersion};
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// let manager = VenvManager::new()?;
@@ -86,7 +86,7 @@ impl VenvManager {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use hpm_python::{VenvManager, ResolvedDependencySet, PythonVersion};
+    /// use hpm_core::python::{VenvManager, ResolvedDependencySet, PythonVersion};
     ///
     /// # async fn example() -> anyhow::Result<()> {
     /// let manager = VenvManager::new()?;
@@ -484,7 +484,7 @@ async fn any_package_present(site_packages: &Path, resolved_deps: &ResolvedDepen
         if let Some(stem) = name.strip_suffix(".dist-info")
             && let Some((pkg_name, _version)) = stem.rsplit_once('-')
         {
-            dist_info_prefixes.push(crate::pep503::normalize(pkg_name));
+            dist_info_prefixes.push(super::pep503::normalize(pkg_name));
         }
     }
     resolved_deps
@@ -527,11 +527,11 @@ mod tests {
     /// Ignored by default: creates a real venv via the bundled uv and verifies
     /// that installed packages land in `site-packages` (the Bug A regression
     /// went unnoticed because no existing test actually invoked uv against a
-    /// venv). Run with `cargo test --package hpm-python -- --ignored`.
+    /// venv). Run with `cargo test --package hpm-core python::venv -- --ignored`.
     #[tokio::test]
     #[ignore]
     async fn test_install_populates_real_site_packages() {
-        crate::initialize().await.expect("uv init failed");
+        crate::python::initialize().await.expect("uv init failed");
 
         let tmp = tempfile::TempDir::new().unwrap();
         let manager = VenvManager::with_venvs_dir(tmp.path().to_path_buf());
@@ -578,7 +578,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_ensure_heals_half_installed_venv() {
-        crate::initialize().await.expect("uv init failed");
+        crate::python::initialize().await.expect("uv init failed");
 
         let tmp = tempfile::TempDir::new().unwrap();
         let manager = VenvManager::with_venvs_dir(tmp.path().to_path_buf());

@@ -36,9 +36,8 @@ current number (the manifest strategies live in
 | Crate | Focus |
 |-------|-------|
 | `hpm-cli` | Argument parsing, output format round-trips (in `tests/cli_validation.rs`). |
-| `hpm-core` | Storage types, package specs, lockfile round-trips, env merge contracts. |
+| `hpm-core` | Storage types, package specs, lockfile round-trips, env merge contracts. The `python` submodule covers Python versions, dependency resolution, content hashing. |
 | `hpm-package` | Manifest validation, TOML round-trips, native configs (in `tests/properties.rs`). |
-| `hpm-python` | Python versions, dependency resolution, content hashing. |
 
 ## Running tests
 
@@ -50,7 +49,7 @@ just test
 just test-doc
 
 # slow / external-dependency tests gated behind `#[ignore]`
-# (currently: real-uv venv smoke tests in hpm-python)
+# (currently: real-uv venv smoke tests in hpm-core::python)
 just test-ignored
 
 # raw cargo equivalents

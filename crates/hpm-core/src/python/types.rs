@@ -72,7 +72,7 @@ mod epoch_seconds_opt {
 /// # Examples
 ///
 /// ```rust
-/// use hpm_python::PythonVersion;
+/// use hpm_core::python::PythonVersion;
 ///
 /// // Create a Python version
 /// let version = PythonVersion::new(3, 11, Some(9));
@@ -116,7 +116,7 @@ impl PythonVersion {
     /// # Examples
     ///
     /// ```rust
-    /// use hpm_python::PythonVersion;
+    /// use hpm_core::python::PythonVersion;
     ///
     /// let version = PythonVersion::new(3, 9, Some(12));
     /// assert_eq!(version.major, 3);
@@ -282,10 +282,10 @@ impl ResolvedDependencySet {
     /// Insert a package with its resolved version. The name is canonicalized
     /// per PEP 503 so the keys match the `*.dist-info/` directory names UV
     /// will lay down, and so two inserts of `Foo-Bar` and `foo_bar` collapse
-    /// to one entry. See [`crate::pep503::normalize`].
+    /// to one entry. See [`super::pep503::normalize`].
     pub fn add_package(&mut self, name: impl AsRef<str>, version: impl Into<String>) {
         self.packages
-            .insert(crate::pep503::normalize(name.as_ref()), version.into());
+            .insert(super::pep503::normalize(name.as_ref()), version.into());
     }
 
     /// Parse `uv pip compile` stdout into a resolved set.

@@ -121,7 +121,7 @@ Houdini 19.x (Python 3.7) and 20.0–20.4 (Python 3.9) are past EOL.
 ```
 
 If you need a new Houdini major before HPM ships support for it, update the
-mapping in `crates/hpm-python/src/dependency.rs::map_houdini_to_python_version`
+mapping in `crates/hpm-core/src/python/collection.rs::map_houdini_to_python_version`
 and open a PR.
 
 ## Virtual environment sharing
@@ -274,7 +274,7 @@ Likely causes and fixes:
 
 ```sh
 RUST_LOG=debug hpm install               # full HPM debug logs
-RUST_LOG=hpm_python=trace hpm install    # Python-specific
+RUST_LOG=hpm_core::python=trace hpm install    # Python-specific
 ```
 
 ### Venv sizes are growing
@@ -314,7 +314,7 @@ du -sh ~/.hpm/venvs/* | sort -h  # find the largest
 ### Content hash
 
 ```rust
-// crates/hpm-python/src/types.rs (simplified)
+// crates/hpm-core/src/python/types.rs (simplified)
 pub fn calculate_content_hash(resolved: &ResolvedDependencySet) -> String {
     let mut hasher = Sha256::new();
     hasher.update(format!("python:{}", resolved.python_version));

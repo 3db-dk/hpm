@@ -78,8 +78,10 @@ pub enum ProjectError {
     NoMatchingVersion { name: String, version_req: String },
 
     /// Python dependency collection / resolution / venv creation failed.
-    /// `hpm-python` returns `anyhow::Error`; we box the source rather than
-    /// pull in anyhow at this layer.
+    /// `python` returns `anyhow::Error`; we erase the source via a
+    /// trait object here to keep `ProjectError` free of structural
+    /// dependence on `anyhow`'s type — it could move to `thiserror`-only
+    /// later without breaking this enum.
     #[error("Python dependency resolution failed")]
     PythonResolution(#[source] Box<dyn std::error::Error + Send + Sync>),
 

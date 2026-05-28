@@ -1,6 +1,6 @@
 //! Dependency collection and management
 
-use crate::types::{PythonDependencies, PythonDependency, PythonVersion, VersionSpec};
+use super::types::{PythonDependencies, PythonDependency, PythonVersion, VersionSpec};
 use anyhow::Result;
 use hpm_package::{PackageManifest, PythonDependencySpec};
 
@@ -34,7 +34,7 @@ use hpm_package::{PackageManifest, PythonDependencySpec};
 /// # Example
 ///
 /// ```rust,no_run
-/// use hpm_python::collect_python_dependencies;
+/// use hpm_core::python::collect_python_dependencies;
 /// use hpm_package::PackageManifest;
 ///
 /// # async fn example() -> anyhow::Result<()> {

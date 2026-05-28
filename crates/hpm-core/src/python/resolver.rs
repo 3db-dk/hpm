@@ -1,7 +1,7 @@
 //! Python dependency resolution using UV
 
-use crate::bundled::{ensure_managed_python, run_uv_command};
-use crate::types::{PythonDependencies, PythonVersion, ResolvedDependencySet};
+use super::bundled::{ensure_managed_python, run_uv_command};
+use super::types::{PythonDependencies, PythonVersion, ResolvedDependencySet};
 use anyhow::{Context, Result};
 use std::io::Write;
 use tempfile::NamedTempFile;
@@ -37,7 +37,7 @@ use tracing::{debug, info};
 /// # Example
 ///
 /// ```rust,no_run
-/// use hpm_python::{resolve_dependencies, PythonDependencies, PythonDependency, VersionSpec};
+/// use hpm_core::python::{resolve_dependencies, PythonDependencies, PythonDependency, VersionSpec};
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// let mut deps = PythonDependencies::new();
@@ -133,7 +133,7 @@ fn create_requirements_file(dependencies: &PythonDependencies) -> Result<NamedTe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{PythonDependency, VersionSpec};
+    use crate::python::types::{PythonDependency, VersionSpec};
 
     #[test]
     fn test_parse_resolved_dependencies() {

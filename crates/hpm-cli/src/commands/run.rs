@@ -5,8 +5,8 @@
 //! venv on demand and run with that interpreter on PATH.
 
 use anyhow::{Context, Result};
+use hpm_core::python::prepare_script_env;
 use hpm_package::Platform;
-use hpm_python::prepare_script_env;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;

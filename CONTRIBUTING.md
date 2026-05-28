@@ -81,10 +81,10 @@ export PROPTEST_CASES=100          # Faster property tests during development
 ```
 crates/
   hpm-cli/       CLI frontend (clap)
-  hpm-core/      Storage, installation, lock files, project discovery
+  hpm-core/      Storage, installation, lock files, project discovery,
+                 Python venv management (`python` submodule, bundled uv)
   hpm-config/    Configuration management
   hpm-package/   Package manifest parsing, Houdini integration
-  hpm-python/    Python venv management (uv integration)
 ```
 
 ## Development Guidelines

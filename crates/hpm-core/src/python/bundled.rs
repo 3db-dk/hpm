@@ -14,7 +14,7 @@ use tracing::{debug, info};
 const UV_VERSION: &str = "0.5.9";
 
 fn hpm_dir() -> Result<PathBuf> {
-    crate::hpm_root()
+    super::hpm_root()
 }
 
 /// Platform-specific UV release archive name (filename only).

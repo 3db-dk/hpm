@@ -19,7 +19,6 @@ indexmap.workspace = true
 async-trait = "0.1"
 hpm-config = { path = "../hpm-config" }
 hpm-package = { path = "../hpm-package" }
-hpm-python = { path = "../hpm-python" }
 thiserror.workspace = true
 toml.workspace = true
 toml_edit = "0.25"
@@ -41,6 +40,9 @@ base64.workspace = true
 glob = "0.3"
 time.workspace = true
 petgraph.workspace = true
+# Python module: uv download/extract + venv management raises anyhow.
+anyhow.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # NTFS junctions for dev-link installs. Junctions work without Developer

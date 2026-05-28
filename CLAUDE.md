@@ -22,7 +22,6 @@ cargo fmt --check    # check formatting
 | Crate | Purpose |
 |-------|---------|
 | `hpm-cli` | CLI frontend (clap) |
-| `hpm-core` | Core orchestration logic |
+| `hpm-core` | Core orchestration logic, including the `python` submodule (bundled uv, venv management, Houdini→Python ABI mapping) |
 | `hpm-config` | Configuration loading/saving |
 | `hpm-package` | Package format and metadata |
-| `hpm-python` | Python environment integration |

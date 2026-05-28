@@ -1,7 +1,7 @@
 //! Python virtual environment cleanup integration
 
-use crate::types::OrphanedVenv;
-use crate::venv::VenvManager;
+use super::types::OrphanedVenv;
+use super::venv::VenvManager;
 use anyhow::Result;
 use tracing::{debug, info};
 

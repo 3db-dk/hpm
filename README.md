@@ -149,10 +149,10 @@ ABI bug in 0.7.0). See the [Python guide](docs/python-guide.md).
 ```
 crates/
   hpm-cli/       CLI frontend (clap)
-  hpm-core/      Storage, installation, lock files, project discovery
+  hpm-core/      Storage, installation, lock files, project discovery,
+                 Python venv management (`python` submodule, bundled uv)
   hpm-config/    Configuration loading and schema
   hpm-package/   Manifest parsing, Houdini package.json generation
-  hpm-python/    Python venv management (bundled uv)
 ```
 
 ## Development

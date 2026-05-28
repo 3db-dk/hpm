@@ -227,6 +227,7 @@ pub mod lock;
 pub mod package_source;
 pub mod packer;
 pub mod project;
+pub mod python;
 pub mod registry;
 pub mod storage;
 

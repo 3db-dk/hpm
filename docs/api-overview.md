@@ -11,16 +11,17 @@ cargo doc --workspace --no-deps --open
 
 ```text
 hpm-cli         binary; clap dispatch, output formatting, exit codes
-  ├── hpm-core         storage, discovery, lock, registry, fetch, pack
+  ├── hpm-core         storage, discovery, lock, registry, fetch, pack, python
   │     ├── hpm-config
-  │     ├── hpm-package
-  │     └── hpm-python
-  │           └── hpm-package
+  │     └── hpm-package
   ├── hpm-config       layered config loading and merging
-  ├── hpm-package      manifest parsing, Houdini integration, deps  (leaf)
-  └── hpm-python       venv management, bundled uv
-        └── hpm-package
+  └── hpm-package      manifest parsing, Houdini integration, deps  (leaf)
 ```
+
+Python tooling (bundled `uv`, content-addressable venvs, Houdini→Python
+mapping) lives in the `hpm_core::python` submodule. It was a separate
+crate through 0.16 but collapsed into `hpm-core` since it had no
+external consumers.
 
 Leaves are `hpm-config` and `hpm-package` — both depend on nothing in the
 workspace, so they can be embedded by external tools without dragging in
@@ -74,7 +75,7 @@ codes and help hints.
 | `PackageTemplate` | Scaffolding for `hpm init` (standard and `--bare`). |
 | `HoudiniPackage`, `HoudiniNativePackage`, `HoudiniEnvValue` | Houdini `package.json` output types. |
 
-### hpm-python
+### hpm-core::python
 
 | Type | Purpose |
 |------|---------|

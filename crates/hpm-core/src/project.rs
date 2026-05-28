@@ -9,10 +9,10 @@
 use crate::archive_fetcher::ArchiveFetcher;
 use crate::lock::LockedSource;
 use crate::package_source::PackageSource;
+use crate::python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use crate::storage::{InstalledPackage, PackageSpec, StorageManager};
 use hpm_config::{Config, ProjectPaths};
 use hpm_package::{HoudiniPackage, IoOp, ManifestEnvEntry, ManifestLoadError, PackageManifest};
-use hpm_python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -481,7 +481,7 @@ impl ProjectManager {
         info!("Resolving Python pip dependencies");
 
         // Initialize UV binary (downloads on first use)
-        hpm_python::initialize()
+        crate::python::initialize()
             .await
             .map_err(|e| ProjectError::PythonResolution(e.into()))?;
 

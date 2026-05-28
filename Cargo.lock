@@ -826,7 +826,6 @@ dependencies = [
  "hpm-config",
  "hpm-core",
  "hpm-package",
- "hpm-python",
  "ignore",
  "indexmap",
  "indicatif",
@@ -859,6 +858,7 @@ dependencies = [
 name = "hpm-core"
 version = "0.16.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64",
  "ed25519-dalek",
@@ -866,7 +866,6 @@ dependencies = [
  "glob",
  "hpm-config",
  "hpm-package",
- "hpm-python",
  "ignore",
  "indexmap",
  "junction",
@@ -902,29 +901,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "toml",
-]
-
-[[package]]
-name = "hpm-python"
-version = "0.16.0"
-dependencies = [
- "anyhow",
- "flate2",
- "hpm-package",
- "indexmap",
- "proptest",
- "reqwest",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tar",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-test",
- "tracing",
- "zip",
 ]
 
 [[package]]
@@ -2335,28 +2311,6 @@ checksum = "1729aa945f29d91ba541258c8df89027d5792d85a8841fb65e8bf0f4ede4ef61"
 dependencies = [
  "rustls",
  "tokio",
-]
-
-[[package]]
-name = "tokio-stream"
-version = "0.1.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32da49809aab5c3bc678af03902d4ccddea2a87d028d86392a4b1560c6906c70"
-dependencies = [
- "futures-core",
- "pin-project-lite",
- "tokio",
-]
-
-[[package]]
-name = "tokio-test"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f6d24790a10a7af737693a3e8f1d03faef7e6ca0cc99aae5066f533766de545"
-dependencies = [
- "futures-core",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]

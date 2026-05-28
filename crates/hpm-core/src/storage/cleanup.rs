@@ -1,7 +1,7 @@
 //! [`ComprehensiveCleanupResult`] — aggregate of a full
 //! packages + dev installs + Python venvs cleanup pass.
 
-use hpm_python::cleanup::CleanupResult;
+use crate::python::cleanup::CleanupResult;
 
 /// Result of comprehensive cleanup including both packages and Python environments
 #[derive(Debug)]

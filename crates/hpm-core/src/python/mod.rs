@@ -94,7 +94,7 @@
 //! ## Quick Start Example
 //!
 //! ```rust,no_run
-//! use hpm_python::{initialize, collect_python_dependencies, resolve_dependencies, VenvManager};
+//! use hpm_core::python::{initialize, collect_python_dependencies, resolve_dependencies, VenvManager};
 //! use hpm_package::PackageManifest;
 //!
 //! # async fn example() -> anyhow::Result<()> {
@@ -121,7 +121,7 @@
 //!
 //! ### Cleanup Management
 //! ```rust,no_run
-//! use hpm_python::cleanup::PythonCleanupAnalyzer;
+//! use hpm_core::python::cleanup::PythonCleanupAnalyzer;
 //!
 //! # async fn cleanup_example() -> anyhow::Result<()> {
 //! let analyzer = PythonCleanupAnalyzer::new()?;
@@ -142,10 +142,10 @@
 //!
 //! ### Conflict Resolution
 //! ```rust,no_run
-//! use hpm_python::resolve_dependencies;
+//! use hpm_core::python::resolve_dependencies;
 //!
 //! # async fn conflict_example() -> anyhow::Result<()> {
-//! # use hpm_python::types::PythonDependencies;
+//! # use hpm_core::python::types::PythonDependencies;
 //! # let collected_deps = PythonDependencies::default();
 //! match resolve_dependencies(&collected_deps).await {
 //!     Ok(resolved) => println!("Resolution successful: {} packages", resolved.packages.len()),
@@ -243,7 +243,7 @@ use std::path::PathBuf;
 ///
 /// ```rust,no_run
 /// # async fn example() -> anyhow::Result<()> {
-/// hpm_python::initialize().await?;
+/// hpm_core::python::initialize().await?;
 /// // Python dependency management is now ready to use
 /// # Ok(())
 /// # }

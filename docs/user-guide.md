@@ -1111,7 +1111,7 @@ Error: No Python version mapping for Houdini 22; supported majors are 19, 20, 21
 ```
 
 An unsupported `[compat].houdini` lower bound is a hard error rather
-than a silent fallback. Update `hpm-python` if you need to add a new major,
+than a silent fallback. Update `hpm-core::python::collection` if you need to add a new major,
 or set the range to a supported lower bound.
 
 ### Checksum mismatch at install time
@@ -1154,7 +1154,7 @@ Restart Houdini after any change to `HOUDINI_PACKAGE_PATH`.
 
 ```sh
 RUST_LOG=debug hpm install
-RUST_LOG=hpm_core=debug,hpm_python=trace hpm install    # per-module
+RUST_LOG=hpm_core=debug,hpm_core::python=trace hpm install    # per-module
 ```
 
 ### Resetting state

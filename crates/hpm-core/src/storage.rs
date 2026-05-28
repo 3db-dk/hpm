@@ -10,9 +10,9 @@
 
 use crate::discovery::ProjectDiscovery;
 use crate::graph::{DependencyResolver, PackageId};
+use crate::python::cleanup::{CleanupResult, PythonCleanupAnalyzer};
 use hpm_config::{ProjectsConfig, StorageConfig};
 use hpm_package::{IoOp, ManifestLoadError, PackageManifest};
-use hpm_python::cleanup::{CleanupResult, PythonCleanupAnalyzer};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;

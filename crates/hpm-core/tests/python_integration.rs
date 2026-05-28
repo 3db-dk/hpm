@@ -1,7 +1,7 @@
 //! Integration tests for Python dependency management system
 
+use hpm_core::python::{cleanup, collection, types, venv};
 use hpm_package::{CompatConfig, PackageInfo, PackageManifest, PackagePath, PythonDependencySpec};
-use hpm_python::{cleanup, collection, types, venv};
 use indexmap::IndexMap;
 
 #[tokio::test]

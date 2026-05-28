@@ -19,9 +19,9 @@
 //! Houdini 21.x's bundled interpreter, which is the most common case for
 //! the out-of-process hooks (`tt_setup`, etc.) this feature exists to serve.
 
-use crate::bundled::{ensure_managed_python, run_uv_command};
-use crate::types::{PythonVersion, ResolvedDependencySet};
-use crate::venv::VenvManager;
+use super::bundled::{ensure_managed_python, run_uv_command};
+use super::types::{PythonVersion, ResolvedDependencySet};
+use super::venv::VenvManager;
 use anyhow::{Context, Result};
 use hpm_package::ScriptEntry;
 use std::collections::HashMap;
@@ -174,7 +174,7 @@ pub async fn prepare_script_env(entry: &ScriptEntry) -> Result<ScriptEnvHandle> 
     if !entry.needs_venv() {
         return Ok(ScriptEnvHandle::default());
     }
-    crate::initialize()
+    super::initialize()
         .await
         .context("Failed to initialize bundled uv")?;
     let venv_path = ensure_script_venv(entry.python(), entry.requirements())
@@ -194,7 +194,7 @@ pub async fn prepare_script_env(entry: &ScriptEntry) -> Result<ScriptEnvHandle> 
 
 /// Resolve raw requirement strings to exact pinned versions via `uv pip compile`.
 ///
-/// Mirrors [`crate::resolver::resolve_dependencies`] but skips the
+/// Mirrors [`super::resolver::resolve_dependencies`] but skips the
 /// `PythonDependencies` shape, which has no syntactic place for arbitrary
 /// requirement-string forms (extras, environment markers, ranges).
 async fn resolve_raw_requirements(
