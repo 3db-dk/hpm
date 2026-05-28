@@ -198,7 +198,7 @@ or `name@version`. `name` uses the `creator/slug` form.
 | Flag | Description |
 |------|-------------|
 | `--path <dir>` | Add as a local path dependency (only valid with a single package). Path dependencies install into a `_dev/` subtree of the global packages dir so they never overwrite a registry install at the same `(slug, version)`. |
-| `--link` | For path dependencies, install as a symlink (Unix) or NTFS junction (Windows) instead of copying. Working-tree edits become visible to a live Houdini session without re-running `hpm sync`. Requires `--path`. |
+| `--link` | For path dependencies, install as a symlink (Unix) or NTFS junction (Windows) instead of copying. Working-tree edits become visible to a live Houdini session without re-running `hpm install`. Requires `--path`. |
 | `-p, --package <path>` | Path to the manifest to modify (`hpm.toml` or containing dir). Defaults to cwd. |
 | `--optional` | Mark all added dependencies as optional. |
 
@@ -493,7 +493,7 @@ are considered:
 
 A project whose path-dep source can't be read (workspace moved or
 deleted) logs a warning and doesn't block cleanup of other dev installs;
-re-run `hpm sync` after fixing the path to reinstate anything that was
+re-run `hpm install` after fixing the path to reinstate anything that was
 swept.
 
 ### `hpm registry`
@@ -611,7 +611,7 @@ local-tools = { path = "../local-tools", optional = true }
 
 # 5. Local path, installed as a symlink/junction (live edits)
 #    Working-tree edits become visible to a live Houdini session without
-#    re-running `hpm sync`. Otherwise identical to (4): same _dev/ namespace
+#    re-running `hpm install`. Otherwise identical to (4): same _dev/ namespace
 #    isolation, no effect on registry installs at the same coordinate.
 local-tools = { path = "../local-tools", link = true }
 ```
@@ -823,7 +823,7 @@ archive from the workspace — useful in CI where you build immediately
 before packing. `hpm build` runs `prepack` scripts and materialises the
 same install image into `output_dir` on disk, so a path-dep consumer
 working in another project can pick it up live (with `link = true`,
-edits flow through without re-running `hpm sync`).
+edits flow through without re-running `hpm install`).
 
 ### `[[registries]]` <a id="registries-array"></a>
 

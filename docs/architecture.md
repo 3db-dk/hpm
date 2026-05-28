@@ -27,8 +27,8 @@ depend on the library crates and skip the CLI entirely).
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
 │ CLI (hpm-cli)                                                          │
-│   • subcommands: init, add, remove, install, update, list, search,    │
-│     check, pack, audit, clean, registry, completions                  │
+│   • subcommands: init, add, remove, install, update, list, search,     │
+│     run, check, build, pack, audit, clean, registry, completions       │
 │   • output formats: human, json, json-lines, json-compact              │
 │   • shell completions: bash, zsh, fish, powershell, elvish             │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -40,17 +40,22 @@ depend on the library crates and skip the CLI entirely).
 │   • LockFile / LockedDependency / PackageSource                        │
 │   • Registry trait + ApiRegistry, GitRegistry                          │
 │   • ArchiveFetcher, packer                                             │
-└─────────┬──────────────────┬──────────────────┬──────────────────┬─────┘
-          │                  │                  │                  │
-┌─────────▼───────┐ ┌────────▼────────┐ ┌─────────▼─────┐
-│ hpm-package     │ │ hpm-python      │ │ hpm-config    │
+└─────────┬──────────────────┬──────────────────┬─────────────────────────┘
+          │                  │                  │
+┌─────────▼────────┐ ┌───────▼─────────┐ ┌──────▼────────┐
+│ hpm-package      │ │ hpm-python      │ │ hpm-config    │
 │   PackageManifest│ │   VenvManager   │ │   Config      │
 │   DependencySpec │ │   PythonVersion │ │   Storage/    │
 │   StageConfig    │ │   ResolvedSet   │ │   Projects/   │
 │   Platform       │ │   bundled uv    │ │   Signing     │
-│   HoudiniPackage │ └─────────────────┘ └───────────────┘
-└──────────────────┘
+│   HoudiniPackage │ │   (uses         │ └───────────────┘
+└──────────────────┘ │    hpm-package) │
+                     └─────────────────┘
 ```
+
+`hpm-python` also depends on `hpm-package` for the `PythonDependencySpec` /
+`ManifestEnvEntry` types it resolves through `uv`. `hpm-package` and
+`hpm-config` are workspace leaves — neither depends on another HPM crate.
 
 Each crate defines its own error type (e.g. `StorageError`, `ConfigError`)
 via `thiserror`. Errors surface to the user through `CliError` in `hpm-cli`,
@@ -391,8 +396,8 @@ layout is content-addressable where it helps:
 └── logs/
 ```
 
-Both `hpm install` and `hpm sync` route URL/registry deps through the same
-two-step flow: `ArchiveFetcher` downloads + extracts into `~/.hpm/fetch/`,
+`hpm install` routes URL/registry deps through a two-step flow:
+`ArchiveFetcher` downloads + extracts into `~/.hpm/fetch/`,
 then `StorageManager::install_into_cas` copies into the canonical CAS at
 `~/.hpm/packages/<slug>@<version>/`. Path deps skip the fetcher entirely
 and go straight to `~/.hpm/packages/_dev/<slug>@<version>/` via
@@ -418,9 +423,9 @@ absolute CAS paths, so the project tree contains no symlinks pointing into
 the global storage.
 
 `sync_dependencies` sweeps stale per-package manifests at the end of every
-sync: any `<slug>.json` in `<project>/.hpm/packages/` whose slug is no longer
-in the resolved dependency set is removed. Without this, a manifest written
-by a previous sync (e.g. for a path dependency that has since been removed)
+install run: any `<slug>.json` in `<project>/.hpm/packages/` whose slug is no
+longer in the resolved dependency set is removed. Without this, a manifest
+written by a previous run (e.g. for a path dependency that has since been removed)
 would keep loading the package on Houdini launch even though `hpm.toml` no
 longer asks for it.
 
@@ -438,7 +443,7 @@ deliberately can't see them). For each discovered project,
 unions those into the "needed" set. Anything in `_dev/` whose dir-name
 encoding falls outside that set is orphan. A project with an unreadable
 path-dep source logs a warning and skips that dep — a broken project
-doesn't bypass cleanup of *other* dev installs; re-running `hpm sync`
+doesn't bypass cleanup of *other* dev installs; re-running `hpm install`
 re-creates whatever the project still needs. Removal goes through the
 same `remove_install_entry` primitive used by `clear_existing_install`
 and `remove_package`, so link installs are unlinked without traversal.
@@ -448,7 +453,7 @@ the manifest's `{ path = "...", link = ? }` spec:
 
 - **Copy** (default, `link = false`): `install_as_dev_copy` snapshot-copies
   the workspace into `_dev/<slug>@<version>/`. Subsequent working-tree
-  edits don't reach the install until the next `hpm sync`.
+  edits don't reach the install until the next `hpm install`.
 - **Link** (`link = true`): `install_as_dev_link` creates a symlink
   (Unix) or NTFS junction (Windows) at `_dev/<slug>@<version>/` pointing
   at the canonicalized workspace. Edits are live; Houdini's HPATH

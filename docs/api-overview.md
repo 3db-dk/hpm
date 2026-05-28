@@ -10,22 +10,21 @@ cargo doc --workspace --no-deps --open
 ## Crate graph
 
 ```text
-┌──────────────┐
-│   hpm-cli    │   Command-line frontend (clap). Binary.
-└──────┬───────┘
-       │ depends on everything below
-┌──────▼───────┐
-│   hpm-core   │   Storage, discovery, lock file, registry trait, archive I/O
-├──────────────┤
-│  hpm-package │   Manifest parsing, Houdini integration, dependency types
-├──────────────┤
-│  hpm-python  │   Venv management, bundled uv, Houdini→Python mapping
-└──────┬───────┘
-       │
-┌──────▼───────┐
-│  hpm-config  │   Configuration loading and merging
-└──────────────┘
+hpm-cli         binary; clap dispatch, output formatting, exit codes
+  ├── hpm-core         storage, discovery, lock, registry, fetch, pack
+  │     ├── hpm-config
+  │     ├── hpm-package
+  │     └── hpm-python
+  │           └── hpm-package
+  ├── hpm-config       layered config loading and merging
+  ├── hpm-package      manifest parsing, Houdini integration, deps  (leaf)
+  └── hpm-python       venv management, bundled uv
+        └── hpm-package
 ```
+
+Leaves are `hpm-config` and `hpm-package` — both depend on nothing in the
+workspace, so they can be embedded by external tools without dragging in
+the rest of HPM.
 
 Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
 `ConfigError`). `hpm-cli` converts these into a single `CliError` with exit

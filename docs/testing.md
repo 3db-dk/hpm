@@ -43,8 +43,19 @@ current number (the manifest strategies live in
 ## Running tests
 
 ```sh
-# everything
+# everything: cli (single-threaded), rest of workspace, then doctests
+just test
+
+# doctests only — public-API examples in //! and /// blocks
+just test-doc
+
+# slow / external-dependency tests gated behind `#[ignore]`
+# (currently: real-uv venv smoke tests in hpm-python)
+just test-ignored
+
+# raw cargo equivalents
 cargo test --workspace
+cargo test --workspace --doc
 
 # one crate
 cargo test -p hpm-core
@@ -55,7 +66,8 @@ cargo test prop_version_req_roundtrip
 # property tests only
 cargo test prop_
 
-# sequential execution (required when tests touch shared filesystem paths)
+# sequential execution (required when tests touch shared filesystem paths;
+# `just test` already does this for hpm-cli via the CwdGuard)
 cargo test --workspace -- --test-threads=1
 
 # more proptest cases (default 256)
