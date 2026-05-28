@@ -23,7 +23,7 @@ const CHECKSUM_CACHE_FILE: &str = ".hpm-checksum";
 ///
 /// This is the **staging** path — `hpm install` and friends fetch into
 /// `<.hpm>/fetch/<safe_name>-<version>/`, then copy into the canonical
-/// `StorageManager` CAS via `install_from_path`. To find a package's
+/// `StorageManager` CAS via `install_into_cas`. To find a package's
 /// canonical install location instead, see [`cas_install_dir`].
 pub fn fetcher_install_dir(packages_dir: &Path, name: &str, version: &str) -> PathBuf {
     let safe_name = name.replace('/', "-");
@@ -34,7 +34,7 @@ pub fn fetcher_install_dir(packages_dir: &Path, name: &str, version: &str) -> Pa
 /// referenced by `name` (the dependency key, possibly scoped as
 /// `creator/slug`) and `version`. The CAS keys by **bare slug**: scoped
 /// names are reduced to their last `/`-segment so the layout matches
-/// what `StorageManager::install_from_path` writes.
+/// what `StorageManager::install_into_cas` writes.
 ///
 /// Used by `LockFile::verify_checksums` and any consumer that needs to
 /// locate an installed package off the lockfile alone.
@@ -443,7 +443,7 @@ impl ArchiveFetcher {
     /// extract into the staging dir, and report the on-disk checksum.
     ///
     /// Path dependencies don't go through here; they're copied straight
-    /// into the dev CAS via `StorageManager::install_from_path_dev`.
+    /// into the dev CAS via `StorageManager::install_as_dev_copy`.
     pub async fn fetch(
         &self,
         source: &PackageSource,
@@ -636,7 +636,7 @@ mod tests {
 
     // Path-source tests removed: path dependencies bypass the fetcher
     // entirely and copy straight into the dev CAS via
-    // `StorageManager::install_from_path_dev`.
+    // `StorageManager::install_as_dev_copy`.
 
     // Unit tests for PackageSource git/version validation removed -
     // covered by prop_release_asset_url_structure, prop_cache_key_uniqueness,

@@ -881,8 +881,8 @@ impl ProjectManager {
 /// `all_installed` is the snapshot of `StorageManager::list_installed()`
 /// captured before installs began; comparing against it avoids re-fetching
 /// packages that another concurrent task may also be racing to install
-/// (the CAS is idempotent under `install_from_path`, but skipping the
-/// network round-trip and the remove-and-recopy that `install_from_path`
+/// (the CAS is idempotent under `install_into_cas`, but skipping the
+/// network round-trip and the remove-and-recopy that `install_into_cas`
 /// performs is worth the shared snapshot — that recopy is the
 /// well-known Windows `os error 5` trigger when Houdini holds files open).
 ///
@@ -954,9 +954,9 @@ async fn install_one_dep(
         DependencySpec::Path { path, link, .. } => {
             let source_path = std::path::Path::new(path);
             let package = if *link {
-                storage.install_from_path_dev_link(source_path).await?
+                storage.install_as_dev_link(source_path).await?
             } else {
-                storage.install_from_path_dev(source_path).await?
+                storage.install_as_dev_copy(source_path).await?
             };
             Ok(InstallOutcome {
                 package,
@@ -979,7 +979,7 @@ async fn fetch_and_install_pkg(
     let fetch_result = fetcher.fetch(&source, name).await?;
     let checksum = fetch_result.checksum.clone();
     let installed = storage
-        .install_from_path(&fetch_result.package_path)
+        .install_into_cas(&fetch_result.package_path)
         .await?;
     info!("Successfully fetched and installed {}@{}", name, version);
     Ok((installed, checksum))

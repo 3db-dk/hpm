@@ -1,7 +1,7 @@
 //! `ArchiveFetcher` input — a URL-addressable package source.
 //!
 //! Path dependencies skip the fetcher entirely (they're copied straight
-//! into the dev CAS via `StorageManager::install_from_path_dev`), so this
+//! into the dev CAS via `StorageManager::install_as_dev_copy`), so this
 //! type only needs to describe a remote download. The lockfile records
 //! both URL and path sources via [`LockedSource`] in `lock.rs`.
 //!

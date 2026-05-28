@@ -77,7 +77,7 @@ pub async fn fetch_manifest(
     let fetcher = build_fetcher(storage)?;
     let fetch_result = fetcher.fetch(&source, name).await?;
     let installed = storage
-        .install_from_path(&fetch_result.package_path)
+        .install_into_cas(&fetch_result.package_path)
         .await?;
 
     info!(

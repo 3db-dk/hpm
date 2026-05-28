@@ -354,7 +354,7 @@ impl LockFile {
     ///   [`LockError::ChecksumMismatch`].
     ///
     /// The lookup is by **bare slug** — scoped names like `creator/foo`
-    /// reduce to `foo` so the lookup matches `install_from_path`'s layout.
+    /// reduce to `foo` so the lookup matches `install_into_cas`'s layout.
     pub fn verify_checksums(&self, packages_dir: &Path) -> Result<(), LockError> {
         for (name, dep) in &self.dependencies {
             let Some(expected_checksum) = &dep.checksum else {

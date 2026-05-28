@@ -81,7 +81,7 @@ impl StorageManager {
     /// deeper. Directories with `@` are treated as package directories.
     ///
     /// The `_dev` subtree is reserved for path-installed packages
-    /// (`install_from_path_dev`) and is intentionally invisible to
+    /// (`install_as_dev_copy`) and is intentionally invisible to
     /// `list_installed`. Otherwise an `ensure_installed` cache lookup that
     /// matches on `(name, version)` could return dev content for a registry
     /// resolution at the same coordinate — see the CAS-poisoning bug.
@@ -153,17 +153,17 @@ impl StorageManager {
     /// The directory must contain a valid hpm.toml manifest.
     ///
     /// Used for content that arrived through the registry/URL fetch pipeline.
-    /// For user-authored path dependencies, use [`install_from_path_dev`]
+    /// For user-authored path dependencies, use [`install_as_dev_copy`]
     /// instead — that keeps dev content out of the registry CAS so a dev
     /// install of `foo@1.0.0` doesn't get served to a different project that
     /// resolves the same coordinate from a registry.
     ///
-    /// [`install_from_path_dev`]: Self::install_from_path_dev
-    pub async fn install_from_path(
+    /// [`install_as_dev_copy`]: Self::install_as_dev_copy
+    pub async fn install_into_cas(
         &self,
         source_path: &std::path::Path,
     ) -> Result<InstalledPackage, StorageError> {
-        self.install_from_path_inner(source_path, InstallStyle::CasCopy)
+        self.install_inner(source_path, InstallStyle::CasCopy)
             .await
     }
 
@@ -173,11 +173,11 @@ impl StorageManager {
     /// Dev installs live in their own namespace because they share `(slug,
     /// version)` keys with registry packages but carry user-authored content
     /// that must not be cached as the canonical install for that coordinate.
-    pub async fn install_from_path_dev(
+    pub async fn install_as_dev_copy(
         &self,
         source_path: &std::path::Path,
     ) -> Result<InstalledPackage, StorageError> {
-        self.install_from_path_inner(source_path, InstallStyle::DevCopy)
+        self.install_inner(source_path, InstallStyle::DevCopy)
             .await
     }
 
@@ -185,18 +185,18 @@ impl StorageManager {
     /// junction (Windows). Working-tree edits at `source_path` become visible
     /// to a live Houdini session immediately, with no re-sync.
     ///
-    /// Same namespace isolation as [`install_from_path_dev`]: the link entry
+    /// Same namespace isolation as [`install_as_dev_copy`]: the link entry
     /// lives at `<packages_dir>/_dev/<slug>@<version>/`, never in the registry
     /// CAS. Registry resolutions at the same coordinate are unaffected.
-    pub async fn install_from_path_dev_link(
+    pub async fn install_as_dev_link(
         &self,
         source_path: &std::path::Path,
     ) -> Result<InstalledPackage, StorageError> {
-        self.install_from_path_inner(source_path, InstallStyle::DevLink)
+        self.install_inner(source_path, InstallStyle::DevLink)
             .await
     }
 
-    async fn install_from_path_inner(
+    async fn install_inner(
         &self,
         source_path: &std::path::Path,
         style: InstallStyle,
@@ -1078,7 +1078,7 @@ houdini = ">=20.5"
         let source_dir = temp_dir.path().join("source-pkg");
         std::fs::create_dir_all(&source_dir).unwrap();
 
-        let result = storage_manager.install_from_path(&source_dir).await;
+        let result = storage_manager.install_into_cas(&source_dir).await;
         assert!(result.is_err());
         match result {
             Err(StorageError::Manifest(ManifestLoadError::NotFound { path })) => {
@@ -1127,7 +1127,7 @@ houdini = ">=20.5"
         write_source_package(&source, "creator/foo", "1.0.0", "from-dev-source");
 
         let installed = storage_manager
-            .install_from_path_dev(&source)
+            .install_as_dev_copy(&source)
             .await
             .unwrap();
 
@@ -1167,7 +1167,7 @@ houdini = ">=20.5"
         let dev_source = temp_dir.path().join("dev-source");
         write_source_package(&dev_source, "creator/foo", "1.0.0", "dev");
         storage_manager
-            .install_from_path_dev(&dev_source)
+            .install_as_dev_copy(&dev_source)
             .await
             .unwrap();
 
@@ -1175,7 +1175,7 @@ houdini = ">=20.5"
         let reg_source = temp_dir.path().join("reg-source");
         write_source_package(&reg_source, "creator/bar", "2.0.0", "registry");
         storage_manager
-            .install_from_path(&reg_source)
+            .install_into_cas(&reg_source)
             .await
             .unwrap();
 
@@ -1210,14 +1210,14 @@ houdini = ">=20.5"
         let dev_source = temp_dir.path().join("dev-source");
         write_source_package(&dev_source, "creator/foo", "1.0.0", "dev-content");
         storage_manager
-            .install_from_path_dev(&dev_source)
+            .install_as_dev_copy(&dev_source)
             .await
             .unwrap();
 
         let reg_source = temp_dir.path().join("reg-source");
         write_source_package(&reg_source, "creator/foo", "1.0.0", "registry-content");
         storage_manager
-            .install_from_path(&reg_source)
+            .install_into_cas(&reg_source)
             .await
             .unwrap();
 
@@ -1257,7 +1257,7 @@ houdini = ">=20.5"
         write_source_package(&source, "creator/foo", "1.0.0", "link-content");
 
         let installed = storage_manager
-            .install_from_path_dev_link(&source)
+            .install_as_dev_link(&source)
             .await
             .unwrap();
 
@@ -1306,7 +1306,7 @@ houdini = ">=20.5"
         let source = temp_dir.path().join("live-source");
         write_source_package(&source, "creator/foo", "1.0.0", "initial");
         let installed = storage_manager
-            .install_from_path_dev_link(&source)
+            .install_as_dev_link(&source)
             .await
             .unwrap();
 
@@ -1340,11 +1340,11 @@ houdini = ">=20.5"
         std::fs::write(source.join("user-script.py"), "# user authored").unwrap();
 
         storage_manager
-            .install_from_path_dev_link(&source)
+            .install_as_dev_link(&source)
             .await
             .unwrap();
         storage_manager
-            .install_from_path_dev_link(&source)
+            .install_as_dev_link(&source)
             .await
             .unwrap();
 
@@ -1380,14 +1380,14 @@ houdini = ">=20.5"
 
         // First: copy install lays down a real directory at the dev path.
         storage_manager
-            .install_from_path_dev(&source)
+            .install_as_dev_copy(&source)
             .await
             .unwrap();
 
         // Then: link install must replace the real dir without traversing
         // into the workspace.
         storage_manager
-            .install_from_path_dev_link(&source)
+            .install_as_dev_link(&source)
             .await
             .unwrap();
 
@@ -1398,7 +1398,7 @@ houdini = ">=20.5"
 
         // And the reverse: link → copy.
         storage_manager
-            .install_from_path_dev(&source)
+            .install_as_dev_copy(&source)
             .await
             .unwrap();
         assert_eq!(
@@ -1423,14 +1423,14 @@ houdini = ">=20.5"
         let link_source = temp_dir.path().join("link-source");
         write_source_package(&link_source, "creator/foo", "1.0.0", "link-content");
         storage_manager
-            .install_from_path_dev_link(&link_source)
+            .install_as_dev_link(&link_source)
             .await
             .unwrap();
 
         let reg_source = temp_dir.path().join("reg-source");
         write_source_package(&reg_source, "creator/foo", "1.0.0", "registry-content");
         storage_manager
-            .install_from_path(&reg_source)
+            .install_into_cas(&reg_source)
             .await
             .unwrap();
 
@@ -1522,7 +1522,7 @@ houdini = ">=20.5"
         let source = temp_dir.path().join("orphan-source");
         write_source_package(&source, "studio/orphan", "1.0.0", "orphan-marker");
         storage_manager
-            .install_from_path_dev(&source)
+            .install_as_dev_copy(&source)
             .await
             .unwrap();
         let dev_path = temp_dir
@@ -1575,7 +1575,7 @@ houdini = ">=20.5"
         let source = temp_dir.path().join("keep-source");
         write_source_package(&source, "studio/keep", "2.0.0", "keep-marker");
         storage_manager
-            .install_from_path_dev(&source)
+            .install_as_dev_copy(&source)
             .await
             .unwrap();
         let dev_path = temp_dir
@@ -1624,7 +1624,7 @@ houdini = ">=20.5"
         write_source_package(&workspace, "studio/linked", "1.0.0", "workspace-marker");
         std::fs::write(workspace.join("user-file.py"), "# user authored").unwrap();
         storage_manager
-            .install_from_path_dev_link(&workspace)
+            .install_as_dev_link(&workspace)
             .await
             .unwrap();
         let dev_path = temp_dir
@@ -1681,13 +1681,13 @@ houdini = ">=20.5"
         let alpha_src = temp_dir.path().join("alpha-src");
         write_source_package(&alpha_src, "studio/alpha", "1.0.0", "alpha");
         storage_manager
-            .install_from_path_dev(&alpha_src)
+            .install_as_dev_copy(&alpha_src)
             .await
             .unwrap();
         let beta_src = temp_dir.path().join("beta-src");
         write_source_package(&beta_src, "studio/beta", "1.0.0", "beta");
         storage_manager
-            .install_from_path_dev(&beta_src)
+            .install_as_dev_copy(&beta_src)
             .await
             .unwrap();
 
@@ -1749,7 +1749,7 @@ houdini = ">=20.5"
         let source = temp_dir.path().join("orphan-src");
         write_source_package(&source, "studio/orphan", "1.0.0", "orphan");
         storage_manager
-            .install_from_path_dev(&source)
+            .install_as_dev_copy(&source)
             .await
             .unwrap();
         let dev_path = temp_dir
@@ -1783,7 +1783,7 @@ houdini = ">=20.5"
         let orphan_src = temp_dir.path().join("orphan-src");
         write_source_package(&orphan_src, "studio/orphan", "1.0.0", "orphan");
         storage_manager
-            .install_from_path_dev(&orphan_src)
+            .install_as_dev_copy(&orphan_src)
             .await
             .unwrap();
 
