@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-05-29
+
 ### Added
 - **Backwards-compatible reading of pre-0.16 (`Manifest 1.x`)
   `hpm.toml` files.** The 0.16.0 "Manifest 2.0" rename
