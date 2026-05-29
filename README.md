@@ -105,6 +105,7 @@ See the [user guide](docs/user-guide.md) for the full manifest reference.
 | `hpm update [pkg...]` | Update dependencies (`--dry-run` to preview) |
 | `hpm list` | Show dependencies (`--tree` for tree view) |
 | `hpm check` | Validate manifest and package structure |
+| `hpm migrate` | Rewrite a pre-0.16 `hpm.toml` to the current schema (`--stdout`, `--check`) |
 | `hpm build` | Materialise the install image into `[stage].output_dir` (`-o <dir>` for a custom path, e.g. per-Houdini-session staging) |
 | `hpm search <query>` | Search configured registries |
 | `hpm pack` | Build a distributable archive (`--key` to sign, `--platform` for native) |

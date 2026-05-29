@@ -7,6 +7,7 @@ pub mod init;
 pub mod install;
 pub mod list;
 pub mod manifest_utils;
+pub mod migrate;
 pub mod pack;
 pub mod registry;
 pub mod remove;

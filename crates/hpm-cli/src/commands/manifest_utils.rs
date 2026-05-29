@@ -16,8 +16,9 @@
 //! from maliciously large manifest files.
 
 use anyhow::{Context, Result};
-use hpm_package::PackageManifest;
+use hpm_package::{LEGACY_MANIFEST_SUNSET, PackageManifest};
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
 /// Maximum allowed manifest file size (1 MB) to prevent DoS attacks.
 pub const MAX_MANIFEST_SIZE: u64 = 1024 * 1024;
@@ -127,7 +128,19 @@ pub fn load_manifest(manifest_path: &Path) -> Result<PackageManifest> {
         );
     }
 
-    let manifest = PackageManifest::from_path(manifest_path)?;
+    let (manifest, migration) = PackageManifest::from_path_migrating(manifest_path)?;
+
+    if let Some(report) = migration {
+        warn!(
+            "{} uses the pre-0.16 hpm.toml format; run `hpm migrate` to update it \
+             (legacy support is removed in {}).",
+            manifest_path.display(),
+            LEGACY_MANIFEST_SUNSET
+        );
+        for w in &report.warnings {
+            warn!("  migration note: {}", w);
+        }
+    }
 
     manifest
         .validate()

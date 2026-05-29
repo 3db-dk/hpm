@@ -19,6 +19,7 @@ pub mod compat;
 pub mod env;
 pub mod error;
 pub mod info;
+pub mod legacy;
 pub mod registry;
 pub mod scripts;
 pub mod stage;
@@ -28,10 +29,16 @@ pub use compat::CompatConfig;
 pub use env::{EnvMethod, ManifestEnvEntry};
 pub use error::ManifestLoadError;
 pub use info::PackageInfo;
+pub use legacy::{MigrationReport, MigrationWarning};
 pub use registry::{RegistryConfig, RegistryType};
 pub use scripts::{PackageScripts, ScriptEntry, ScriptEnv};
 pub use stage::{PlaceRule, PlatformStaging, StageConfig, StagePlatformRules};
 pub use validation::{ValidationLevel, ValidationReport};
+
+/// The hpm version in which read-side support for the pre-0.16 manifest
+/// format is removed. Referenced in the deprecation warning emitted when an
+/// old-format `hpm.toml` is loaded.
+pub const LEGACY_MANIFEST_SUNSET: &str = "0.20.0";
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -76,6 +83,29 @@ pub struct PackageManifest {
     pub scripts: PackageScripts,
 }
 
+/// Parse `hpm.toml` content into a [`PackageManifest`], transparently
+/// converting the pre-0.16 format when detected.
+///
+/// Returns the parsed manifest plus `Some(MigrationReport)` when the input
+/// was in the legacy format (so callers can warn / surface review items), or
+/// `None` for a current-format manifest.
+///
+/// Detection is marker-based (see [`legacy::is_legacy`]) because the current
+/// typed parser silently drops the old top-level sections rather than
+/// erroring on them.
+pub fn parse_manifest_str(
+    content: &str,
+) -> Result<(PackageManifest, Option<MigrationReport>), toml::de::Error> {
+    let table: toml::Table = toml::from_str(content)?;
+    if legacy::is_legacy(&table) {
+        let legacy_manifest: legacy::LegacyManifest = toml::from_str(content)?;
+        let (manifest, report) = legacy::migrate_legacy(legacy_manifest);
+        Ok((manifest, Some(report)))
+    } else {
+        Ok((toml::from_str(content)?, None))
+    }
+}
+
 impl PackageManifest {
     /// Load and parse a package manifest from `hpm.toml` at the given path.
     ///
@@ -83,7 +113,25 @@ impl PackageManifest {
     /// callers that want to treat absence as "no project here" should match
     /// that variant explicitly. I/O and parse errors carry the source path
     /// so users can locate the bad file.
+    /// Loads pre-0.16 ("Manifest 1.x") manifests transparently by converting
+    /// them to the current shape (see [`mod@legacy`]); any conversion review
+    /// items are discarded here. Use [`Self::from_path_migrating`] to surface
+    /// them and the deprecation warning.
     pub fn from_path(path: &Path) -> Result<Self, ManifestLoadError> {
+        Ok(Self::from_path_migrating(path)?.0)
+    }
+
+    /// Like [`Self::from_path`], but also returns a [`MigrationReport`] when
+    /// the file was in the pre-0.16 format and had to be converted (`None`
+    /// for current-format manifests).
+    ///
+    /// CLI paths use this to warn the user that their manifest is on the
+    /// deprecated format and to surface lossy conversions (notably
+    /// `[native]` -> `[stage]`); internal callers go through
+    /// [`Self::from_path`] and get the conversion silently.
+    pub fn from_path_migrating(
+        path: &Path,
+    ) -> Result<(Self, Option<MigrationReport>), ManifestLoadError> {
         if !path.exists() {
             return Err(ManifestLoadError::NotFound {
                 path: path.to_path_buf(),
@@ -93,7 +141,7 @@ impl PackageManifest {
             path: path.to_path_buf(),
             source,
         })?;
-        toml::from_str(&content).map_err(|source| ManifestLoadError::Parse {
+        parse_manifest_str(&content).map_err(|source| ManifestLoadError::Parse {
             path: path.to_path_buf(),
             source,
         })

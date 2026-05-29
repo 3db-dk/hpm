@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Backwards-compatible reading of pre-0.16 (`Manifest 1.x`)
+  `hpm.toml` files.** The 0.16.0 "Manifest 2.0" rename
+  (`[houdini]` -> `[compat].houdini`, `[env]` + `[dev.env]` ->
+  `[runtime]`, `[native]` -> `[compat].platforms` + `[stage]`,
+  `[scripts.platform.<os>]` -> conditional `cmd`) meant the new parser
+  silently dropped the old top-level sections — a package published with
+  the old schema would install with its Houdini range, env vars, and
+  native placement gone. Old-format manifests are now detected and
+  converted to the current shape on load (transparently, so installs of
+  already-published packages keep working), with a deprecation warning
+  pointing at `hpm migrate`. Read-side legacy support is removed in
+  **0.20.0** (`hpm_package::LEGACY_MANIFEST_SUNSET`).
+
+- **`hpm migrate` command.** Rewrites a pre-0.16 `hpm.toml` to the
+  current schema in place, backing the original up as `hpm.toml.bak`.
+  `--stdout` previews the result without writing; `--check` reports
+  whether migration is needed (non-zero exit if so) and writes nothing —
+  useful as a CI gate. The `[native]` -> `[stage]` step is best-effort:
+  the old `files` globs were filters, while `[stage.platform].place`
+  rules need a destination, so the derived `to` paths are flagged for
+  review both in the terminal and as a comment block atop the rewritten
+  file.
+
 ## [0.17.1] - 2026-05-28
 
 ### Fixed
@@ -320,8 +344,10 @@ the user guide's `[stage]` and "Workflow notes" sections.
   `--houdini <range>`.
 
 ### Migration
-There is no automatic migration — manifests must be rewritten by hand
-to the new shape. Each section's rewrite is mechanical:
+As of the Unreleased section above, old-format manifests are read
+automatically and `hpm migrate` rewrites them to the new shape; this
+note stands for the 0.16.0–0.17.1 window, where migration was manual.
+Each section's rewrite is mechanical:
 
 | Old | New |
 |-----|-----|
