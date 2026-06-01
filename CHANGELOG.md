@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-06-01
+
+### Fixed
+
+- **One corrupt cached manifest no longer wedges the whole CAS.** A
+  package cached with an invalid platform (the real-world trigger was
+  `macos-universal`, which is not a valid `Platform`) made
+  `PackageManifest::from_path` return a parse error.
+  `StorageManager::parse_installed_package` propagated that `Err` up
+  through `collect_installed_packages` -> `list_installed`, aborting the
+  entire listing. Because reconcile, `hpm_list_packages`, env-var
+  discovery, and project sync/launch all funnel through
+  `list_installed()`, a single broken cached package broke all of them —
+  even for projects that did not depend on it. A malformed manifest is
+  now warned and skipped (mirroring the existing not-found skip), so the
+  rest of the store stays usable and the broken package simply will not
+  resolve from CAS.
+
 ## [0.18.0] - 2026-05-29
 
 ### Added
