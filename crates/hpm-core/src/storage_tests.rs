@@ -81,6 +81,65 @@ houdini = ">=20.5"
     assert_eq!(packages[0].version, "1.0.0");
 }
 
+/// Regression: a single corrupt cached manifest must not abort the whole CAS
+/// walk. One package with an unknown platform (or any unparseable manifest)
+/// previously made `list_installed` return `Err`, which wedged reconcile,
+/// env-var discovery, and every project launch — even for projects that don't
+/// depend on the broken package. `list_installed` must warn, skip the broken
+/// entry, and still surface every valid package.
+#[test]
+fn list_installed_skips_unparseable_manifest() {
+    let temp_dir = TempDir::new().unwrap();
+    let storage_config = StorageConfig {
+        home_dir: temp_dir.path().to_path_buf(),
+        cache_dir: temp_dir.path().join("cache"),
+        packages_dir: temp_dir.path().join("packages"),
+        registry_cache_dir: temp_dir.path().join("registry"),
+    };
+    let storage_manager = StorageManager::new(storage_config).unwrap();
+
+    // A valid package the launcher does depend on.
+    let good_dir = temp_dir.path().join("packages").join("good-package@1.0.0");
+    std::fs::create_dir_all(&good_dir).unwrap();
+    std::fs::write(
+        good_dir.join("hpm.toml"),
+        r#"
+[package]
+path = "studio/good-package"
+name = "Good Package"
+version = "1.0.0"
+"#,
+    )
+    .unwrap();
+
+    // A broken cached package with an invalid platform value, mirroring the
+    // real-world `macos-universal` corruption.
+    let bad_dir = temp_dir.path().join("packages").join("asset-browser@0.1.0");
+    std::fs::create_dir_all(&bad_dir).unwrap();
+    std::fs::write(
+        bad_dir.join("hpm.toml"),
+        r#"
+[package]
+path = "studio/asset-browser"
+name = "Asset Browser"
+version = "0.1.0"
+
+[compat]
+platforms = ["windows-x86_64", "linux-x86_64", "macos-universal"]
+"#,
+    )
+    .unwrap();
+
+    let packages = storage_manager.list_installed().unwrap();
+    assert_eq!(
+        packages.len(),
+        1,
+        "broken manifest must be skipped, not abort the listing; got {:?}",
+        packages.iter().map(|p| p.slug()).collect::<Vec<_>>()
+    );
+    assert_eq!(packages[0].slug(), "good-package");
+}
+
 // Error path tests
 
 #[tokio::test]
@@ -165,14 +224,15 @@ fn list_packages_with_corrupted_manifest() {
     )
     .unwrap();
 
-    let result = storage_manager.list_installed();
-    assert!(result.is_err());
-    match result {
-        Err(StorageError::Manifest(ManifestLoadError::Parse { path, .. })) => {
-            assert!(path.ends_with("hpm.toml"));
-        }
-        other => panic!("Expected Manifest::Parse error, got: {:?}", other),
-    }
+    // A corrupt manifest must not abort the whole CAS walk — it is warned and
+    // skipped so the rest of the store stays usable. (Previously this returned
+    // Err, which wedged every consumer over one bad cached package.)
+    let packages = storage_manager.list_installed().unwrap();
+    assert!(
+        packages.is_empty(),
+        "corrupted manifest must be skipped, not surfaced; got {:?}",
+        packages.iter().map(|p| p.slug()).collect::<Vec<_>>()
+    );
 }
 
 #[test]

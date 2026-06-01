@@ -135,7 +135,21 @@ impl StorageManager {
             // Directory without a manifest is not a package — skip silently
             // to keep `list_installed` resilient to stray scaffolding.
             Err(ManifestLoadError::NotFound { .. }) => return Ok(None),
-            Err(e) => return Err(StorageError::Manifest(e)),
+            // A malformed manifest (bad TOML, unknown platform, etc.) is one
+            // broken entry — it must not abort the whole CAS walk. Aborting
+            // here wedges every consumer that lists installed packages
+            // (reconcile, env-var discovery, project sync/launch) over a
+            // single corrupt cached package, even for projects that don't
+            // depend on it. Warn and skip so the rest of the store stays
+            // usable; the broken package simply won't resolve from CAS.
+            Err(e) => {
+                warn!(
+                    "Skipping unparseable package manifest at {}: {}",
+                    manifest_path.display(),
+                    e
+                );
+                return Ok(None);
+            }
         };
 
         Ok(Some(InstalledPackage {
