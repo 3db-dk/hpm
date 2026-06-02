@@ -371,8 +371,21 @@ fn runtime_install_source_dev_gates_emission() {
     }
 }
 
+/// Helper: collect every [runtime]-emitted entry for a key, in emission
+/// order. `append`/`prepend` overrides combine with the package value, so
+/// a key can legitimately appear in more than one env map.
+fn collect_env_entries<'a>(
+    pkg: &'a hpm_package::HoudiniPackage,
+    key: &str,
+) -> Vec<&'a hpm_package::HoudiniEnvValue> {
+    pkg.env
+        .as_ref()
+        .map(|env| env.iter().filter_map(|m| m.get(key)).collect())
+        .unwrap_or_default()
+}
+
 #[test]
-fn project_override_wins_over_install_source_dev_variant() {
+fn project_prepend_override_combines_with_dev_variant() {
     let temp_dir = TempDir::new().unwrap();
     let (config, storage_manager) = test_setup(temp_dir.path());
     let project_root = temp_dir.path().join("project");
@@ -400,7 +413,7 @@ fn project_override_wins_over_install_source_dev_variant() {
     let installed = InstalledPackage {
         version: "1.0.0".to_string(),
         manifest,
-        install_path: package_path,
+        install_path: package_path.clone(),
         is_dev: true,
     };
 
@@ -416,11 +429,166 @@ fn project_override_wins_over_install_source_dev_variant() {
     let pkg = project_manager
         .create_houdini_package_with_python(&installed, None, &overrides)
         .unwrap();
-    let entry = find_env_entry(&pkg, "HOUDINI_DSO_PATH")
-        .expect("dev-gated key must still emit when project overrides it");
-    match entry {
-        hpm_package::HoudiniEnvValue::Detailed { value, .. } => {
+
+    // A `prepend` override combines: the package's own (dev-gated)
+    // contribution is emitted first, then the project's prepend, so
+    // Houdini merges both in load order.
+    let entries = collect_env_entries(&pkg, "HOUDINI_DSO_PATH");
+    assert_eq!(
+        entries.len(),
+        2,
+        "prepend override must combine with the package value, not replace it"
+    );
+    match entries[0] {
+        hpm_package::HoudiniEnvValue::DetailedConditional { method, value } => {
+            assert_eq!(method, "prepend");
+            let v = value[0].values().next().unwrap();
+            assert_eq!(v, &format!("{}/build/Release", package_path.display()));
+        }
+        other => panic!("expected the package's dev variant first, got {other:?}"),
+    }
+    match entries[1] {
+        hpm_package::HoudiniEnvValue::Detailed { method, value } => {
+            assert_eq!(method, "prepend");
             assert_eq!(value, "/opt/forced/dso");
+        }
+        other => panic!("expected the project's prepend second, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_append_override_combines_with_package_value() {
+    // The core regression: a project `append`/`prepend` override against a
+    // package-provided env var must extend it, emitting both the package's
+    // value and the project's, not replace the package's contribution.
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+
+    let mut manifest = hpm_package::PackageManifest::new(
+        PackagePath::new("studio/lib").unwrap(),
+        "Lib".to_string(),
+        "1.0.0".to_string(),
+        None,
+        Vec::new(),
+        None,
+    );
+    let mut runtime = IndexMap::new();
+    runtime.insert(
+        "PYTHONPATH".to_string(),
+        ManifestEnvEntry {
+            method: hpm_package::EnvMethod::Append,
+            value: Some("$HPM_PACKAGE_ROOT/python".into()),
+            required: false,
+        },
+    );
+    manifest.runtime = runtime;
+
+    let package_path = temp_dir.path().join("lib@1.0.0");
+    std::fs::create_dir_all(&package_path).unwrap();
+
+    let installed = InstalledPackage {
+        version: "1.0.0".to_string(),
+        manifest,
+        install_path: package_path.clone(),
+        is_dev: false,
+    };
+
+    let mut overrides = IndexMap::new();
+    overrides.insert(
+        "PYTHONPATH".to_string(),
+        ManifestEnvEntry {
+            method: hpm_package::EnvMethod::Append,
+            value: Some("/work/project/extra".into()),
+            required: false,
+        },
+    );
+    let pkg = project_manager
+        .create_houdini_package_with_python(&installed, None, &overrides)
+        .unwrap();
+
+    let entries = collect_env_entries(&pkg, "PYTHONPATH");
+    assert_eq!(
+        entries.len(),
+        2,
+        "append override must combine with the package value, not replace it"
+    );
+    // Package value first, then the project's append.
+    match entries[0] {
+        hpm_package::HoudiniEnvValue::Detailed { method, value } => {
+            assert_eq!(method, "append");
+            assert_eq!(value, &format!("{}/python", package_path.display()));
+        }
+        other => panic!("expected the package value first, got {other:?}"),
+    }
+    match entries[1] {
+        hpm_package::HoudiniEnvValue::Detailed { method, value } => {
+            assert_eq!(method, "append");
+            assert_eq!(value, "/work/project/extra");
+        }
+        other => panic!("expected the project's append second, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_set_override_still_replaces_package_value() {
+    // `set` keeps replace semantics: only the project's value is emitted.
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+
+    let mut manifest = hpm_package::PackageManifest::new(
+        PackagePath::new("studio/lib").unwrap(),
+        "Lib".to_string(),
+        "1.0.0".to_string(),
+        None,
+        Vec::new(),
+        None,
+    );
+    let mut runtime = IndexMap::new();
+    runtime.insert(
+        "MY_CONFIG".to_string(),
+        ManifestEnvEntry {
+            method: hpm_package::EnvMethod::Set,
+            value: Some("$HPM_PACKAGE_ROOT/default".into()),
+            required: false,
+        },
+    );
+    manifest.runtime = runtime;
+
+    let package_path = temp_dir.path().join("lib@1.0.0");
+    std::fs::create_dir_all(&package_path).unwrap();
+
+    let installed = InstalledPackage {
+        version: "1.0.0".to_string(),
+        manifest,
+        install_path: package_path,
+        is_dev: false,
+    };
+
+    let mut overrides = IndexMap::new();
+    overrides.insert(
+        "MY_CONFIG".to_string(),
+        ManifestEnvEntry {
+            method: hpm_package::EnvMethod::Set,
+            value: Some("/custom".into()),
+            required: false,
+        },
+    );
+    let pkg = project_manager
+        .create_houdini_package_with_python(&installed, None, &overrides)
+        .unwrap();
+
+    let entries = collect_env_entries(&pkg, "MY_CONFIG");
+    assert_eq!(entries.len(), 1, "set override must replace, not combine");
+    match entries[0] {
+        hpm_package::HoudiniEnvValue::Detailed { method, value } => {
+            assert_eq!(method, "set");
+            assert_eq!(value, "/custom");
         }
         other => panic!("expected Detailed env value, got {other:?}"),
     }

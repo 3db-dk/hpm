@@ -717,7 +717,17 @@ a default and the project override becomes optional. Without a value, the
 entry is a hard placeholder.
 
 A consuming project can also override any package-declared env var by
-re-declaring the same key in its own `[runtime]` — the project's entry wins.
+re-declaring the same key in its own `[runtime]`. How the project entry
+combines with the package's depends on the *project* entry's `method`:
+
+| Project `method` | Result |
+|------------------|--------|
+| `set` | Replaces the package's contribution wholesale — only the project's value is emitted. |
+| `prepend` / `append` | Extends it — the package's own entry is emitted first, then the project's, so Houdini merges both in load order with the requested method. |
+
+So a project `append`/`prepend` adds to a package-provided value (e.g.
+extending a package's `PYTHONPATH`) rather than clobbering it. Use `set`
+when you genuinely want to replace what the package contributes.
 
 #### Conditional values
 
@@ -786,10 +796,14 @@ fires, and Houdini sees only the published `dso/` location. If you want
 the variable to disappear entirely for non-dev consumers, omit the
 fallback branch — an entry with no surviving variants is not emitted.
 
-Precedence when a key appears in more than one place (highest first):
+When a key appears in both the project and the package, the project
+entry's `method` decides whether it replaces or combines:
 
-1. The consuming project's `[runtime]` override.
-2. The package's `[runtime]` entry (with surviving variants).
+- `set` — the project override replaces the package's `[runtime]` entry
+  (with its surviving variants).
+- `prepend` / `append` — the package's `[runtime]` entry (with surviving
+  variants) is emitted first, then the project's override, and Houdini
+  merges them in load order.
 
 ### `[stage]`
 

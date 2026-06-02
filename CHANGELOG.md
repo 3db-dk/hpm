@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Project `[runtime]` `append`/`prepend` overrides now combine with the
+  package value instead of replacing it.** When a project's `[runtime]`
+  override targeted a key that an installed package also declared, HPM
+  took the project's entry wholesale (`project_override.or(pkg_entry)`),
+  dropping the package's own contribution. This made `method = "append"`
+  and `method = "prepend"` behave exactly like `set` — picking either in
+  the project config silently overrode the package-provided value (most
+  visibly `PYTHONPATH`). The override loop in
+  `create_houdini_package_with_python` now branches on the override's
+  method: `set` still replaces, while `append`/`prepend` emit the
+  package's original entry first and then the project's entry into the
+  generated `package.json`, so Houdini merges them in load order with the
+  requested method.
+
+### Changed
+
+- **Behavior change for existing projects.** Any project that set an
+  `append`/`prepend` `[runtime]` override expecting it to *replace* the
+  package value will now combine instead. Switch such overrides to
+  `method = "set"` to keep the old replace behavior.
+
 ## [0.18.1] - 2026-06-01
 
 ### Fixed

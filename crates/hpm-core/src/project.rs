@@ -12,7 +12,9 @@ use crate::package_source::PackageSource;
 use crate::python::{VenvManager, collect_python_dependencies, resolve_dependencies};
 use crate::storage::{InstalledPackage, PackageSpec, StorageManager};
 use hpm_config::{Config, ProjectPaths};
-use hpm_package::{HoudiniPackage, IoOp, ManifestEnvEntry, ManifestLoadError, PackageManifest};
+use hpm_package::{
+    EnvMethod, HoudiniPackage, IoOp, ManifestEnvEntry, ManifestLoadError, PackageManifest,
+};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -605,50 +607,101 @@ impl ProjectManager {
             env.push(scripts_env);
         }
 
-        // Append user-defined env vars from [runtime], with project-level
-        // [runtime] overrides winning per-key. Each entry's conditional
-        // variants are filtered by `is_dev` — branches gated to a
-        // non-matching `install_source` drop out, so dev-only contributions
-        // never reach a registry consumer's Houdini manifest and
-        // registry-only contributions never reach a dev install. A
-        // required-but-unsupplied placeholder (no value, no project
-        // override) surfaces as `MissingRequiredEnv`.
+        // Append user-defined env vars from [runtime], reconciling each
+        // package entry with any project-level [runtime] override of the
+        // same key:
+        //
+        // * `set` (or no override) — the effective entry replaces the
+        //   package's contribution wholesale.
+        // * `append` / `prepend` — the package's own entry is emitted
+        //   first, then the project's override, so Houdini's native
+        //   package system merges them in load order with the requested
+        //   method. This lets a project *extend* a package-provided value
+        //   rather than clobber it.
+        //
+        // Each entry's conditional variants are filtered by `is_dev` —
+        // branches gated to a non-matching `install_source` drop out, so
+        // dev-only contributions never reach a registry consumer's Houdini
+        // manifest and registry-only contributions never reach a dev
+        // install. A required-but-unsupplied placeholder (no value from the
+        // package and none from the project) surfaces as `MissingRequiredEnv`.
         if !installed_package.manifest.runtime.is_empty() {
             let pkg_root = package_path.to_string_lossy().into_owned();
             let user_runtime = &installed_package.manifest.runtime;
+            let slug = installed_package.manifest.package.slug().to_string();
+            let is_dev = installed_package.is_dev;
 
-            for key in user_runtime.keys() {
-                let project_override = project_env_overrides.get(key);
-                let pkg_entry = user_runtime.get(key);
-                let effective_entry = project_override
-                    .or(pkg_entry)
-                    .expect("key originates from package's [runtime]");
-
-                if effective_entry.value.is_none() {
-                    return Err(ProjectError::MissingRequiredEnv {
-                        var: key.clone(),
-                        package: installed_package.manifest.package.slug().to_string(),
-                    });
-                }
-
-                let lowered = effective_entry
-                    .lower(
-                        &[("$HPM_PACKAGE_ROOT", &pkg_root)],
-                        installed_package.is_dev,
-                    )
+            // Lower one entry and, unless it is inert in this install
+            // context (every variant install-source-filtered out), push it
+            // onto `env` under `key`.
+            let emit = |key: &str,
+                        entry: &ManifestEnvEntry,
+                        env: &mut Vec<HashMap<String, hpm_package::HoudiniEnvValue>>|
+             -> Result<(), ProjectError> {
+                let lowered = entry
+                    .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)], is_dev)
                     .map_err(|e| ProjectError::InvalidEnvExpression {
-                        var: key.clone(),
-                        package: installed_package.manifest.package.slug().to_string(),
+                        var: key.to_string(),
+                        package: slug.clone(),
                         message: e.to_string(),
                     })?;
-                let Some(houdini_value) = lowered else {
-                    // Every variant was install-source-filtered out for this
-                    // install context — the entry is inert here. Skip silently.
-                    continue;
-                };
-                let mut env_map = HashMap::new();
-                env_map.insert(key.clone(), houdini_value);
-                env.push(env_map);
+                if let Some(houdini_value) = lowered {
+                    let mut env_map = HashMap::new();
+                    env_map.insert(key.to_string(), houdini_value);
+                    env.push(env_map);
+                }
+                Ok(())
+            };
+
+            for key in user_runtime.keys() {
+                let pkg_entry = user_runtime
+                    .get(key)
+                    .expect("key originates from package's [runtime]");
+                let project_override = project_env_overrides.get(key);
+
+                match project_override {
+                    // No project override: emit the package's own entry. A
+                    // valueless entry here is an unsatisfied required
+                    // placeholder.
+                    None => {
+                        if pkg_entry.value.is_none() {
+                            return Err(ProjectError::MissingRequiredEnv {
+                                var: key.clone(),
+                                package: slug.clone(),
+                            });
+                        }
+                        emit(key, pkg_entry, &mut env)?;
+                    }
+                    // `set` replaces the package's contribution wholesale.
+                    Some(over) if over.method == EnvMethod::Set => {
+                        if over.value.is_none() {
+                            return Err(ProjectError::MissingRequiredEnv {
+                                var: key.clone(),
+                                package: slug.clone(),
+                            });
+                        }
+                        emit(key, over, &mut env)?;
+                    }
+                    // `append` / `prepend` combine with the package value:
+                    // emit the package's entry first (so Houdini merges in
+                    // load order), then the project's override. A valueless
+                    // package entry (required placeholder) contributes
+                    // nothing and is satisfied by the project's value.
+                    Some(over) => {
+                        if pkg_entry.value.is_none() && over.value.is_none() {
+                            return Err(ProjectError::MissingRequiredEnv {
+                                var: key.clone(),
+                                package: slug.clone(),
+                            });
+                        }
+                        if pkg_entry.value.is_some() {
+                            emit(key, pkg_entry, &mut env)?;
+                        }
+                        if over.value.is_some() {
+                            emit(key, over, &mut env)?;
+                        }
+                    }
+                }
             }
         }
 
