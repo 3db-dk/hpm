@@ -74,7 +74,7 @@
 //!
 //! | Houdini Version | Python Version | Notes                    |
 //! |----------------|----------------|--------------------------|
-//! | 20.5           | Python 3.10    | Minimum supported        |
+//! | 20.5           | Python 3.11    | Minimum supported        |
 //! | 21.x           | Python 3.11    |                          |
 //! | 22.x           | Python 3.13    | Latest                   |
 //!

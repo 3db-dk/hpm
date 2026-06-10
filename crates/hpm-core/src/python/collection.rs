@@ -14,7 +14,7 @@ use hpm_package::{PackageManifest, PythonDependencySpec};
 /// * `project_houdini_version` — The project's `[compat].houdini` lower bound. When
 ///   provided, it is the **authoritative** source for Python version
 ///   selection: Houdini ships a fixed embedded CPython per major release
-///   (20.5→3.10, 21→3.11, 22→3.13), and the venv must match that ABI or
+///   (20.5→3.11, 21→3.11, 22→3.13), and the venv must match that ABI or
 ///   wheels will fail to import inside Houdini. Per-package
 ///   `[compat].houdini` declarations describe compatibility floors and are
 ///   intentionally ignored for Python version mapping in this case.
@@ -158,7 +158,10 @@ fn map_houdini_to_python_version(houdini_version: &str) -> Result<PythonVersion>
     let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
 
     match (major, minor) {
-        (20, 5..) => Ok(PythonVersion::new(3, 10, None)),
+        // Houdini 20.5's main builds are built against Python 3.11; a 3.10
+        // build exists only as a separate download. We map to the default.
+        // https://www.sidefx.com/docs/houdini/news/20_5/platforms.html
+        (20, 5..) => Ok(PythonVersion::new(3, 11, None)),
         (21, _) => Ok(PythonVersion::new(3, 11, None)),
         (22, _) => Ok(PythonVersion::new(3, 13, None)),
         _ => Err(anyhow::anyhow!(
@@ -232,17 +235,17 @@ mod tests {
         assert!(result.dependencies.contains_key("numpy"));
         assert!(result.dependencies.contains_key("requests"));
 
-        // Check that Python version was mapped correctly (Houdini 20.5 -> Python 3.10)
+        // Check that Python version was mapped correctly (Houdini 20.5 -> Python 3.11)
         assert!(result.python_version.is_some());
         let py_version = result.python_version.unwrap();
         assert_eq!(py_version.major, 3);
-        assert_eq!(py_version.minor, 10);
+        assert_eq!(py_version.minor, 11);
     }
 
     /// When the project pins Houdini 22 but a package only declares
     /// `[compat].houdini = ">=20.5"`, the resolver must target Python 3.13
-    /// (Houdini 22's embedded interpreter) — not 3.10. Without this override
-    /// the venv would carry 3.10 wheels that crash at import inside Houdini 22.
+    /// (Houdini 22's embedded interpreter) — not 3.11. Without this override
+    /// the venv would carry 3.11 wheels that crash at import inside Houdini 22.
     #[tokio::test]
     async fn test_project_houdini_version_overrides_per_package_mapping() {
         let mut python_deps = IndexMap::new();
@@ -348,7 +351,7 @@ mod tests {
     fn test_houdini_to_python_version_mapping() {
         assert_eq!(
             map_houdini_to_python_version("20.5").unwrap(),
-            PythonVersion::new(3, 10, None)
+            PythonVersion::new(3, 11, None)
         );
         assert_eq!(
             map_houdini_to_python_version("21.0").unwrap(),

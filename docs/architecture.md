@@ -518,7 +518,7 @@ pub fn content_hash(resolved: &ResolvedDependencies) -> String {
 
 | Houdini | Python |
 |---------|--------|
-| 20.5+ | 3.10 |
+| 20.5+ | 3.11 |
 | 21.x | 3.11 |
 | 22.x | 3.13 |
 

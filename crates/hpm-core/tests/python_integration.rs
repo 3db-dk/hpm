@@ -109,11 +109,11 @@ async fn test_end_to_end_python_workflow() {
     assert!(collected_deps.dependencies.contains_key("scipy"));
     assert!(collected_deps.dependencies.contains_key("matplotlib"));
 
-    // Python version should be mapped from Houdini version (20.5 -> Python 3.10)
+    // Python version should be mapped from Houdini version (20.5 -> Python 3.11)
     assert!(collected_deps.python_version.is_some());
     let py_version = collected_deps.python_version.unwrap();
     assert_eq!(py_version.major, 3);
-    assert_eq!(py_version.minor, 10);
+    assert_eq!(py_version.minor, 11);
 
     // Step 2: Test dependency resolution (mock since UV may not be available)
     // In a real scenario, this would resolve to exact versions

@@ -129,7 +129,7 @@ HPM picks the Python version from the lower bound of `[compat].houdini`:
 
 | Houdini    | Python |
 |-----------:|--------|
-| 20.5+      | 3.10   |
+| 20.5+      | 3.11   |
 | 21.x       | 3.11   |
 | 22.x       | 3.13   |
 

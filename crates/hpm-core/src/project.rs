@@ -490,7 +490,7 @@ impl ProjectManager {
         // Collect python dependencies from all package manifests. The project
         // manifest's own Houdini version is the source of truth for which
         // CPython we target — Houdini ships a fixed embedded interpreter
-        // (20.5→3.10, 21→3.11, 22→3.13), and per-package `[compat].houdini`
+        // (20.5→3.11, 21→3.11, 22→3.13), and per-package `[compat].houdini`
         // declarations only describe compatibility floors, not the runtime
         // ABI. Without this override the venv could end up pinned to a
         // package's older Python and crash on import inside the launched

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Houdini 20.5 now maps to Python 3.11, not 3.10.** SideFX's Houdini
+  20.5 platforms page states the main builds are built against Python
+  3.11, with a Python 3.10 build available only as a separate download.
+  HPM was mapping 20.5 to the alternate 3.10 interpreter, so for a stock
+  20.5 install it resolved dependencies and built venvs against 3.10
+  while the embedded interpreter was 3.11 — risking wheel/ABI mismatches
+  at import time inside Houdini. `map_houdini_to_python_version` now
+  returns 3.11 for 20.5+.
+  Source: https://www.sidefx.com/docs/houdini/news/20_5/platforms.html
+
 ## [0.19.0] - 2026-06-02
 
 ### Fixed
