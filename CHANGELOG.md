@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-06-10
+
 ### Fixed
 
 - **Houdini 20.5 now maps to Python 3.11, not 3.10.** SideFX's Houdini
