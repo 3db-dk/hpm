@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Build profiles for `hpm build`.** A second axis orthogonal to
+  `--platform`, for packages whose native binaries can be built more than
+  one way — typically an optimized `release` (the default) and a
+  symbol-bearing `debug` variant for attaching a debugger to an HDK plugin.
+  - `hpm build --profile <name>` (default `release`). The selected profile
+    is exposed to `[stage].prepack` scripts as `HPM_BUILD_PROFILE`, so one
+    script can do `cmake --build --config $HPM_BUILD_PROFILE` instead of
+    duplicating per-build-type scripts. The resolved target platform is
+    exposed alongside it as `HPM_PLATFORM`. Both are set only on the
+    `hpm build` prepack path, not for a standalone `hpm run`.
+  - Optional `[stage.profile.<name>]` manifest tables make a profile build
+    reproducible from `hpm.toml`. A profile layers its own
+    `prepack`/`include`/`exclude`/`place` rules onto the base `[stage]`:
+    `prepack` replaces the base when non-empty, `include`/`exclude` append,
+    and per-platform `place` rules append (so e.g. the `debug` profile can
+    ship Windows PDBs alongside the DSO). Profile platform keys validate
+    against `[compat].platforms` like the base `[stage.platform.*]` tables.
+  - `hpm pack`, archive naming, and the registry format are unchanged;
+    profile selection is a build-time concern only.
+
 ## [0.19.1] - 2026-06-10
 
 ### Fixed

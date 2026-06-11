@@ -410,8 +410,21 @@ patterns:
 | `-m, --manifest <path>` | Path to `hpm.toml` or containing dir. Defaults to cwd. |
 | `-o, --output <dir>` | Override `[stage].output_dir`. Relative paths resolve against the manifest dir; absolute paths are used verbatim. |
 | `--platform <id>` | Target platform. Defaults to host when `[compat].platforms` is declared. Required when host is not in the declared list. |
+| `--profile <name>` | Build profile. Defaults to `release`. Selects the matching `[stage.profile.<name>]` table (if any) and is exposed to prepack scripts as `HPM_BUILD_PROFILE`. |
 | `--no-prepack` | Skip `[stage].prepack` scripts. Use in CI when build steps already ran out-of-band. |
 | `--no-clean` | Keep existing output-dir contents instead of wiping first. |
+
+**Prepack environment.** In addition to `HPM_PACKAGE_ROOT`, prepack scripts
+(and any `[scripts]` they invoke) see two build-context variables:
+
+- `HPM_BUILD_PROFILE` — the selected `--profile` (default `release`). A single
+  prepack script can branch on it, e.g. `cmake --build --config $HPM_BUILD_PROFILE`,
+  instead of maintaining one script per build type.
+- `HPM_PLATFORM` — the resolved target platform (e.g. `macos-aarch64`), set
+  whenever the package declares `[compat].platforms`.
+
+These are set only for the `hpm build` prepack path; a standalone
+`hpm run <script>` does not carry build-profile or platform context.
 
 **Workflow notes — live editing and DSO rebuild**
 
@@ -871,6 +884,48 @@ before packing. `hpm build` runs `prepack` scripts and materialises the
 same install image into `output_dir` on disk, so a path-dep consumer
 working in another project can pick it up live (with `link = true`,
 edits flow through without re-running `hpm install`).
+
+#### Build profiles — `[stage.profile.<name>]`
+
+Build profiles are a second axis orthogonal to platform, for packages whose
+native binaries can be built more than one way — typically an optimized
+`release` (the default) and a symbol-bearing `debug` variant for attaching a
+debugger to an HDK plugin.
+
+`hpm build --profile <name>` always exposes the name to prepack scripts as
+`HPM_BUILD_PROFILE` (see *Prepack environment* above). When a matching
+`[stage.profile.<name>]` table is declared, its overrides layer onto the base
+`[stage]` so the profile build is reproducible from the manifest:
+
+```toml
+[stage]
+prepack = ["build-dso"]
+
+[stage.profile.debug]
+# Replaces the base prepack list when non-empty.
+prepack = ["build-dso-debug"]
+
+# Per-platform place rules here are appended to the base platform rules —
+# e.g. ship Windows PDBs alongside the DSO only in the debug profile.
+[stage.profile.debug.platform.windows-x86_64]
+place = [{ from = "build/Debug/*.pdb", to = "dso/windows-x86_64/" }]
+```
+
+Merge semantics (base `[stage]` + selected profile):
+
+- `prepack` — the profile's list replaces the base when non-empty; otherwise
+  the base `prepack` runs.
+- `include` / `exclude` — profile entries are appended to the base globs.
+- `platform.<plat>.place` — profile place rules are appended to the matching
+  base platform entry (a new platform key is created if absent). Each
+  `[stage.profile.<name>.platform.<plat>]` key must appear in
+  `[compat].platforms`, same as the base `[stage.platform.<plat>]` tables.
+
+The default profile is `release`; you only need a `[stage.profile.release]`
+table if you want to customize the default. A `--profile <name>` that names no
+declared table is allowed — the env var is still set — but `hpm build` prints a
+warning so a typo is visible. `hpm pack` is unaffected by `--profile`; profile
+selection is a build-time concern only.
 
 ### `[[registries]]` <a id="registries-array"></a>
 
