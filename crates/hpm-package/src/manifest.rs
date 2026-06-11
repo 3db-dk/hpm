@@ -275,36 +275,12 @@ impl PackageManifest {
         // Validate [stage]: per-platform keys must appear in [compat].platforms,
         // and place rules must declare both `from` and `to`. Place rules with
         // empty `from` would match nothing useful; reject those at load time.
-        for (platform_str, rules) in &self.stage.platform.entries {
-            let platform = match platform_str.parse::<Platform>() {
-                Ok(p) => p,
-                Err(e) => {
-                    report
-                        .errors
-                        .push(format!("[stage.platform.{}]: {}", platform_str, e));
-                    continue;
-                }
-            };
-            if !self.compat.platforms.contains(&platform) {
-                report.errors.push(format!(
-                    "[stage.platform.{}] declared but '{}' not listed in [compat].platforms",
-                    platform_str, platform_str
-                ));
-            }
-            for (i, rule) in rules.place.iter().enumerate() {
-                if rule.from.trim().is_empty() {
-                    report.errors.push(format!(
-                        "[stage.platform.{}].place[{}]: `from` must not be empty",
-                        platform_str, i
-                    ));
-                }
-                if rule.to.trim().is_empty() {
-                    report.errors.push(format!(
-                        "[stage.platform.{}].place[{}]: `to` must not be empty (use \"./\" for the archive root)",
-                        platform_str, i
-                    ));
-                }
-            }
+        // The same checks apply to per-profile place tables under
+        // `[stage.profile.<name>.platform.<plat>]`.
+        self.validate_platform_staging("stage.platform", &self.stage.platform, report);
+        for (profile, rules) in &self.stage.profile.entries {
+            let label = format!("stage.profile.{}.platform", profile);
+            self.validate_platform_staging(&label, &rules.platform, report);
         }
 
         // Validate [runtime] entries: a missing value is only legal as a
@@ -353,6 +329,49 @@ impl PackageManifest {
                     })
                 {
                     report.errors.push(format!("script '{}': {}", name, e));
+                }
+            }
+        }
+    }
+
+    /// Validate a `[stage(.profile.<name>)?.platform.*]` table: each platform
+    /// key must parse and appear in `[compat].platforms`, and every place rule
+    /// must declare a non-empty `from` and `to`. `label` is the table prefix
+    /// used in error messages (e.g. `"stage.platform"`).
+    fn validate_platform_staging(
+        &self,
+        label: &str,
+        staging: &PlatformStaging,
+        report: &mut ValidationReport,
+    ) {
+        for (platform_str, rules) in &staging.entries {
+            let platform = match platform_str.parse::<Platform>() {
+                Ok(p) => p,
+                Err(e) => {
+                    report
+                        .errors
+                        .push(format!("[{}.{}]: {}", label, platform_str, e));
+                    continue;
+                }
+            };
+            if !self.compat.platforms.contains(&platform) {
+                report.errors.push(format!(
+                    "[{}.{}] declared but '{}' not listed in [compat].platforms",
+                    label, platform_str, platform_str
+                ));
+            }
+            for (i, rule) in rules.place.iter().enumerate() {
+                if rule.from.trim().is_empty() {
+                    report.errors.push(format!(
+                        "[{}.{}].place[{}]: `from` must not be empty",
+                        label, platform_str, i
+                    ));
+                }
+                if rule.to.trim().is_empty() {
+                    report.errors.push(format!(
+                        "[{}.{}].place[{}]: `to` must not be empty (use \"./\" for the archive root)",
+                        label, platform_str, i
+                    ));
                 }
             }
         }
