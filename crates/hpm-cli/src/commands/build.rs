@@ -22,6 +22,7 @@ use hpm_core::packer::StageFilter;
 use hpm_package::path_util::relative_path_to_forward_slash;
 use hpm_package::{PackageManifest, Platform};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -40,6 +41,9 @@ pub struct BuildOptions {
     /// running multiple Houdini sessions, each with its own staged image
     /// in a separate temp directory.
     pub output: Option<PathBuf>,
+    /// Build profile selecting a `[stage.profile.<name>]` table (default
+    /// `"release"`). Always exposed to prepack scripts as `HPM_BUILD_PROFILE`.
+    pub profile: String,
     /// Skip `[stage].prepack`. CI sometimes runs prepack steps separately.
     pub no_prepack: bool,
     /// Wipe the output directory before populating it. Default true; users
@@ -60,15 +64,39 @@ pub async fn build(options: BuildOptions, console: &mut Console) -> Result<()> {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let stage = &manifest.stage;
-    if stage.is_empty() {
+    if manifest.stage.is_empty() {
         anyhow::bail!("Package has no [stage] section — nothing to build");
     }
 
     let platform = resolve_target_platform(&manifest, options.platform.as_deref())?;
 
+    // A non-default profile that names no declared table still sets
+    // HPM_BUILD_PROFILE, but its absence is usually a typo worth surfacing.
+    if options.profile != "release" && !manifest.stage.has_profile(&options.profile) {
+        console.warn(format!(
+            "profile '{}' has no [stage.profile.{}] table; using base [stage]",
+            options.profile, options.profile
+        ));
+    }
+    let stage = manifest.stage.resolved_for_profile(&options.profile);
+
+    // Context exposed to prepack scripts (and any [scripts] they invoke):
+    // the selected build profile and, when known, the target platform.
+    let mut prepack_env: HashMap<String, String> = HashMap::new();
+    prepack_env.insert("HPM_BUILD_PROFILE".to_string(), options.profile.clone());
+    if let Some(p) = &platform {
+        prepack_env.insert("HPM_PLATFORM".to_string(), p.as_str().to_string());
+    }
+
     if !options.no_prepack && !stage.prepack.is_empty() {
-        run_prepack(&manifest, &stage.prepack, options.manifest.clone(), console).await?;
+        run_prepack(
+            &manifest,
+            &stage.prepack,
+            options.manifest.clone(),
+            &prepack_env,
+            console,
+        )
+        .await?;
     }
 
     let output_dir = match &options.output {
@@ -83,7 +111,7 @@ pub async fn build(options: BuildOptions, console: &mut Console) -> Result<()> {
     fs::create_dir_all(&output_dir)
         .with_context(|| format!("Failed to create {}", output_dir.display()))?;
 
-    let filter = StageFilter::new(stage, platform.as_ref())
+    let filter = StageFilter::new(&stage, platform.as_ref())
         .map_err(|e| anyhow::anyhow!("Failed to build stage filter: {}", e))?;
     let ignore = build_ignore_rules(&package_root)
         .with_context(|| format!("Failed to read ignore rules in {}", package_root.display()))?;
@@ -133,10 +161,11 @@ pub async fn build(options: BuildOptions, console: &mut Console) -> Result<()> {
     }
 
     console.success(format!(
-        "Built {} v{} ({} file(s){})",
+        "Built {} v{} ({} file(s), profile={}{})",
         manifest.package.name,
         manifest.package.version,
         copied,
+        options.profile,
         platform
             .as_ref()
             .map(|p| format!(", platform={}", p))
@@ -188,6 +217,7 @@ async fn run_prepack(
     manifest: &PackageManifest,
     names: &[String],
     manifest_arg: Option<PathBuf>,
+    extra_env: &HashMap<String, String>,
     console: &mut Console,
 ) -> Result<()> {
     for name in names {
@@ -198,7 +228,7 @@ async fn run_prepack(
             );
         }
         console.info(format!("prepack: {}", name));
-        let code = run_script(name, &[], manifest_arg.clone(), console).await?;
+        let code = run_script(name, &[], manifest_arg.clone(), extra_env, console).await?;
         if code != 0 {
             bail!(
                 "Prepack script '{}' exited with status {} — aborting build",

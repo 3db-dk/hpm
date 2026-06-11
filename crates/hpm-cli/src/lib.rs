@@ -288,6 +288,7 @@
 //! - **HPM Package**: Manifest processing and Houdini integration
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
+use std::collections::HashMap;
 use std::process::ExitCode;
 use std::time::Instant;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -522,6 +523,11 @@ pub enum Commands {
         /// `[compat].platforms` is declared.
         #[arg(long)]
         platform: Option<String>,
+        /// Build profile to apply. Selects the matching `[stage.profile.<name>]`
+        /// table (if any) and is exposed to prepack scripts as
+        /// `HPM_BUILD_PROFILE`. The target platform is exposed as `HPM_PLATFORM`.
+        #[arg(long, default_value = "release")]
+        profile: String,
         /// Skip `[stage].prepack`. Useful in CI when the build steps already
         /// ran out-of-band.
         #[arg(long)]
@@ -779,9 +785,15 @@ async fn run_command(
                 .cli_network("search")?;
         }
         Commands::Run { script, args } => {
-            let exit_code = commands::run::run_script(script, args, directory.clone(), console)
-                .await
-                .cli_package("run")?;
+            let exit_code = commands::run::run_script(
+                script,
+                args,
+                directory.clone(),
+                &HashMap::new(),
+                console,
+            )
+            .await
+            .cli_package("run")?;
             return Ok(if exit_code == 0 {
                 ExitStatus::Success
             } else {
@@ -830,6 +842,7 @@ async fn run_command(
             manifest,
             output,
             platform,
+            profile,
             no_prepack,
             no_clean,
         } => {
@@ -837,6 +850,7 @@ async fn run_command(
                 manifest: manifest.clone().or_else(|| directory.clone()),
                 output: output.clone(),
                 platform: platform.clone(),
+                profile: profile.clone(),
                 no_prepack: *no_prepack,
                 clean: !*no_clean,
             };

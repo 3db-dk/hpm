@@ -23,6 +23,7 @@ pub async fn run_script(
     script: &str,
     extra_args: &[String],
     directory: Option<PathBuf>,
+    extra_env: &HashMap<String, String>,
     console: &mut Console,
 ) -> Result<i32> {
     let manifest_path = determine_manifest_path(directory)?;
@@ -69,6 +70,11 @@ pub async fn run_script(
         "HPM_PACKAGE_ROOT".to_string(),
         package_root.to_string_lossy().into_owned(),
     );
+    // Caller-supplied context (build profile, target platform). Applied
+    // before the venv handle so a managed PATH/VIRTUAL_ENV always wins.
+    for (key, value) in extra_env {
+        env_vars.insert(key.clone(), value.clone());
+    }
     env_handle.apply_to(&mut env_vars);
 
     let mut command = shell_command(&cmd_string);
