@@ -22,7 +22,7 @@ them, and how to configure them per-user vs. per-project.
 ## Adding a registry
 
 ```sh
-hpm registry add <URL> [--name <alias>] [--type api|git]
+hpm registry add <URL> [--name <alias>] [--type api|git] [--if-not-exists]
 ```
 
 Examples:
@@ -37,7 +37,15 @@ hpm registry add https://github.com/studio/hpm-packages.git --name studio --type
 # No --name: HPM infers an alias from the URL
 hpm registry add https://api.studio.com/registry
 # → added as "registry"
+
+# Idempotent add: succeed silently if a registry with this name already
+# exists, instead of erroring. Useful in provisioning scripts.
+hpm registry add https://api.3db.dk/v1/registry --name houdinihub --if-not-exists
 ```
+
+By default, adding a registry whose name already exists is an error. Pass
+`--if-not-exists` to treat that as a no-op (exit 0) so automated setup can
+re-run safely.
 
 This writes to `~/.hpm/config.toml`:
 

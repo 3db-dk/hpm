@@ -586,6 +586,10 @@ pub enum RegistryAction {
         /// Registry type: "api" or "git" (auto-detected if not specified)
         #[arg(long = "type")]
         registry_type: Option<String>,
+        /// Succeed silently if a registry with the same name already exists,
+        /// instead of erroring. Eases idempotent/automated provisioning.
+        #[arg(long)]
+        if_not_exists: bool,
     },
     /// List configured registries
     List,
@@ -890,6 +894,7 @@ async fn run_command(
                 url,
                 name,
                 registry_type,
+                if_not_exists,
             } => {
                 let config = load_cli_config()?;
                 commands::registry::add_registry(
@@ -897,6 +902,7 @@ async fn run_command(
                     url.clone(),
                     name.clone(),
                     registry_type.clone(),
+                    *if_not_exists,
                 )
                 .await
                 .cli_config("registry add")?;

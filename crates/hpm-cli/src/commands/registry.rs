@@ -29,6 +29,7 @@ pub async fn add_registry(
     url: String,
     name: Option<String>,
     registry_type: Option<String>,
+    if_not_exists: bool,
 ) -> Result<()> {
     // Infer registry type from URL if not specified
     let reg_type = match registry_type.as_deref() {
@@ -61,6 +62,22 @@ pub async fn add_registry(
     };
 
     if !config.add_registry(registry_config) {
+        if if_not_exists {
+            // Idempotent path: a registry by this name is already present, so
+            // there is nothing to do. Report the no-op rather than erroring so
+            // automated provisioning can re-run `hpm registry add … --if-not-exists`
+            // safely.
+            info!(
+                "Registry '{}' already exists; left unchanged (--if-not-exists)",
+                display_name
+            );
+            println!(
+                "{} Registry '{}' already exists, left unchanged",
+                style("[=]").dim(),
+                style(&display_name).cyan()
+            );
+            return Ok(());
+        }
         bail!(
             "A registry named '{}' already exists. Remove it first or choose a different name.",
             display_name

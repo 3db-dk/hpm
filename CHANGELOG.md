@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`hpm registry add --if-not-exists`.** Adding a registry whose name
+  already exists is still an error by default, but `--if-not-exists` turns
+  that into a no-op (exit 0) so provisioning scripts can re-run safely.
+
 ### Fixed
 
 - **`hpm install` now surfaces the real reason a dependency failed to

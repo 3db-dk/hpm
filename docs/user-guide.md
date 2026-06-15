@@ -547,7 +547,7 @@ swept.
 Manage registries in `~/.hpm/config.toml`. See [Registries](#registries).
 
 ```
-hpm registry add <URL> [--name <alias>] [--type api|git]
+hpm registry add <URL> [--name <alias>] [--type api|git] [--if-not-exists]
 hpm registry list
 hpm registry remove <NAME>
 hpm registry update
@@ -555,6 +555,10 @@ hpm registry update
 
 If `--type` is omitted, HPM infers it: URLs ending in `.git` or hosted on
 `github.com` / `gitea.*` are treated as `git`; everything else is `api`.
+
+Pass `--if-not-exists` to make `add` idempotent: if a registry with the same
+name already exists it is left unchanged and the command exits 0, instead of
+erroring. Useful in provisioning scripts.
 
 ### `hpm completions`
 
