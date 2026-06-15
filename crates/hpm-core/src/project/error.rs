@@ -60,7 +60,10 @@ pub enum ProjectError {
     InvalidPackageSource(#[from] PackageSourceError),
 
     /// Dependency requested but no registries are configured.
-    #[error("Cannot install {name} {version_req}: no registries configured")]
+    #[error(
+        "Cannot install {name} {version_req}: no package registries are configured. \
+         Run 'hpm registry add <url>' to add one."
+    )]
     NoRegistriesConfigured { name: String, version_req: String },
 
     /// Registry lookup failed for `name@version_req`. Source is boxed;

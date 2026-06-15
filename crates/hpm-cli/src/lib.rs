@@ -647,7 +647,9 @@ pub async fn run() -> ExitCode {
                 // For machine-readable formats, print JSON error
                 let error_json = serde_json::json!({
                     "success": false,
-                    "error": error.to_string(),
+                    // `detail()` carries the full cause chain; `to_string()`
+                    // would emit only the category label ("Package error").
+                    "error": error.detail(),
                     "error_type": match &error {
                         CliError::Config { .. } => "config",
                         CliError::Package { .. } => "package",

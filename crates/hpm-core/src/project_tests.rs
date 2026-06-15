@@ -670,6 +670,43 @@ async fn install_one_dep_short_circuits_on_scoped_name() {
     assert!(outcome.source.is_none());
 }
 
+/// Regression: a registry-resolved dep that misses the installed-cache
+/// short-circuit, with no registries configured, must fail as
+/// `NoRegistriesConfigured` (pointing the user at `hpm registry add`) rather
+/// than resolving against the empty set and surfacing a misleading
+/// `VersionNotFound`. This is the `hpm install` analogue of the
+/// single-package `resolve_and_install_from_registry` check.
+#[tokio::test]
+async fn install_one_dep_no_registries_reports_not_configured() {
+    let temp_dir = TempDir::new().unwrap();
+    let (_config, storage_manager) = test_setup(temp_dir.path());
+    let fetcher =
+        ArchiveFetcher::new(temp_dir.path().join("cache"), temp_dir.path().join("fetch")).unwrap();
+
+    // Empty registry set, and no matching installed package, so the
+    // resolution branch is reached with nothing to resolve against.
+    let registry_set = crate::registry::RegistrySet::new();
+    let spec = hpm_package::DependencySpec::Simple("1.12.2".to_string());
+    let err = install_one_dep(
+        &storage_manager,
+        &fetcher,
+        Some(&registry_set),
+        &[],
+        "tumblepipe",
+        &spec,
+    )
+    .await
+    .expect_err("no registries configured must be an error");
+
+    match err {
+        ProjectError::NoRegistriesConfigured { name, version_req } => {
+            assert_eq!(name, "tumblepipe");
+            assert_eq!(version_req, "1.12.2");
+        }
+        other => panic!("expected NoRegistriesConfigured, got {other:?}"),
+    }
+}
+
 /// Regression: a Houdini manifest left over from a previous sync (e.g. a
 /// dev override that has since been removed) must be swept when its slug
 /// no longer appears in the dependency set. Otherwise Houdini keeps

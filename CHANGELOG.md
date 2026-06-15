@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`hpm install` now surfaces the real reason a dependency failed to
+  resolve**, instead of collapsing every cause into a generic
+  `Failed to sync project dependencies`. The CLI prints the full error
+  chain, so the three common failures read distinctly:
+  - No registries configured: `Cannot install <pkg> <ver>: no package
+    registries are configured. Run 'hpm registry add <url>' to add one.`
+    (Previously the install/sync path resolved against an empty registry
+    set and reported a misleading "not found".)
+  - Package/version not found: `Failed to resolve <pkg> <ver> from
+    registry: Version '<ver>' of package '<pkg>' not found in registry`.
+  - The full cause chain is also included in `--output json` error output,
+    which previously emitted only the category label (`Package error`).
+
 ## [0.20.0] - 2026-06-11
 
 ### Added

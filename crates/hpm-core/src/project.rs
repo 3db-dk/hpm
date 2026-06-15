@@ -928,6 +928,17 @@ async fn install_one_dep(
                 });
             }
             let rs = registry_set.expect("registry set built when registry deps present");
+            // A registry-resolved dep with no registries configured is its own
+            // failure, distinct from "package not found": resolving against an
+            // empty set would otherwise surface a misleading VersionNotFound.
+            // Mirror the single-package `resolve_and_install_from_registry`
+            // path so `hpm install` points the user at `hpm registry add`.
+            if rs.is_empty() {
+                return Err(ProjectError::NoRegistriesConfigured {
+                    name: name.to_string(),
+                    version_req: version.clone(),
+                });
+            }
             let entry = rs.get_version(name, version).await.map_err(|source| {
                 ProjectError::RegistryResolution {
                     name: name.to_string(),

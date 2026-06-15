@@ -299,6 +299,26 @@ mod tests {
     }
 
     #[test]
+    fn version_req_exact_operator_is_accepted() {
+        // `=1.2.3` is the semver exact-match operator. It must parse as a
+        // requirement (not be mistaken for a literal version string and shoved
+        // into a registry URL path), matching 1.2.3 and nothing else.
+        let req = VersionReq::new("=1.2.3").expect("'=1.2.3' must parse as a requirement");
+        assert_eq!(req.as_str(), "=1.2.3");
+        assert!(req.matches("1.2.3"));
+        assert!(!req.matches("1.2.4"));
+        assert!(!req.matches("1.2.2"));
+    }
+
+    #[test]
+    fn package_spec_exact_operator_version() {
+        let spec = PackageSpec::parse("tumblehead/fire-fx@=1.2.3")
+            .expect("scoped spec with '=' operator must parse");
+        assert_eq!(spec.name, "tumblehead/fire-fx");
+        assert_eq!(spec.version_req.as_str(), "=1.2.3");
+    }
+
+    #[test]
     fn package_spec_multiple_at_signs_uses_last() {
         // With rfind('@'), "package@1.0.0@extra" splits into name="package@1.0.0"
         // and version="extra" — rejected because "extra" is not a valid version

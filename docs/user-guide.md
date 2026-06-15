@@ -1206,6 +1206,27 @@ Error: Package error: Package 'studio/foo' not found
 Check `hpm registry list` — if it's empty, add one with `hpm registry add`.
 If registries are configured, run `hpm registry update` and try again.
 
+### Dependency failed to resolve on install
+
+`hpm install` reports the specific cause in the error chain. The two most
+common forms:
+
+```
+Package error: Failed to sync project dependencies: Cannot install foo 1.2.3:
+no package registries are configured. Run 'hpm registry add <url>' to add one.
+```
+
+```
+Package error: Failed to sync project dependencies: Failed to resolve foo 1.2.3
+from registry: Version '1.2.3' of package 'foo' not found in registry
+```
+
+The first means no registry is configured — add one with `hpm registry add`.
+The second means the package or version isn't in any configured registry:
+confirm the name (registries index by `creator/slug`, not the bare slug) and
+the version, then `hpm registry update`. Add `-vv` for the same detail plus a
+usage hint.
+
 ### Houdini version mapping failed
 
 ```

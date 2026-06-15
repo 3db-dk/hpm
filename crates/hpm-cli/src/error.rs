@@ -140,13 +140,20 @@ impl CliError {
         }
     }
 
-    fn detail(&self) -> String {
+    /// Render the error's one-line detail, including the full `anyhow` cause
+    /// chain. The `{:#}` (alternate) format walks `source()` recursively, so a
+    /// failure several layers deep (e.g. install → sync → registry resolution →
+    /// HTTP 404) surfaces every link instead of just the outermost context. The
+    /// plain `{}` form we used before printed only the top frame, which is what
+    /// made distinct failures (no registries / package not found / bad version)
+    /// all collapse to one generic line.
+    pub(crate) fn detail(&self) -> String {
         match self {
-            CliError::Config { source, .. } => format!("Configuration error: {source}"),
-            CliError::Package { source, .. } => format!("Package error: {source}"),
-            CliError::Network { source, .. } => format!("Network error: {source}"),
-            CliError::Io { source, .. } => format!("I/O error: {source}"),
-            CliError::Internal { source, .. } => format!("Internal error: {source}"),
+            CliError::Config { source, .. } => format!("Configuration error: {source:#}"),
+            CliError::Package { source, .. } => format!("Package error: {source:#}"),
+            CliError::Network { source, .. } => format!("Network error: {source:#}"),
+            CliError::Io { source, .. } => format!("I/O error: {source:#}"),
+            CliError::Internal { source, .. } => format!("Internal error: {source:#}"),
             CliError::External {
                 command, exit_code, ..
             } => {
@@ -232,6 +239,26 @@ mod tests {
         assert_eq!(ExitCode::from(ExitStatus::Failure), ExitCode::from(1));
         assert_eq!(ExitCode::from(ExitStatus::Error), ExitCode::from(2));
         assert_eq!(ExitCode::from(ExitStatus::External(42)), ExitCode::from(42));
+    }
+
+    #[test]
+    fn detail_includes_full_cause_chain() {
+        // Regression: a wrapped error must surface its underlying cause, not
+        // just the outermost context. Previously `detail()` used `{source}`,
+        // which printed only "Failed to sync project dependencies" and hid the
+        // real reason (e.g. "no registries configured").
+        let root = anyhow::anyhow!("no package registries are configured")
+            .context("Failed to sync project dependencies");
+        let err = CliError::package(root, None);
+        let detail = err.detail();
+        assert!(
+            detail.contains("Failed to sync project dependencies"),
+            "outer context should remain, got: {detail}"
+        );
+        assert!(
+            detail.contains("no package registries are configured"),
+            "underlying cause should be surfaced, got: {detail}"
+        );
     }
 
     #[test]
