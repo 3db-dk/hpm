@@ -241,7 +241,7 @@ pub mod storage;
 // etc.); the top-level aliases just spare callers a deeper import.
 
 // Project orchestration — the entry point most library consumers use.
-pub use project::{InstallOutcome, ProjectDependency, ProjectError, ProjectManager};
+pub use project::{InstallOutcome, PackageRunEnv, ProjectDependency, ProjectError, ProjectManager};
 
 // Configuration. Re-exported from hpm-config so a single `hpm-core` dep
 // covers both for embedded callers.

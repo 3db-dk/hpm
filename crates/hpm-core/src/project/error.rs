@@ -100,6 +100,13 @@ pub enum ProjectError {
         package: String,
         message: String,
     },
+
+    /// A `package-env` script was run but the project's dependency
+    /// environment isn't ready: the lockfile is missing, or a locked
+    /// dependency isn't present in the global package store. The message
+    /// points the user at `hpm install`.
+    #[error("{0}")]
+    PackageEnvNotReady(String),
     // (`[compat].houdini` is now a `HoudiniRange` newtype that validates
     // at deserialize time, so the prior `InvalidHoudiniCompat` variant is
     // unreachable and has been removed.)
