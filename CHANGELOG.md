@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`hpm run` no longer passes script arguments with literal quotes on
+  Windows.** Forwarded args (e.g. `hpm run task -- foo 1001 1010`) arrived in
+  the script's `sys.argv` wrapped in extra double quotes — `1001` became the
+  6-character string `"1001"` — which broke any script that parses its args
+  (int conversion, `argparse`, path opening). The args were quoted once for
+  the shell and then re-escaped a second time by Rust's command spawner, so
+  the quotes survived into the child's argv. The Windows command line is now
+  built verbatim and handed to `cmd /S /C` so the per-arg quoting reaches the
+  child unchanged. Affects all script execution, including `package-env`
+  scripts.
+
 ## [0.22.1] - 2026-06-16
 
 ### Fixed

@@ -200,8 +200,16 @@ fn build_command_string(cmd: &str, extra_args: &[String]) -> String {
 fn shell_command(cmd: &str) -> Command {
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         let mut c = Command::new("cmd");
-        c.arg("/C").arg(cmd);
+        // Build the command line verbatim with `raw_arg`. If we used the
+        // normal `.arg(cmd)`, Rust would re-escape our already-`"`-quoted
+        // forwarded args (turning `"1001"` into `\"1001\"`); cmd.exe passes
+        // the backslashes through literally and the child's CRT then parses
+        // them as literal quote characters in argv. `/S` makes cmd strip
+        // exactly the outer quote pair and run the rest of the line intact.
+        c.raw_arg("/S /C");
+        c.raw_arg(windows_cmd_quote(cmd));
         c
     }
     #[cfg(not(target_os = "windows"))]
@@ -210,6 +218,16 @@ fn shell_command(cmd: &str) -> Command {
         c.arg("-c").arg(cmd);
         c
     }
+}
+
+/// Wrap a full command line in the outer quote pair that `cmd /S /C` expects.
+///
+/// `/S` removes the first and last `"` of the argument and treats everything
+/// in between as the command, so a single enclosing pair lets the inner
+/// per-arg quoting reach the child process unchanged.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_cmd_quote(cmd: &str) -> String {
+    format!("\"{cmd}\"")
 }
 
 /// Minimal POSIX/cmd shell quoting for trailing-arg pass-through.
@@ -325,5 +343,21 @@ mod tests {
         // `hpm run x -- "it's"` should survive the trip through `sh -c`.
         let q = shell_quote("it's");
         assert_eq!(q, "'it'\\''s'");
+    }
+
+    #[test]
+    fn windows_cmd_quote_wraps_in_single_outer_pair() {
+        // `cmd /S /C` strips exactly the outer pair, so the inner command —
+        // including any per-arg `"` quoting — must survive verbatim and must
+        // NOT be re-escaped to `\"`. The `\"` rewrite is what produced literal
+        // `"1001"` args in the child's argv on Windows.
+        let cmd = r#"python probe.py "foo" "1001""#;
+        let wrapped = windows_cmd_quote(cmd);
+        assert!(wrapped.starts_with('"') && wrapped.ends_with('"'));
+        assert!(!wrapped.contains("\\\""));
+        // Strip the outer pair the way `/S` does: the inner text must be the
+        // original command string, byte-for-byte.
+        let inner = &wrapped[1..wrapped.len() - 1];
+        assert_eq!(inner, cmd);
     }
 }
