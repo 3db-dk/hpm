@@ -355,6 +355,7 @@ Behaviour:
 - Looks up the named entry; if its `cmd` is a conditional list, the first variant whose `when.os` matches the host wins. Plain entries always match.
 - Sets `HPM_PACKAGE_ROOT` to the manifest directory and runs the command from that directory through the host shell (`sh -c` on Unix, `cmd /C` on Windows).
 - For [table-form entries](#per-script-python-environments) with `python` or `requirements`, materializes a uv-managed venv at `~/.hpm/venvs/<hash>/`, prepends its `bin/` (or `Scripts/` on Windows) to `PATH`, and sets `VIRTUAL_ENV`. Two scripts whose `python` + `requirements` resolve to the same closure share one venv on disk.
+- For entries with [`package-env = true`](#running-inside-the-package-environment), runs inside the package's full resolved environment instead: the merged venv across the project and its installed dependencies, with every package's `python/` on `PYTHONPATH`. Requires `hpm install` to have been run.
 - The script's exit code becomes `hpm`'s exit code, so `hpm run` is safe to chain in CI or wrap in a Houdini hook.
 
 **Example**
@@ -1025,6 +1026,47 @@ requirements = ["pyyaml"]
 
 Both `python` and `requirements` are optional in the table form; omitting
 both yields a regular script with no venv overhead.
+
+#### Running inside the package environment
+
+A per-script venv is intentionally minimal — it installs only the script's
+own `requirements` and does **not** expose the package's
+`[python_dependencies]` or make the package's `python/` modules importable.
+That's right for self-contained tooling, but the wrong shape for code that
+ships *in* the package and needs to import it (a render-farm task, a CLI the
+package exposes).
+
+Set `package-env = true` to run the script inside the package's full
+resolved environment instead:
+
+```toml
+[scripts.farm]
+cmd         = "python -m tumblepipe.farm"
+package-env = true
+```
+
+`hpm run farm` then builds the same environment `hpm install` materialises
+for Houdini, but for this out-of-Houdini process:
+
+- a merged uv venv resolved from `[python_dependencies]` across the project
+  **and its installed hpm dependencies** (so a dependency's Python packages
+  are present too);
+- every involved package's `python/` directory on `PYTHONPATH` — the
+  running package first, then each dependency, then the venv's
+  `site-packages`;
+- the interpreter pinned to the project's Houdini-mapped CPython (a
+  per-script `python` here is ignored); any `requirements` on the entry are
+  layered on top of the package environment.
+
+This is read-only: the dependency set comes from the existing `hpm.lock`
+plus the global package store, so it never fetches packages or rewrites
+generated Houdini manifests. Because the venv is content-addressable, when
+`hpm install` already built it the run reuses it without re-resolving.
+
+Run `hpm install` first so the project is locked and its dependencies are
+present; otherwise `hpm run` errors and points you there. Consumers like the
+Deadline render-farm plugin can then delegate the whole venv/deps/PYTHONPATH
+dance to `hpm run <script>` instead of reproducing it.
 
 The table form also accepts plain inline-table syntax:
 

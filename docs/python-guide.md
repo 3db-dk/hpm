@@ -162,6 +162,15 @@ scripts whose resolved closures match share storage with each other and,
 where the resolved set happens to coincide, with `[python_dependencies]`
 venvs.
 
+A per-script venv is deliberately isolated — it carries only the script's
+own `requirements`. When a script ships *in* the package and needs to import
+it (a render-farm task, a packaged CLI), set `package-env = true` instead;
+`hpm run` then executes it inside the package's full resolved environment:
+the merged venv across the project and its installed dependencies, with
+every package's `python/` on `PYTHONPATH` — the same environment this guide
+describes for Houdini, reused for an out-of-Houdini process. See
+[Running inside the package environment](user-guide.md#running-inside-the-package-environment).
+
 ## Houdini integration
 
 Once `hpm install` has produced the venv, it writes a Houdini manifest per

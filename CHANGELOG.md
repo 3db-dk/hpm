@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`package-env = true` for `[scripts]` entries.** A script can now opt
+  into running inside the package's full resolved environment instead of an
+  isolated per-script venv. `hpm run <script>` then builds the same
+  environment `hpm install` materialises for Houdini — a merged uv venv
+  resolved from `[python_dependencies]` across the project and its installed
+  dependencies, with every package's `python/` on `PYTHONPATH` — so a script
+  that ships in the package (e.g. a render-farm task) can import the package
+  and its deps without re-implementing the venv/deps/PYTHONPATH dance. The
+  interpreter is the project's Houdini-mapped CPython (a per-script `python`
+  is ignored); any `requirements` on the entry are layered on top. Resolved
+  read-only from `hpm.lock` + the global store, so it never fetches packages
+  or rewrites generated Houdini manifests; run `hpm install` first.
+
 ## [0.21.0] - 2026-06-15
 
 ### Added
