@@ -18,6 +18,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+use zip::DateTime;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
@@ -286,7 +287,15 @@ pub fn create_archive(
     let file = fs::File::create(&archive_path)
         .map_err(|e| IoOp::wrap("create archive", &archive_path, e))?;
     let mut zip = ZipWriter::new(file);
-    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    // Pin the entry timestamp to a fixed value. With the `time` feature,
+    // `SimpleFileOptions::default()` stamps each entry with the current time,
+    // which (at the 2-second MS-DOS resolution) makes two packs of the same
+    // tree produce different bytes — and thus different checksums — whenever
+    // they straddle a 2-second boundary. A fixed epoch keeps archives
+    // byte-for-byte reproducible, which the package checksum relies on.
+    let options = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .last_modified_time(DateTime::default());
 
     for (source, archive_name) in &entries {
         zip.start_file(archive_name.as_str(), options)?;

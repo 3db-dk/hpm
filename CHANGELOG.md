@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Package archives are now byte-for-byte reproducible.** `hpm pack`
+  stamped each zip entry with the current time, so repacking an unchanged
+  tree could produce a different archive — and a different checksum —
+  whenever two packs straddled the 2-second MS-DOS timestamp boundary. This
+  intermittently broke the determinism the package checksum relies on (it
+  surfaced as a Windows CI test failure). Entry timestamps are now pinned to
+  a fixed epoch.
+
 ## [0.22.0] - 2026-06-16
 
 ### Added
