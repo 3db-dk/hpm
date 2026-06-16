@@ -6,10 +6,12 @@
 
 use anyhow::{Context, Result};
 use hpm_core::python::prepare_script_env;
+use hpm_core::{PackageRunEnv, ProjectManager, StorageManager};
 use hpm_package::Platform;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use tracing::debug;
 
 use crate::commands::manifest_utils::{determine_manifest_path, load_manifest};
@@ -52,30 +54,48 @@ pub async fn run_script(
     let cmd_string = build_command_string(&resolved_cmd, extra_args);
     debug!("hpm run {}: {}", script, cmd_string);
 
-    if entry.needs_venv() && !entry.requirements().is_empty() {
-        console.info(format!(
-            "Preparing script venv ({} requirement(s))",
-            entry.requirements().len()
-        ));
-    }
-    let env_handle = prepare_script_env(&entry)
-        .await
-        .with_context(|| format!("Preparing environment for script '{}'", script))?;
-    if let Some(venv_bin) = &env_handle.path_prepend {
-        debug!("hpm run {}: using venv bin {}", script, venv_bin.display());
-    }
-
     let mut env_vars: HashMap<String, String> = HashMap::new();
     env_vars.insert(
         "HPM_PACKAGE_ROOT".to_string(),
         package_root.to_string_lossy().into_owned(),
     );
     // Caller-supplied context (build profile, target platform). Applied
-    // before the venv handle so a managed PATH/VIRTUAL_ENV always wins.
+    // before the managed env so a managed PATH/VIRTUAL_ENV/PYTHONPATH wins.
     for (key, value) in extra_env {
         env_vars.insert(key.clone(), value.clone());
     }
-    env_handle.apply_to(&mut env_vars);
+
+    if entry.uses_package_env() {
+        // Run inside the package's full resolved environment: merged venv +
+        // every involved package's python/ on PYTHONPATH. Resolved read-only
+        // from hpm.lock + the global store via ProjectManager.
+        console.info("Preparing package environment");
+        let run_env = resolve_package_env(&package_root, entry.requirements())
+            .await
+            .with_context(|| format!("Preparing package environment for script '{}'", script))?;
+        apply_package_env(&run_env, &mut env_vars);
+        if let Some(bin) = &run_env.venv_bin {
+            debug!(
+                "hpm run {}: using package venv bin {}",
+                script,
+                bin.display()
+            );
+        }
+    } else {
+        if entry.needs_venv() && !entry.requirements().is_empty() {
+            console.info(format!(
+                "Preparing script venv ({} requirement(s))",
+                entry.requirements().len()
+            ));
+        }
+        let env_handle = prepare_script_env(&entry)
+            .await
+            .with_context(|| format!("Preparing environment for script '{}'", script))?;
+        if let Some(venv_bin) = &env_handle.path_prepend {
+            debug!("hpm run {}: using venv bin {}", script, venv_bin.display());
+        }
+        env_handle.apply_to(&mut env_vars);
+    }
 
     let mut command = shell_command(&cmd_string);
     command.current_dir(&package_root).envs(&env_vars);
@@ -93,6 +113,75 @@ pub async fn run_script(
     }
 
     Ok(exit_code)
+}
+
+/// Resolve the package environment for a `package-env` script by building a
+/// `ProjectManager` rooted at the project and delegating to its read-only
+/// resolver. Config is loaded lazily here — only `package-env` scripts pay
+/// for it; plain and per-script-venv runs don't touch the project layer.
+async fn resolve_package_env(
+    package_root: &Path,
+    extra_requirements: &[String],
+) -> Result<PackageRunEnv> {
+    let config = hpm_config::Config::load().context("Failed to load HPM configuration")?;
+    let storage_manager = Arc::new(
+        StorageManager::new(config.storage.clone())
+            .context("Failed to initialize package storage")?,
+    );
+    let project_manager = ProjectManager::new(
+        package_root.to_path_buf(),
+        storage_manager,
+        Arc::new(config),
+    )
+    .context("Failed to open project")?;
+    project_manager
+        .resolve_package_env(extra_requirements)
+        .await
+        .map_err(Into::into)
+}
+
+/// Fold a [`PackageRunEnv`] into the subprocess env map: `VIRTUAL_ENV`,
+/// `PATH` (venv bin prepended), and `PYTHONPATH` (package python/ dirs +
+/// venv site-packages prepended). Mirrors `ScriptEnvHandle::apply_to`'s
+/// prepend semantics so an existing `PATH`/`PYTHONPATH` is preserved.
+fn apply_package_env(run_env: &PackageRunEnv, env_vars: &mut HashMap<String, String>) {
+    if let Some(virtual_env) = &run_env.virtual_env {
+        env_vars.insert(
+            "VIRTUAL_ENV".to_string(),
+            virtual_env.to_string_lossy().into_owned(),
+        );
+    }
+    if let Some(bin) = &run_env.venv_bin {
+        prepend_env_paths(env_vars, "PATH", std::slice::from_ref(bin));
+    }
+    prepend_env_paths(env_vars, "PYTHONPATH", &run_env.python_paths);
+}
+
+/// Prepend `prefixes` to the path-list env var `key` (in `env_vars`, falling
+/// back to the process env), joined by the platform separator. No-op when
+/// `prefixes` is empty.
+fn prepend_env_paths(env_vars: &mut HashMap<String, String>, key: &str, prefixes: &[PathBuf]) {
+    if prefixes.is_empty() {
+        return;
+    }
+    let separator = if cfg!(target_os = "windows") {
+        ";"
+    } else {
+        ":"
+    };
+    let mut parts: Vec<String> = prefixes
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let existing = env_vars
+        .get(key)
+        .cloned()
+        .or_else(|| std::env::var(key).ok())
+        .unwrap_or_default();
+    if !existing.is_empty() {
+        parts.push(existing);
+    }
+    env_vars.insert(key.to_string(), parts.join(separator));
 }
 
 fn build_command_string(cmd: &str, extra_args: &[String]) -> String {
@@ -160,6 +249,74 @@ mod tests {
     fn build_command_no_args_is_passthrough() {
         let out = build_command_string("ruff .", &[]);
         assert_eq!(out, "ruff .");
+    }
+
+    #[test]
+    fn prepend_env_paths_is_noop_when_empty() {
+        let mut env = HashMap::new();
+        env.insert("PYTHONPATH".to_string(), "/existing".to_string());
+        prepend_env_paths(&mut env, "PYTHONPATH", &[]);
+        assert_eq!(env.get("PYTHONPATH").map(String::as_str), Some("/existing"));
+    }
+
+    #[test]
+    fn prepend_env_paths_prepends_in_order_preserving_existing() {
+        let sep = if cfg!(target_os = "windows") {
+            ";"
+        } else {
+            ":"
+        };
+        let mut env = HashMap::new();
+        env.insert("PYTHONPATH".to_string(), "/existing".to_string());
+        prepend_env_paths(
+            &mut env,
+            "PYTHONPATH",
+            &[PathBuf::from("/pkg/python"), PathBuf::from("/dep/python")],
+        );
+        assert_eq!(
+            env.get("PYTHONPATH").unwrap(),
+            &format!("/pkg/python{sep}/dep/python{sep}/existing")
+        );
+    }
+
+    #[test]
+    fn apply_package_env_sets_virtual_env_path_and_pythonpath() {
+        let run_env = PackageRunEnv {
+            venv_bin: Some(PathBuf::from("/venv/bin")),
+            virtual_env: Some(PathBuf::from("/venv")),
+            python_paths: vec![PathBuf::from("/pkg/python"), PathBuf::from("/venv/site")],
+        };
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), "/usr/bin".to_string());
+        apply_package_env(&run_env, &mut env);
+
+        assert_eq!(env.get("VIRTUAL_ENV").map(String::as_str), Some("/venv"));
+        assert!(env.get("PATH").unwrap().starts_with("/venv/bin"));
+        assert!(env.get("PATH").unwrap().ends_with("/usr/bin"));
+        let pp = env.get("PYTHONPATH").unwrap();
+        assert!(pp.starts_with("/pkg/python"));
+        assert!(pp.contains("/venv/site"));
+    }
+
+    #[test]
+    fn apply_package_env_without_venv_only_sets_pythonpath() {
+        // A package with python/ dirs but no Python deps: no venv, but the
+        // dirs still land on PYTHONPATH.
+        let run_env = PackageRunEnv {
+            venv_bin: None,
+            virtual_env: None,
+            python_paths: vec![PathBuf::from("/pkg/python")],
+        };
+        let mut env = HashMap::new();
+        // Stage an empty PYTHONPATH so the prepend doesn't fall back to the
+        // test process's own PYTHONPATH (keeps the assertion deterministic).
+        env.insert("PYTHONPATH".to_string(), String::new());
+        apply_package_env(&run_env, &mut env);
+        assert!(!env.contains_key("VIRTUAL_ENV"));
+        assert_eq!(
+            env.get("PYTHONPATH").map(String::as_str),
+            Some("/pkg/python")
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
