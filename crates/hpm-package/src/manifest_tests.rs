@@ -120,6 +120,7 @@ fn strict_rejects_empty_conditional_cmd_list() {
             cmd: EnvValue::Conditional(Vec::new()),
             python: None,
             requirements: Vec::new(),
+            package_env: false,
         }),
     );
     let report = m.validate_with(ValidationLevel::Strict);
@@ -149,6 +150,7 @@ fn strict_accepts_plain_script_entries() {
             cmd: EnvValue::Flat("cargo build".to_string()),
             python: None,
             requirements: Vec::new(),
+            package_env: false,
         }),
     );
     let report = m.validate_with(ValidationLevel::Strict);

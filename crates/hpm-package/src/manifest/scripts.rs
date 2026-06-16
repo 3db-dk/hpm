@@ -42,6 +42,32 @@ pub struct ScriptEnv {
     pub python: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requirements: Vec<String>,
+    /// Run this script inside the package's full resolved environment: the
+    /// merged uv venv built from `[python_dependencies]` across the project
+    /// and its installed hpm dependencies, with every involved package's
+    /// `python/` directory on `PYTHONPATH`. This lets a script import the
+    /// package it ships in (and that package's deps) without re-implementing
+    /// the venv/deps/PYTHONPATH dance — see `hpm run`.
+    ///
+    /// When set, the interpreter is the project's Houdini-mapped CPython
+    /// (authoritative for ABI), so a per-script `python` pin is ignored; any
+    /// `requirements` here are layered on top of the package environment.
+    ///
+    /// Honoured only by callers with a project context (`hpm run`); embedders
+    /// that resolve scripts in isolation (the desktop hook runner) ignore it.
+    #[serde(
+        default,
+        rename = "package-env",
+        alias = "package_env",
+        skip_serializing_if = "is_false"
+    )]
+    pub package_env: bool,
+}
+
+/// serde `skip_serializing_if` helper — omit `package-env = false` from
+/// round-tripped manifests so an unset flag stays unwritten.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl ScriptEntry {
@@ -81,8 +107,21 @@ impl ScriptEntry {
     }
 
     /// True when this script needs a uv-managed environment.
+    ///
+    /// Covers only the per-script venv path (`python` / `requirements`). The
+    /// package-environment path is gated separately by [`Self::uses_package_env`]
+    /// because it needs a project context the script-venv path doesn't.
     pub fn needs_venv(&self) -> bool {
         self.python().is_some() || !self.requirements().is_empty()
+    }
+
+    /// True when this script opts into the package's full resolved environment
+    /// (`package-env = true`). See [`ScriptEnv::package_env`].
+    pub fn uses_package_env(&self) -> bool {
+        match self {
+            ScriptEntry::Plain(_) => false,
+            ScriptEntry::WithEnv(env) => env.package_env,
+        }
     }
 }
 
@@ -131,5 +170,93 @@ impl PackageScripts {
     /// True when no entries exist.
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_package_env_kebab_key() {
+        let scripts: PackageScripts = toml::from_str(
+            r#"
+            [farm]
+            cmd = "python -m tumblepipe.farm"
+            package-env = true
+            "#,
+        )
+        .unwrap();
+        let entry = scripts.commands.get("farm").unwrap();
+        assert!(entry.uses_package_env());
+        // package-env alone doesn't trip the per-script venv path.
+        assert!(!entry.needs_venv());
+    }
+
+    #[test]
+    fn parses_package_env_snake_alias() {
+        let scripts: PackageScripts = toml::from_str(
+            r#"
+            [farm]
+            cmd = "python -m tumblepipe.farm"
+            package_env = true
+            "#,
+        )
+        .unwrap();
+        assert!(scripts.commands.get("farm").unwrap().uses_package_env());
+    }
+
+    #[test]
+    fn package_env_defaults_false_and_coexists_with_requirements() {
+        let scripts: PackageScripts = toml::from_str(
+            r#"
+            plain = "ruff ."
+
+            [tt]
+            cmd = "python scripts/tt.py"
+            requirements = ["PySide6>=6.6"]
+
+            [farm]
+            cmd = "python -m tumblepipe.farm"
+            package-env = true
+            requirements = ["extra-dep"]
+            "#,
+        )
+        .unwrap();
+        assert!(!scripts.commands.get("plain").unwrap().uses_package_env());
+        assert!(!scripts.commands.get("tt").unwrap().uses_package_env());
+
+        let farm = scripts.commands.get("farm").unwrap();
+        assert!(farm.uses_package_env());
+        assert_eq!(farm.requirements(), &["extra-dep".to_string()]);
+    }
+
+    #[test]
+    fn package_env_false_is_not_serialized() {
+        let entry = ScriptEntry::WithEnv(ScriptEnv {
+            cmd: EnvValue::Flat("ruff .".to_string()),
+            python: None,
+            requirements: Vec::new(),
+            package_env: false,
+        });
+        let toml = toml::to_string(&entry).unwrap();
+        assert!(
+            !toml.contains("package-env"),
+            "unset package-env must not round-trip: {toml}"
+        );
+    }
+
+    #[test]
+    fn package_env_true_round_trips() {
+        let entry = ScriptEntry::WithEnv(ScriptEnv {
+            cmd: EnvValue::Flat("python -m tumblepipe.farm".to_string()),
+            python: None,
+            requirements: Vec::new(),
+            package_env: true,
+        });
+        let toml = toml::to_string(&entry).unwrap();
+        assert!(toml.contains("package-env = true"), "{toml}");
+        let back: ScriptEntry = toml::from_str(&toml).unwrap();
+        assert!(back.uses_package_env());
     }
 }

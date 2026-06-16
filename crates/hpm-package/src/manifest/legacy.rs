@@ -505,10 +505,14 @@ fn migrate_scripts(scripts: Option<LegacyScripts>) -> PackageScripts {
             });
         }
 
-        // Preserve any python/requirements the base table-form carried.
-        let (python, requirements) = match base {
-            Some(ScriptEntry::WithEnv(env)) => (env.python.clone(), env.requirements.clone()),
-            _ => (None, Vec::new()),
+        // Preserve any python/requirements/package-env the base table-form carried.
+        let (python, requirements, package_env) = match base {
+            Some(ScriptEntry::WithEnv(env)) => (
+                env.python.clone(),
+                env.requirements.clone(),
+                env.package_env,
+            ),
+            _ => (None, Vec::new(), false),
         };
 
         out.insert(
@@ -517,6 +521,7 @@ fn migrate_scripts(scripts: Option<LegacyScripts>) -> PackageScripts {
                 cmd: EnvValue::Conditional(branches),
                 python,
                 requirements,
+                package_env,
             }),
         );
     }
