@@ -521,6 +521,8 @@ fn migrate_scripts(scripts: Option<LegacyScripts>) -> PackageScripts {
                 cmd: EnvValue::Conditional(branches),
                 python,
                 requirements,
+                label: None,
+                description: None,
                 package_env,
             }),
         );

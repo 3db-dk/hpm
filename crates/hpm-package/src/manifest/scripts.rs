@@ -15,9 +15,13 @@ use serde::{Deserialize, Serialize};
 /// cmd = "python scripts/tt_setup.py"
 /// python = "3.11"
 /// requirements = ["PySide6>=6.6"]
+/// label = "Set up TT"
+/// description = "Provisions the TT working environment"
 /// ```
 ///
-/// `python` and `requirements` are both optional; when either is set, hpm
+/// `label` and `description` are optional, consumer-agnostic metadata for
+/// tools that present scripts to users (menus, tooltips); hpm itself never
+/// acts on them. `python` and `requirements` are both optional; when either is set, hpm
 /// resolves them through the same uv pipeline that backs `[python_dependencies]`
 /// and runs `cmd` with the resolved interpreter on PATH. When both are absent,
 /// the table form behaves identically to the shorthand.
@@ -42,6 +46,16 @@ pub struct ScriptEnv {
     pub python: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requirements: Vec<String>,
+    /// Optional human-readable display name for this script, for tools that
+    /// present scripts to end users (menus, buttons). Consumer-agnostic
+    /// metadata — hpm itself never acts on it; UIs fall back to the entry
+    /// key when it's absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Optional one-line description of what this script does, for tooltips
+    /// and help text in tools that surface scripts. Purely informational.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Run this script inside the package's full resolved environment: the
     /// merged uv venv built from `[python_dependencies]` across the project
     /// and its installed hpm dependencies, with every involved package's
@@ -103,6 +117,24 @@ impl ScriptEntry {
         match self {
             ScriptEntry::Plain(_) => &[],
             ScriptEntry::WithEnv(env) => &env.requirements,
+        }
+    }
+
+    /// Human-readable display name, if the entry set one. Plain entries and
+    /// table entries without `label` return `None`; consumers fall back to the
+    /// script's key.
+    pub fn label(&self) -> Option<&str> {
+        match self {
+            ScriptEntry::Plain(_) => None,
+            ScriptEntry::WithEnv(env) => env.label.as_deref(),
+        }
+    }
+
+    /// One-line description of what the script does, if the entry set one.
+    pub fn description(&self) -> Option<&str> {
+        match self {
+            ScriptEntry::Plain(_) => None,
+            ScriptEntry::WithEnv(env) => env.description.as_deref(),
         }
     }
 
@@ -237,6 +269,8 @@ mod tests {
             cmd: EnvValue::Flat("ruff .".to_string()),
             python: None,
             requirements: Vec::new(),
+            label: None,
+            description: None,
             package_env: false,
         });
         let toml = toml::to_string(&entry).unwrap();
@@ -247,11 +281,85 @@ mod tests {
     }
 
     #[test]
+    fn parses_label_and_description() {
+        let scripts: PackageScripts = toml::from_str(
+            r#"
+            plain = "ruff ."
+
+            [launch]
+            cmd = "python -m mytool.ui"
+            label = "Launch My Tool"
+            description = "Open the main UI"
+            "#,
+        )
+        .unwrap();
+
+        // Plain entries carry no metadata.
+        let plain = scripts.commands.get("plain").unwrap();
+        assert_eq!(plain.label(), None);
+        assert_eq!(plain.description(), None);
+
+        let launch = scripts.commands.get("launch").unwrap();
+        assert_eq!(launch.label(), Some("Launch My Tool"));
+        assert_eq!(launch.description(), Some("Open the main UI"));
+    }
+
+    #[test]
+    fn label_and_description_default_to_none() {
+        let scripts: PackageScripts = toml::from_str(
+            r#"
+            [tt]
+            cmd = "python scripts/tt.py"
+            python = "3.11"
+            "#,
+        )
+        .unwrap();
+        let tt = scripts.commands.get("tt").unwrap();
+        assert_eq!(tt.label(), None);
+        assert_eq!(tt.description(), None);
+    }
+
+    #[test]
+    fn unset_label_and_description_are_not_serialized() {
+        let entry = ScriptEntry::WithEnv(ScriptEnv {
+            cmd: EnvValue::Flat("ruff .".to_string()),
+            python: None,
+            requirements: Vec::new(),
+            label: None,
+            description: None,
+            package_env: false,
+        });
+        let toml = toml::to_string(&entry).unwrap();
+        assert!(
+            !toml.contains("label") && !toml.contains("description"),
+            "unset metadata must not round-trip: {toml}"
+        );
+    }
+
+    #[test]
+    fn label_and_description_round_trip() {
+        let entry = ScriptEntry::WithEnv(ScriptEnv {
+            cmd: EnvValue::Flat("python -m mytool.ui".to_string()),
+            python: None,
+            requirements: Vec::new(),
+            label: Some("Launch My Tool".to_string()),
+            description: Some("Open the main UI".to_string()),
+            package_env: false,
+        });
+        let toml = toml::to_string(&entry).unwrap();
+        let back: ScriptEntry = toml::from_str(&toml).unwrap();
+        assert_eq!(back.label(), Some("Launch My Tool"));
+        assert_eq!(back.description(), Some("Open the main UI"));
+    }
+
+    #[test]
     fn package_env_true_round_trips() {
         let entry = ScriptEntry::WithEnv(ScriptEnv {
             cmd: EnvValue::Flat("python -m tumblepipe.farm".to_string()),
             python: None,
             requirements: Vec::new(),
+            label: None,
+            description: None,
             package_env: true,
         });
         let toml = toml::to_string(&entry).unwrap();

@@ -347,6 +347,8 @@ mod tests {
             cmd: EnvValue::Flat("python scripts/foo.py".to_string()),
             python: None,
             requirements: vec![],
+            label: None,
+            description: None,
             package_env: false,
         });
         let handle = prepare_script_env(&entry).await.unwrap();

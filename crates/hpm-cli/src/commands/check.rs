@@ -322,7 +322,14 @@ async fn validate_best_practices(
                 Some(cmd) if cmd.trim().is_empty() => {
                     result.add_warning(format!("Script '{}' has empty command", name));
                 }
-                Some(_) => {}
+                Some(_) => {
+                    if let Some(desc) = entry.description() {
+                        let display = entry.label().unwrap_or(name);
+                        result.add_info(format!("Script '{}': {}", display, desc));
+                    } else if let Some(label) = entry.label() {
+                        result.add_info(format!("Script '{}' labelled '{}'", name, label));
+                    }
+                }
                 None => {
                     // No variant matches the host — still legitimate (the
                     // script just isn't available on this OS) but worth a
