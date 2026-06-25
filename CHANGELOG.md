@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Optional `label` and `description` metadata on table-form `[scripts]`
+  entries.** Package authors can attach a human-readable display name and a
+  one-line summary to a script, for tools that present a package's scripts to
+  end users (menus, buttons, tooltips). The fields are purely informational —
+  HPM never acts on them (`hpm run` ignores them; `hpm check` only echoes them
+  back) — and are omitted from round-tripped manifests when unset. Consumers
+  fall back to the entry key when `label` is absent.
+
 ## [0.22.2] - 2026-06-16
 
 ### Fixed

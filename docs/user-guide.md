@@ -962,6 +962,26 @@ build = "python scripts/build.py"
 test = "python -m pytest tests/"
 ```
 
+#### Display metadata (`label` and `description`)
+
+The table form accepts two optional, purely informational fields for tools
+that present scripts to people (menus, buttons, tooltips):
+
+```toml
+[scripts.launch]
+cmd         = "python -m mytool.ui"
+label       = "Launch My Tool"
+description = "Open the main UI"
+```
+
+`label` is a human-readable display name and `description` is a one-line
+summary. HPM itself never acts on either — `hpm run` ignores them, and
+`hpm check` only echoes them back so you can confirm they parsed. They are
+consumer-agnostic metadata: any frontend that surfaces a package's scripts
+may use them (falling back to the entry key when `label` is absent), but
+nothing in HPM treats a labelled script as special. Both are omitted from
+round-tripped manifests when unset.
+
 #### Per-host variation
 
 Scripts whose command differs per OS use a conditional `cmd` value — the
