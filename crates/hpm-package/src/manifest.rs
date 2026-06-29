@@ -7,6 +7,7 @@
 //! - [`env`][mod@env] — `[runtime]` entries and `EnvMethod`
 //! - [`error`] — load-time errors
 //! - [`info`] — `[package]` metadata
+//! - [`operators`] — `[[operators]]` bundled-operator declarations
 //! - [`registry`] — `[[registries]]` entries
 //! - [`scripts`] — `[scripts]` entries
 //! - [`stage`] — `[stage]` and per-platform place rules

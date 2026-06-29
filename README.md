@@ -154,6 +154,7 @@ crates/
                  Python venv management (`python` submodule, bundled uv)
   hpm-config/    Configuration loading and schema
   hpm-package/   Manifest parsing, Houdini package.json generation
+  hpm-assets/    Operator asset-index model emitted by `hpm pack`
 ```
 
 ## Development

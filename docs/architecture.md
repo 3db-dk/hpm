@@ -42,13 +42,13 @@ depend on the library crates and skip the CLI entirely).
 │   • ArchiveFetcher, packer                                             │
 └─────────┬──────────────────┬──────────────────┬─────────────────────────┘
           │                  │                  │
-┌─────────▼────────┐                    ┌───────────────┐
-│ hpm-package      │                    │ hpm-config    │
-│   PackageManifest│                    │   Config      │
-│   DependencySpec │                    │   Storage/    │
-│   StageConfig    │                    │   Projects/   │
-│   Platform       │                    │   Signing     │
-│   HoudiniPackage │                    └───────────────┘
+┌─────────▼────────┐   ┌───────────────┐   ┌───────────────┐
+│ hpm-package      │   │ hpm-assets    │   │ hpm-config    │
+│   PackageManifest│   │   Asset       │   │   Config      │
+│   DependencySpec │   │   AssetKind   │   │   Storage/    │
+│   StageConfig    │   └───────────────┘   │   Projects/   │
+│   Platform       │                       │   Signing     │
+│   HoudiniPackage │                       └───────────────┘
 └──────────────────┘
 ```
 
@@ -58,8 +58,8 @@ Houdini→Python ABI mapping, and per-script venv resolution — lives in
 but folded into `hpm-core` since it had no consumers other than
 `hpm-core` and `hpm-cli`.
 
-`hpm-package` and `hpm-config` are workspace leaves — neither depends
-on another HPM crate.
+`hpm-package`, `hpm-assets`, and `hpm-config` are workspace leaves — none
+depends on another HPM crate.
 
 Each crate defines its own error type (e.g. `StorageError`, `ConfigError`)
 via `thiserror`. Errors surface to the user through `CliError` in `hpm-cli`,
@@ -79,10 +79,11 @@ Key non-functional properties:
 | `hpm-cli` | Command-line frontend (clap). Turns command-line invocations into calls on the library crates. |
 | `hpm-core` | Storage, project discovery, lock file, registry trait + two implementations, archive fetching/packing, Python tooling (`python` submodule: bundled `uv`, venvs, cleanup). |
 | `hpm-package` | `hpm.toml` parsing and validation, dependency/Python dependency types, Houdini `package.json` generation, platform enum. |
+| `hpm-assets` | Operator asset-index model (`Asset`, `AssetKind`) emitted by `hpm pack` from `[[operators]]` declarations. |
 | `hpm-config` | Global and project configuration loading and merging. |
 
 Dependencies flow downward: `hpm-cli` depends on everything else, `hpm-core`
-depends on package and config, and so on. No crate depends upward.
+depends on package, assets, and config, and so on. No crate depends upward.
 Domain errors (`StorageError`, `ConfigError`, ...) live in the crate that
 produces them.
 

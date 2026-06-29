@@ -13,9 +13,11 @@ cargo doc --workspace --no-deps --open
 hpm-cli         binary; clap dispatch, output formatting, exit codes
   ├── hpm-core         storage, discovery, lock, registry, fetch, pack, python
   │     ├── hpm-config
-  │     └── hpm-package
+  │     ├── hpm-package
+  │     └── hpm-assets
   ├── hpm-config       layered config loading and merging
-  └── hpm-package      manifest parsing, Houdini integration, deps  (leaf)
+  ├── hpm-package      manifest parsing, Houdini integration, deps  (leaf)
+  └── hpm-assets       operator asset-index model for `hpm pack`     (leaf)
 ```
 
 Python tooling (bundled `uv`, content-addressable venvs, Houdini→Python
@@ -23,9 +25,9 @@ mapping) lives in the `hpm_core::python` submodule. It was a separate
 crate through 0.16 but collapsed into `hpm-core` since it had no
 external consumers.
 
-Leaves are `hpm-config` and `hpm-package` — both depend on nothing in the
-workspace, so they can be embedded by external tools without dragging in
-the rest of HPM.
+Leaves are `hpm-config`, `hpm-package`, and `hpm-assets` — none depend on
+anything in the workspace, so they can be embedded by external tools without
+dragging in the rest of HPM.
 
 Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
 `ConfigError`). `hpm-cli` converts these into a single `CliError` with exit
@@ -52,6 +54,7 @@ codes and help hints.
 | `fetch_manifest` | Free function: returns the parsed `PackageManifest` for `(name, version)` without project context. CAS hit reads from disk; CAS miss resolves+fetches+installs. Pass `""` or `"latest"` to pick the highest semver. |
 | `PackageRunEnv` | Resolved runtime environment for a `package-env` script, produced by `ProjectManager::resolve_package_env(extra_requirements)`: the merged venv (`venv_bin`, `virtual_env`) plus `python_paths` (each package's `python/` then the venv `site-packages`) for `PYTHONPATH`. Read-only — built from `hpm.lock` + the global store, mirroring what `sync_dependencies` resolves for Houdini. `hpm run` applies it for `package-env = true` scripts. |
 | `packer` | Produces signed/unsigned `.zip` archives for `hpm pack`. Public helpers: `pack`, `create_archive`, `compute_archive_checksum`/`compute_bytes_checksum` (SHA-256), `sign_archive`/`sign_bytes` (Ed25519, returns `(base64_signature, hex_key_id)`), `load_signing_key` / `load_signing_key_from_pem`. The byte-based variants are for tooling that mutates archive bytes after pack (e.g. third-party hosting that requires reshaping) and needs to recompute the hash + re-sign without round-tripping through disk. `SigningKey` is re-exported so callers don't need a direct `ed25519-dalek` dep. |
+| `collect_assets`, `AssetIndex`, `AssetIndexError` | Builds the `hpm pack` operator asset index from a manifest's `[[operators]]` declarations (`asset_index` module). Maps each declaration to an `hpm_assets::Asset`, deriving namespace/version from the type name, and verifies each declared `source` exists in the produced archive — any that don't are returned in `AssetIndex::missing_sources` for the caller to warn on (a missing source is an author mistake, not a pack failure). |
 
 ### hpm-package
 
@@ -73,8 +76,16 @@ codes and help hints.
 | `StageConfig`, `PlatformStaging`, `StagePlatformRules`, `PlaceRule`, `ProfileStaging`, `StageProfileRules` | `[stage]` table. `output_dir` (default `"dist"`), `prepack` script list, workspace `include` / `exclude` globs, and per-platform `place = [{ from, to }]` rules. `from` is a workspace-relative glob; `to` is either a directory (ends with `/`) or a literal archive path. `[stage.profile.<name>]` tables (`StageProfileRules`) layer per-profile `prepack`/`include`/`exclude`/`place` overrides onto the base; `StageConfig::resolved_for_profile(name)` returns the merged config a build uses. |
 | `Platform` | Canonical platform enum, mirroring the TumbleTrove API: `LinuxX86_64`, `LinuxAarch64`, `MacosX86_64`, `MacosAarch64`, `WindowsX86_64`, `WindowsAarch64`, `Universal`. `os_key()` returns `Option<&str>` (`None` for `Universal`). |
 | `RegistryConfig`, `RegistryType` | `[[registries]]` entries in manifests. |
+| `OperatorDecl`, `OperatorKind` | `[[operators]]` entries — the operators (node types) a package bundles, declared by the author so `hpm pack` can emit a searchable asset index. `kind` (`Hda`/`Hdk`), `type_name`, and `category` are required; `label`, `tab_submenu`, `icon`, and `source` are optional. |
 | `PackageTemplate` | Scaffolding for `hpm init` (standard and `--bare`). |
 | `HoudiniPackage`, `HoudiniNativePackage`, `HoudiniEnvValue` | Houdini `package.json` output types. |
+
+### hpm-assets
+
+| Type | Purpose |
+|------|---------|
+| `Asset`, `AssetKind` | The wire model `hpm pack --json` emits in its `assets` array. One flat object per bundled operator with a `kind` discriminator (`hda_operator`/`hdk_operator`); `None` fields are omitted. Built from `[[operators]]` declarations by `hpm_core::collect_assets`. |
+| `split_type_name(type_name)` | Best-effort split of a namespaced operator type name into `(namespace, base, op_version)` following Houdini's `namespace::name::version` grammar (version detected as digits-and-dots). Used to populate an `Asset`'s `namespace`/`op_version` from the declared `type_name`. |
 
 ### hpm-core::python
 

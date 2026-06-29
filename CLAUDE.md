@@ -25,3 +25,4 @@ cargo fmt --check    # check formatting
 | `hpm-core` | Core orchestration logic, including the `python` submodule (bundled uv, venv management, Houdini→Python ABI mapping) |
 | `hpm-config` | Configuration loading/saving |
 | `hpm-package` | Package format and metadata |
+| `hpm-assets` | Operator asset-index model emitted by `hpm pack` |
