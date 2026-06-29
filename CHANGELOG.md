@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`[[operators]]` `hdk` kind renamed to `dso`.** The kind value now names the
+  shipped file artifact — `dso` parallels `hda` and matches Houdini's own
+  `dso/` plugin directory — rather than the HDK toolkit used to build it. The
+  emitted asset `kind` in `hpm pack --json` changes accordingly
+  (`hdk_operator` → `dso_operator`). The `[[operators]]` index is new in 0.24.0
+  and not yet consumed by any registry, so this is a safe rename.
+
 ## [0.24.0] - 2026-06-29
 
 ### Added

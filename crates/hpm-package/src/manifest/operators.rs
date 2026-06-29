@@ -15,8 +15,9 @@ use serde::{Deserialize, Serialize};
 pub enum OperatorKind {
     /// Defined by an HDA/OTL digital asset (`otls/*.hda`, `*.otl`).
     Hda,
-    /// Registered by a compiled HDK plugin (`dso/*.so`, `*.dll`, `*.dylib`).
-    Hdk,
+    /// Registered by a compiled plugin shipped as a DSO (`dso/*.so`, `*.dll`,
+    /// `*.dylib`) — i.e. authored against the HDK.
+    Dso,
 }
 
 /// One operator (node type) the package ships, declared by the author.
@@ -25,7 +26,7 @@ pub enum OperatorKind {
 /// descriptive fields that enrich the emitted index.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OperatorDecl {
-    /// HDA vs HDK — sets the emitted asset's kind.
+    /// HDA vs DSO — sets the emitted asset's kind.
     pub kind: OperatorKind,
     /// Namespaced operator type name (e.g. `studio::rbd_configure::2.0`).
     pub type_name: String,

@@ -51,7 +51,7 @@ icon = "SOP_rbd"
 source = "otls/rbd.hda"
 
 [[operators]]
-kind = "hdk"
+kind = "dso"
 type_name = "studio::fast_scatter"
 category = "Sop"
 "#;
@@ -68,7 +68,7 @@ category = "Sop"
     assert_eq!(m.operators[0].icon.as_deref(), Some("SOP_rbd"));
     assert_eq!(m.operators[0].source.as_deref(), Some("otls/rbd.hda"));
     // Optional fields default to None.
-    assert_eq!(m.operators[1].kind, OperatorKind::Hdk);
+    assert_eq!(m.operators[1].kind, OperatorKind::Dso);
     assert_eq!(m.operators[1].label, None);
     assert_eq!(m.operators[1].source, None);
     assert_eq!(m.operators[1].tab_submenu, None);
@@ -78,7 +78,7 @@ category = "Sop"
 fn strict_rejects_operator_missing_required_fields() {
     let mut m = make_manifest();
     m.operators.push(OperatorDecl {
-        kind: OperatorKind::Hdk,
+        kind: OperatorKind::Dso,
         type_name: String::new(),
         category: "  ".to_string(),
         label: None,

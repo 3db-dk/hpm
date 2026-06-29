@@ -174,12 +174,12 @@ pub async fn execute(
                 .iter()
                 .filter(|a| matches!(a.kind, hpm_assets::AssetKind::HdaOperator))
                 .count();
-            let hdk = asset_index.assets.len() - hda;
+            let dso = asset_index.assets.len() - hda;
             println!(
-                "  assets:  {} ({} HDA, {} HDK)",
+                "  assets:  {} ({} HDA, {} DSO)",
                 asset_index.assets.len(),
                 hda,
-                hdk
+                dso
             );
         }
     }

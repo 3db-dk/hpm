@@ -475,7 +475,7 @@ Pack runs `hpm check` first, then:
 
 `--json` adds an `assets` array alongside the existing checksum/signature
 fields. Each entry describes one bundled operator; `None` fields are omitted.
-HDA-vs-HDK is carried by `kind` (`hda_operator` / `hdk_operator`).
+HDA-vs-DSO is carried by `kind` (`hda_operator` / `dso_operator`).
 
 ```json
 {
@@ -497,7 +497,7 @@ HDA-vs-HDK is carried by `kind` (`hda_operator` / `hdk_operator`).
       "source_file": "otls/rbd.hda"
     },
     {
-      "kind": "hdk_operator",
+      "kind": "dso_operator",
       "type_name": "studio::fast_scatter",
       "label": "Fast Scatter",
       "category": "Sop",
@@ -1149,7 +1149,7 @@ downloading or opening the archive.
 
 ```toml
 [[operators]]
-kind        = "hda"                          # "hda" or "hdk"
+kind        = "hda"                          # "hda" or "dso"
 type_name   = "studio::rbd_configure::2.0"
 label       = "RBD Configure"
 category    = "Sop"
@@ -1158,7 +1158,7 @@ icon        = "SOP_rbd"
 source      = "otls/rbd.hda"
 
 [[operators]]
-kind      = "hdk"
+kind      = "dso"
 type_name = "studio::fast_scatter"
 label     = "Fast Scatter"
 category  = "Sop"
@@ -1167,7 +1167,7 @@ source    = "dso/scatter.so"
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `kind` | yes | `hda` (defined by an HDA/OTL digital asset) or `hdk` (registered by a compiled HDK plugin). |
+| `kind` | yes | `hda` (defined by an HDA/OTL digital asset) or `dso` (registered by a compiled plugin shipped as a DSO, i.e. authored against the HDK). |
 | `type_name` | yes | Namespaced operator type name, e.g. `studio::rbd_configure::2.0`. `hpm` derives `namespace` and `op_version` from it where it can. |
 | `category` | yes | Operator table / network category: `Sop`, `Object`, `Dop`, `Lop`, `Top`, `Vop`, `Rop`, `Driver`, … |
 | `label` | no | TAB-menu display name. |

@@ -31,7 +31,7 @@ pub enum AssetIndexError {
 fn to_asset(op: &OperatorDecl) -> Asset {
     let kind = match op.kind {
         OperatorKind::Hda => AssetKind::HdaOperator,
-        OperatorKind::Hdk => AssetKind::HdkOperator,
+        OperatorKind::Dso => AssetKind::DsoOperator,
     };
     let (namespace, _base, op_version) = split_type_name(&op.type_name);
     Asset {
@@ -157,7 +157,7 @@ mod tests {
                 Some("otls/rbd.hda"),
             ),
             op(
-                OperatorKind::Hdk,
+                OperatorKind::Dso,
                 "studio::fast_scatter",
                 "Sop",
                 Some("dso/scatter.so"),
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(rbd.source_file.as_deref(), Some("otls/rbd.hda"));
 
         let scatter = &index.assets[1];
-        assert_eq!(scatter.kind, AssetKind::HdkOperator);
+        assert_eq!(scatter.kind, AssetKind::DsoOperator);
         assert_eq!(scatter.namespace.as_deref(), Some("studio"));
         assert_eq!(scatter.op_version, None);
     }
@@ -186,7 +186,7 @@ mod tests {
         let archive = write_zip(dir.path(), &[("README.md", b"hi")]);
 
         let ops = vec![op(
-            OperatorKind::Hdk,
+            OperatorKind::Dso,
             "studio::ghost",
             "Sop",
             Some("dso/ghost.so"),
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn no_declared_sources_skips_archive_read() {
-        let ops = vec![op(OperatorKind::Hdk, "studio::x", "Sop", None)];
+        let ops = vec![op(OperatorKind::Dso, "studio::x", "Sop", None)];
         let index = collect_assets(Path::new("/no/such/archive.zip"), &ops).unwrap();
         assert_eq!(index.assets.len(), 1);
         assert!(index.missing_sources.is_empty());

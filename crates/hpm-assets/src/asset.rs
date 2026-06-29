@@ -18,8 +18,9 @@ use serde::{Deserialize, Serialize};
 pub enum AssetKind {
     /// An operator defined by an HDA/OTL digital asset.
     HdaOperator,
-    /// An operator registered by a compiled HDK plugin (DSO).
-    HdkOperator,
+    /// An operator registered by a compiled plugin shipped as a DSO
+    /// (authored against the HDK).
+    DsoOperator,
 }
 
 /// One indexed operator that a package ships.
@@ -27,7 +28,7 @@ pub enum AssetKind {
 /// `None` fields are omitted from the serialized index.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Asset {
-    /// Discriminator: HDA vs HDK operator.
+    /// Discriminator: HDA vs DSO operator.
     pub kind: AssetKind,
 
     /// Namespaced operator type name (e.g. `studio::rbd_configure::2.0`).

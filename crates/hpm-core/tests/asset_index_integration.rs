@@ -52,7 +52,7 @@ fn pack_then_index_reports_present_and_missing_sources() {
         ),
         // declared but not shipped -> reported as missing
         op(
-            OperatorKind::Hdk,
+            OperatorKind::Dso,
             "studio::fast_scatter",
             "Sop",
             Some("dso/scatter.so"),
@@ -65,7 +65,7 @@ fn pack_then_index_reports_present_and_missing_sources() {
     assert_eq!(index.assets[0].kind, AssetKind::HdaOperator);
     assert_eq!(index.assets[0].namespace.as_deref(), Some("studio"));
     assert_eq!(index.assets[0].op_version.as_deref(), Some("2.0"));
-    assert_eq!(index.assets[1].kind, AssetKind::HdkOperator);
+    assert_eq!(index.assets[1].kind, AssetKind::DsoOperator);
 
     assert_eq!(index.missing_sources, vec!["dso/scatter.so".to_string()]);
 }

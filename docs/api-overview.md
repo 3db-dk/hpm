@@ -76,7 +76,7 @@ codes and help hints.
 | `StageConfig`, `PlatformStaging`, `StagePlatformRules`, `PlaceRule`, `ProfileStaging`, `StageProfileRules` | `[stage]` table. `output_dir` (default `"dist"`), `prepack` script list, workspace `include` / `exclude` globs, and per-platform `place = [{ from, to }]` rules. `from` is a workspace-relative glob; `to` is either a directory (ends with `/`) or a literal archive path. `[stage.profile.<name>]` tables (`StageProfileRules`) layer per-profile `prepack`/`include`/`exclude`/`place` overrides onto the base; `StageConfig::resolved_for_profile(name)` returns the merged config a build uses. |
 | `Platform` | Canonical platform enum, mirroring the TumbleTrove API: `LinuxX86_64`, `LinuxAarch64`, `MacosX86_64`, `MacosAarch64`, `WindowsX86_64`, `WindowsAarch64`, `Universal`. `os_key()` returns `Option<&str>` (`None` for `Universal`). |
 | `RegistryConfig`, `RegistryType` | `[[registries]]` entries in manifests. |
-| `OperatorDecl`, `OperatorKind` | `[[operators]]` entries — the operators (node types) a package bundles, declared by the author so `hpm pack` can emit a searchable asset index. `kind` (`Hda`/`Hdk`), `type_name`, and `category` are required; `label`, `tab_submenu`, `icon`, and `source` are optional. |
+| `OperatorDecl`, `OperatorKind` | `[[operators]]` entries — the operators (node types) a package bundles, declared by the author so `hpm pack` can emit a searchable asset index. `kind` (`Hda`/`Dso`), `type_name`, and `category` are required; `label`, `tab_submenu`, `icon`, and `source` are optional. |
 | `PackageTemplate` | Scaffolding for `hpm init` (standard and `--bare`). |
 | `HoudiniPackage`, `HoudiniNativePackage`, `HoudiniEnvValue` | Houdini `package.json` output types. |
 
@@ -84,7 +84,7 @@ codes and help hints.
 
 | Type | Purpose |
 |------|---------|
-| `Asset`, `AssetKind` | The wire model `hpm pack --json` emits in its `assets` array. One flat object per bundled operator with a `kind` discriminator (`hda_operator`/`hdk_operator`); `None` fields are omitted. Built from `[[operators]]` declarations by `hpm_core::collect_assets`. |
+| `Asset`, `AssetKind` | The wire model `hpm pack --json` emits in its `assets` array. One flat object per bundled operator with a `kind` discriminator (`hda_operator`/`dso_operator`); `None` fields are omitted. Built from `[[operators]]` declarations by `hpm_core::collect_assets`. |
 | `split_type_name(type_name)` | Best-effort split of a namespaced operator type name into `(namespace, base, op_version)` following Houdini's `namespace::name::version` grammar (version detected as digits-and-dots). Used to populate an `Asset`'s `namespace`/`op_version` from the declared `type_name`. |
 
 ### hpm-core::python
