@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Package asset index from `hpm pack`.** Authors can declare the operators
+  (node types) their package bundles in a new `[[operators]]` manifest array
+  (`kind = "hda"|"hdk"`, `type_name`, `category`, plus optional `label`,
+  `tab_submenu`, `icon`, `source`). `hpm pack --json` now emits these as an
+  `assets` array alongside the existing checksum/signature fields, so a
+  registry can offer node-level search ("which package ships an
+  `rbd_configure` SOP?") without ever downloading or opening an archive. Pack
+  warns when a declared `source` file is missing from the produced archive.
+  HPM uses author declarations rather than parsing HDA/DSO files because the
+  HDA container format is officially undocumented and may change between
+  Houdini versions, and a compiled DSO does not expose operator names offline.
+
 ## [0.23.0] - 2026-06-25
 
 ### Added

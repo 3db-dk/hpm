@@ -460,6 +460,7 @@ Pack runs `hpm check` first, then:
 2. Filters files by `[stage]` (per-platform `place` rules and `include`/`exclude` globs) when the manifest declares `[compat].platforms`.
 3. Produces a `.zip` archive plus a SHA-256 checksum.
 4. If a signing key is supplied, produces an Ed25519 signature over the archive bytes and emits a `keyId`.
+5. Builds a searchable **asset index** from the manifest's [`[[operators]]`](#operators) declarations and includes it in `--json` output (and warns if a declared `source` file is missing from the archive).
 
 **Options**
 
@@ -469,6 +470,46 @@ Pack runs `hpm check` first, then:
 | `--output <dir>` | Output directory. Defaults to the current directory. |
 | `--json` | Emit the result as JSON (useful in CI). |
 | `--platform <id>` | Override host-platform detection. Valid: `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, `windows-aarch64`, `universal`. Only legal when `[compat].platforms` is declared. |
+
+**Asset index in `--json` output**
+
+`--json` adds an `assets` array alongside the existing checksum/signature
+fields. Each entry describes one bundled operator; `None` fields are omitted.
+HDA-vs-HDK is carried by `kind` (`hda_operator` / `hdk_operator`).
+
+```json
+{
+  "archive": "studio-rbd-tools-1.0.0.zip",
+  "sha256": "…",
+  "signature": null,
+  "key_id": null,
+  "platform": null,
+  "assets": [
+    {
+      "kind": "hda_operator",
+      "type_name": "studio::rbd_configure::2.0",
+      "label": "RBD Configure",
+      "category": "Sop",
+      "namespace": "studio",
+      "op_version": "2.0",
+      "tab_submenu": "Studio/Dynamics",
+      "icon": "SOP_rbd",
+      "source_file": "otls/rbd.hda"
+    },
+    {
+      "kind": "hdk_operator",
+      "type_name": "studio::fast_scatter",
+      "label": "Fast Scatter",
+      "category": "Sop",
+      "namespace": "studio",
+      "source_file": "dso/scatter.so"
+    }
+  ]
+}
+```
+
+The index is built from declarations, not by parsing the bundled files —
+see [`[[operators]]`](#operators) for why and how to declare them.
 
 **Signing key resolution order**
 
@@ -1098,6 +1139,53 @@ tt_setup = { cmd = "python scripts/tt_setup.py", python = "3.11", requirements =
 Consumers resolve scripts through `PackageManifest::script_for(name)` (or
 `resolved_scripts()`) which returns the [`ScriptEntry`] verbatim;
 call `ScriptEntry::resolve_cmd(host_os)` to pick the right variant.
+
+### `[[operators]]`
+
+Declares the operators (node types) the package bundles, so `hpm pack` can
+emit a searchable **asset index** that lets a registry offer node-level search
+(e.g. "find the package that ships an `rbd_configure` SOP") without ever
+downloading or opening the archive.
+
+```toml
+[[operators]]
+kind        = "hda"                          # "hda" or "hdk"
+type_name   = "studio::rbd_configure::2.0"
+label       = "RBD Configure"
+category    = "Sop"
+tab_submenu = "Studio/Dynamics"
+icon        = "SOP_rbd"
+source      = "otls/rbd.hda"
+
+[[operators]]
+kind      = "hdk"
+type_name = "studio::fast_scatter"
+label     = "Fast Scatter"
+category  = "Sop"
+source    = "dso/scatter.so"
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `kind` | yes | `hda` (defined by an HDA/OTL digital asset) or `hdk` (registered by a compiled HDK plugin). |
+| `type_name` | yes | Namespaced operator type name, e.g. `studio::rbd_configure::2.0`. `hpm` derives `namespace` and `op_version` from it where it can. |
+| `category` | yes | Operator table / network category: `Sop`, `Object`, `Dop`, `Lop`, `Top`, `Vop`, `Rop`, `Driver`, … |
+| `label` | no | TAB-menu display name. |
+| `tab_submenu` | no | TAB submenu path, e.g. `Studio/Dynamics`. |
+| `icon` | no | Icon identifier, e.g. `SOP_rbd`. |
+| `source` | no | Archive-relative file the operator lives in (`otls/rbd.hda`, `dso/scatter.so`). When set, `hpm pack` warns if that file is not present in the produced archive. |
+
+Why declarations rather than reading the files? The HDA container format is
+officially undocumented and can change between Houdini versions, and a
+compiled HDK plugin (DSO) does not expose its operator names offline at all —
+they are C++ constructor arguments that only materialise inside Houdini. A
+declaration in `hpm.toml` is stable, version-proof, and a single source of
+truth. The author already knows exactly what they ship.
+
+Platform and Houdini-version filtering come for free from elsewhere in the
+manifest: a DSO's architecture is implied by the per-platform archive it ships
+in (`[compat].platforms` + `[stage]`), and the supported Houdini range is
+`[compat].houdini`. See [`hpm pack`](#hpm-pack) for the emitted index shape.
 
 ## Global configuration
 
