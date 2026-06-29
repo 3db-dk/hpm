@@ -552,6 +552,10 @@ pub enum Commands {
         /// Target platform (defaults to host platform when `[compat].platforms` is declared)
         #[arg(long)]
         platform: Option<String>,
+        /// Fail the pack if any `[[operators]]` `source` is missing from the
+        /// produced archive (default: warn only).
+        #[arg(long)]
+        verify_assets: bool,
     },
     /// Run security audit on dependencies
     Audit {
@@ -869,6 +873,7 @@ async fn run_command(
             output,
             json,
             platform,
+            verify_assets,
         } => {
             let config = load_cli_config()?;
             commands::pack::execute(
@@ -878,6 +883,7 @@ async fn run_command(
                 output.clone(),
                 *json,
                 platform.clone(),
+                *verify_assets,
                 console,
             )
             .await

@@ -66,12 +66,74 @@ category = "Sop"
         Some("Studio/Dynamics")
     );
     assert_eq!(m.operators[0].icon.as_deref(), Some("SOP_rbd"));
-    assert_eq!(m.operators[0].source.as_deref(), Some("otls/rbd.hda"));
+    assert_eq!(
+        m.operators[0].source,
+        Some(OperatorSource::Single("otls/rbd.hda".to_string()))
+    );
     // Optional fields default to None.
     assert_eq!(m.operators[1].kind, OperatorKind::Dso);
     assert_eq!(m.operators[1].label, None);
     assert_eq!(m.operators[1].source, None);
     assert_eq!(m.operators[1].tab_submenu, None);
+}
+
+#[test]
+fn parses_per_platform_operator_source() {
+    let toml = r#"
+[package]
+path = "studio/test"
+name = "Test"
+version = "1.0.0"
+
+[compat]
+platforms = ["linux-x86_64", "macos-aarch64"]
+
+[[operators]]
+kind = "dso"
+type_name = "studio::fast_scatter"
+category = "Sop"
+source = { linux-x86_64 = "dso/linux-x86_64/scatter.so", macos-aarch64 = "dso/macos-aarch64/scatter.dylib" }
+"#;
+    let (m, _) = parse_manifest_str(toml).unwrap();
+    assert!(m.validate().is_ok(), "{:?}", m.validate());
+    let resolved = m.operators[0].resolved_source(Some(&Platform::LinuxX86_64));
+    assert_eq!(
+        resolved,
+        SourceResolution::Path("dso/linux-x86_64/scatter.so")
+    );
+    // A platform not in the table is not shipped for that operator.
+    let win = m.operators[0].resolved_source(Some(&Platform::WindowsX86_64));
+    assert_eq!(win, SourceResolution::NotForPlatform);
+}
+
+#[test]
+fn strict_rejects_per_platform_source_key_not_in_compat() {
+    let toml = r#"
+[package]
+path = "studio/test"
+name = "Test"
+version = "1.0.0"
+
+[compat]
+platforms = ["linux-x86_64"]
+
+[[operators]]
+kind = "dso"
+type_name = "studio::fast_scatter"
+category = "Sop"
+source = { macos-aarch64 = "dso/macos-aarch64/scatter.dylib" }
+"#;
+    let (m, _) = parse_manifest_str(toml).unwrap();
+    let report = m.validate_with(ValidationLevel::Strict);
+    assert!(!report.is_ok());
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|e| e.contains("macos-aarch64") && e.contains("[compat].platforms")),
+        "{:?}",
+        report.errors
+    );
 }
 
 #[test]

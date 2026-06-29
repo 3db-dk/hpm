@@ -7,7 +7,10 @@
 //! declares each operator here, giving `hpm pack` a stable, version-proof asset
 //! index to emit for node-level registry search.
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+
+use crate::platform::Platform;
 
 /// Which kind of file an operator is defined by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,6 +21,40 @@ pub enum OperatorKind {
     /// Registered by a compiled plugin shipped as a DSO (`dso/*.so`, `*.dll`,
     /// `*.dylib`) — i.e. authored against the HDK.
     Dso,
+}
+
+/// Where an operator's defining file lives in the produced package.
+///
+/// Universal assets (HDAs, single-platform DSOs) use a single archive-relative
+/// path present in every archive. A DSO whose binary differs per platform
+/// (`.so` / `.dll` / `.dylib`, often under `dso/<platform>/`) uses a
+/// platform-keyed table, mirroring `[stage.platform.*]`. Each per-platform pack
+/// then resolves and verifies the path for the platform it targets.
+///
+/// Deserializes from either form: a bare string is [`Single`](Self::Single); a
+/// table keyed by platform identifier is [`PerPlatform`](Self::PerPlatform).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OperatorSource {
+    /// A single archive-relative path, present in every archive.
+    Single(String),
+    /// Per-platform archive-relative paths, keyed by platform identifier
+    /// (`linux-x86_64`, `macos-aarch64`, …). Keys must appear in
+    /// `[compat].platforms`.
+    PerPlatform(IndexMap<String, String>),
+}
+
+/// Outcome of resolving an [`OperatorDecl`]'s source against a target platform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceResolution<'a> {
+    /// A concrete archive path to emit (and verify against the archive).
+    Path(&'a str),
+    /// No source was declared — index the operator without a path or check.
+    Unspecified,
+    /// The source is platform-specific and the target platform is not among its
+    /// keys, so this operator is not shipped in the target platform's package
+    /// and is omitted from that platform's index.
+    NotForPlatform,
 }
 
 /// One operator (node type) the package ships, declared by the author.
@@ -41,9 +78,34 @@ pub struct OperatorDecl {
     /// Icon identifier (`SOP_rbd`). Optional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
-    /// Archive-relative source file this operator lives in (`otls/rbd.hda`,
-    /// `dso/scatter.so`). Optional, but recommended: `hpm pack` warns when a
-    /// declared `source` is not present in the produced archive.
+    /// Where the operator's file lives in the produced package — a single
+    /// archive path or a per-platform table. Optional, but recommended:
+    /// `hpm pack` checks the resolved path against the produced archive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
+    pub source: Option<OperatorSource>,
+}
+
+impl OperatorDecl {
+    /// Resolve this operator's source for a pack targeting `platform`
+    /// (`None` for a universal, platform-less pack).
+    ///
+    /// A [`Single`](OperatorSource::Single) source resolves to its path on every
+    /// platform. A [`PerPlatform`](OperatorSource::PerPlatform) source resolves
+    /// to the entry for `platform`, or [`NotForPlatform`](SourceResolution::NotForPlatform)
+    /// when the target platform is not among its keys (or the pack is
+    /// platform-less). No declared source yields
+    /// [`Unspecified`](SourceResolution::Unspecified).
+    pub fn resolved_source(&self, platform: Option<&Platform>) -> SourceResolution<'_> {
+        match &self.source {
+            None => SourceResolution::Unspecified,
+            Some(OperatorSource::Single(path)) => SourceResolution::Path(path),
+            Some(OperatorSource::PerPlatform(map)) => match platform {
+                Some(p) => match map.get(p.as_str()) {
+                    Some(path) => SourceResolution::Path(path),
+                    None => SourceResolution::NotForPlatform,
+                },
+                None => SourceResolution::NotForPlatform,
+            },
+        }
+    }
 }

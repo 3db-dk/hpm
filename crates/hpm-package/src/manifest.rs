@@ -32,7 +32,7 @@ pub use env::{EnvMethod, ManifestEnvEntry};
 pub use error::ManifestLoadError;
 pub use info::PackageInfo;
 pub use legacy::{MigrationReport, MigrationWarning};
-pub use operators::{OperatorDecl, OperatorKind};
+pub use operators::{OperatorDecl, OperatorKind, OperatorSource, SourceResolution};
 pub use registry::{RegistryConfig, RegistryType};
 pub use scripts::{PackageScripts, ScriptEntry, ScriptEnv};
 pub use stage::{PlaceRule, PlatformStaging, StageConfig, StagePlatformRules};
@@ -305,7 +305,9 @@ impl PackageManifest {
 
         // Validate [[operators]]: each declaration must carry a non-empty
         // `type_name` and `category` — those are the fields the index keys on,
-        // and an empty value would publish a useless entry.
+        // and an empty value would publish a useless entry. A per-platform
+        // `source` table must key on platforms declared in [compat].platforms,
+        // mirroring the [stage.platform.*] check.
         for (i, op) in self.operators.iter().enumerate() {
             if op.type_name.trim().is_empty() {
                 report.errors.push(format!(
@@ -318,6 +320,23 @@ impl PackageManifest {
                     "[[operators]][{}]: `category` must not be empty",
                     i
                 ));
+            }
+            if let Some(OperatorSource::PerPlatform(map)) = &op.source {
+                for key in map.keys() {
+                    match key.parse::<Platform>() {
+                        Ok(platform) => {
+                            if !self.compat.platforms.contains(&platform) {
+                                report.errors.push(format!(
+                                    "[[operators]][{}].source: platform '{}' not listed in [compat].platforms",
+                                    i, key
+                                ));
+                            }
+                        }
+                        Err(e) => report
+                            .errors
+                            .push(format!("[[operators]][{}].source.{}: {}", i, key, e)),
+                    }
+                }
             }
         }
 

@@ -470,6 +470,7 @@ Pack runs `hpm check` first, then:
 | `--output <dir>` | Output directory. Defaults to the current directory. |
 | `--json` | Emit the result as JSON (useful in CI). |
 | `--platform <id>` | Override host-platform detection. Valid: `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, `windows-aarch64`, `universal`. Only legal when `[compat].platforms` is declared. |
+| `--verify-assets` | Fail the pack (and delete the archive) if any `[[operators]]` `source` is missing from the produced archive, instead of just warning. |
 
 **Asset index in `--json` output**
 
@@ -1173,7 +1174,38 @@ source    = "dso/scatter.so"
 | `label` | no | TAB-menu display name. |
 | `tab_submenu` | no | TAB submenu path, e.g. `Studio/Dynamics`. |
 | `icon` | no | Icon identifier, e.g. `SOP_rbd`. |
-| `source` | no | Archive-relative file the operator lives in (`otls/rbd.hda`, `dso/scatter.so`). When set, `hpm pack` warns if that file is not present in the produced archive. |
+| `source` | no | Where the operator's file lives **in the produced package** (after `[stage]` placement) — either a single archive-relative path or a per-platform table (see below). When set, `hpm pack` checks it against the produced archive. |
+
+**Per-platform `source` (multi-platform DSOs)**
+
+A single HDA ships at the same path in every archive, so one `source` string
+works. But a compiled operator's binary differs per platform
+(`.so` / `.dll` / `.dylib`, often under `dso/<platform>/`), so its `source` is a
+table keyed by platform — mirroring `[stage.platform.*]`. The keys must appear
+in `[compat].platforms`:
+
+```toml
+[[operators]]
+kind      = "dso"
+type_name = "studio::fast_scatter"
+label     = "Fast Scatter"
+category  = "Sop"
+source    = { linux-x86_64 = "dso/linux-x86_64/scatter.so", macos-aarch64 = "dso/macos-aarch64/scatter.dylib", windows-x86_64 = "dso/windows-x86_64/scatter.dll" }
+```
+
+Each per-platform `hpm pack` resolves `source` to the entry for the platform it
+targets and emits that concrete path. An operator whose table does **not** list
+the platform being packed is omitted from that platform's index — its file
+isn't in that package. (Omit `source` entirely to index an operator by
+name/category with no path and no check.)
+
+**Verifying sources at pack time**
+
+By default `hpm pack` *warns* when a declared `source` is missing from the
+produced archive. Pass `--verify-assets` to make it a hard error instead (and
+delete the invalid archive) — recommended in CI so a package never publishes an
+index advertising a file it doesn't ship. The check runs against the built
+archive, so build compiled artifacts before packing.
 
 Why declarations rather than reading the files? The HDA container format is
 officially undocumented and can change between Houdini versions, and a

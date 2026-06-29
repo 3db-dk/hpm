@@ -2,7 +2,7 @@
 
 use hpm_assets::AssetKind;
 use hpm_core::{collect_assets, packer};
-use hpm_package::manifest::{OperatorDecl, OperatorKind, StageConfig};
+use hpm_package::manifest::{OperatorDecl, OperatorKind, OperatorSource, StageConfig};
 use std::fs;
 use tempfile::TempDir;
 
@@ -14,7 +14,7 @@ fn op(kind: OperatorKind, type_name: &str, category: &str, source: Option<&str>)
         label: None,
         tab_submenu: None,
         icon: None,
-        source: source.map(|s| s.to_string()),
+        source: source.map(|s| OperatorSource::Single(s.to_string())),
     }
 }
 
@@ -59,7 +59,7 @@ fn pack_then_index_reports_present_and_missing_sources() {
         ),
     ];
 
-    let index = collect_assets(&result.archive_path, &operators).unwrap();
+    let index = collect_assets(&result.archive_path, &operators, None).unwrap();
 
     assert_eq!(index.assets.len(), 2);
     assert_eq!(index.assets[0].kind, AssetKind::HdaOperator);

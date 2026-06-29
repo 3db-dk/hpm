@@ -13,6 +13,7 @@ pub async fn execute(
     output: Option<PathBuf>,
     json: bool,
     platform_arg: Option<String>,
+    verify_assets: bool,
     console: &mut Console,
 ) -> Result<()> {
     let package_dir = match directory {
@@ -120,10 +121,15 @@ pub async fn execute(
     .context("Pack task panicked")??;
 
     // Build the searchable asset index from the manifest's [[operators]]
-    // declarations, checking each declared source against the produced archive.
-    // Indexing must not fail the pack itself, so a hard error here degrades to
-    // an empty index with a warning.
-    let asset_index = match hpm_core::collect_assets(&result.archive_path, &manifest.operators) {
+    // declarations, resolving each operator's source for the target platform
+    // and checking it against the produced archive. Indexing must not fail the
+    // pack itself, so a hard error here degrades to an empty index with a
+    // warning.
+    let asset_index = match hpm_core::collect_assets(
+        &result.archive_path,
+        &manifest.operators,
+        platform.as_ref(),
+    ) {
         Ok(index) => index,
         Err(e) => {
             console.warn(format!("Could not build asset index: {e}"));
@@ -133,10 +139,27 @@ pub async fn execute(
             }
         }
     };
-    for missing in &asset_index.missing_sources {
-        console.warn(format!(
-            "Declared operator source not found in archive: {missing}"
-        ));
+
+    // A declared operator source that isn't in the produced archive means the
+    // index would advertise a file the package doesn't ship. With
+    // `--verify-assets` this is fatal (and the invalid archive is removed so CI
+    // can't publish it); otherwise it's a warning.
+    if !asset_index.missing_sources.is_empty() {
+        if verify_assets {
+            let _ = std::fs::remove_file(&result.archive_path);
+            let list = asset_index.missing_sources.join("\n  - ");
+            bail!(
+                "operator source(s) declared in [[operators]] but missing from the packed archive:\n  - {list}\n\n\
+                 `source` must name the file's path inside the package (after [stage] placement). \
+                 Build the package first if these are compiled artifacts, fix the path, or declare a \
+                 per-platform `source` table. The archive was removed."
+            );
+        }
+        for missing in &asset_index.missing_sources {
+            console.warn(format!(
+                "Declared operator source not found in archive: {missing} (pass --verify-assets to fail the pack)"
+            ));
+        }
     }
 
     if json {

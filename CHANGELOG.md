@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`hpm pack --verify-assets`.** Fails the pack (and deletes the produced
+  archive) when any `[[operators]]` `source` is missing from the archive,
+  instead of only warning. Recommended in CI so a package never publishes an
+  asset index that advertises a file it doesn't ship.
+- **Per-platform `[[operators]]` `source`.** `source` may now be a
+  platform-keyed table (mirroring `[stage.platform.*]`) as well as a single
+  path, so a DSO operator whose binary differs per platform
+  (`.so`/`.dll`/`.dylib`) declares one entry per platform. Each per-platform
+  pack resolves and emits the concrete path for the platform it targets;
+  operators not shipped for that platform are omitted from its index. Keys are
+  validated against `[compat].platforms`.
+
 ### Changed
 
 - **`[[operators]]` `hdk` kind renamed to `dso`.** The kind value now names the
