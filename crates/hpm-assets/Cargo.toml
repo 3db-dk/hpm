@@ -1,0 +1,22 @@
+[package]
+name = "hpm-assets"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+description = "Houdini asset index extraction (HDA operators) for HPM"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+roxmltree.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

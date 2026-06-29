@@ -4,6 +4,7 @@ members = [
     "crates/hpm-core",
     "crates/hpm-config",
     "crates/hpm-package",
+    "crates/hpm-assets",
 ]
 resolver = "2"
 
@@ -63,6 +64,9 @@ indexmap = { version = "2.0", features = ["serde"] }
 zip = "8.4"
 tar = "0.4"
 flate2 = "1.0"
+
+# XML parsing (HDA Tools.shelf sections)
+roxmltree = "0.20"
 
 [profile.release]
 lto = true
