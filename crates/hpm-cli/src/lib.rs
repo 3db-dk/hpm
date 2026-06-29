@@ -973,6 +973,15 @@ fn init_logging(verbosity: Verbosity) {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| log_level.into()),
         )
-        .with(tracing_subscriber::fmt::layer().with_target(false))
+        // Diagnostics go to stderr, never stdout. This keeps stdout clean for
+        // machine-readable output — `hpm pack --json` (and any other
+        // `--output json*` command) emits only its JSON payload on stdout,
+        // while `hpm check`/pack progress logs stay on stderr where consumers
+        // can ignore them.
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .with_writer(std::io::stderr),
+        )
         .init();
 }

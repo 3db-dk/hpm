@@ -388,7 +388,10 @@ async fn check_package_size(project_dir: &Path, result: &mut ValidationResult) {
 }
 
 fn display_results(result: ValidationResult) -> Result<()> {
-    println!();
+    // Blank-line spacers bracket the tracing log lines below, which go to
+    // stderr — so the spacers must too, or they would orphan onto stdout and
+    // pollute machine-readable output (e.g. `hpm pack --json`).
+    eprintln!();
 
     // Display info messages
     for info in &result.info_messages {
@@ -397,7 +400,7 @@ fn display_results(result: ValidationResult) -> Result<()> {
 
     // Display warnings
     if !result.warnings.is_empty() {
-        println!();
+        eprintln!();
         for warning in &result.warnings {
             warn!("[WARN] {}", warning);
         }
@@ -405,13 +408,13 @@ fn display_results(result: ValidationResult) -> Result<()> {
 
     // Display errors
     if !result.errors.is_empty() {
-        println!();
+        eprintln!();
         for error in &result.errors {
             error!("[ERROR] {}", error);
         }
     }
 
-    println!();
+    eprintln!();
 
     if result.is_valid {
         info!("Package validation completed successfully!");

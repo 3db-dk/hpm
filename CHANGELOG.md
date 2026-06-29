@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   HDA container format is officially undocumented and may change between
   Houdini versions, and a compiled DSO does not expose operator names offline.
 
+### Fixed
+
+- **Diagnostic logs no longer pollute stdout.** Tracing output and the
+  `hpm check` spacer lines now go to stderr, so machine-readable output is
+  clean: `hpm pack --json` (and any `--output json*` command) emits only its
+  JSON payload on stdout. Previously the pre-pack check logged `[OK]` lines and
+  blank spacers to stdout ahead of the JSON, forcing consumers to parse the
+  last line.
+
 ## [0.23.0] - 2026-06-25
 
 ### Added
