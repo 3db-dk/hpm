@@ -6,9 +6,14 @@
 //! — HPM does not parse the package's HDA/DSO files (the HDA format is
 //! undocumented and unstable, and DSOs do not expose operator names offline).
 //!
-//! As a light guard against drift between what's declared and what actually
-//! ships, [`collect_assets`] checks each declared `source` against the produced
-//! archive and reports any that are missing.
+//! Each operator's `source` is resolved for the platform being packed (a
+//! single path applies everywhere; a per-platform table resolves to its entry),
+//! and operators not shipped for that platform are dropped from its index.
+//!
+//! As a guard against drift between what's declared and what actually ships,
+//! [`collect_assets`] checks each resolved `source` against the produced archive
+//! and reports any that are missing (the CLI warns, or fails under
+//! `--verify-assets`).
 
 use std::path::Path;
 

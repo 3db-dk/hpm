@@ -298,7 +298,7 @@ hpm check
 
 Check runs:
 
-- `hpm.toml` exists, parses, and passes manifest validation (scoped `creator/slug` path, semver version, `[compat].houdini` parseable, `[stage]` per-platform consistency with `[compat].platforms`).
+- `hpm.toml` exists, parses, and passes manifest validation (scoped `creator/slug` path, semver version, `[compat].houdini` parseable, `[stage]` and `[[operators]]` per-platform consistency with `[compat].platforms`).
 - Generated Houdini `package.json` serializes cleanly.
 - Soft warnings for: missing description, missing authors, missing keywords, missing `[compat].houdini`, missing README or license file, missing `.gitignore` when a `.git` directory is present, packages larger than 100 MB, and individual files larger than 10 MB.
 
