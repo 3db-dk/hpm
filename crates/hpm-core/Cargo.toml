@@ -19,6 +19,7 @@ indexmap.workspace = true
 async-trait = "0.1"
 hpm-config = { path = "../hpm-config" }
 hpm-package = { path = "../hpm-package" }
+hpm-assets = { path = "../hpm-assets" }
 thiserror.workspace = true
 toml.workspace = true
 toml_edit = "0.25"

@@ -220,6 +220,7 @@
 //! - Generated manifests integrate with Houdini's environment system
 
 pub mod archive_fetcher;
+pub mod asset_index;
 pub mod discovery;
 pub mod fetch_manifest;
 pub mod graph;
@@ -277,6 +278,7 @@ pub use graph::{DependencyError, DependencyGraph, DependencyResolver, PackageId,
 // install/pack flow" isn't sharp; if a downstream consumer needs them,
 // they should be reachable from the top-level alias.
 pub use archive_fetcher::{ArchiveFetcher, FetchError, FetchResult};
+pub use asset_index::{AssetIndex, AssetIndexError, collect_assets};
 pub use fetch_manifest::{FetchManifestError, fetch_manifest};
 pub use package_source::{PackageSource, PackageSourceError};
 pub use packer::{PackError, PackResult};

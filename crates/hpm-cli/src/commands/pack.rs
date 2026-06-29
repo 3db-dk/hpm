@@ -119,6 +119,26 @@ pub async fn execute(
     .await
     .context("Pack task panicked")??;
 
+    // Build the searchable asset index from the manifest's [[operators]]
+    // declarations, checking each declared source against the produced archive.
+    // Indexing must not fail the pack itself, so a hard error here degrades to
+    // an empty index with a warning.
+    let asset_index = match hpm_core::collect_assets(&result.archive_path, &manifest.operators) {
+        Ok(index) => index,
+        Err(e) => {
+            console.warn(format!("Could not build asset index: {e}"));
+            hpm_core::AssetIndex {
+                assets: Vec::new(),
+                missing_sources: Vec::new(),
+            }
+        }
+    };
+    for missing in &asset_index.missing_sources {
+        console.warn(format!(
+            "Declared operator source not found in archive: {missing}"
+        ));
+    }
+
     if json {
         // Machine-readable JSON output for CI
         let json_output = serde_json::json!({
@@ -127,6 +147,7 @@ pub async fn execute(
             "signature": result.signature,
             "key_id": result.key_id,
             "platform": result.platform,
+            "assets": asset_index.assets,
         });
         println!("{}", serde_json::to_string(&json_output).unwrap());
     } else {
@@ -146,6 +167,20 @@ pub async fn execute(
         }
         if let Some(ref kid) = result.key_id {
             println!("  kid:     {}", kid);
+        }
+        if !asset_index.assets.is_empty() {
+            let hda = asset_index
+                .assets
+                .iter()
+                .filter(|a| matches!(a.kind, hpm_assets::AssetKind::HdaOperator))
+                .count();
+            let hdk = asset_index.assets.len() - hda;
+            println!(
+                "  assets:  {} ({} HDA, {} HDK)",
+                asset_index.assets.len(),
+                hda,
+                hdk
+            );
         }
     }
 

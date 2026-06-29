@@ -18,9 +18,9 @@
 pub mod compat;
 pub mod env;
 pub mod error;
-pub mod hdk;
 pub mod info;
 pub mod legacy;
+pub mod operators;
 pub mod registry;
 pub mod scripts;
 pub mod stage;
@@ -29,9 +29,9 @@ pub mod validation;
 pub use compat::CompatConfig;
 pub use env::{EnvMethod, ManifestEnvEntry};
 pub use error::ManifestLoadError;
-pub use hdk::HdkOperator;
 pub use info::PackageInfo;
 pub use legacy::{MigrationReport, MigrationWarning};
+pub use operators::{OperatorDecl, OperatorKind};
 pub use registry::{RegistryConfig, RegistryType};
 pub use scripts::{PackageScripts, ScriptEntry, ScriptEnv};
 pub use stage::{PlaceRule, PlatformStaging, StageConfig, StagePlatformRules};
@@ -83,12 +83,13 @@ pub struct PackageManifest {
     pub runtime: IndexMap<String, ManifestEnvEntry>,
     #[serde(default, skip_serializing_if = "PackageScripts::is_empty")]
     pub scripts: PackageScripts,
-    /// `[[hdk_operators]]` — operators registered by compiled HDK plugins,
-    /// declared by the author. A DSO does not expose its operator names
-    /// offline, so these declarations let `hpm pack` index HDK nodes
-    /// alongside HDA operators. See [`hdk`].
+    /// `[[operators]]` — the operators (node types) this package bundles,
+    /// declared by the author. `hpm pack` emits these as a searchable asset
+    /// index. Declarations are used rather than parsing the package files
+    /// because the HDA format is undocumented/unstable and DSOs do not expose
+    /// operator names offline. See [`operators`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hdk_operators: Vec<HdkOperator>,
+    pub operators: Vec<OperatorDecl>,
 }
 
 /// Parse `hpm.toml` content into a [`PackageManifest`], transparently
@@ -202,7 +203,7 @@ impl PackageManifest {
             python_dependencies: IndexMap::new(),
             runtime: IndexMap::new(),
             scripts: PackageScripts::default(),
-            hdk_operators: Vec::new(),
+            operators: Vec::new(),
         }
     }
 
@@ -301,19 +302,19 @@ impl PackageManifest {
             report.errors.push(e);
         }
 
-        // Validate [[hdk_operators]]: each declaration must carry a non-empty
+        // Validate [[operators]]: each declaration must carry a non-empty
         // `type_name` and `category` — those are the fields the index keys on,
         // and an empty value would publish a useless entry.
-        for (i, op) in self.hdk_operators.iter().enumerate() {
+        for (i, op) in self.operators.iter().enumerate() {
             if op.type_name.trim().is_empty() {
                 report.errors.push(format!(
-                    "[[hdk_operators]][{}]: `type_name` must not be empty",
+                    "[[operators]][{}]: `type_name` must not be empty",
                     i
                 ));
             }
             if op.category.trim().is_empty() {
                 report.errors.push(format!(
-                    "[[hdk_operators]][{}]: `category` must not be empty",
+                    "[[operators]][{}]: `category` must not be empty",
                     i
                 ));
             }

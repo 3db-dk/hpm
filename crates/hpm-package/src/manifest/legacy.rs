@@ -224,9 +224,8 @@ pub fn migrate_legacy(legacy: LegacyManifest) -> (PackageManifest, MigrationRepo
         python_dependencies: legacy.python_dependencies,
         runtime,
         scripts,
-        // The pre-0.16 format had no HDK operator declarations; nothing to
-        // migrate.
-        hdk_operators: Vec::new(),
+        // The pre-0.16 format had no operator declarations; nothing to migrate.
+        operators: Vec::new(),
     };
 
     (manifest, report)

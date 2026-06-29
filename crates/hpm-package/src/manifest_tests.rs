@@ -34,41 +34,56 @@ fn strict_rejects_empty_name_and_version() {
 }
 
 #[test]
-fn parses_hdk_operators_array() {
+fn parses_operators_array() {
     let toml = r#"
 [package]
 path = "studio/test"
 name = "Test"
 version = "1.0.0"
 
-[[hdk_operators]]
-type_name = "studio::fast_scatter"
-label = "Fast Scatter"
+[[operators]]
+kind = "hda"
+type_name = "studio::rbd_configure::2.0"
+label = "RBD Configure"
 category = "Sop"
-source = "dso/scatter.so"
+tab_submenu = "Studio/Dynamics"
+icon = "SOP_rbd"
+source = "otls/rbd.hda"
 
-[[hdk_operators]]
-type_name = "studio::rbd_solve"
-category = "Dop"
+[[operators]]
+kind = "hdk"
+type_name = "studio::fast_scatter"
+category = "Sop"
 "#;
     let (m, _) = parse_manifest_str(toml).unwrap();
-    assert_eq!(m.hdk_operators.len(), 2);
-    assert_eq!(m.hdk_operators[0].type_name, "studio::fast_scatter");
-    assert_eq!(m.hdk_operators[0].label.as_deref(), Some("Fast Scatter"));
-    assert_eq!(m.hdk_operators[0].category, "Sop");
-    assert_eq!(m.hdk_operators[0].source.as_deref(), Some("dso/scatter.so"));
-    // label and source are optional.
-    assert_eq!(m.hdk_operators[1].label, None);
-    assert_eq!(m.hdk_operators[1].source, None);
+    assert_eq!(m.operators.len(), 2);
+    assert_eq!(m.operators[0].kind, OperatorKind::Hda);
+    assert_eq!(m.operators[0].type_name, "studio::rbd_configure::2.0");
+    assert_eq!(m.operators[0].label.as_deref(), Some("RBD Configure"));
+    assert_eq!(m.operators[0].category, "Sop");
+    assert_eq!(
+        m.operators[0].tab_submenu.as_deref(),
+        Some("Studio/Dynamics")
+    );
+    assert_eq!(m.operators[0].icon.as_deref(), Some("SOP_rbd"));
+    assert_eq!(m.operators[0].source.as_deref(), Some("otls/rbd.hda"));
+    // Optional fields default to None.
+    assert_eq!(m.operators[1].kind, OperatorKind::Hdk);
+    assert_eq!(m.operators[1].label, None);
+    assert_eq!(m.operators[1].source, None);
+    assert_eq!(m.operators[1].tab_submenu, None);
 }
 
 #[test]
-fn strict_rejects_hdk_operator_missing_required_fields() {
+fn strict_rejects_operator_missing_required_fields() {
     let mut m = make_manifest();
-    m.hdk_operators.push(HdkOperator {
+    m.operators.push(OperatorDecl {
+        kind: OperatorKind::Hdk,
         type_name: String::new(),
-        label: None,
         category: "  ".to_string(),
+        label: None,
+        tab_submenu: None,
+        icon: None,
         source: None,
     });
     let report = m.validate_with(ValidationLevel::Strict);

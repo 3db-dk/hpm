@@ -1,24 +1,16 @@
 //! Houdini package asset indexing for HPM.
 //!
-//! `hpm pack` uses this crate to enumerate the operators (nodes) a package
-//! bundles and emit them as a searchable index. The registry never opens an
-//! archive, so packing is the one moment the files are in hand at the right
-//! time.
+//! `hpm pack` uses this crate's [`Asset`] model to emit a searchable index of
+//! the operators (node types) a package bundles, so the registry can offer
+//! node-level search without ever opening an archive.
 //!
-//! Two asset sources are covered:
-//!
-//! - **HDAs** (`otls/*.hda`, `*.otl`) — parsed fully offline by [`hda`]. An
-//!   HDA is a self-describing, section-keyed container; operator type names,
-//!   labels, categories, TAB submenus, and icons all live in plain-text
-//!   sections.
-//! - **HDK plugins** (`dso/*.so`, `*.dll`, `*.dylib`) — a compiled DSO does not
-//!   expose operator names offline, so those entries come from the author's
-//!   `[[hdk_operators]]` declaration in the manifest, assembled by the caller.
-//!
-//! The output model lives in [`asset`].
+//! The index is built from the author's `[[operators]]` declarations in
+//! `hpm.toml`. HPM deliberately does not parse the package's own files to
+//! discover operators: the HDA container format is officially undocumented and
+//! may change between Houdini versions, and a compiled HDK plugin does not
+//! expose its operator names offline at all. Author declarations are stable,
+//! version-proof, and a single source of truth.
 
 pub mod asset;
-pub mod hda;
 
-pub use asset::{Asset, AssetKind, AssetSource};
-pub use hda::{HdaParseError, parse_hda_bytes};
+pub use asset::{Asset, AssetKind, split_type_name};
