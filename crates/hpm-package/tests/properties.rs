@@ -188,6 +188,7 @@ pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
                 python_dependencies: indexmap::IndexMap::new(),
                 runtime: indexmap::IndexMap::new(),
                 scripts: Default::default(),
+                hdk_operators: Vec::new(),
             },
         )
 }
@@ -525,6 +526,7 @@ proptest! {
             python_dependencies: indexmap::IndexMap::new(),
             runtime: indexmap::IndexMap::new(),
             scripts: Default::default(),
+                hdk_operators: Vec::new(),
         };
 
         // Houdini package generation either succeeds with a well-formed

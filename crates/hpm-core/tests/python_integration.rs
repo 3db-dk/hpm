@@ -53,6 +53,7 @@ async fn test_end_to_end_python_workflow() {
         python_dependencies: python_deps_a,
         runtime: indexmap::IndexMap::new(),
         scripts: Default::default(),
+        hdk_operators: Vec::new(),
     };
 
     let mut python_deps_b = IndexMap::new();
@@ -94,6 +95,7 @@ async fn test_end_to_end_python_workflow() {
         python_dependencies: python_deps_b,
         runtime: indexmap::IndexMap::new(),
         scripts: Default::default(),
+        hdk_operators: Vec::new(),
     };
 
     let manifests = vec![manifest_a, manifest_b];
@@ -300,6 +302,7 @@ async fn test_houdini_python_version_mapping_edge_cases() {
             python_dependencies: python_deps,
             runtime: indexmap::IndexMap::new(),
             scripts: Default::default(),
+            hdk_operators: Vec::new(),
         }
     };
 

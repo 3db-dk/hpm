@@ -18,6 +18,7 @@
 pub mod compat;
 pub mod env;
 pub mod error;
+pub mod hdk;
 pub mod info;
 pub mod legacy;
 pub mod registry;
@@ -28,6 +29,7 @@ pub mod validation;
 pub use compat::CompatConfig;
 pub use env::{EnvMethod, ManifestEnvEntry};
 pub use error::ManifestLoadError;
+pub use hdk::HdkOperator;
 pub use info::PackageInfo;
 pub use legacy::{MigrationReport, MigrationWarning};
 pub use registry::{RegistryConfig, RegistryType};
@@ -81,6 +83,12 @@ pub struct PackageManifest {
     pub runtime: IndexMap<String, ManifestEnvEntry>,
     #[serde(default, skip_serializing_if = "PackageScripts::is_empty")]
     pub scripts: PackageScripts,
+    /// `[[hdk_operators]]` — operators registered by compiled HDK plugins,
+    /// declared by the author. A DSO does not expose its operator names
+    /// offline, so these declarations let `hpm pack` index HDK nodes
+    /// alongside HDA operators. See [`hdk`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hdk_operators: Vec<HdkOperator>,
 }
 
 /// Parse `hpm.toml` content into a [`PackageManifest`], transparently
@@ -194,6 +202,7 @@ impl PackageManifest {
             python_dependencies: IndexMap::new(),
             runtime: IndexMap::new(),
             scripts: PackageScripts::default(),
+            hdk_operators: Vec::new(),
         }
     }
 
@@ -290,6 +299,24 @@ impl PackageManifest {
         // install/emit time.
         if let Err(e) = validate_env_table("runtime", &self.runtime) {
             report.errors.push(e);
+        }
+
+        // Validate [[hdk_operators]]: each declaration must carry a non-empty
+        // `type_name` and `category` — those are the fields the index keys on,
+        // and an empty value would publish a useless entry.
+        for (i, op) in self.hdk_operators.iter().enumerate() {
+            if op.type_name.trim().is_empty() {
+                report.errors.push(format!(
+                    "[[hdk_operators]][{}]: `type_name` must not be empty",
+                    i
+                ));
+            }
+            if op.category.trim().is_empty() {
+                report.errors.push(format!(
+                    "[[hdk_operators]][{}]: `category` must not be empty",
+                    i
+                ));
+            }
         }
 
         // Validate [scripts] entries: a conditional `cmd` may only gate on

@@ -34,6 +34,58 @@ fn strict_rejects_empty_name_and_version() {
 }
 
 #[test]
+fn parses_hdk_operators_array() {
+    let toml = r#"
+[package]
+path = "studio/test"
+name = "Test"
+version = "1.0.0"
+
+[[hdk_operators]]
+type_name = "studio::fast_scatter"
+label = "Fast Scatter"
+category = "Sop"
+source = "dso/scatter.so"
+
+[[hdk_operators]]
+type_name = "studio::rbd_solve"
+category = "Dop"
+"#;
+    let (m, _) = parse_manifest_str(toml).unwrap();
+    assert_eq!(m.hdk_operators.len(), 2);
+    assert_eq!(m.hdk_operators[0].type_name, "studio::fast_scatter");
+    assert_eq!(m.hdk_operators[0].label.as_deref(), Some("Fast Scatter"));
+    assert_eq!(m.hdk_operators[0].category, "Sop");
+    assert_eq!(m.hdk_operators[0].source.as_deref(), Some("dso/scatter.so"));
+    // label and source are optional.
+    assert_eq!(m.hdk_operators[1].label, None);
+    assert_eq!(m.hdk_operators[1].source, None);
+}
+
+#[test]
+fn strict_rejects_hdk_operator_missing_required_fields() {
+    let mut m = make_manifest();
+    m.hdk_operators.push(HdkOperator {
+        type_name: String::new(),
+        label: None,
+        category: "  ".to_string(),
+        source: None,
+    });
+    let report = m.validate_with(ValidationLevel::Strict);
+    assert!(!report.is_ok());
+    assert!(
+        report.errors.iter().any(|e| e.contains("type_name")),
+        "missing type_name error: {:?}",
+        report.errors
+    );
+    assert!(
+        report.errors.iter().any(|e| e.contains("category")),
+        "missing category error: {:?}",
+        report.errors
+    );
+}
+
+#[test]
 fn strict_rejects_non_semver_version() {
     let mut m = make_manifest();
     m.package.version = "not.a.version".to_string();
