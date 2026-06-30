@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.1] - 2026-06-30
+
+### Changed
+
+- **`script_run::ScriptSink` now requires `Send`** (`pub trait ScriptSink:
+  Send`). Lets embedders drive `run_prepack` / `run_script` from a
+  multi-threaded executor (e.g. the tumbletrove desktop awaits the runner
+  inside `tauri::async_runtime::spawn`, which requires `Send + 'static`
+  futures). Every real sink is already `Send`, so this is a no-op for existing
+  implementations including the CLI's `Console` sink.
+
 ## [0.26.0] - 2026-06-30
 
 ### Added
