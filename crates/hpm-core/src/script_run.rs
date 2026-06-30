@@ -57,8 +57,14 @@ pub struct PreparedScript {
 /// [`run`](Self::run). The CLI implements this over its `Console` and a
 /// `sh -c` / `cmd /S /C` spawn; the desktop implements it over xterm events
 /// and its own process spawn.
+// `Send` so `run_prepack`/`run_script`'s `&mut dyn ScriptSink` futures stay
+// `Send` — embedders that drive the runner from a multi-threaded executor
+// (the tumbletrove desktop awaits it inside `tauri::async_runtime::spawn` and
+// async Tauri commands, which require `Send + 'static`) can't use the trait
+// object otherwise. The CLI's `block_on` doesn't need it, but the bound is
+// harmless there: its `Console` sink is already `Send`.
 #[async_trait]
-pub trait ScriptSink {
+pub trait ScriptSink: Send {
     /// Emit an informational status line (e.g. `prepack: build-sops`).
     /// Default no-op so terse embedders can ignore it.
     fn info(&mut self, message: &str) {
