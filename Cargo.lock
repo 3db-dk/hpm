@@ -827,6 +827,7 @@ name = "hpm-cli"
 version = "0.25.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "clap_complete",
  "console",

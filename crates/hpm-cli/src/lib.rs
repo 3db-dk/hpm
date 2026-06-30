@@ -298,6 +298,7 @@ pub mod console;
 pub mod error;
 pub mod output;
 pub mod progress;
+pub mod script_sink;
 use commands::init_package;
 pub use console::{ColorChoice, Console, Verbosity};
 use error::{CliError, CliResult, CliResultExt, ExitStatus};

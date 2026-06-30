@@ -28,8 +28,8 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use crate::commands::manifest_utils::{determine_manifest_path, load_manifest};
-use crate::commands::run::run_script;
 use crate::console::Console;
+use crate::script_sink::ConsoleSink;
 
 pub struct BuildOptions {
     /// Manifest or its containing directory. None = cwd.
@@ -89,12 +89,13 @@ pub async fn build(options: BuildOptions, console: &mut Console) -> Result<()> {
     }
 
     if !options.no_prepack && !stage.prepack.is_empty() {
-        run_prepack(
+        let mut sink = ConsoleSink::new(console);
+        hpm_core::script_run::run_prepack(
             &manifest,
             &stage.prepack,
-            options.manifest.clone(),
+            &package_root,
             &prepack_env,
-            console,
+            &mut sink,
         )
         .await?;
     }
@@ -211,33 +212,6 @@ fn resolve_target_platform(
         }
         (None, true) => Ok(None),
     }
-}
-
-async fn run_prepack(
-    manifest: &PackageManifest,
-    names: &[String],
-    manifest_arg: Option<PathBuf>,
-    extra_env: &HashMap<String, String>,
-    console: &mut Console,
-) -> Result<()> {
-    for name in names {
-        if manifest.script_for(name).is_none() {
-            bail!(
-                "[stage].prepack references '{}' but no such [scripts] entry exists",
-                name
-            );
-        }
-        console.info(format!("prepack: {}", name));
-        let code = run_script(name, &[], manifest_arg.clone(), extra_env, console).await?;
-        if code != 0 {
-            bail!(
-                "Prepack script '{}' exited with status {} — aborting build",
-                name,
-                code
-            );
-        }
-    }
-    Ok(())
 }
 
 fn build_ignore_rules(dir: &Path) -> Result<Gitignore> {
