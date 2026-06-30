@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Shared `[scripts]` runner in `hpm-core` (`script_run` module).** The
+  prepack/script-running loop that previously lived only in the `hpm` binary is
+  now a library entry point: `run_prepack`, `run_script`, and `prepare_script`,
+  parameterized over a `ScriptSink` (spawn + diagnostics). Embedders that build
+  install images out-of-process can run a package's scripts through the exact
+  same env contract (`HPM_PACKAGE_ROOT`, per-script venv, `package-env`,
+  `PATH`/`VIRTUAL_ENV`/`PYTHONPATH`) as `hpm run` / `hpm build`, instead of
+  re-composing it and drifting. The CLI's `hpm run` and `hpm build` prepack now
+  both route through it.
+
+### Changed
+
+- **Prepack scripts now go through the full script-env composition.** As a
+  side effect of the shared runner, table-form `[scripts]` used as `prepack`
+  steps get their per-script uv interpreter on `PATH` like any other `hpm run`
+  script. No manifest or CLI-behavior change for existing packages.
+
 ## [0.25.0] - 2026-06-29
 
 ### Added
