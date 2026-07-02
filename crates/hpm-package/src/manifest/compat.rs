@@ -35,4 +35,44 @@ impl CompatConfig {
     pub fn houdini_min(&self) -> Option<String> {
         self.houdini.as_ref().and_then(HoudiniRange::lower_bound)
     }
+
+    /// True when the package declares support for a concrete native platform
+    /// (any [`Platform`] other than [`Platform::Universal`]) — i.e. it ships
+    /// per-platform native binaries (HDK/DSO). Pure-data / pure-Python
+    /// packages declare nothing here, or only `universal`, and return `false`.
+    ///
+    /// Used to steer dev installs away from link-mode for native packages: a
+    /// junction/symlink makes the workspace build output the very DSO a
+    /// running Houdini has memory-mapped, blocking in-place rebuilds.
+    pub fn declares_native_platforms(&self) -> bool {
+        self.platforms.iter().any(|p| *p != Platform::Universal)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_platforms_is_not_native() {
+        assert!(!CompatConfig::default().declares_native_platforms());
+    }
+
+    #[test]
+    fn universal_only_is_not_native() {
+        let compat = CompatConfig {
+            platforms: vec![Platform::Universal],
+            ..Default::default()
+        };
+        assert!(!compat.declares_native_platforms());
+    }
+
+    #[test]
+    fn any_concrete_platform_is_native() {
+        let compat = CompatConfig {
+            platforms: vec![Platform::Universal, Platform::WindowsX86_64],
+            ..Default::default()
+        };
+        assert!(compat.declares_native_platforms());
+    }
 }

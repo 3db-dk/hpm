@@ -548,6 +548,112 @@ async fn install_as_dev_link_creates_link_to_workspace() {
     );
 }
 
+/// Native-binary packages must never be link-installed: a junction/symlink
+/// makes the workspace build output the very DSO a running Houdini has
+/// memory-mapped, blocking in-place rebuilds (Windows LNK1104). A dev-link
+/// request for a package that declares concrete `[compat].platforms` is
+/// silently downgraded to a copy — an independent physical file the linker
+/// can overwrite freely.
+#[tokio::test]
+async fn dev_link_install_downgrades_to_copy_for_native_packages() {
+    let temp_dir = TempDir::new().unwrap();
+    let storage_config = StorageConfig {
+        home_dir: temp_dir.path().to_path_buf(),
+        packages_dir: temp_dir.path().join("packages"),
+        cache_dir: temp_dir.path().join("cache"),
+        registry_cache_dir: temp_dir.path().join("registry"),
+    };
+    let storage_manager = StorageManager::new(storage_config).unwrap();
+
+    let source = temp_dir.path().join("native-source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("hpm.toml"),
+        "[package]\npath = \"creator/foo\"\nname = \"creator/foo\"\nversion = \"1.0.0\"\n\
+         \n[compat]\nplatforms = [\"linux-x86_64\", \"windows-x86_64\"]\n",
+    )
+    .unwrap();
+    std::fs::write(source.join("MARKER"), "native-content").unwrap();
+
+    let installed = storage_manager.install_as_dev_link(&source).await.unwrap();
+
+    let expected = temp_dir
+        .path()
+        .join("packages")
+        .join("_dev")
+        .join("foo@1.0.0");
+    assert_eq!(installed.install_path, expected);
+
+    // Despite the DevLink request, the entry must be an independent copy —
+    // a real directory, not a symlink/junction into the workspace.
+    let meta = std::fs::symlink_metadata(&expected).unwrap();
+    let is_link = meta.file_type().is_symlink() || {
+        #[cfg(windows)]
+        {
+            junction::exists(&expected).unwrap_or(false)
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    };
+    assert!(
+        !is_link,
+        "native-platform dev install must be a copy, not a symlink/junction"
+    );
+    assert!(
+        installed.is_dev,
+        "downgraded install is still a dev install"
+    );
+    assert_eq!(
+        std::fs::read_to_string(expected.join("MARKER")).unwrap(),
+        "native-content"
+    );
+}
+
+/// A `universal`-only package (pure-data / pure-Python) declares no concrete
+/// native platform, so link-mode stays link-mode — live edits must still
+/// reach a running session.
+#[tokio::test]
+async fn dev_link_install_keeps_link_for_universal_packages() {
+    let temp_dir = TempDir::new().unwrap();
+    let storage_config = StorageConfig {
+        home_dir: temp_dir.path().to_path_buf(),
+        packages_dir: temp_dir.path().join("packages"),
+        cache_dir: temp_dir.path().join("cache"),
+        registry_cache_dir: temp_dir.path().join("registry"),
+    };
+    let storage_manager = StorageManager::new(storage_config).unwrap();
+
+    let source = temp_dir.path().join("universal-source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("hpm.toml"),
+        "[package]\npath = \"creator/foo\"\nname = \"creator/foo\"\nversion = \"1.0.0\"\n\
+         \n[compat]\nplatforms = [\"universal\"]\n",
+    )
+    .unwrap();
+    std::fs::write(source.join("MARKER"), "universal-content").unwrap();
+
+    let installed = storage_manager.install_as_dev_link(&source).await.unwrap();
+
+    let meta = std::fs::symlink_metadata(&installed.install_path).unwrap();
+    let is_link = meta.file_type().is_symlink() || {
+        #[cfg(windows)]
+        {
+            junction::exists(&installed.install_path).unwrap_or(false)
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    };
+    assert!(
+        is_link,
+        "universal-only dev link must stay a symlink/junction"
+    );
+}
+
 /// Live-edit guarantee: a file written into the workspace *after* the
 /// link install becomes visible through the install_path. This is the
 /// whole reason the feature exists.

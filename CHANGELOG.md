@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Link-mode dev installs no longer break in-place native (DSO) rebuilds.**
+  A path dependency installed with `link = true` (`hpm add --path --link`, or a
+  `{ path, link = true }` spec) that declares concrete `[compat].platforms`
+  (anything other than `universal`) is now installed as a copy instead of a
+  symlink/junction. Previously the junction made the workspace build output the
+  same physical file Houdini had memory-mapped, so rebuilding the DSO/DLL while
+  a session started from that dev install was running failed with Windows
+  `LNK1104` / `ERROR_SHARING_VIOLATION`. Link-mode buys nothing for native code
+  (a mapped DSO needs a relaunch to reload regardless), so native packages are
+  transparently copied; the rebuilt binary is picked up on the next dev launch.
+  Pure-data / pure-Python / `universal`-only link installs are unaffected and
+  keep live-edit behavior.
+
 ## [0.26.1] - 2026-06-30
 
 ### Changed

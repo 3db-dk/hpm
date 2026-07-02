@@ -199,6 +199,15 @@ impl StorageManager {
     /// Same namespace isolation as [`Self::install_as_dev_copy`]: the link entry
     /// lives at `<packages_dir>/_dev/<slug>@<version>/`, never in the registry
     /// CAS. Registry resolutions at the same coordinate are unaffected.
+    ///
+    /// Native-binary packages are the exception: if the manifest declares
+    /// concrete `[compat].platforms` (see
+    /// [`CompatConfig::declares_native_platforms`]), this falls back to a copy
+    /// so an in-place DSO rebuild isn't blocked by a running Houdini session
+    /// holding the mapped binary. The returned [`InstalledPackage`] is a copy
+    /// in that case, not a link.
+    ///
+    /// [`CompatConfig::declares_native_platforms`]: hpm_package::CompatConfig::declares_native_platforms
     pub async fn install_as_dev_link(
         &self,
         source_path: &std::path::Path,
@@ -211,13 +220,9 @@ impl StorageManager {
         source_path: &std::path::Path,
         style: InstallStyle,
     ) -> Result<InstalledPackage, StorageError> {
-        let kind = style.log_kind();
-        info!(
-            "Installing {kind}package from path: {}",
-            source_path.display()
-        );
-
-        // Read and parse the manifest
+        // Read and parse the manifest before choosing the final install
+        // style: its `[compat].platforms` can force a DevLink down to a
+        // DevCopy (see below), which also changes the log kind.
         let manifest_path = source_path.join("hpm.toml");
         let manifest = PackageManifest::from_path(&manifest_path)?;
 
@@ -225,6 +230,30 @@ impl StorageManager {
         let name = &name;
         let version = &manifest.package.version;
 
+        // Link-mode is unsafe for native-binary packages. A Windows junction
+        // (or Unix symlink) makes the workspace build output the very DSO/DLL
+        // a running Houdini has memory-mapped, so an in-place rebuild fails
+        // with LNK1104 / ERROR_SHARING_VIOLATION. It also buys nothing: a
+        // mapped DSO can't be hot-reloaded into a live session — a new binary
+        // needs a relaunch. Downgrade to a copy so the workspace file and the
+        // mapped file are distinct physical files; the rebuilt binary is
+        // picked up on the next dev launch (which re-copies and re-runs
+        // prepack). Pure-data / pure-Python link installs are untouched.
+        let style = if matches!(style, InstallStyle::DevLink)
+            && manifest.compat.declares_native_platforms()
+        {
+            warn!(
+                "{}@{} declares native platforms in [compat].platforms; \
+                 installing as a dev copy instead of a link so an in-place \
+                 native rebuild isn't blocked by a running Houdini session",
+                name, version
+            );
+            InstallStyle::DevCopy
+        } else {
+            style
+        };
+
+        let kind = style.log_kind();
         info!(
             "Installing {kind}{}@{} from {}",
             name,
