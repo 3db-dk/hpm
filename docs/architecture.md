@@ -465,6 +465,17 @@ the manifest's `{ path = "...", link = ? }` spec:
   the Developer Mode / admin requirement that NTFS directory symlinks
   carry, so the workflow is viable on a stock Houdini workstation.
 
+Native-binary packages are the exception: when a `link = true` path dep
+declares concrete `[compat].platforms` (anything other than `universal`),
+`install_inner` downgrades it to a copy — see
+`CompatConfig::declares_native_platforms`. A junction/symlink would make
+the workspace's build output the very DSO/DLL a running Houdini has
+memory-mapped, so an in-place rebuild fails (Windows `LNK1104` /
+`ERROR_SHARING_VIOLATION`), and link-mode buys nothing for native code
+anyway — a mapped DSO can't hot-reload into a live session; it needs a
+relaunch, which re-copies and re-runs prepack. Pure-data / pure-Python /
+`universal`-only link installs are unaffected.
+
 Both install replacement (`clear_existing_install`) and orphan cleanup
 (`remove_package`) are symlink-safe: each checks `symlink_metadata` (plus
 `junction::exists` on Windows) before deciding between `remove_dir_all`

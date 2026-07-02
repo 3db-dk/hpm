@@ -198,7 +198,7 @@ or `name@version`. `name` uses the `creator/slug` form.
 | Flag | Description |
 |------|-------------|
 | `--path <dir>` | Add as a local path dependency (only valid with a single package). Path dependencies install into a `_dev/` subtree of the global packages dir so they never overwrite a registry install at the same `(slug, version)`. |
-| `--link` | For path dependencies, install as a symlink (Unix) or NTFS junction (Windows) instead of copying. Working-tree edits become visible to a live Houdini session without re-running `hpm install`. Requires `--path`. |
+| `--link` | For path dependencies, install as a symlink (Unix) or NTFS junction (Windows) instead of copying. Working-tree edits become visible to a live Houdini session without re-running `hpm install`. Requires `--path`. Packages that declare native `[compat].platforms` (a DSO/HDK build, not `universal`) are installed as a copy even with `--link`: a linked native binary can't be rebuilt in place while a Houdini session has it loaded (Windows `LNK1104`), and a mapped DSO needs a relaunch to reload anyway. |
 | `-p, --package <path>` | Path to the manifest to modify (`hpm.toml` or containing dir). Defaults to cwd. |
 | `--optional` | Mark all added dependencies as optional. |
 
