@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dev launches of a native path dependency no longer fail with `os error 5`
+  when another Houdini is open.** A copy-mode path dep (including a `link = true`
+  native package, which is installed as a copy) was cleared and recopied on
+  every sync. For a native package the copy holds the DSOs a concurrently-running
+  Houdini has memory-mapped, so on Windows the removal step failed with
+  `ERROR_ACCESS_DENIED` and surfaced as "Package `<name>@<version>` is in use by
+  another process" — even when the package content was unchanged and the user
+  simply had a sibling Houdini open. Dev copies now record a fingerprint of the
+  source workspace (relative path + length + mtime per file) in a `.hpm-devsrc`
+  sidecar; a re-sync whose source is unchanged skips the clear-and-recopy
+  entirely, matching the "already installed" short-circuit the registry/URL
+  specs already had. A genuinely changed workspace still recopies, and a truly
+  loaded, changed DLL still reports `PackageInUse` (you can't overwrite a mapped
+  binary). Linux/macOS were never affected — open files unlink cleanly there.
+
 ## [0.26.2] - 2026-07-02
 
 ### Fixed

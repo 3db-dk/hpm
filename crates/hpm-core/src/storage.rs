@@ -29,7 +29,8 @@ pub use error::StorageError;
 pub use types::{InstalledPackage, PackageSpec, VersionReq};
 
 use dev_install::{
-    DEV_INSTALL_DIR, InstallStyle, clear_existing_install, create_dev_link, remove_install_entry,
+    DEV_INSTALL_DIR, InstallStyle, clear_existing_install, create_dev_link, dev_copy_is_current,
+    remove_install_entry, write_dev_fingerprint,
 };
 #[derive(Debug, Clone)]
 pub struct StorageManager {
@@ -270,6 +271,40 @@ impl StorageManager {
                 .join(format!("{}@{}", name, version)),
         };
 
+        // Skip the clear-and-recopy when a dev copy already reflects the
+        // source. Native path deps downgrade DevLink to DevCopy (above), so
+        // the copy holds DSOs a concurrently-running Houdini may have mapped;
+        // on Windows the removal would then fail with `os error 5`
+        // (`PackageInUse`) even though the content is unchanged and the user
+        // just has another Houdini open. Recognizing the unchanged copy and
+        // leaving it in place removes that lock contention — the dev-copy
+        // analogue of the "already installed" short-circuits the registry/URL
+        // specs have in `install_one_dep`.
+        if matches!(style, InstallStyle::DevCopy) {
+            match dev_copy_is_current(source_path, &target_dir) {
+                Ok(true) => {
+                    info!(
+                        "dev copy {}@{} already up to date; skipping recopy",
+                        name, version
+                    );
+                    return Ok(InstalledPackage {
+                        version: version.clone(),
+                        manifest,
+                        install_path: target_dir,
+                        is_dev: true,
+                    });
+                }
+                Ok(false) => {}
+                // The freshness check is an optimization, not a correctness
+                // gate: on any IO error reading the trees, fall through to the
+                // normal clear-and-recopy rather than failing the install.
+                Err(e) => warn!(
+                    "dev copy freshness check for {}@{} failed ({}); recopying",
+                    name, version, e
+                ),
+            }
+        }
+
         // Symlink-safe replacement: if the existing entry is a link (the
         // common case during repeat sync of a link-installed dep), we must
         // never `remove_dir_all` it — that would follow a Windows junction
@@ -279,6 +314,11 @@ impl StorageManager {
         match style {
             InstallStyle::CasCopy | InstallStyle::DevCopy => {
                 self.copy_directory(source_path, &target_dir)?;
+                if matches!(style, InstallStyle::DevCopy) {
+                    // Record the source fingerprint so the next dev launch can
+                    // recognize an unchanged workspace and skip this recopy.
+                    write_dev_fingerprint(source_path, &target_dir);
+                }
             }
             InstallStyle::DevLink => {
                 // Junctions need absolute paths; symlinks behave more

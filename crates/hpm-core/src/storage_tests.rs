@@ -415,6 +415,56 @@ async fn install_as_dev_copy_targets_dev_subtree() {
     );
 }
 
+/// Re-installing an unchanged dev copy must skip the destructive
+/// clear-and-recopy. This is the fix for the Windows `os error 5`
+/// (`PackageInUse`) failure: a concurrently-running Houdini holds the copied
+/// DSOs mapped, so the removal step would fail even though the content hasn't
+/// changed. We prove the skip by planting a sentinel inside the copy that a
+/// clear-and-recopy would delete — an unchanged re-install must leave it.
+#[tokio::test]
+async fn unchanged_dev_copy_reinstall_skips_recopy() {
+    let temp_dir = TempDir::new().unwrap();
+    let storage_config = StorageConfig {
+        home_dir: temp_dir.path().to_path_buf(),
+        packages_dir: temp_dir.path().join("packages"),
+        cache_dir: temp_dir.path().join("cache"),
+        registry_cache_dir: temp_dir.path().join("registry"),
+    };
+    let storage_manager = StorageManager::new(storage_config).unwrap();
+
+    let source = temp_dir.path().join("dev-source");
+    write_source_package(&source, "creator/foo", "1.0.0", "v1");
+    storage_manager.install_as_dev_copy(&source).await.unwrap();
+
+    let dev_dir = temp_dir
+        .path()
+        .join("packages")
+        .join("_dev")
+        .join("foo@1.0.0");
+    // A clear-and-recopy would wipe this; a skip leaves it in place.
+    let sentinel = dev_dir.join("SENTINEL");
+    std::fs::write(&sentinel, "would-be-removed-by-recopy").unwrap();
+
+    // Source unchanged → re-install must short-circuit.
+    storage_manager.install_as_dev_copy(&source).await.unwrap();
+    assert!(
+        sentinel.exists(),
+        "unchanged re-install must skip the clear-and-recopy"
+    );
+
+    // Source changed → re-install must recopy (sentinel gone, content fresh).
+    write_source_package(&source, "creator/foo", "1.0.0", "v2-longer-marker");
+    storage_manager.install_as_dev_copy(&source).await.unwrap();
+    assert!(
+        !sentinel.exists(),
+        "changed source must clear-and-recopy the dev install"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dev_dir.join("MARKER")).unwrap(),
+        "v2-longer-marker"
+    );
+}
+
 /// Regression: `list_installed` is the cache the project's
 /// `ensure_installed`/`ensure_installed_from_url` short-circuits consult.
 /// If a dev install showed up there, a different project resolving the

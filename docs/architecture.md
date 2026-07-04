@@ -476,6 +476,22 @@ anyway — a mapped DSO can't hot-reload into a live session; it needs a
 relaunch, which re-copies and re-runs prepack. Pure-data / pure-Python /
 `universal`-only link installs are unaffected.
 
+Dev copies carry an "unchanged" skip guard so a re-sync of a native package
+doesn't needlessly clear-and-recopy while a Houdini has its DSOs mapped. Each
+copy records a fingerprint of the source workspace (relative path + length +
+mtime of every file) in a `.hpm-devsrc` sidecar. On the next install
+`dev_copy_is_current` recomputes the source fingerprint: an exact match (or, if
+the sidecar is missing/stale, a full content-hash comparison that then refreshes
+it) means the copy already reflects the source, so `install_inner` returns the
+existing install and skips the removal entirely. This is the copy-mode analogue
+of the "already installed" short-circuits the registry/URL specs have in
+`install_one_dep`, and it's what keeps a *concurrently-running* Houdini — one
+that merely holds the mapped DSOs locked — from turning an idempotent re-sync
+into a Windows `os error 5` / `StorageError::PackageInUse` failure. When the
+workspace genuinely changes, the fingerprint differs, the recopy runs, and a
+truly-loaded changed DLL still surfaces `PackageInUse` (correctly — you can't
+overwrite a mapped binary).
+
 Both install replacement (`clear_existing_install`) and orphan cleanup
 (`remove_package`) are symlink-safe: each checks `symlink_metadata` (plus
 `junction::exists` on Windows) before deciding between `remove_dir_all`

@@ -1142,6 +1142,12 @@ async fn install_one_dep(
             })
         }
         DependencySpec::Path { path, link, .. } => {
+            // Unlike the Simple/Registry/Url arms there's no `all_installed`
+            // skip here: a path dep's workspace can change between syncs, so we
+            // always re-enter the installer. The "already installed / unchanged"
+            // guard that avoids the Windows `os error 5` recopy lives one layer
+            // down in `install_inner` (source-fingerprint short-circuit for dev
+            // copies) — it compares content rather than trusting the snapshot.
             let source_path = std::path::Path::new(path);
             let package = if *link {
                 storage.install_as_dev_link(source_path).await?
