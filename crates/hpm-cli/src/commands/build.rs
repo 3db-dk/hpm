@@ -44,6 +44,11 @@ pub struct BuildOptions {
     /// Build profile selecting a `[stage.profile.<name>]` table (default
     /// `"release"`). Always exposed to prepack scripts as `HPM_BUILD_PROFILE`.
     pub profile: String,
+    /// Houdini major versions to target, space-separated (e.g. `"21 22"`).
+    /// Forwarded verbatim to prepack scripts as `HPM_HOUDINI_MAJORS`; hpm does
+    /// not interpret it. `None`/blank leaves the var unset so an inherited
+    /// value (or the package's full declared matrix) applies.
+    pub houdini_majors: Option<String>,
     /// Skip `[stage].prepack`. CI sometimes runs prepack steps separately.
     pub no_prepack: bool,
     /// Wipe the output directory before populating it. Default true; users
@@ -81,11 +86,18 @@ pub async fn build(options: BuildOptions, console: &mut Console) -> Result<()> {
     let stage = manifest.stage.resolved_for_profile(&options.profile);
 
     // Context exposed to prepack scripts (and any [scripts] they invoke):
-    // the selected build profile and, when known, the target platform.
+    // the selected build profile, the target platform when known, and an
+    // optional Houdini-major restriction.
     let mut prepack_env: HashMap<String, String> = HashMap::new();
     prepack_env.insert("HPM_BUILD_PROFILE".to_string(), options.profile.clone());
     if let Some(p) = &platform {
         prepack_env.insert("HPM_PLATFORM".to_string(), p.as_str().to_string());
+    }
+    // Optional Houdini-major restriction, forwarded verbatim. Only set it when
+    // a non-blank value is given: a blank/absent flag must not clobber an
+    // inherited HPM_HOUDINI_MAJORS, and unset means "build the full matrix".
+    if let Some(majors) = normalize_houdini_majors(options.houdini_majors.as_deref()) {
+        prepack_env.insert("HPM_HOUDINI_MAJORS".to_string(), majors);
     }
 
     if !options.no_prepack && !stage.prepack.is_empty() {
@@ -214,6 +226,21 @@ fn resolve_target_platform(
     }
 }
 
+/// Normalize a `--houdini-majors` flag into the `HPM_HOUDINI_MAJORS` value.
+///
+/// Trims surrounding whitespace and returns `None` for an absent or blank
+/// flag, so the caller only overlays the var when there is a real restriction
+/// to forward — a blank flag leaves any inherited `HPM_HOUDINI_MAJORS` intact.
+/// The value is otherwise passed through verbatim; hpm does not parse it.
+fn normalize_houdini_majors(flag: Option<&str>) -> Option<String> {
+    let trimmed = flag?.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 fn build_ignore_rules(dir: &Path) -> Result<Gitignore> {
     let mut builder = GitignoreBuilder::new(dir);
     builder
@@ -231,4 +258,27 @@ fn build_ignore_rules(dir: &Path) -> Result<Gitignore> {
         builder.add(hpmignore);
     }
     Ok(builder.build()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_houdini_majors;
+
+    #[test]
+    fn absent_or_blank_flag_yields_none() {
+        // None so the caller never clobbers an inherited HPM_HOUDINI_MAJORS.
+        assert_eq!(normalize_houdini_majors(None), None);
+        assert_eq!(normalize_houdini_majors(Some("")), None);
+        assert_eq!(normalize_houdini_majors(Some("   ")), None);
+    }
+
+    #[test]
+    fn value_is_trimmed_but_otherwise_verbatim() {
+        assert_eq!(
+            normalize_houdini_majors(Some("  21 22 ")),
+            Some("21 22".to_string())
+        );
+        // Interior spacing is not hpm's to normalize — forwarded as-is.
+        assert_eq!(normalize_houdini_majors(Some("22")), Some("22".to_string()));
+    }
 }

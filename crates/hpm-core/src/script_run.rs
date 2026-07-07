@@ -190,7 +190,8 @@ pub async fn run_script(
 ///
 /// Each `name` must resolve to a `[scripts]` entry; an unknown name is a hard
 /// error before anything spawns. `extra_env` carries the build context
-/// (`HPM_BUILD_PROFILE`, `HPM_PLATFORM`) onto every prepack script.
+/// (`HPM_BUILD_PROFILE`, `HPM_PLATFORM`, and optionally `HPM_HOUDINI_MAJORS`)
+/// onto every prepack script.
 pub async fn run_prepack(
     manifest: &PackageManifest,
     names: &[String],

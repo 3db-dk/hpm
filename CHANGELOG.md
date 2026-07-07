@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`HPM_HOUDINI_MAJORS` is now part of the `hpm build` prepack environment.**
+  A package that builds one native artifact per Houdini major (a compiled USD
+  resolver, say) can restrict the matrix by reading this variable: space-separated
+  major numbers (e.g. `21 22`), unset/empty meaning "build the full declared
+  matrix". `hpm build` sets it from a new `--houdini-majors` flag and forwards
+  the value verbatim without interpreting it. When the flag is omitted an
+  `HPM_HOUDINI_MAJORS` already present in the environment passes through
+  unchanged, so an out-of-process producer (e.g. a desktop launcher that
+  discovers the machine's installed majors) can set it while an explicit
+  `--houdini-majors` still overrides. This promotes the previously ad-hoc,
+  unprefixed `HOUDINI_MAJORS` convention into the first-class `HPM_*` build-env
+  contract alongside `HPM_BUILD_PROFILE` and `HPM_PLATFORM`.
+
 ## [0.26.3] - 2026-07-04
 
 ### Fixed

@@ -529,6 +529,13 @@ pub enum Commands {
         /// `HPM_BUILD_PROFILE`. The target platform is exposed as `HPM_PLATFORM`.
         #[arg(long, default_value = "release")]
         profile: String,
+        /// Houdini major versions this build should target, space-separated
+        /// (e.g. `--houdini-majors "21 22"`). Forwarded verbatim to prepack
+        /// scripts as `HPM_HOUDINI_MAJORS` so a package that builds one native
+        /// artifact per major can restrict the matrix. Unset = no restriction
+        /// (an inherited `HPM_HOUDINI_MAJORS` still passes through).
+        #[arg(long)]
+        houdini_majors: Option<String>,
         /// Skip `[stage].prepack`. Useful in CI when the build steps already
         /// ran out-of-band.
         #[arg(long)]
@@ -854,6 +861,7 @@ async fn run_command(
             output,
             platform,
             profile,
+            houdini_majors,
             no_prepack,
             no_clean,
         } => {
@@ -862,6 +870,7 @@ async fn run_command(
                 output: output.clone(),
                 platform: platform.clone(),
                 profile: profile.clone(),
+                houdini_majors: houdini_majors.clone(),
                 no_prepack: *no_prepack,
                 clean: !*no_clean,
             };

@@ -412,20 +412,36 @@ patterns:
 | `-o, --output <dir>` | Override `[stage].output_dir`. Relative paths resolve against the manifest dir; absolute paths are used verbatim. |
 | `--platform <id>` | Target platform. Defaults to host when `[compat].platforms` is declared. Required when host is not in the declared list. |
 | `--profile <name>` | Build profile. Defaults to `release`. Selects the matching `[stage.profile.<name>]` table (if any) and is exposed to prepack scripts as `HPM_BUILD_PROFILE`. |
+| `--houdini-majors <list>` | Houdini major versions this build targets, space-separated (e.g. `--houdini-majors "21 22"`). Forwarded verbatim to prepack scripts as `HPM_HOUDINI_MAJORS`. Omit to leave it unset. |
 | `--no-prepack` | Skip `[stage].prepack` scripts. Use in CI when build steps already ran out-of-band. |
 | `--no-clean` | Keep existing output-dir contents instead of wiping first. |
 
 **Prepack environment.** In addition to `HPM_PACKAGE_ROOT`, prepack scripts
-(and any `[scripts]` they invoke) see two build-context variables:
+(and any `[scripts]` they invoke) see these build-context variables:
 
 - `HPM_BUILD_PROFILE` — the selected `--profile` (default `release`). A single
   prepack script can branch on it, e.g. `cmake --build --config $HPM_BUILD_PROFILE`,
   instead of maintaining one script per build type.
 - `HPM_PLATFORM` — the resolved target platform (e.g. `macos-aarch64`), set
   whenever the package declares `[compat].platforms`.
+- `HPM_HOUDINI_MAJORS` — the set of Houdini major versions this build should
+  target, space-separated (e.g. `21 22`, or just `22`). A package that builds
+  one native artifact per Houdini major (a compiled USD resolver, say) reads it
+  to restrict the matrix — build every declared major when it is unset or empty,
+  otherwise only the listed ones. hpm forwards the value verbatim and does not
+  interpret it.
 
-These are set only for the `hpm build` prepack path; a standalone
-`hpm run <script>` does not carry build-profile or platform context.
+  `hpm build` sets it from `--houdini-majors`; CI passes the release matrix
+  that way instead of exporting an ad-hoc, unprefixed variable. When the flag
+  is omitted, an `HPM_HOUDINI_MAJORS` already present in the environment passes
+  through unchanged, so an out-of-process producer (e.g. a desktop launcher
+  that discovers the machine's installed majors) can set it and an explicit
+  `--houdini-majors` still overrides. Unset in both = the package's full
+  declared matrix.
+
+`HPM_BUILD_PROFILE`, `HPM_PLATFORM`, and `HPM_HOUDINI_MAJORS` are set only for
+the `hpm build` prepack path; a standalone `hpm run <script>` does not carry
+build-profile, platform, or Houdini-major context.
 
 **Workflow notes — live editing and DSO rebuild**
 
