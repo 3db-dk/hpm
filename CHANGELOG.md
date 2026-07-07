@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-07-07
+
 ### Added
 
 - **`HPM_HOUDINI_MAJORS` is now part of the `hpm build` prepack environment.**
