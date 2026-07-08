@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Concurrent dev launches of the same path dependency no longer fail with
+  `PackageInUse`.** Dev (path-dep) copies are now content-addressed: a copy
+  installs into `_dev/<slug>@<version>/<source-hash>/` and the generated Houdini
+  manifest points `hpath` there, instead of clearing and recopying one shared
+  `_dev/<slug>@<version>/` directory in place. A rebuild writes a new hash
+  directory while a concurrently-running Houdini keeps mapping the one it was
+  launched from, so nothing is ever removed out from under a live process. This
+  eliminates the Windows `ERROR_ACCESS_DENIED` (`os error 5`) hard-failure that a
+  second open session triggered during the rebuild-then-relaunch loop, and makes
+  overlapping dev sessions of the same package safe on all platforms. An
+  unchanged workspace resolves to the existing hash directory and is reused
+  untouched.
+
+### Changed
+
+- **`hpm clean` reclaims superseded dev copies.** With copies now
+  content-addressed, each rebuild leaves a directory behind; cleanup prunes every
+  hash directory except the current source's for a still-referenced install
+  (whole containers are still removed for orphaned installs). Reclamation is
+  best-effort and expects Houdini sessions to be closed — a copy still mapped by a
+  live process is skipped rather than force-removed. The internal `.hpm-devsrc`
+  fingerprint sidecar and content-digest freshness check are removed, superseded
+  by the content-addressed layout.
+
 ## [0.27.0] - 2026-07-07
 
 ### Added

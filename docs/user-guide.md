@@ -591,7 +591,12 @@ are considered:
   `{ path = "..." }` deps, copy or link mode): preserved if any active
   project's path-dep source manifest reports that `(slug, version)`.
   Entries are listed as `_dev/<slug>@<version>` so the source of each is
-  obvious. Link installs are unlinked safely — never followed.
+  obvious. Link installs are unlinked safely — never followed. A copy is
+  content-addressed as `_dev/<slug>@<version>/<source-hash>/`, so each
+  rebuild leaves a new directory behind; `clean` reclaims the superseded
+  ones for a still-used package, keeping only the current build. Run it
+  with your Houdini sessions closed — a copy still in use is skipped rather
+  than removed.
 - **Python venvs** under `~/.hpm/venvs/`: preserved if any kept package
   declares matching `[python_dependencies]`. Removed only when
   `--python-only` or `--comprehensive` is set.

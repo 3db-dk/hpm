@@ -456,8 +456,9 @@ Path deps come in two install styles, selected by the `link` field on
 the manifest's `{ path = "...", link = ? }` spec:
 
 - **Copy** (default, `link = false`): `install_as_dev_copy` snapshot-copies
-  the workspace into `_dev/<slug>@<version>/`. Subsequent working-tree
-  edits don't reach the install until the next `hpm install`.
+  the workspace into a content-addressed `_dev/<slug>@<version>/<source-hash>/`
+  directory (see below). Subsequent working-tree edits don't reach the install
+  until the next `hpm install`.
 - **Link** (`link = true`): `install_as_dev_link` creates a symlink
   (Unix) or NTFS junction (Windows) at `_dev/<slug>@<version>/` pointing
   at the canonicalized workspace. Edits are live; Houdini's HPATH
@@ -476,21 +477,37 @@ anyway — a mapped DSO can't hot-reload into a live session; it needs a
 relaunch, which re-copies and re-runs prepack. Pure-data / pure-Python /
 `universal`-only link installs are unaffected.
 
-Dev copies carry an "unchanged" skip guard so a re-sync of a native package
-doesn't needlessly clear-and-recopy while a Houdini has its DSOs mapped. Each
-copy records a fingerprint of the source workspace (relative path + length +
-mtime of every file) in a `.hpm-devsrc` sidecar. On the next install
-`dev_copy_is_current` recomputes the source fingerprint: an exact match (or, if
-the sidecar is missing/stale, a full content-hash comparison that then refreshes
-it) means the copy already reflects the source, so `install_inner` returns the
-existing install and skips the removal entirely. This is the copy-mode analogue
-of the "already installed" short-circuits the registry/URL specs have in
-`install_one_dep`, and it's what keeps a *concurrently-running* Houdini — one
-that merely holds the mapped DSOs locked — from turning an idempotent re-sync
-into a Windows `os error 5` / `StorageError::PackageInUse` failure. When the
-workspace genuinely changes, the fingerprint differs, the recopy runs, and a
-truly-loaded changed DLL still surfaces `PackageInUse` (correctly — you can't
-overwrite a mapped binary).
+Dev copies are **content-addressed** so a re-sync never clears a directory a
+running Houdini has mapped. `source_hash` fingerprints the workspace (relative
+path + length + mtime of every file, stat-only) and that hash *names* the
+install directory: the copy lands at `_dev/<slug>@<version>/<source-hash>/`, and
+the generated Houdini manifest points `hpath` there. `install_inner` stages the
+copy into a hidden `.stage-<pid>-<n>` directory and commits it with an atomic,
+race-tolerant `rename` (a concurrent install that loses the race drops its stage,
+since the content is identical by construction). If the target hash directory is
+already present and complete, the existing install is reused untouched — the
+copy-mode analogue of the "already installed" short-circuits the registry/URL
+specs have in `install_one_dep`.
+
+The payoff is that a rebuild produces a *new* hash directory rather than
+overwriting the old one: a concurrently-running Houdini keeps mapping the
+directory it was launched from, so `install_inner` never `remove_dir_all`s a live
+copy. Before content addressing, an in-place clear-and-recopy of a package a
+second session still had mapped failed on Windows with `os error 5` /
+`StorageError::PackageInUse`; that failure is now structurally impossible on all
+platforms. At install time only a stale *link* left by a prior `link = true`
+install is cleared (`clear_container_link`, link-safe); the directory of live
+hashes is left in place, and legacy flat content from pre-content-addressing
+installs is pruned best-effort (`prune_legacy_dev_content`).
+
+Superseded hash directories accumulate across a dev-iteration loop and are
+reclaimed by `hpm clean`: `cleanup_unused_dev_installs` removes whole orphan
+containers (tolerant of in-use) and, for still-referenced installs, prunes every
+hash directory except the one matching the current source
+(`prune_stale_dev_hashes`). Reclamation is best-effort and carries the same "run
+when Houdini sessions are closed" expectation as CAS package cleanup — a copy
+still mapped by a live process is skipped (on Windows the OS lock fails the
+removal) rather than force-removed.
 
 Both install replacement (`clear_existing_install`) and orphan cleanup
 (`remove_package`) are symlink-safe: each checks `symlink_metadata` (plus
