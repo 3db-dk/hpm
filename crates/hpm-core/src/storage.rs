@@ -13,7 +13,7 @@ use crate::graph::{DependencyResolver, PackageId};
 use crate::python::cleanup::{CleanupResult, PythonCleanupAnalyzer};
 use hpm_config::{ProjectsConfig, StorageConfig};
 use hpm_package::{IoOp, ManifestLoadError, PackageManifest};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -29,8 +29,9 @@ pub use error::StorageError;
 pub use types::{InstalledPackage, PackageSpec, VersionReq};
 
 use dev_install::{
-    DEV_INSTALL_DIR, InstallStyle, clear_existing_install, create_dev_link, dev_copy_is_current,
-    remove_install_entry, write_dev_fingerprint,
+    DEV_INSTALL_DIR, InstallStyle, clear_container_link, clear_existing_install,
+    commit_staged_copy, create_dev_link, dev_copy_is_complete, dev_copy_target,
+    prune_legacy_dev_content, prune_stale_dev_hashes, remove_install_entry, source_hash, stage_dir,
 };
 #[derive(Debug, Clone)]
 pub struct StorageManager {
@@ -262,65 +263,94 @@ impl StorageManager {
             source_path.display()
         );
 
-        let target_dir = match style {
-            InstallStyle::CasCopy => self.config.package_dir(name, version),
-            InstallStyle::DevCopy | InstallStyle::DevLink => self
-                .config
-                .packages_dir
-                .join(DEV_INSTALL_DIR)
-                .join(format!("{}@{}", name, version)),
-        };
-
-        // Skip the clear-and-recopy when a dev copy already reflects the
-        // source. Native path deps downgrade DevLink to DevCopy (above), so
-        // the copy holds DSOs a concurrently-running Houdini may have mapped;
-        // on Windows the removal would then fail with `os error 5`
-        // (`PackageInUse`) even though the content is unchanged and the user
-        // just has another Houdini open. Recognizing the unchanged copy and
-        // leaving it in place removes that lock contention — the dev-copy
-        // analogue of the "already installed" short-circuits the registry/URL
-        // specs have in `install_one_dep`.
-        if matches!(style, InstallStyle::DevCopy) {
-            match dev_copy_is_current(source_path, &target_dir) {
-                Ok(true) => {
-                    info!(
-                        "dev copy {}@{} already up to date; skipping recopy",
-                        name, version
-                    );
-                    return Ok(InstalledPackage {
-                        version: version.clone(),
-                        manifest,
-                        install_path: target_dir,
-                        is_dev: true,
-                    });
-                }
-                Ok(false) => {}
-                // The freshness check is an optimization, not a correctness
-                // gate: on any IO error reading the trees, fall through to the
-                // normal clear-and-recopy rather than failing the install.
-                Err(e) => warn!(
-                    "dev copy freshness check for {}@{} failed ({}); recopying",
-                    name, version, e
-                ),
-            }
-        }
-
-        // Symlink-safe replacement: if the existing entry is a link (the
-        // common case during repeat sync of a link-installed dep), we must
-        // never `remove_dir_all` it — that would follow a Windows junction
-        // into the user's workspace and recursively delete it.
-        clear_existing_install(&target_dir, name, version)?;
+        // Dev styles share the `_dev/<slug>@<version>` container. A copy lands
+        // at a content-addressed `<container>/<hash>` subdirectory; a link's
+        // entry *is* the container path.
+        let dev_container = self
+            .config
+            .packages_dir
+            .join(DEV_INSTALL_DIR)
+            .join(format!("{}@{}", name, version));
 
         match style {
-            InstallStyle::CasCopy | InstallStyle::DevCopy => {
+            InstallStyle::CasCopy => {
+                let target_dir = self.config.package_dir(name, version);
+                // Symlink-safe replacement: never `remove_dir_all` a junction.
+                clear_existing_install(&target_dir, name, version)?;
                 self.copy_directory(source_path, &target_dir)?;
-                if matches!(style, InstallStyle::DevCopy) {
-                    // Record the source fingerprint so the next dev launch can
-                    // recognize an unchanged workspace and skip this recopy.
-                    write_dev_fingerprint(source_path, &target_dir);
-                }
+                info!("Successfully installed {kind}{}@{}", name, version);
+                Ok(InstalledPackage {
+                    version: version.clone(),
+                    manifest,
+                    install_path: target_dir,
+                    is_dev: false,
+                })
             }
+
+            InstallStyle::DevCopy => {
+                // Content-addressed install. The copy lands at
+                // `<container>/<hash>`, where `hash` fingerprints the source
+                // workspace, and the regenerated Houdini manifest points `hpath`
+                // there. A rebuild yields a *new* hash directory: a
+                // concurrently-running Houdini keeps mapping the directory it was
+                // launched from, so nothing is ever removed out from under a live
+                // process. This is what eliminates the Windows `os error 5`
+                // (`PackageInUse`) failure on the rebuild-then-relaunch loop,
+                // which the old in-place clear-and-recopy could not avoid once a
+                // second session had the copy mapped.
+                let hash = source_hash(source_path)
+                    .map_err(|e| IoOp::wrap("fingerprint dev source", source_path, e))?;
+                let target_dir = dev_copy_target(&dev_container, &hash);
+
+                // Clear only a stale *link* left by a prior DevLink install of
+                // this coordinate; a directory of live hashes is left in place.
+                clear_container_link(&dev_container)?;
+
+                if dev_copy_is_complete(&target_dir) {
+                    // Identical source already installed (an unchanged relaunch,
+                    // or another session materialized this exact build): reuse it
+                    // untouched — the analogue of the registry "already
+                    // installed" short-circuit, now lock-free by construction.
+                    info!(
+                        "dev copy {}@{} ({}) already present; skipping recopy",
+                        name, version, hash
+                    );
+                } else {
+                    std::fs::create_dir_all(&dev_container)
+                        .map_err(|e| IoOp::wrap("create dev container", &dev_container, e))?;
+                    // Copy into a hidden staging dir, then commit with an atomic
+                    // rename so a crash mid-copy never leaves a half-populated
+                    // hash directory that a later launch would trust as complete.
+                    let staged = stage_dir(&dev_container);
+                    if let Err(e) = self.copy_directory(source_path, &staged) {
+                        let _ = std::fs::remove_dir_all(&staged);
+                        return Err(e);
+                    }
+                    commit_staged_copy(&staged, &target_dir)?;
+                    info!("Successfully installed {kind}{}@{}", name, version);
+                }
+
+                // Best-effort: drop legacy flat content left by
+                // pre-content-addressing installs of this coordinate.
+                prune_legacy_dev_content(&dev_container);
+
+                Ok(InstalledPackage {
+                    version: version.clone(),
+                    manifest,
+                    install_path: target_dir,
+                    is_dev: true,
+                })
+            }
+
             InstallStyle::DevLink => {
+                let target_dir = dev_container;
+                // Symlink-safe replacement: if the existing entry is a link (the
+                // common case during repeat sync of a link-installed dep), we
+                // must never `remove_dir_all` it — that would follow a Windows
+                // junction into the user's workspace and recursively delete it. A
+                // prior content-addressed copy directory here is replaced wholesale.
+                clear_existing_install(&target_dir, name, version)?;
+
                 // Junctions need absolute paths; symlinks behave more
                 // predictably when absolute too. Canonicalize so the link
                 // survives changes to the project's working directory.
@@ -332,19 +362,16 @@ impl StorageManager {
                 }
                 create_dev_link(&absolute_source, &target_dir)
                     .map_err(|e| IoOp::wrap("create dev link at", &target_dir, e))?;
+
+                info!("Successfully installed {kind}{}@{}", name, version);
+                Ok(InstalledPackage {
+                    version: version.clone(),
+                    manifest,
+                    install_path: target_dir,
+                    is_dev: true,
+                })
             }
         }
-
-        info!("Successfully installed {kind}{}@{}", name, version);
-
-        let is_dev = matches!(style, InstallStyle::DevCopy | InstallStyle::DevLink);
-
-        Ok(InstalledPackage {
-            version: version.clone(),
-            manifest,
-            install_path: target_dir,
-            is_dev,
-        })
     }
 
     /// Copy a directory recursively
@@ -595,25 +622,23 @@ impl StorageManager {
         Ok(out)
     }
 
-    /// Find dev installs that no known project's path-dependency claims.
+    /// Resolve which `(slug, version)` dev coordinates the discovered projects
+    /// still need, mapped to the source workspace each is installed from.
     ///
     /// Walks every discovered project, parses its `hpm.toml`, and for each
     /// `DependencySpec::Path` resolves the source manifest to extract
-    /// `(slug, version)`. The union of those tuples is the "needed" set; dev
-    /// installs outside it are orphans.
+    /// `(slug, version)` and the source path. Source reads that fail (missing
+    /// path, malformed manifest) log a warning and skip the dep — a broken
+    /// project doesn't bypass cleanup, since re-running `hpm sync` re-creates
+    /// whatever it needs.
     ///
-    /// Source reads that fail (missing path, malformed manifest) log a
-    /// warning and skip the dep. A broken project doesn't bypass cleanup —
-    /// re-running `hpm sync` re-creates whatever it needs.
-    async fn find_orphaned_dev_installs(
+    /// Returns `None` when no HPM-managed projects are discovered at all: with
+    /// nothing to compare against, cleanup is skipped rather than treating every
+    /// dev install as an orphan.
+    async fn resolve_dev_needs(
         &self,
         projects_config: &ProjectsConfig,
-    ) -> Result<Vec<DevInstall>, StorageError> {
-        let dev_installs = self.list_dev_installs()?;
-        if dev_installs.is_empty() {
-            return Ok(Vec::new());
-        }
-
+    ) -> Result<Option<HashMap<(String, String), PathBuf>>, StorageError> {
         let project_discovery = ProjectDiscovery::new(projects_config.clone());
         let projects = project_discovery.find_projects()?;
 
@@ -621,10 +646,10 @@ impl StorageManager {
             warn!(
                 "No HPM-managed projects found - skipping dev cleanup to prevent removing dev installs"
             );
-            return Ok(Vec::new());
+            return Ok(None);
         }
 
-        let mut needed: HashSet<(String, String)> = HashSet::new();
+        let mut needed: HashMap<(String, String), PathBuf> = HashMap::new();
         for project in &projects {
             for (dep_name, spec) in &project.manifest.dependencies {
                 let hpm_package::DependencySpec::Path { path, .. } = spec else {
@@ -636,7 +661,10 @@ impl StorageManager {
                 let manifest_path = source.join("hpm.toml");
                 match PackageManifest::from_path(&manifest_path) {
                     Ok(m) => {
-                        needed.insert((m.package.slug().to_string(), m.package.version.clone()));
+                        needed.insert(
+                            (m.package.slug().to_string(), m.package.version.clone()),
+                            source,
+                        );
                     }
                     Err(e) => {
                         warn!(
@@ -652,51 +680,124 @@ impl StorageManager {
             }
         }
 
+        Ok(Some(needed))
+    }
+
+    /// Find dev installs that no known project's path-dependency claims.
+    /// The union of needed `(slug, version)` tuples is the "needed" set; dev
+    /// installs outside it are orphans.
+    async fn find_orphaned_dev_installs(
+        &self,
+        projects_config: &ProjectsConfig,
+    ) -> Result<Vec<DevInstall>, StorageError> {
+        let dev_installs = self.list_dev_installs()?;
+        if dev_installs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let Some(needed) = self.resolve_dev_needs(projects_config).await? else {
+            return Ok(Vec::new());
+        };
+
         let orphans: Vec<DevInstall> = dev_installs
             .into_iter()
-            .filter(|d| !needed.contains(&(d.slug.clone(), d.version.clone())))
+            .filter(|d| !needed.contains_key(&(d.slug.clone(), d.version.clone())))
             .collect();
         Ok(orphans)
     }
 
-    /// Remove dev installs that no project's path-dependency claims.
+    /// Remove dev installs that no project's path-dependency claims, then
+    /// reclaim superseded content copies of the installs that remain.
     /// Returns identifiers of the entries actually removed.
+    ///
+    /// Reclamation prunes every `<container>/<hash>` directory except the one
+    /// matching the current source, so the accumulated builds from a dev
+    /// iteration loop don't grow `_dev/` without bound. It is best-effort and
+    /// carries the same "run when Houdini sessions are closed" expectation as
+    /// the CAS package cleanup: a copy still mapped by a live process is skipped
+    /// (on Windows the OS lock fails the removal) rather than force-removed.
     pub async fn cleanup_unused_dev_installs(
         &self,
         projects_config: &ProjectsConfig,
     ) -> Result<Vec<String>, StorageError> {
-        let orphans = self.find_orphaned_dev_installs(projects_config).await?;
-        if orphans.is_empty() {
-            info!("No orphaned dev installs found");
+        let dev_installs = self.list_dev_installs()?;
+        if dev_installs.is_empty() {
+            info!("No dev installs found");
             return Ok(Vec::new());
         }
 
-        info!("Found {} orphaned dev installs to remove", orphans.len());
+        let Some(needed) = self.resolve_dev_needs(projects_config).await? else {
+            return Ok(Vec::new());
+        };
+
+        let (orphans, referenced): (Vec<DevInstall>, Vec<DevInstall>) = dev_installs
+            .into_iter()
+            .partition(|d| !needed.contains_key(&(d.slug.clone(), d.version.clone())));
+
         let mut removed = Vec::new();
-        for dev in orphans {
-            // symlink_metadata + remove_install_entry is the same defensive
-            // removal we use in `clear_existing_install` and `remove_package`:
-            // a link install must be unlinked, never followed.
-            let meta = match std::fs::symlink_metadata(&dev.install_path) {
-                Ok(m) => m,
-                Err(e) => {
-                    warn!(
-                        "Failed to stat dev install {} at {}: {}",
-                        dev.identifier(),
-                        dev.install_path.display(),
-                        e
-                    );
-                    continue;
+        if orphans.is_empty() {
+            info!("No orphaned dev installs found");
+        } else {
+            info!("Found {} orphaned dev installs to remove", orphans.len());
+            for dev in orphans {
+                // symlink_metadata + remove_install_entry is the same defensive
+                // removal we use in `clear_existing_install` and `remove_package`:
+                // a link install must be unlinked, never followed. Removing a
+                // whole container reclaims all of its hash copies at once.
+                let meta = match std::fs::symlink_metadata(&dev.install_path) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        warn!(
+                            "Failed to stat dev install {} at {}: {}",
+                            dev.identifier(),
+                            dev.install_path.display(),
+                            e
+                        );
+                        continue;
+                    }
+                };
+                match remove_install_entry(&dev.install_path, &meta, &dev.slug, &dev.version) {
+                    Ok(()) => {
+                        info!("Removed orphaned dev install: {}", dev.identifier());
+                        removed.push(dev.identifier());
+                    }
+                    Err(e) => {
+                        warn!("Failed to remove dev install {}: {}", dev.identifier(), e);
+                    }
                 }
+            }
+        }
+
+        // Reclaim superseded content copies of the installs that are still
+        // referenced by a project. The current hash is computed from the same
+        // source path the install resolves from.
+        for dev in &referenced {
+            let Some(source) = needed.get(&(dev.slug.clone(), dev.version.clone())) else {
+                continue;
             };
-            match remove_install_entry(&dev.install_path, &meta, &dev.slug, &dev.version) {
-                Ok(()) => {
-                    info!("Removed orphaned dev install: {}", dev.identifier());
-                    removed.push(dev.identifier());
+            // Only copy containers (real directories) carry hash subdirs; a link
+            // install has no superseded copies to reclaim.
+            if !dev.install_path.is_dir() {
+                continue;
+            }
+            match source_hash(source) {
+                Ok(hash) => {
+                    let n = prune_stale_dev_hashes(&dev.install_path, &hash);
+                    if n > 0 {
+                        info!(
+                            "Reclaimed {} superseded dev {} for {}",
+                            n,
+                            if n == 1 { "copy" } else { "copies" },
+                            dev.identifier()
+                        );
+                    }
                 }
-                Err(e) => {
-                    warn!("Failed to remove dev install {}: {}", dev.identifier(), e);
-                }
+                Err(e) => warn!(
+                    "Could not fingerprint source for {} at {}; skipping copy reclamation: {}",
+                    dev.identifier(),
+                    source.display(),
+                    e
+                ),
             }
         }
 

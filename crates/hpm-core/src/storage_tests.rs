@@ -399,13 +399,15 @@ async fn install_as_dev_copy_targets_dev_subtree() {
 
     let installed = storage_manager.install_as_dev_copy(&source).await.unwrap();
 
-    let expected = temp_dir
+    // The copy lives at a content-addressed `<container>/<hash>` subdir under
+    // the `_dev` subtree, and `install_path` points at that hash directory.
+    let container = temp_dir
         .path()
         .join("packages")
         .join("_dev")
         .join("foo@1.0.0");
-    assert_eq!(installed.install_path, expected);
-    assert!(expected.join("MARKER").exists());
+    assert_eq!(installed.install_path.parent().unwrap(), container);
+    assert!(installed.install_path.join("MARKER").exists());
 
     // The registry CAS path must remain empty.
     let registry_cas = temp_dir.path().join("packages").join("foo@1.0.0");
@@ -415,14 +417,14 @@ async fn install_as_dev_copy_targets_dev_subtree() {
     );
 }
 
-/// Re-installing an unchanged dev copy must skip the destructive
-/// clear-and-recopy. This is the fix for the Windows `os error 5`
-/// (`PackageInUse`) failure: a concurrently-running Houdini holds the copied
-/// DSOs mapped, so the removal step would fail even though the content hasn't
-/// changed. We prove the skip by planting a sentinel inside the copy that a
-/// clear-and-recopy would delete — an unchanged re-install must leave it.
+/// Content-addressed dev copies make the rebuild-then-relaunch loop safe. An
+/// unchanged re-install reuses the exact same hash directory — no clear, no
+/// recopy, which is the fix for the Windows `os error 5` (`PackageInUse`)
+/// failure a concurrently-running Houdini triggered. A changed source installs
+/// into a *new* hash directory and leaves the old one intact, so a live session
+/// still mapping it is never disturbed.
 #[tokio::test]
-async fn unchanged_dev_copy_reinstall_skips_recopy() {
+async fn dev_copy_reinstall_is_content_addressed() {
     let temp_dir = TempDir::new().unwrap();
     let storage_config = StorageConfig {
         home_dir: temp_dir.path().to_path_buf(),
@@ -434,34 +436,38 @@ async fn unchanged_dev_copy_reinstall_skips_recopy() {
 
     let source = temp_dir.path().join("dev-source");
     write_source_package(&source, "creator/foo", "1.0.0", "v1");
-    storage_manager.install_as_dev_copy(&source).await.unwrap();
+    let first = storage_manager.install_as_dev_copy(&source).await.unwrap();
 
-    let dev_dir = temp_dir
-        .path()
-        .join("packages")
-        .join("_dev")
-        .join("foo@1.0.0");
-    // A clear-and-recopy would wipe this; a skip leaves it in place.
-    let sentinel = dev_dir.join("SENTINEL");
+    // A sentinel inside the copy proves an unchanged re-install doesn't clear it.
+    let sentinel = first.install_path.join("SENTINEL");
     std::fs::write(&sentinel, "would-be-removed-by-recopy").unwrap();
 
-    // Source unchanged → re-install must short-circuit.
-    storage_manager.install_as_dev_copy(&source).await.unwrap();
+    // Source unchanged → the same hash dir is reused; the sentinel survives.
+    let again = storage_manager.install_as_dev_copy(&source).await.unwrap();
+    assert_eq!(
+        again.install_path, first.install_path,
+        "unchanged source reuses the content-addressed dir"
+    );
     assert!(
         sentinel.exists(),
-        "unchanged re-install must skip the clear-and-recopy"
+        "unchanged re-install must not clear the existing copy"
     );
 
-    // Source changed → re-install must recopy (sentinel gone, content fresh).
+    // Source changed → a new hash dir with fresh content; the old dir (and any
+    // files a running Houdini mapped from it) is left untouched.
     write_source_package(&source, "creator/foo", "1.0.0", "v2-longer-marker");
-    storage_manager.install_as_dev_copy(&source).await.unwrap();
-    assert!(
-        !sentinel.exists(),
-        "changed source must clear-and-recopy the dev install"
+    let rebuilt = storage_manager.install_as_dev_copy(&source).await.unwrap();
+    assert_ne!(
+        rebuilt.install_path, first.install_path,
+        "changed source installs into a new content-addressed dir"
     );
     assert_eq!(
-        std::fs::read_to_string(dev_dir.join("MARKER")).unwrap(),
+        std::fs::read_to_string(rebuilt.install_path.join("MARKER")).unwrap(),
         "v2-longer-marker"
+    );
+    assert!(
+        first.install_path.exists() && sentinel.exists(),
+        "the superseded copy is retained, never removed in place"
     );
 }
 
@@ -524,7 +530,7 @@ async fn dev_and_registry_installs_coexist_at_same_coordinate() {
 
     let dev_source = temp_dir.path().join("dev-source");
     write_source_package(&dev_source, "creator/foo", "1.0.0", "dev-content");
-    storage_manager
+    let dev_installed = storage_manager
         .install_as_dev_copy(&dev_source)
         .await
         .unwrap();
@@ -533,12 +539,7 @@ async fn dev_and_registry_installs_coexist_at_same_coordinate() {
     write_source_package(&reg_source, "creator/foo", "1.0.0", "registry-content");
     storage_manager.install_into_cas(&reg_source).await.unwrap();
 
-    let dev_marker = temp_dir
-        .path()
-        .join("packages")
-        .join("_dev")
-        .join("foo@1.0.0")
-        .join("MARKER");
+    let dev_marker = dev_installed.install_path.join("MARKER");
     let reg_marker = temp_dir
         .path()
         .join("packages")
@@ -627,20 +628,22 @@ async fn dev_link_install_downgrades_to_copy_for_native_packages() {
 
     let installed = storage_manager.install_as_dev_link(&source).await.unwrap();
 
-    let expected = temp_dir
+    // Downgraded to a content-addressed copy: `install_path` is a
+    // `<container>/<hash>` subdir under the `_dev` subtree.
+    let container = temp_dir
         .path()
         .join("packages")
         .join("_dev")
         .join("foo@1.0.0");
-    assert_eq!(installed.install_path, expected);
+    assert_eq!(installed.install_path.parent().unwrap(), container);
 
     // Despite the DevLink request, the entry must be an independent copy —
     // a real directory, not a symlink/junction into the workspace.
-    let meta = std::fs::symlink_metadata(&expected).unwrap();
+    let meta = std::fs::symlink_metadata(&installed.install_path).unwrap();
     let is_link = meta.file_type().is_symlink() || {
         #[cfg(windows)]
         {
-            junction::exists(&expected).unwrap_or(false)
+            junction::exists(&installed.install_path).unwrap_or(false)
         }
         #[cfg(not(windows))]
         {
@@ -656,7 +659,7 @@ async fn dev_link_install_downgrades_to_copy_for_native_packages() {
         "downgraded install is still a dev install"
     );
     assert_eq!(
-        std::fs::read_to_string(expected.join("MARKER")).unwrap(),
+        std::fs::read_to_string(installed.install_path.join("MARKER")).unwrap(),
         "native-content"
     );
 }

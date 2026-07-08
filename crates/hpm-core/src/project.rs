@@ -1144,10 +1144,11 @@ async fn install_one_dep(
         DependencySpec::Path { path, link, .. } => {
             // Unlike the Simple/Registry/Url arms there's no `all_installed`
             // skip here: a path dep's workspace can change between syncs, so we
-            // always re-enter the installer. The "already installed / unchanged"
-            // guard that avoids the Windows `os error 5` recopy lives one layer
-            // down in `install_inner` (source-fingerprint short-circuit for dev
-            // copies) — it compares content rather than trusting the snapshot.
+            // always re-enter the installer. `install_inner` content-addresses
+            // dev copies (`_dev/<slug>@<version>/<source-hash>/`), so an
+            // unchanged workspace resolves to the same hash directory and is
+            // reused untouched, while a rebuild lands in a fresh directory —
+            // never removing a copy a running Houdini may have mapped.
             let source_path = std::path::Path::new(path);
             let package = if *link {
                 storage.install_as_dev_link(source_path).await?
