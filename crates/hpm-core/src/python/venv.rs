@@ -277,20 +277,12 @@ impl VenvManager {
         &self,
         resolved_deps: &ResolvedDependencySet,
     ) -> Result<tempfile::NamedTempFile> {
-        use std::io::Write;
-
-        let mut temp_file = tempfile::NamedTempFile::new()
-            .context("Failed to create temporary requirements file")?;
-
-        for (name, version) in &resolved_deps.packages {
-            writeln!(temp_file, "{}=={}", name, version)
-                .context("Failed to write to requirements file")?;
-        }
-
-        temp_file
-            .flush()
-            .context("Failed to flush requirements file")?;
-        Ok(temp_file)
+        let lines: Vec<String> = resolved_deps
+            .packages
+            .iter()
+            .map(|(name, version)| format!("{}=={}", name, version))
+            .collect();
+        super::resolver::write_requirements_file(&lines)
     }
 
     /// Update virtual environment metadata
@@ -440,34 +432,13 @@ impl VenvManager {
         venv_path: &Path,
         python_version: &PythonVersion,
     ) -> PathBuf {
-        #[cfg(target_os = "windows")]
-        {
-            let _ = python_version; // Windows venvs share one Lib/site-packages
-            venv_path.join("Lib").join("site-packages")
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            venv_path
-                .join("lib")
-                .join(format!(
-                    "python{}.{}",
-                    python_version.major, python_version.minor
-                ))
-                .join("site-packages")
-        }
+        super::venv_layout::site_packages_dir(venv_path, python_version)
     }
 }
 
 /// Absolute path to the Python interpreter inside a venv created by `uv venv`.
 fn venv_python_executable(venv_path: &Path) -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        venv_path.join("Scripts").join("python.exe")
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        venv_path.join("bin").join("python")
-    }
+    super::venv_layout::python_executable(venv_path)
 }
 
 /// Verify that at least one resolved package has a `dist-info` directory in

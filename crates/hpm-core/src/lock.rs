@@ -5,9 +5,7 @@
 //! across different machines and time.
 
 use crate::archive_fetcher::cas_install_dir;
-use hpm_package::path_util::relative_path_to_forward_slash;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -434,36 +432,11 @@ impl LockedPythonDependency {
     }
 }
 
-/// Compute SHA256 checksum of a directory's contents
+/// Compute SHA256 checksum of a directory's contents via the shared
+/// [`crate::tree_hash::hash_tree`] — the same digest the fetcher records
+/// at install time.
 fn compute_directory_checksum(dir: &Path) -> Result<String, LockError> {
-    let mut hasher = Sha256::new();
-    let mut entries: Vec<_> = walkdir::WalkDir::new(dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.path().to_path_buf())
-        .collect();
-
-    // Sort for deterministic hashing
-    entries.sort();
-
-    for path in entries {
-        // Include relative path in hash for structure integrity. Normalized
-        // to `/` so the digest is identical for the same tree on any host.
-        let relative_path = relative_path_to_forward_slash(path.strip_prefix(dir).unwrap_or(&path));
-        hasher.update(relative_path.as_bytes());
-
-        // Hash file contents
-        let contents = std::fs::read(&path)
-            .map_err(|e| hpm_package::IoOp::wrap("read package file for checksum", &path, e))?;
-        hasher.update(&contents);
-    }
-
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect())
+    Ok(crate::tree_hash::hash_tree(dir)?)
 }
 
 /// Get current UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` ISO 8601 form.

@@ -62,37 +62,14 @@ pub async fn resolve_dependencies(
         dependencies.dependencies.len()
     );
 
-    // Use default Python version if not specified
     let python_version = dependencies
         .python_version
-        .as_ref()
-        .unwrap_or(&PythonVersion::new(3, 9, None))
-        .clone();
+        .clone()
+        .unwrap_or_else(super::default_python_version);
 
-    // Create temporary requirements file
-    let req_file =
-        create_requirements_file(dependencies).context("Failed to create requirements file")?;
-
-    // `pip compile` needs an interpreter, and on a clean machine UV won't
-    // implicitly download one for this command — install the managed
-    // CPython up front so resolution doesn't fail with "No interpreter
-    // found" when nothing's on PATH.
-    let py_str = python_version.to_string();
-    ensure_managed_python(&py_str).await?;
-
-    // Run UV to resolve dependencies
-    let output = run_uv_command(&[
-        "pip",
-        "compile",
-        req_file.path().to_str().unwrap(),
-        "--python-version",
-        &py_str,
-    ])
-    .await
-    .context("Failed to run UV dependency resolution")?;
-
-    // Parse resolved dependencies
-    let resolved = ResolvedDependencySet::from_pip_compile_output(&output.stdout, python_version);
+    let resolved = compile_requirements(&requirement_lines(dependencies), python_version)
+        .await
+        .context("Failed to run UV dependency resolution")?;
 
     info!("Resolved {} Python packages", resolved.packages.len());
     Ok(resolved)
@@ -112,9 +89,8 @@ pub async fn resolve_dependencies(
 /// on `python/` directories alone.
 ///
 /// The Python version comes from `collected` (the project's Houdini-mapped
-/// CPython); absent that, it falls back to [`crate::python::DEFAULT_SCRIPT_PYTHON`]
-/// rather than the bare resolver default, since package-env scripts target
-/// Houdini-adjacent interpreters.
+/// CPython); absent that, it falls back to
+/// [`crate::python::DEFAULT_PYTHON_VERSION`].
 pub async fn resolve_combined(
     collected: &PythonDependencies,
     extra_requirements: &[String],
@@ -122,7 +98,7 @@ pub async fn resolve_combined(
     let python_version = collected
         .python_version
         .clone()
-        .unwrap_or_else(|| PythonVersion::new(3, 11, None));
+        .unwrap_or_else(super::default_python_version);
 
     let has_manifest_deps = collected.dependencies.values().any(|d| !d.optional);
     let has_extra = extra_requirements.iter().any(|r| !r.trim().is_empty());
@@ -140,9 +116,68 @@ pub async fn resolve_combined(
             .count()
     );
 
-    let req_file = create_combined_requirements_file(collected, extra_requirements)
-        .context("Failed to create combined requirements file")?;
+    let mut lines = requirement_lines(collected);
+    lines.extend(extra_requirements.iter().map(|r| r.to_string()));
 
+    let resolved = compile_requirements(&lines, python_version)
+        .await
+        .context("Failed to resolve package environment dependencies")?;
+    info!(
+        "Resolved {} packages for package environment",
+        resolved.packages.len()
+    );
+    Ok(resolved)
+}
+
+/// Render the non-optional entries of `dependencies` as PEP-508 requirement
+/// lines (`name[extras]spec`).
+fn requirement_lines(dependencies: &PythonDependencies) -> Vec<String> {
+    dependencies
+        .dependencies
+        .iter()
+        .filter(|(_, dep)| !dep.optional)
+        .map(|(name, dep)| {
+            // Handle "*" version (any version) by omitting the version specifier
+            let version_part = if dep.version.spec == "*" || dep.version.spec.is_empty() {
+                ""
+            } else {
+                dep.version.spec.as_str()
+            };
+            if dep.extras.is_empty() {
+                format!("{}{}", name, version_part)
+            } else {
+                format!("{}[{}]{}", name, dep.extras.join(","), version_part)
+            }
+        })
+        .collect()
+}
+
+/// Write requirement lines to a temp requirements file, skipping blank lines.
+pub(super) fn write_requirements_file(lines: &[String]) -> Result<NamedTempFile> {
+    let mut temp_file =
+        NamedTempFile::new().context("Failed to create temporary requirements file")?;
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        writeln!(temp_file, "{}", line).context("Failed to write to requirements file")?;
+    }
+    temp_file
+        .flush()
+        .context("Failed to flush requirements file")?;
+    debug!("Created requirements file: {:?}", temp_file.path());
+    Ok(temp_file)
+}
+
+/// The one `uv pip compile` invocation: write `lines` to a temp requirements
+/// file, make sure the managed CPython exists (on a clean machine UV won't
+/// implicitly download one for this command), compile, and parse the pins.
+pub(super) async fn compile_requirements(
+    lines: &[String],
+    python_version: PythonVersion,
+) -> Result<ResolvedDependencySet> {
+    let req_file = write_requirements_file(lines)?;
     let py_str = python_version.to_string();
     ensure_managed_python(&py_str).await?;
 
@@ -153,68 +188,12 @@ pub async fn resolve_combined(
         "--python-version",
         &py_str,
     ])
-    .await
-    .context("Failed to resolve package environment dependencies")?;
+    .await?;
 
-    let resolved = ResolvedDependencySet::from_pip_compile_output(&output.stdout, python_version);
-    info!(
-        "Resolved {} packages for package environment",
-        resolved.packages.len()
-    );
-    Ok(resolved)
-}
-
-/// Write both manifest dependencies and raw requirement strings into one
-/// requirements file for [`resolve_combined`].
-fn create_combined_requirements_file(
-    dependencies: &PythonDependencies,
-    extra_requirements: &[String],
-) -> Result<NamedTempFile> {
-    let mut temp_file = create_requirements_file(dependencies)?;
-    for req in extra_requirements {
-        let req = req.trim();
-        if req.is_empty() {
-            continue;
-        }
-        writeln!(temp_file, "{}", req)
-            .context("Failed to write extra requirement to requirements file")?;
-    }
-    temp_file
-        .flush()
-        .context("Failed to flush combined requirements file")?;
-    Ok(temp_file)
-}
-
-/// Create a requirements.txt file from Python dependencies
-fn create_requirements_file(dependencies: &PythonDependencies) -> Result<NamedTempFile> {
-    let mut temp_file =
-        NamedTempFile::new().context("Failed to create temporary requirements file")?;
-
-    for (name, dep) in &dependencies.dependencies {
-        if !dep.optional {
-            // Handle "*" version (any version) by omitting the version specifier
-            let version_part = if dep.version.spec == "*" || dep.version.spec.is_empty() {
-                String::new()
-            } else {
-                dep.version.spec.clone()
-            };
-
-            let line = if dep.extras.is_empty() {
-                format!("{}{}\n", name, version_part)
-            } else {
-                format!("{}[{}]{}\n", name, dep.extras.join(","), version_part)
-            };
-            temp_file
-                .write_all(line.as_bytes())
-                .context("Failed to write to requirements file")?;
-        }
-    }
-
-    temp_file
-        .flush()
-        .context("Failed to flush requirements file")?;
-    debug!("Created requirements file: {:?}", temp_file.path());
-    Ok(temp_file)
+    Ok(ResolvedDependencySet::from_pip_compile_output(
+        &output.stdout,
+        python_version,
+    ))
 }
 
 #[cfg(test)]
@@ -257,14 +236,12 @@ certifi==2022.12.7";
     }
 
     #[test]
-    fn combined_requirements_file_includes_manifest_and_extra() {
+    fn combined_requirements_include_manifest_and_extra() {
         let mut deps = PythonDependencies::new();
         deps.add_dependency(PythonDependency::new("numpy", VersionSpec::new(">=1.20")));
-        let tmp = create_combined_requirements_file(
-            &deps,
-            &["PySide6>=6.6".to_string(), "  ".to_string()],
-        )
-        .unwrap();
+        let mut lines = requirement_lines(&deps);
+        lines.extend(["PySide6>=6.6".to_string(), "  ".to_string()]);
+        let tmp = write_requirements_file(&lines).unwrap();
         let content = std::fs::read_to_string(tmp.path()).unwrap();
         assert!(content.contains("numpy>=1.20"), "{content}");
         assert!(content.contains("PySide6>=6.6"), "{content}");
@@ -273,7 +250,7 @@ certifi==2022.12.7";
     }
 
     #[test]
-    fn test_create_requirements_file() {
+    fn requirement_lines_render_extras_and_specs() {
         let mut deps = PythonDependencies::new();
         deps.add_dependency(PythonDependency::new("numpy", VersionSpec::new(">=1.20")));
         deps.add_dependency(
@@ -281,10 +258,23 @@ certifi==2022.12.7";
                 .with_extras(vec!["security".to_string()]),
         );
 
-        let temp_file = create_requirements_file(&deps).unwrap();
+        let temp_file = write_requirements_file(&requirement_lines(&deps)).unwrap();
         let content = std::fs::read_to_string(temp_file.path()).unwrap();
 
         assert!(content.contains("numpy>=1.20"));
         assert!(content.contains("requests[security]>=2.25"));
+    }
+
+    #[test]
+    fn write_requirements_skips_empty_lines() {
+        let reqs = vec![
+            "  ".to_string(),
+            "PySide6>=6.6".to_string(),
+            "".to_string(),
+            "numpy".to_string(),
+        ];
+        let tmp = write_requirements_file(&reqs).unwrap();
+        let content = std::fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(content, "PySide6>=6.6\nnumpy\n");
     }
 }

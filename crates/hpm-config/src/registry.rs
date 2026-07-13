@@ -3,6 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 
+// One registry-backend enum for the whole workspace — the manifest's
+// `[[registries]]` and the config's registry list describe the same concept.
+pub use hpm_package::RegistryType;
+
 /// Configuration for a single package registry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistrySourceConfig {
@@ -13,12 +17,4 @@ pub struct RegistrySourceConfig {
     /// Registry type: "api" or "git"
     #[serde(rename = "type")]
     pub registry_type: RegistryType,
-}
-
-/// The type of registry backend.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum RegistryType {
-    Api,
-    Git,
 }

@@ -165,6 +165,17 @@ pub mod resolver;
 pub mod script_env;
 pub mod types;
 pub mod venv;
+pub mod venv_layout;
+
+/// Default CPython version when nothing supplies one — neither the project's
+/// Houdini mapping nor an explicit script `python` pin. Matches Houdini
+/// 21.x's bundled interpreter, the most common runtime hpm targets.
+pub const DEFAULT_PYTHON_VERSION: &str = "3.11";
+
+/// [`DEFAULT_PYTHON_VERSION`] as a parsed [`PythonVersion`].
+pub(crate) fn default_python_version() -> types::PythonVersion {
+    types::PythonVersion::new(3, 11, None)
+}
 
 /// The root HPM data directory (`~/.hpm`).
 ///
@@ -206,9 +217,8 @@ pub use types::{
 pub use venv::VenvManager;
 
 // Per-script venvs (table-form `[scripts]` entries with python/requirements)
-pub use script_env::{
-    DEFAULT_SCRIPT_PYTHON, ScriptEnvHandle, ensure_script_venv, prepare_script_env, venv_bin_dir,
-};
+pub use script_env::{ScriptEnvHandle, ensure_script_venv, prepare_script_env};
+pub use venv_layout::bin_dir as venv_bin_dir;
 
 use anyhow::Result;
 use std::path::PathBuf;

@@ -33,7 +33,6 @@ use hpm_core::project::manifest_edit;
 use hpm_core::{LockFile, registry::RegistrySet};
 use hpm_package::DependencySpec;
 use std::collections::HashSet;
-use std::io::{self, Write};
 use std::path::PathBuf;
 use tracing::warn;
 
@@ -103,7 +102,10 @@ pub async fn update_packages(config: &Config, options: UpdateOptions) -> Result<
         return Ok(());
     }
 
-    if !options.yes && matches!(options.output, OutputFormat::Human) && !prompt_apply()? {
+    if !options.yes
+        && matches!(options.output, OutputFormat::Human)
+        && !Console::new().confirm("Apply these updates?")?
+    {
         println!("Update cancelled");
         return Ok(());
     }
@@ -186,16 +188,6 @@ async fn collect_candidates(
         }
     }
     Ok(candidates)
-}
-
-fn prompt_apply() -> Result<bool> {
-    println!();
-    print!("Apply these updates? [y/N]: ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let response = input.trim().to_lowercase();
-    Ok(response == "y" || response == "yes")
 }
 
 fn print_candidates(candidates: &[Candidate], output: OutputFormat) {

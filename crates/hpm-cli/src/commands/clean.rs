@@ -2,7 +2,6 @@ use anyhow::{Result, bail};
 use clap::Args;
 use hpm_config::Config;
 use hpm_core::StorageManager;
-use std::io::{self, Write};
 use tracing::info;
 
 #[derive(Args, Debug)]
@@ -74,17 +73,6 @@ pub async fn execute_clean(config: &Config, args: &CleanArgs) -> Result<()> {
     }
 }
 
-/// Prompt the user with `[y/N]: <label>`. Returns true on `y`/`yes`.
-fn prompt_yes_no(label: &str) -> Result<bool> {
-    println!();
-    print!("{label} [y/N]: ");
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let response = input.trim().to_lowercase();
-    Ok(response == "y" || response == "yes")
-}
-
 async fn cleanup_packages(storage: &StorageManager, config: &Config, mode: Mode) -> Result<()> {
     let would_remove_cas = storage.cleanup_unused_dry_run(&config.projects).await?;
     let would_remove_dev = storage
@@ -115,7 +103,9 @@ async fn cleanup_packages(storage: &StorageManager, config: &Config, mode: Mode)
             println!("Run 'hpm clean --yes' to remove without confirmation");
             Ok(())
         }
-        Mode::Interactive if !prompt_yes_no("Remove these packages?")? => {
+        Mode::Interactive
+            if !crate::console::Console::new().confirm("Remove these packages?")? =>
+        {
             println!("Cleanup cancelled");
             Ok(())
         }
@@ -173,7 +163,9 @@ async fn cleanup_python(storage: &StorageManager, mode: Mode) -> Result<()> {
             println!("Run 'hpm clean --python-only --yes' to remove without confirmation");
             Ok(())
         }
-        Mode::Interactive if !prompt_yes_no("Remove these virtual environments?")? => {
+        Mode::Interactive
+            if !crate::console::Console::new().confirm("Remove these virtual environments?")? =>
+        {
             println!("Cleanup cancelled");
             Ok(())
         }
@@ -240,7 +232,7 @@ async fn cleanup_comprehensive(
             println!("Run 'hpm clean --comprehensive --yes' to remove without confirmation");
             Ok(())
         }
-        Mode::Interactive if !prompt_yes_no("Remove these items?")? => {
+        Mode::Interactive if !crate::console::Console::new().confirm("Remove these items?")? => {
             println!("Cleanup cancelled");
             Ok(())
         }

@@ -224,14 +224,17 @@ pub mod asset_index;
 pub mod discovery;
 pub mod fetch_manifest;
 pub mod graph;
+pub(crate) mod http;
 pub mod lock;
 pub mod package_source;
 pub mod packer;
+pub(crate) mod process_util;
 pub mod project;
 pub mod python;
 pub mod registry;
 pub mod script_run;
 pub mod storage;
+pub mod tree_hash;
 
 // ==========================================================================
 // Stable library API

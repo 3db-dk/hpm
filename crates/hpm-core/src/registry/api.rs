@@ -53,9 +53,7 @@ impl ApiRegistry {
         base_url: impl Into<String>,
         token: Option<&str>,
     ) -> Result<Self, RegistryError> {
-        let mut builder = reqwest::Client::builder()
-            .user_agent("hpm/0.1.0")
-            .timeout(std::time::Duration::from_secs(30));
+        let mut builder = crate::http::client_builder(std::time::Duration::from_secs(30));
 
         if let Some(token) = token {
             let mut value = HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|e| {

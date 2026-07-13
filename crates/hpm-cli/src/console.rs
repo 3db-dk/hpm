@@ -69,6 +69,19 @@ impl Console {
         }
     }
 
+    /// Prompt the user with `<label> [y/N]: `. Returns true on `y`/`yes`.
+    /// The single interactive-confirmation path for all commands.
+    pub fn confirm(&mut self, label: impl Display) -> std::io::Result<bool> {
+        use std::io::{BufRead, Write};
+        println!();
+        print!("{label} [y/N]: ");
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().lock().read_line(&mut input)?;
+        let response = input.trim().to_lowercase();
+        Ok(response == "y" || response == "yes")
+    }
+
     fn should_show(&self, level: Level) -> bool {
         match (self.verbosity, level) {
             (Verbosity::Quiet, Level::Warning | Level::Success) => true,

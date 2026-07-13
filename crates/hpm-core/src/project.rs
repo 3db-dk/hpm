@@ -304,10 +304,7 @@ impl ProjectManager {
                             .map(|r| hpm_config::RegistrySourceConfig {
                                 name: r.name.clone(),
                                 url: r.url.clone(),
-                                registry_type: match r.registry_type {
-                                    hpm_package::RegistryType::Api => hpm_config::RegistryType::Api,
-                                    hpm_package::RegistryType::Git => hpm_config::RegistryType::Git,
-                                },
+                                registry_type: r.registry_type.clone(),
                             })
                             .collect()
                     } else {

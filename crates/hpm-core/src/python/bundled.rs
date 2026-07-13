@@ -116,7 +116,7 @@ async fn download_uv(target_path: &Path) -> Result<()> {
         fs::create_dir_all(parent).await?;
     }
 
-    let client = reqwest::Client::builder().user_agent("hpm").build()?;
+    let client = crate::http::client_builder(std::time::Duration::from_secs(300)).build()?;
     let response = client
         .get(&download_url)
         .send()
@@ -307,8 +307,7 @@ pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output> {
 
     // Suppress the brief console window flash that UV (a CLI tool) would
     // otherwise show when spawned from a GUI parent on Windows.
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    crate::process_util::hide_console_tokio(&mut cmd);
 
     let output = cmd.output().await?;
 

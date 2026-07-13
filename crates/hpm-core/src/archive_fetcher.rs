@@ -5,16 +5,12 @@
 
 use crate::package_source::{PackageSource, PackageSourceError};
 use flate2::read::GzDecoder;
-use hpm_package::path_util::relative_path_to_forward_slash;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, info, warn};
-
-/// Name of the checksum cache file stored in package directories.
-const CHECKSUM_CACHE_FILE: &str = ".hpm-checksum";
 
 /// Compute the on-disk directory where `ArchiveFetcher` extracts a fetched
 /// package keyed by `(name, version)`. Slashes in `name` (e.g. scoped
@@ -320,48 +316,14 @@ fn compute_file_sha256_sync(path: &Path) -> Result<String, FetchError> {
     Ok(result.iter().map(|b| format!("{:02x}", b)).collect())
 }
 
-/// Compute a SHA-256 checksum of a directory's contents (blocking operation).
+/// Compute a SHA-256 checksum of a directory's contents (blocking operation)
+/// via the shared [`crate::tree_hash::hash_tree`].
 ///
 /// Always computed from the actual tree — never cached on disk. A stored
 /// checksum can go stale without anything invalidating it, silently
 /// misreporting the package hash that feeds lockfile verification.
 fn compute_directory_checksum_sync(dir: &Path) -> Result<String, FetchError> {
-    let mut hasher = Sha256::new();
-
-    // Walk directory in sorted order for deterministic checksums
-    let mut entries: Vec<_> = walkdir::WalkDir::new(dir)
-        .sort_by_file_name()
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        // Skip stray `.hpm-checksum` cache files written by earlier hpm
-        // versions so they can't perturb the digest.
-        .filter(|e| e.file_name() != CHECKSUM_CACHE_FILE)
-        .collect();
-
-    entries.sort_by(|a, b| a.path().cmp(b.path()));
-
-    for entry in entries {
-        // Include relative path in hash. Normalize to `/` so the digest
-        // is identical for the same tree on Unix and Windows (otherwise
-        // the cache key diverges by host OS for no good reason).
-        let relative_path = entry.path().strip_prefix(dir).unwrap_or(entry.path());
-        hasher.update(relative_path_to_forward_slash(relative_path).as_bytes());
-
-        // Include file contents in hash
-        let mut file = std::fs::File::open(entry.path())?;
-        let mut buffer = [0u8; 8192];
-        loop {
-            let bytes_read = file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..bytes_read]);
-        }
-    }
-
-    let result = hasher.finalize();
-    Ok(result.iter().map(|b| format!("{:02x}", b)).collect())
+    crate::tree_hash::hash_tree(dir).map_err(|e| FetchError::IoError(std::io::Error::other(e)))
 }
 
 /// Errors that can occur during archive fetching.
@@ -434,10 +396,9 @@ impl ArchiveFetcher {
         std::fs::create_dir_all(&cache_dir).map_err(FetchError::CacheDirectoryError)?;
         std::fs::create_dir_all(&packages_dir).map_err(FetchError::CacheDirectoryError)?;
 
-        let http_client = reqwest::Client::builder()
-            .user_agent("hpm/0.1.0")
-            .timeout(std::time::Duration::from_secs(300)) // 5 min timeout for large packages
-            .build()?;
+        // 5 min timeout for large packages
+        let http_client =
+            crate::http::client_builder(std::time::Duration::from_secs(300)).build()?;
 
         Ok(Self {
             http_client,

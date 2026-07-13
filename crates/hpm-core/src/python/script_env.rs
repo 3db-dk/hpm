@@ -19,23 +19,14 @@
 //! Houdini 21.x's bundled interpreter, which is the most common case for
 //! the out-of-process hooks (`tt_setup`, etc.) this feature exists to serve.
 
-use super::bundled::{ensure_managed_python, run_uv_command};
 use super::types::{PythonVersion, ResolvedDependencySet};
 use super::venv::VenvManager;
 use anyhow::{Context, Result};
 use hpm_package::ScriptEntry;
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use tempfile::NamedTempFile;
-use tracing::{debug, info};
-
-/// Default Python version when a script entry omits `python`.
-///
-/// Picked to match Houdini 21.x's bundled interpreter — the typical context
-/// for out-of-process hooks like `tt_setup` that this feature targets.
-pub const DEFAULT_SCRIPT_PYTHON: &str = "3.11";
+use tracing::info;
 
 /// Ensure a venv exists with the given Python version and inline requirements,
 /// and return its root path.
@@ -51,7 +42,7 @@ pub async fn ensure_script_venv(
     python_version: Option<&str>,
     requirements: &[String],
 ) -> Result<PathBuf> {
-    let py_str = python_version.unwrap_or(DEFAULT_SCRIPT_PYTHON);
+    let py_str = python_version.unwrap_or(super::DEFAULT_PYTHON_VERSION);
     let parsed = PythonVersion::from_str(py_str)
         .with_context(|| format!("Invalid python version '{}' in script entry", py_str))?;
 
@@ -64,25 +55,13 @@ pub async fn ensure_script_venv(
             requirements.len(),
             py_str
         );
-        resolve_raw_requirements(py_str, requirements, parsed).await?
+        super::resolver::compile_requirements(requirements, parsed)
+            .await
+            .context("Failed to resolve script requirements")?
     };
 
     let manager = VenvManager::new()?;
     manager.ensure_virtual_environment(&resolved).await
-}
-
-/// Path to the directory inside a venv that holds executables (`bin` on Unix,
-/// `Scripts` on Windows). Callers prepend this to `PATH` before spawning the
-/// script so `python` resolves to the venv interpreter.
-pub fn venv_bin_dir(venv_path: &Path) -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        venv_path.join("Scripts")
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        venv_path.join("bin")
-    }
 }
 
 /// Env-var mutations a caller should apply to a script subprocess before
@@ -180,7 +159,7 @@ pub async fn prepare_script_env(entry: &ScriptEntry) -> Result<ScriptEnvHandle> 
     let venv_path = ensure_script_venv(entry.python(), entry.requirements())
         .await
         .context("Failed to prepare script venv")?;
-    let bin_dir = venv_bin_dir(&venv_path);
+    let bin_dir = super::venv_layout::bin_dir(&venv_path);
     let mut env = HashMap::new();
     env.insert(
         "VIRTUAL_ENV".to_string(),
@@ -192,80 +171,9 @@ pub async fn prepare_script_env(entry: &ScriptEntry) -> Result<ScriptEnvHandle> 
     })
 }
 
-/// Resolve raw requirement strings to exact pinned versions via `uv pip compile`.
-///
-/// Mirrors [`super::resolver::resolve_dependencies`] but skips the
-/// `PythonDependencies` shape, which has no syntactic place for arbitrary
-/// requirement-string forms (extras, environment markers, ranges).
-async fn resolve_raw_requirements(
-    python_version_str: &str,
-    requirements: &[String],
-    python_version: PythonVersion,
-) -> Result<ResolvedDependencySet> {
-    let req_file = write_requirements_file(requirements)?;
-
-    // Match the resolver path: install the managed CPython up front so a
-    // clean machine doesn't trip "No interpreter found" on first run.
-    ensure_managed_python(python_version_str).await?;
-
-    let output = run_uv_command(&[
-        "pip",
-        "compile",
-        req_file.path().to_str().unwrap(),
-        "--python-version",
-        python_version_str,
-    ])
-    .await
-    .context("Failed to resolve script requirements")?;
-
-    let resolved = ResolvedDependencySet::from_pip_compile_output(&output.stdout, python_version);
-
-    debug!(
-        "Resolved {} packages for script venv",
-        resolved.packages.len()
-    );
-    Ok(resolved)
-}
-
-fn write_requirements_file(requirements: &[String]) -> Result<NamedTempFile> {
-    let mut tmp = NamedTempFile::new().context("Failed to create temp requirements file")?;
-    for req in requirements {
-        let req = req.trim();
-        if req.is_empty() {
-            continue;
-        }
-        writeln!(tmp, "{}", req).context("Failed to write requirements file")?;
-    }
-    tmp.flush().context("Failed to flush requirements file")?;
-    Ok(tmp)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn write_requirements_skips_empty_lines() {
-        let reqs = vec![
-            "  ".to_string(),
-            "PySide6>=6.6".to_string(),
-            "".to_string(),
-            "numpy".to_string(),
-        ];
-        let tmp = write_requirements_file(&reqs).unwrap();
-        let content = std::fs::read_to_string(tmp.path()).unwrap();
-        assert_eq!(content, "PySide6>=6.6\nnumpy\n");
-    }
-
-    #[test]
-    fn venv_bin_dir_layout_matches_uv() {
-        let p = Path::new("/tmp/venv");
-        let bin = venv_bin_dir(p);
-        #[cfg(target_os = "windows")]
-        assert!(bin.ends_with("Scripts"));
-        #[cfg(not(target_os = "windows"))]
-        assert!(bin.ends_with("bin"));
-    }
 
     #[test]
     fn apply_to_sets_env_and_prepends_path_when_present() {

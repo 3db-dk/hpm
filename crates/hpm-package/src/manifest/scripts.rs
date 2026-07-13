@@ -79,11 +79,9 @@ pub struct ScriptEnv {
     pub package_env: bool,
 }
 
-/// serde `skip_serializing_if` helper — omit `package-env = false` from
-/// round-tripped manifests so an unset flag stays unwritten.
-fn is_false(b: &bool) -> bool {
-    !*b
-}
+// serde `skip_serializing_if` helper — omit `package-env = false` from
+// round-tripped manifests so an unset flag stays unwritten.
+use super::env::is_false;
 
 impl ScriptEntry {
     /// Resolve the command for the given host OS.

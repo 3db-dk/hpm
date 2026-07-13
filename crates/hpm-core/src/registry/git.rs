@@ -115,11 +115,7 @@ impl GitRegistry {
                 let mut cmd = std::process::Command::new("git");
                 cmd.args(["pull", "--ff-only", "-q"])
                     .current_dir(&cache_dir);
-                #[cfg(target_os = "windows")]
-                {
-                    use std::os::windows::process::CommandExt;
-                    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-                }
+                crate::process_util::hide_console_std(&mut cmd);
                 let output = cmd.output().map_err(|e| {
                     RegistryError::GitError(format!("Failed to run git pull: {}", e))
                 })?;
@@ -147,11 +143,7 @@ impl GitRegistry {
                 let mut cmd = std::process::Command::new("git");
                 cmd.args(["clone", "--depth=1", "-q", &remote_url])
                     .arg(&cache_dir);
-                #[cfg(target_os = "windows")]
-                {
-                    use std::os::windows::process::CommandExt;
-                    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-                }
+                crate::process_util::hide_console_std(&mut cmd);
                 let output = cmd.output().map_err(|e| {
                     RegistryError::GitError(format!("Failed to run git clone: {}", e))
                 })?;

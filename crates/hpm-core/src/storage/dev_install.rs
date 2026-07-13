@@ -256,11 +256,18 @@ pub(super) fn clear_container_link(container: &Path) -> Result<(), StorageError>
 pub(super) fn source_hash(source: &Path) -> std::io::Result<String> {
     let mut hasher = Sha256::new();
 
-    let mut entries: Vec<_> = walkdir::WalkDir::new(source)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
+    // Walk errors propagate: a digest over a silently truncated tree would
+    // name a content-addressed directory that doesn't match the workspace.
+    let mut entries = Vec::new();
+    for entry in walkdir::WalkDir::new(source) {
+        let entry = entry.map_err(|e| {
+            e.into_io_error()
+                .unwrap_or_else(|| std::io::Error::other("walk error"))
+        })?;
+        if entry.file_type().is_file() {
+            entries.push(entry);
+        }
+    }
     // Sort for a deterministic digest independent of readdir order.
     entries.sort_by(|a, b| a.path().cmp(b.path()));
 
