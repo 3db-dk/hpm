@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 ///   merges the `debug` profile onto the base config. See
 ///   [`StageConfig::resolved_for_profile`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StageConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<String>,
@@ -130,6 +131,7 @@ impl PlatformStaging {
 
 /// Place rules for a single platform.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StagePlatformRules {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub place: Vec<PlaceRule>,
@@ -140,6 +142,7 @@ pub struct StagePlatformRules {
 /// their original basename; otherwise `to` is the literal archive path
 /// (use when relocating a single file).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlaceRule {
     pub from: String,
     pub to: String,
@@ -165,6 +168,7 @@ impl ProfileStaging {
 /// [`StageConfig::resolved_for_profile`]. All fields are optional; an absent
 /// field leaves the base value untouched.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StageProfileRules {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prepack: Vec<String>,

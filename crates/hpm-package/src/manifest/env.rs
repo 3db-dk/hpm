@@ -53,6 +53,7 @@ impl EnvMethod {
 /// time) or on `houdini` / `os` / `python` (compiled into Houdini's
 /// expression form per <https://www.sidefx.com/docs/houdini/ref/plugins.html>).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ManifestEnvEntry {
     pub method: EnvMethod,
     #[serde(default, skip_serializing_if = "Option::is_none")]

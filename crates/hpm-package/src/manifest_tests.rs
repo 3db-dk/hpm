@@ -34,6 +34,38 @@ fn strict_rejects_empty_name_and_version() {
 }
 
 #[test]
+fn rejects_unknown_top_level_section() {
+    // A misspelled or stale section (e.g. the pre-0.16 [houdini]) must fail
+    // the parse instead of being silently dropped.
+    let toml = r#"
+[package]
+path = "studio/test"
+name = "Test"
+version = "1.0.0"
+
+[houdini]
+version = "20.5"
+"#;
+    let err = parse_manifest_str(toml).unwrap_err();
+    assert!(
+        err.to_string().contains("houdini"),
+        "error should name the unknown section: {err}"
+    );
+}
+
+#[test]
+fn rejects_unknown_field_in_section() {
+    let toml = r#"
+[package]
+path = "studio/test"
+name = "Test"
+version = "1.0.0"
+nam = "typo"
+"#;
+    assert!(parse_manifest_str(toml).is_err());
+}
+
+#[test]
 fn parses_operators_array() {
     let toml = r#"
 [package]

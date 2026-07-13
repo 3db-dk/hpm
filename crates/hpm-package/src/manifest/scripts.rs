@@ -40,6 +40,7 @@ pub enum ScriptEntry {
 /// at `hpm run` time); other axes on a script variant are rejected at
 /// manifest validation time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScriptEnv {
     pub cmd: EnvValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]

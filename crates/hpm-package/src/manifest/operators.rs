@@ -62,6 +62,7 @@ pub enum SourceResolution<'a> {
 /// `kind`, `type_name`, and `category` are required; the rest are optional
 /// descriptive fields that enrich the emitted index.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct OperatorDecl {
     /// HDA vs DSO — sets the emitted asset's kind.
     pub kind: OperatorKind,

@@ -57,6 +57,7 @@ use env::validate_env_table;
 // No `Default` impl: a manifest without a `package.path` is meaningless.
 // Construct via `PackageManifest::new` or full struct literal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageManifest {
     pub package: PackageInfo,
     #[serde(default, skip_serializing_if = "CompatConfig::is_empty")]

@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 /// package's Houdini compatibility unconstrained — the generated package
 /// manifest emits no `enable` clause.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompatConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub houdini: Option<HoudiniRange>,
