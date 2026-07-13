@@ -15,7 +15,9 @@
 //! - [`registry`] — registry source list
 //! - [`signing`] — package-signing key path
 //! - [`builder`] — programmatic [`Config`] construction
-//! - [`error`] — [`ConfigError`]
+//!
+//! Errors are the shared [`hpm_package::TomlFileError`] — configuration is
+//! just a TOML file on disk, with no failure modes of its own.
 //!
 //! ## Basic usage
 //!
@@ -38,7 +40,6 @@
 //! ```
 
 pub mod builder;
-pub mod error;
 pub mod install;
 pub mod overlay;
 pub mod project_paths;
@@ -48,7 +49,6 @@ pub mod signing;
 pub mod storage;
 
 pub use builder::ConfigBuilder;
-pub use error::ConfigError;
 pub use install::InstallConfig;
 pub use overlay::ConfigOverlay;
 pub use project_paths::ProjectPaths;
@@ -57,6 +57,7 @@ pub use registry::{RegistrySourceConfig, RegistryType};
 pub use signing::SigningConfig;
 pub use storage::StorageConfig;
 
+use hpm_package::TomlFileError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
@@ -95,7 +96,7 @@ impl Config {
     /// Config files are parsed as [`ConfigOverlay`]s, so each layer overrides
     /// exactly the values it sets. If no config files exist, returns the
     /// default configuration.
-    pub fn load() -> Result<Self, ConfigError> {
+    pub fn load() -> Result<Self, TomlFileError> {
         let mut config = Self::default();
 
         // Load user config from ~/.hpm/config.toml.
@@ -138,7 +139,7 @@ impl Config {
     }
 
     /// Load the configuration from a single file, resolved over the defaults.
-    pub fn load_from_path(path: &Path) -> Result<Self, ConfigError> {
+    pub fn load_from_path(path: &Path) -> Result<Self, TomlFileError> {
         let overlay = ConfigOverlay::load(path)?;
         let mut config = Self::default();
         overlay.apply_to(&mut config);
@@ -168,7 +169,7 @@ impl Config {
     }
 
     /// Save the configuration to a file.
-    pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
+    pub fn save(&self, path: &Path) -> Result<(), TomlFileError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 hpm_package::IoOp::wrap("create config parent directory", parent, e)
@@ -181,7 +182,7 @@ impl Config {
     }
 
     /// Save the configuration to the user's config file (~/.hpm/config.toml).
-    pub fn save_user_config(&self) -> Result<(), ConfigError> {
+    pub fn save_user_config(&self) -> Result<(), TomlFileError> {
         let path = Self::default_home_dir().join("config.toml");
         self.save(&path)
     }
@@ -339,14 +340,14 @@ ignore_patterns = ["backup", ".cache", "temp"]
 
         let result = Config::load_from_path(&config_path);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigError::Parse { .. }));
+        assert!(matches!(result.unwrap_err(), TomlFileError::Parse { .. }));
     }
 
     #[test]
     fn config_load_nonexistent_file() {
         let result = Config::load_from_path(Path::new("/nonexistent/config.toml"));
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigError::Io(_)));
+        assert!(matches!(result.unwrap_err(), TomlFileError::Io(_)));
     }
 
     #[test]
@@ -450,7 +451,7 @@ max_search_depth = "not_a_number"
 
         let result = Config::load_from_path(&config_path);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigError::Parse { .. }));
+        assert!(matches!(result.unwrap_err(), TomlFileError::Parse { .. }));
     }
 
     #[test]

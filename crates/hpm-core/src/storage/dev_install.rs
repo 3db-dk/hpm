@@ -319,10 +319,10 @@ pub(super) fn dev_copy_is_complete(target: &Path) -> bool {
 static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// A unique, hidden staging directory under `container` for an in-progress
-/// copy. Hidden (`.`-prefixed, not a hash name) so [`prune_legacy_dev_content`]
-/// skips it and a concurrent install of the same package never disturbs it;
-/// unique via pid + a process-local counter so two installs racing the same
-/// hash each stage into their own directory.
+/// copy. Hidden (`.`-prefixed, not a hash name) so GC and concurrent installs
+/// of the same package never disturb it; unique via pid + a process-local
+/// counter so two installs racing the same hash each stage into their own
+/// directory.
 pub(super) fn stage_dir(container: &Path) -> PathBuf {
     let seq = STAGE_SEQ.fetch_add(1, Ordering::Relaxed);
     container.join(format!(".stage-{}-{}", std::process::id(), seq))
@@ -343,33 +343,6 @@ pub(super) fn commit_staged_copy(staged: &Path, target: &Path) -> Result<(), Sto
             Ok(())
         }
         Err(e) => Err(IoOp::wrap("commit dev copy to", target, e).into()),
-    }
-}
-
-/// Best-effort removal of legacy, non-content-addressed entries directly under
-/// a dev container: the flat `hpm.toml`/`dso/`/`python/` tree written by hpm
-/// versions before content addressing, plus any stray non-hash files. Content
-/// hash directories are preserved (a live Houdini may have one mapped; they are
-/// reclaimed only by GC), and hidden staging directories are skipped so a
-/// concurrent install is never disturbed. Anything that can't be removed (still
-/// in use on Windows) is simply left for a later pass.
-pub(super) fn prune_legacy_dev_content(container: &Path) {
-    let entries = match std::fs::read_dir(container) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with('.') || is_hash_dir_name(&name) {
-            continue;
-        }
-        let path = entry.path();
-        let _ = if path.is_dir() {
-            std::fs::remove_dir_all(&path)
-        } else {
-            std::fs::remove_file(&path)
-        };
     }
 }
 
@@ -519,29 +492,6 @@ mod tests {
             "name = 'winner'",
             "the winner's content is preserved",
         );
-    }
-
-    /// Migration: legacy flat content is pruned, hash dirs and hidden staging
-    /// dirs are preserved.
-    #[test]
-    fn prune_legacy_dev_content_removes_only_flat_entries() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let container = tmp.path().join("slug@1.0.0");
-        // Legacy flat layout: a manifest and a dso/ tree directly in the container.
-        write(&container.join("hpm.toml"), "name = 'x'");
-        write(&container.join("dso/plugin.so"), "BINARY");
-        // A current content copy and an in-progress stage that must survive.
-        let hash = "c".repeat(64);
-        write(&container.join(&hash).join("hpm.toml"), "name = 'x'");
-        let staged = container.join(".stage-123-0");
-        write(&staged.join("hpm.toml"), "name = 'x'");
-
-        prune_legacy_dev_content(&container);
-
-        assert!(!container.join("hpm.toml").exists(), "flat manifest pruned");
-        assert!(!container.join("dso").exists(), "flat dso tree pruned");
-        assert!(container.join(&hash).exists(), "hash dir preserved");
-        assert!(staged.exists(), "staging dir preserved");
     }
 
     /// GC reclaims superseded hashes, keeping the current one.

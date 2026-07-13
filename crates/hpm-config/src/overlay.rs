@@ -7,8 +7,8 @@
 //! default value", so overlays are the only shape files are parsed as.
 
 use crate::Config;
-use crate::error::ConfigError;
 use crate::registry::RegistrySourceConfig;
+use hpm_package::TomlFileError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -66,22 +66,22 @@ pub struct SigningOverlay {
 
 impl ConfigOverlay {
     /// Load an overlay from a TOML file.
-    pub fn load(path: &Path) -> Result<Self, ConfigError> {
+    pub fn load(path: &Path) -> Result<Self, TomlFileError> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| hpm_package::IoOp::wrap("read TOML file", path, e))?;
         Self::parse(&content, path)
     }
 
     /// Parse an overlay from a TOML string.
-    pub fn parse(content: &str, path: &Path) -> Result<Self, ConfigError> {
-        toml::from_str(content).map_err(|e| ConfigError::Parse {
+    pub fn parse(content: &str, path: &Path) -> Result<Self, TomlFileError> {
+        toml::from_str(content).map_err(|e| TomlFileError::Parse {
             path: path.to_path_buf(),
             source: Box::new(e),
         })
     }
 
     /// Save the overlay to a TOML file, writing only the fields that are set.
-    pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
+    pub fn save(&self, path: &Path) -> Result<(), TomlFileError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 hpm_package::IoOp::wrap("create config parent directory", parent, e)

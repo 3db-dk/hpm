@@ -234,27 +234,18 @@ fn encode_package_path(name: &str) -> String {
     }
 }
 
-/// Map any platform identifier a registry might emit to hpm's canonical
-/// [`hpm_package::Platform`]. Accepts the canonical arch-suffixed long form
-/// (`"windows-x86_64"`, `"macos-aarch64"`, …) and the short OS form
-/// (`"WINDOWS"`/`"linux"`/etc., case-insensitive) for back-compat with
-/// pre-arch-suffix data. Short OS tags assume x86_64 — the dominant arch at
-/// the time those entries were written. Returns `None` for anything else,
-/// including the universal sentinel handled separately by [`is_universal`].
+/// Map a registry platform identifier to hpm's canonical
+/// [`hpm_package::Platform`]. Only the canonical arch-suffixed form
+/// (`"windows-x86_64"`, `"macos-aarch64"`, …) is accepted; a bare OS tag
+/// is ambiguous (it says nothing about the architecture) and returns
+/// `None` rather than guessing. The universal sentinel is handled
+/// separately by [`is_universal`].
 fn normalize_platform(s: &str) -> Option<hpm_package::Platform> {
     use hpm_package::Platform;
-    // Match the canonical long form first via FromStr; treat the universal
-    // tag as a fallback signal (see is_universal), not a Platform match.
-    if let Ok(p) = s.parse::<Platform>()
-        && p != Platform::Universal
-    {
-        return Some(p);
-    }
-    match s.to_ascii_lowercase().as_str() {
-        "windows" => Some(Platform::WindowsX86_64),
-        "linux" => Some(Platform::LinuxX86_64),
-        "macos" => Some(Platform::MacosX86_64),
-        _ => None,
+    match s.parse::<Platform>() {
+        Ok(Platform::Universal) => None,
+        Ok(p) => Some(p),
+        Err(_) => None,
     }
 }
 
@@ -398,12 +389,12 @@ mod tests {
     }
 
     #[test]
-    fn normalize_accepts_short_os_case_insensitive() {
-        // Short OS tags pre-date arch suffixes and assume x86_64 — that's
-        // what was published at the time entries with those tags existed.
-        assert_eq!(normalize_platform("WINDOWS"), Some(Platform::WindowsX86_64));
-        assert_eq!(normalize_platform("Linux"), Some(Platform::LinuxX86_64));
-        assert_eq!(normalize_platform("macos"), Some(Platform::MacosX86_64));
+    fn normalize_rejects_bare_os_tags() {
+        // A bare OS tag says nothing about the architecture; matching it
+        // to x86_64 would be a guess that misroutes ARM hosts.
+        assert_eq!(normalize_platform("WINDOWS"), None);
+        assert_eq!(normalize_platform("Linux"), None);
+        assert_eq!(normalize_platform("macos"), None);
     }
 
     #[test]
@@ -417,18 +408,6 @@ mod tests {
         assert_eq!(normalize_platform("macos-universal"), None);
         // arm64 (vs aarch64) is the wrong spelling for hpm's enum.
         assert_eq!(normalize_platform("linux-arm64"), None);
-    }
-
-    #[test]
-    fn select_picks_host_match_against_short_os_tags() {
-        // The bug from issue #3: TumbleTrove API emits "LINUX"/"WINDOWS".
-        // Linux is first in the array; a Windows host must still pick Windows.
-        let builds = vec![
-            build_with(Some("LINUX"), "linux.zip"),
-            build_with(Some("WINDOWS"), "windows.zip"),
-        ];
-        let picked = select_build(&builds, Some(Platform::WindowsX86_64)).unwrap();
-        assert_eq!(picked.dl, "windows.zip");
     }
 
     #[test]
@@ -468,7 +447,7 @@ mod tests {
     #[test]
     fn select_falls_back_to_universal_when_no_host_match() {
         let builds = vec![
-            build_with(Some("LINUX"), "linux.zip"),
+            build_with(Some("linux-x86_64"), "linux.zip"),
             build_with(None, "any.zip"),
         ];
         let picked = select_build(&builds, Some(Platform::WindowsX86_64)).unwrap();
@@ -478,7 +457,7 @@ mod tests {
     #[test]
     fn select_treats_explicit_universal_string_as_universal() {
         let builds = vec![
-            build_with(Some("LINUX"), "linux.zip"),
+            build_with(Some("linux-x86_64"), "linux.zip"),
             build_with(Some("UNIVERSAL"), "any.zip"),
         ];
         let picked = select_build(&builds, Some(Platform::WindowsX86_64)).unwrap();
@@ -490,8 +469,8 @@ mod tests {
         // The defense-in-depth case: every build is platform-tagged, none
         // match the host. Must NOT silently fall through to builds[0].
         let builds = vec![
-            build_with(Some("LINUX"), "linux.zip"),
-            build_with(Some("MACOS"), "macos.zip"),
+            build_with(Some("linux-x86_64"), "linux.zip"),
+            build_with(Some("macos-aarch64"), "macos.zip"),
         ];
         assert!(select_build(&builds, Some(Platform::WindowsX86_64)).is_none());
     }
@@ -499,8 +478,8 @@ mod tests {
     #[test]
     fn select_returns_none_when_host_unknown_and_no_universal() {
         let builds = vec![
-            build_with(Some("LINUX"), "linux.zip"),
-            build_with(Some("WINDOWS"), "windows.zip"),
+            build_with(Some("linux-x86_64"), "linux.zip"),
+            build_with(Some("windows-x86_64"), "windows.zip"),
         ];
         assert!(select_build(&builds, None).is_none());
     }

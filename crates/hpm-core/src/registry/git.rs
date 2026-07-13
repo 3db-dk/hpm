@@ -58,48 +58,26 @@ impl GitRegistry {
         }
     }
 
-    /// Compute the index file path for a package name.
+    /// Compute the index file path for a scoped package path
+    /// (`creator/slug` -> `<creator>/<slug>.json`).
     ///
-    /// For scoped paths (`creator/slug`): `<creator>/<slug>.json`
-    /// For legacy flat names, follows the old Cargo-style convention:
-    /// - 1 char: `1/<name>.json`
-    /// - 2 chars: `2/<name>.json`
-    /// - 3 chars: `3/<first-char>/<name>.json`
-    /// - 4+ chars: `<first-2>/<next-2>/<name>.json`
-    fn index_path(&self, name: &str) -> PathBuf {
+    /// Non-scoped names are rejected: the index layout is keyed on the
+    /// scoped package path, and every registry entry carries one.
+    fn index_path(&self, name: &str) -> Result<PathBuf, RegistryError> {
         let lower = name.to_lowercase();
-
-        // Scoped path: creator/slug -> creator/slug.json
-        if let Some((creator, slug)) = lower.split_once('/') {
-            let relative = PathBuf::from(creator).join(format!("{}.json", slug));
-            return self.cache_dir.join(relative);
-        }
-
-        // Legacy flat names
-        let relative = match lower.len() {
-            0 => unreachable!("package name cannot be empty"),
-            1 => PathBuf::from("1").join(format!("{}.json", lower)),
-            2 => PathBuf::from("2").join(format!("{}.json", lower)),
-            3 => {
-                let first = &lower[..1];
-                PathBuf::from("3")
-                    .join(first)
-                    .join(format!("{}.json", lower))
-            }
-            _ => {
-                let prefix1 = &lower[..2];
-                let prefix2 = &lower[2..4.min(lower.len())];
-                PathBuf::from(prefix1)
-                    .join(prefix2)
-                    .join(format!("{}.json", lower))
-            }
+        let Some((creator, slug)) = lower.split_once('/') else {
+            return Err(RegistryError::ParseError(format!(
+                "Package name '{}' is not a scoped path (expected 'creator/slug')",
+                name
+            )));
         };
-        self.cache_dir.join(relative)
+        let relative = PathBuf::from(creator).join(format!("{}.json", slug));
+        Ok(self.cache_dir.join(relative))
     }
 
     /// Parse all entries from a package's index file.
     fn read_entries(&self, name: &str) -> Result<Vec<RegistryEntry>, RegistryError> {
-        let path = self.index_path(name);
+        let path = self.index_path(name)?;
         if !path.exists() {
             return Err(RegistryError::PackageNotFound {
                 name: name.to_string(),
@@ -299,51 +277,20 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_index_path_1_char() {
+    fn test_index_path_rejects_non_scoped_name() {
         let tmp = TempDir::new().unwrap();
         let reg = GitRegistry::new("test", "https://example.com", tmp.path());
-        let path = reg.index_path("a");
-        assert!(path.ends_with("1/a.json"));
-    }
-
-    #[test]
-    fn test_index_path_2_chars() {
-        let tmp = TempDir::new().unwrap();
-        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
-        let path = reg.index_path("ab");
-        assert!(path.ends_with("2/ab.json"));
-    }
-
-    #[test]
-    fn test_index_path_3_chars() {
-        let tmp = TempDir::new().unwrap();
-        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
-        let path = reg.index_path("abc");
-        assert!(path.ends_with("3/a/abc.json"));
-    }
-
-    #[test]
-    fn test_index_path_long_name() {
-        let tmp = TempDir::new().unwrap();
-        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
-        let path = reg.index_path("package-name");
-        assert!(path.ends_with("pa/ck/package-name.json"));
-    }
-
-    #[test]
-    fn test_index_path_case_insensitive() {
-        let tmp = TempDir::new().unwrap();
-        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
-        let path1 = reg.index_path("MyPackage");
-        let path2 = reg.index_path("mypackage");
-        assert_eq!(path1, path2);
+        assert!(matches!(
+            reg.index_path("package-name"),
+            Err(RegistryError::ParseError(_))
+        ));
     }
 
     #[test]
     fn test_index_path_scoped() {
         let tmp = TempDir::new().unwrap();
         let reg = GitRegistry::new("test", "https://example.com", tmp.path());
-        let path = reg.index_path("tumblehead/tumble-rig");
+        let path = reg.index_path("tumblehead/tumble-rig").unwrap();
         assert!(path.ends_with("tumblehead/tumble-rig.json"));
     }
 
@@ -351,8 +298,8 @@ mod tests {
     fn test_index_path_scoped_case_insensitive() {
         let tmp = TempDir::new().unwrap();
         let reg = GitRegistry::new("test", "https://example.com", tmp.path());
-        let path1 = reg.index_path("TumbleHead/Tumble-Rig");
-        let path2 = reg.index_path("tumblehead/tumble-rig");
+        let path1 = reg.index_path("TumbleHead/Tumble-Rig").unwrap();
+        let path2 = reg.index_path("tumblehead/tumble-rig").unwrap();
         assert_eq!(path1, path2);
     }
 
@@ -360,7 +307,7 @@ mod tests {
     fn test_read_entries_not_found() {
         let tmp = TempDir::new().unwrap();
         let reg = GitRegistry::new("test", "https://example.com", tmp.path());
-        let result = reg.read_entries("nonexistent");
+        let result = reg.read_entries("creator/nonexistent");
         assert!(matches!(result, Err(RegistryError::PackageNotFound { .. })));
     }
 
@@ -370,7 +317,7 @@ mod tests {
         let reg = GitRegistry::new("test", "https://example.com", tmp.path());
 
         // Create index file for a scoped package
-        let path = reg.index_path("acme/mops");
+        let path = reg.index_path("acme/mops").unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let line1 = r#"{"name":"acme/mops","vers":"1.0.0","deps":[],"dl":"https://example.com/mops-1.0.0.tar.gz","yanked":false}"#;
         let line2 = r#"{"name":"acme/mops","vers":"2.0.0","deps":[],"dl":"https://example.com/mops-2.0.0.tar.gz","yanked":false}"#;

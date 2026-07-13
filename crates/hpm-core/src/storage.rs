@@ -31,7 +31,7 @@ pub use types::{InstalledPackage, PackageSpec, VersionReq};
 use dev_install::{
     DEV_INSTALL_DIR, InstallStyle, clear_container_link, clear_existing_install,
     commit_staged_copy, create_dev_link, dev_copy_is_complete, dev_copy_target,
-    prune_legacy_dev_content, prune_stale_dev_hashes, remove_install_entry, source_hash, stage_dir,
+    prune_stale_dev_hashes, remove_install_entry, source_hash, stage_dir,
 };
 #[derive(Debug, Clone)]
 pub struct StorageManager {
@@ -329,10 +329,6 @@ impl StorageManager {
                     commit_staged_copy(&staged, &target_dir)?;
                     info!("Successfully installed {kind}{}@{}", name, version);
                 }
-
-                // Best-effort: drop legacy flat content left by
-                // pre-content-addressing installs of this coordinate.
-                prune_legacy_dev_content(&dev_container);
 
                 Ok(InstalledPackage {
                     version: version.clone(),
