@@ -383,11 +383,19 @@ impl StorageManager {
         std::fs::create_dir_all(target)
             .map_err(|e| IoOp::wrap("create install target", target, e))?;
 
-        for entry in walkdir::WalkDir::new(source)
-            .min_depth(1)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
+        for entry in walkdir::WalkDir::new(source).min_depth(1) {
+            let entry = entry.map_err(|e| {
+                let path = e
+                    .path()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_else(|| source.to_path_buf());
+                IoOp::wrap(
+                    "walk source directory at",
+                    &path,
+                    e.into_io_error()
+                        .unwrap_or_else(|| std::io::Error::other("walk error")),
+                )
+            })?;
             let relative_path = entry.path().strip_prefix(source).map_err(|_| {
                 IoOp::wrap(
                     "strip workspace prefix from",
