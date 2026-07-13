@@ -1,23 +1,15 @@
 //! Git-hosted registry index client.
 //!
 //! Implements a Cargo-style git-based package index where package metadata
-//! is stored as JSON-lines files in a directory structure based on package name.
+//! is stored as JSON-lines files keyed by the scoped package path.
 //!
 //! ## Index structure
 //!
 //! ```text
 //! registry-repo/
 //!   config.json
-//!   1/
-//!     a.json          # 1-char package names
-//!   2/
-//!     ab.json         # 2-char package names
-//!   3/
-//!     a/
-//!       abc.json      # 3-char package names (first char prefix)
-//!   pa/
-//!     ck/
-//!       package-name.json   # 4+ char names (2-char prefix directories)
+//!   <creator>/
+//!     <slug>.json     # one file per package, keyed by scoped path
 //! ```
 //!
 //! Each `.json` file contains one JSON object per line (one per version).
@@ -27,7 +19,7 @@ use super::{Registry, RegistryError};
 use async_trait::async_trait;
 use hpm_package::IoOp;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::info;
 
 /// A Git-hosted package registry index.
 pub struct GitRegistry {
@@ -133,9 +125,14 @@ impl GitRegistry {
                 })?;
 
                 if !output.status.success() {
+                    // A registry that has silently stopped updating resolves
+                    // to stale versions with no indication why — fail instead
+                    // of falling back to the old cache.
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    warn!("Git pull failed for '{}': {}", display_name, stderr);
-                    // Non-fatal: we can still use the cached version
+                    return Err(RegistryError::GitError(format!(
+                        "Git pull failed for '{}': {}",
+                        display_name, stderr
+                    )));
                 }
             } else {
                 // Clone fresh
@@ -185,11 +182,14 @@ impl GitRegistry {
             });
         }
 
-        // Walk the cache directory looking for .json files
-        for entry in walkdir::WalkDir::new(&self.cache_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
+        // Walk the cache directory looking for .json files. The cache is a
+        // git checkout hpm itself manages — an unreadable file or a
+        // malformed index line means the cache is corrupt, which should
+        // surface, not silently shrink the search results.
+        for entry in walkdir::WalkDir::new(&self.cache_dir) {
+            let entry = entry.map_err(|e| {
+                RegistryError::GitError(format!("Failed to walk registry cache: {}", e))
+            })?;
             let path = entry.path();
             if path.extension().is_none_or(|ext| ext != "json") {
                 continue;
@@ -200,30 +200,36 @@ impl GitRegistry {
             }
 
             // Read entries from this file
-            if let Ok(content) = std::fs::read_to_string(path) {
-                let mut latest: Option<RegistryEntry> = None;
-                for line in content.lines() {
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
-                    if let Ok(entry) = serde_json::from_str::<RegistryEntry>(line) {
-                        if entry.name.to_lowercase().contains(&query_lower)
-                            || entry
-                                .description
-                                .as_deref()
-                                .is_some_and(|d| d.to_lowercase().contains(&query_lower))
-                        {
-                            // Keep latest version
-                            if latest.as_ref().is_none_or(|l| entry.version > l.version) {
-                                latest = Some(entry);
-                            }
-                        }
+            let content = std::fs::read_to_string(path)
+                .map_err(|e| IoOp::wrap("read registry index", path, e))?;
+            let mut latest: Option<RegistryEntry> = None;
+            for (line_num, line) in content.lines().enumerate() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let entry: RegistryEntry = serde_json::from_str(line).map_err(|e| {
+                    RegistryError::ParseError(format!(
+                        "Failed to parse line {} of {}: {}",
+                        line_num + 1,
+                        path.display(),
+                        e
+                    ))
+                })?;
+                if entry.name.to_lowercase().contains(&query_lower)
+                    || entry
+                        .description
+                        .as_deref()
+                        .is_some_and(|d| d.to_lowercase().contains(&query_lower))
+                {
+                    // Keep latest version
+                    if latest.as_ref().is_none_or(|l| entry.version > l.version) {
+                        latest = Some(entry);
                     }
                 }
-                if let Some(entry) = latest {
-                    results.push(entry);
-                }
+            }
+            if let Some(entry) = latest {
+                results.push(entry);
             }
         }
 

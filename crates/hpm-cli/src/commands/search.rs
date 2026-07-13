@@ -34,15 +34,24 @@ pub async fn search_packages(
         return Ok(());
     }
 
-    let registry_set = RegistrySet::from_config(config);
+    let registry_set = RegistrySet::from_config(config)?;
 
     let results = registry_set
         .search(&query)
         .await
         .map_err(|e| anyhow::anyhow!("Registry search failed: {}", e))?;
 
+    for (name, err) in &results.unavailable {
+        eprintln!(
+            "{} Registry '{}' is unreachable ({}); results may be incomplete.",
+            style("Warning:").yellow().bold(),
+            style(name).cyan(),
+            err
+        );
+    }
+
     if json_output {
-        let json = serde_json::to_string_pretty(&results)?;
+        let json = serde_json::to_string_pretty(&results.packages)?;
         println!("{}", json);
         return Ok(());
     }
@@ -54,7 +63,7 @@ pub async fn search_packages(
 
     println!(
         "Found {} packages matching '{}':",
-        style(results.total).bold(),
+        style(results.packages.len()).bold(),
         style(&query).yellow()
     );
     println!();

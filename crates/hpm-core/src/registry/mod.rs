@@ -88,6 +88,15 @@ pub struct RegistrySet {
     registries: Vec<Box<dyn Registry>>,
 }
 
+/// Merged search results across a [`RegistrySet`], with the registries that
+/// could not be reached listed explicitly.
+pub struct SetSearchResults {
+    /// Matching entries from every reachable registry.
+    pub packages: Vec<RegistryEntry>,
+    /// Registries skipped because they were unreachable, with the error.
+    pub unavailable: Vec<(String, RegistryError)>,
+}
+
 impl RegistrySet {
     pub fn new() -> Self {
         Self {
@@ -98,7 +107,7 @@ impl RegistrySet {
     /// Build a `RegistrySet` from a full `Config`. Convenience wrapper around
     /// [`Self::from_configs`] for the common case where the caller just wants
     /// the set defined by the user's global config.
-    pub fn from_config(config: &hpm_config::Config) -> Self {
+    pub fn from_config(config: &hpm_config::Config) -> Result<Self, RegistryError> {
         Self::from_configs(&config.registries, &config.storage.registry_cache_dir)
     }
 
@@ -118,7 +127,7 @@ impl RegistrySet {
     pub fn from_configs(
         registries: &[hpm_config::RegistrySourceConfig],
         registry_cache_dir: &std::path::Path,
-    ) -> Self {
+    ) -> Result<Self, RegistryError> {
         Self::from_configs_with_auth(registries, registry_cache_dir, None)
     }
 
@@ -128,21 +137,28 @@ impl RegistrySet {
     /// Git registries ignore the token — there is no auth story for the git
     /// index today. When `auth_token` is `None`, behavior is identical to
     /// [`Self::from_configs`].
+    ///
+    /// A registry entry that cannot be constructed (bad URL, bad token) is a
+    /// hard error: silently dropping it from the set would later surface as
+    /// a misleading "package not found".
     pub fn from_configs_with_auth(
         registries: &[hpm_config::RegistrySourceConfig],
         registry_cache_dir: &std::path::Path,
         auth_token: Option<&str>,
-    ) -> Self {
+    ) -> Result<Self, RegistryError> {
         let mut set = Self::new();
 
         for reg in registries {
             match reg.registry_type {
                 hpm_config::RegistryType::Api => {
-                    if let Ok(api_reg) =
-                        ApiRegistry::with_auth_token(&reg.name, &reg.url, auth_token)
-                    {
-                        set.add(Box::new(api_reg));
-                    }
+                    let api_reg = ApiRegistry::with_auth_token(&reg.name, &reg.url, auth_token)
+                        .map_err(|e| {
+                            RegistryError::ParseError(format!(
+                                "Registry '{}' could not be constructed: {}",
+                                reg.name, e
+                            ))
+                        })?;
+                    set.add(Box::new(api_reg));
                 }
                 hpm_config::RegistryType::Git => {
                     let cache_dir = registry_cache_dir.join(&reg.name);
@@ -152,7 +168,7 @@ impl RegistrySet {
             }
         }
 
-        set
+        Ok(set)
     }
 
     pub fn add(&mut self, registry: Box<dyn Registry>) {
@@ -160,19 +176,26 @@ impl RegistrySet {
     }
 
     /// Search all registries and merge results.
-    pub async fn search(&self, query: &str) -> Result<SearchResults, RegistryError> {
+    ///
+    /// An unreachable registry does not abort the whole search (the healthy
+    /// registries' results are still useful), but it is reported in
+    /// [`SetSearchResults::unavailable`] so callers can tell the user the
+    /// results may be incomplete instead of silently omitting them.
+    pub async fn search(&self, query: &str) -> Result<SetSearchResults, RegistryError> {
         let mut all_packages = Vec::new();
+        let mut unavailable = Vec::new();
         for registry in &self.registries {
             match registry.search(query).await {
                 Ok(results) => all_packages.extend(results.packages),
-                Err(RegistryError::NetworkError(_)) => continue, // skip unavailable registries
+                Err(e @ RegistryError::NetworkError(_)) => {
+                    unavailable.push((registry.name().to_string(), e));
+                }
                 Err(e) => return Err(e),
             }
         }
-        let total = all_packages.len();
-        Ok(SearchResults {
+        Ok(SetSearchResults {
             packages: all_packages,
-            total,
+            unavailable,
         })
     }
 

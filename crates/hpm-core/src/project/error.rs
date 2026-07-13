@@ -76,6 +76,12 @@ pub enum ProjectError {
         source: Box<RegistryError>,
     },
 
+    /// The configured registry set itself could not be constructed
+    /// (bad URL, bad auth token). Distinct from `RegistryResolution` —
+    /// this is a configuration problem, not a lookup failure.
+    #[error("Invalid registry configuration")]
+    RegistryConfiguration(#[source] Box<RegistryError>),
+
     /// Registry returned versions, but none satisfied the requirement.
     #[error("No version of {name} matches requirement {version_req}")]
     NoMatchingVersion { name: String, version_req: String },

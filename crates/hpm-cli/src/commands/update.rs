@@ -78,7 +78,7 @@ pub async fn update_packages(config: &Config, options: UpdateOptions) -> Result<
     let lock_path = project_dir.join("hpm.lock");
 
     let existing_lock = LockFile::load(&lock_path).ok();
-    let registry_set = RegistrySet::from_config(config);
+    let registry_set = RegistrySet::from_config(config)?;
     if registry_set.is_empty() {
         bail!(
             "Cannot check for updates: no registries are configured. \

@@ -50,7 +50,7 @@ use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifes
 use anyhow::{Context, Result};
 use hpm_config::Config;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Remove a package dependency from hpm.toml manifest
 pub async fn remove_package(
@@ -99,20 +99,16 @@ pub async fn remove_package(
     save_manifest(&manifest, &manifest_path)
         .with_context(|| format!("Failed to save manifest to {}", manifest_path.display()))?;
 
-    // Update lock file by running install (which regenerates the lock file)
+    // Update lock file by running install (which regenerates the lock
+    // file). A failure here leaves hpm.toml and hpm.lock out of sync, so
+    // it fails the command rather than being downgraded to a warning.
     info!("Updating lock file...");
-    match super::install::install_dependencies(config, Some(manifest_path), false).await {
-        Ok(()) => {
-            info!("Lock file updated successfully");
-        }
-        Err(e) => {
-            warn!(
-                "Failed to update lock file after removing dependency: {}",
-                e
-            );
-            warn!("You may need to run 'hpm install' manually to update the lock file");
-        }
-    }
+    super::install::install_dependencies(config, Some(manifest_path), false)
+        .await
+        .context(
+            "Dependency removed from hpm.toml, but regenerating the lock file failed; \
+             hpm.toml and hpm.lock are now out of sync — run 'hpm install' to reconcile",
+        )?;
 
     info!("Package '{}' removed successfully", package_name);
     info!(

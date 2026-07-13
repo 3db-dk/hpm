@@ -82,19 +82,20 @@ pub async fn execute(
 
     let output_dir = output.unwrap_or_else(|| package_dir.clone());
 
-    // Generate Houdini-native package.json if not already present
-    let inject_files: Vec<(String, Vec<u8>)> = match manifest.generate_houdini_native_package() {
-        Ok((filename, native_pkg)) => {
-            if package_dir.join(&filename).exists() {
-                // User has a hand-written file; don't overwrite
-                vec![]
-            } else {
-                let json_bytes = serde_json::to_vec_pretty(&native_pkg)
-                    .context("Failed to serialize Houdini native package JSON")?;
-                vec![(filename, json_bytes)]
-            }
-        }
-        Err(_) => vec![],
+    // Generate Houdini-native package.json if not already present. A
+    // generation failure fails the pack: shipping an archive without the
+    // package.json Houdini needs would produce a broken install.
+    let (native_filename, native_pkg) = manifest
+        .generate_houdini_native_package()
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to generate the Houdini package.json for the archive")?;
+    let inject_files: Vec<(String, Vec<u8>)> = if package_dir.join(&native_filename).exists() {
+        // User has a hand-written file; don't overwrite
+        vec![]
+    } else {
+        let json_bytes = serde_json::to_vec_pretty(&native_pkg)
+            .context("Failed to serialize Houdini native package JSON")?;
+        vec![(native_filename, json_bytes)]
     };
 
     // Run pack on blocking thread (zip I/O)
@@ -122,23 +123,16 @@ pub async fn execute(
 
     // Build the searchable asset index from the manifest's [[operators]]
     // declarations, resolving each operator's source for the target platform
-    // and checking it against the produced archive. Indexing must not fail the
-    // pack itself, so a hard error here degrades to an empty index with a
-    // warning.
-    let asset_index = match hpm_core::collect_assets(
-        &result.archive_path,
-        &manifest.operators,
-        platform.as_ref(),
-    ) {
-        Ok(index) => index,
-        Err(e) => {
-            console.warn(format!("Could not build asset index: {e}"));
-            hpm_core::AssetIndex {
-                assets: Vec::new(),
-                missing_sources: Vec::new(),
-            }
-        }
-    };
+    // and checking it against the produced archive. An indexing failure
+    // fails the pack — emitting an archive whose advertised index silently
+    // dropped is a packaging bug, not a shippable artifact.
+    let asset_index =
+        hpm_core::collect_assets(&result.archive_path, &manifest.operators, platform.as_ref())
+            .inspect_err(|_| {
+                // Don't leave a half-vetted archive behind for CI to publish.
+                let _ = std::fs::remove_file(&result.archive_path);
+            })
+            .context("Failed to build the asset index for the packed archive")?;
 
     // A declared operator source that isn't in the produced archive means the
     // index would advertise a file the package doesn't ship. With

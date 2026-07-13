@@ -214,7 +214,8 @@ impl ProjectManager {
             &self.config.registries,
             &self.config.storage.registry_cache_dir,
             self.auth_token.as_deref(),
-        );
+        )
+        .map_err(|e| ProjectError::RegistryConfiguration(Box::new(e)))?;
 
         if registry_set.is_empty() {
             return Err(ProjectError::NoRegistriesConfigured {
@@ -335,13 +336,13 @@ impl ProjectManager {
                     } else {
                         self.config.registries.clone()
                     };
-                Some(Arc::new(
-                    crate::registry::RegistrySet::from_configs_with_auth(
-                        &registry_configs,
-                        &self.config.storage.registry_cache_dir,
-                        self.auth_token.as_deref(),
-                    ),
-                ))
+                let set = crate::registry::RegistrySet::from_configs_with_auth(
+                    &registry_configs,
+                    &self.config.storage.registry_cache_dir,
+                    self.auth_token.as_deref(),
+                )
+                .map_err(|e| ProjectError::RegistryConfiguration(Box::new(e)))?;
+                Some(Arc::new(set))
             } else {
                 None
             };

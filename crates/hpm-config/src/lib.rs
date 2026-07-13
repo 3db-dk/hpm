@@ -60,7 +60,7 @@ pub use storage::StorageConfig;
 use hpm_package::TomlFileError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -99,27 +99,14 @@ impl Config {
     pub fn load() -> Result<Self, TomlFileError> {
         let mut config = Self::default();
 
-        // Load user config from ~/.hpm/config.toml.
-        // A malformed user config must not lock the user out: every CLI
-        // command calls `load()`, so propagating a parse error here leaves
-        // no way to run registry commands to repair it. Fall back to defaults
-        // and warn instead. Project configs below are user-authored and
-        // project-scoped, so those still fail hard.
+        // Load user config from ~/.hpm/config.toml. A malformed file is a
+        // hard error: silently running with default storage/registry paths
+        // because the config didn't parse produces far more confusing
+        // behavior than an error naming the bad file.
         let user_config_path = Self::user_config_path();
         if user_config_path.exists() {
             debug!("Loading user config from {:?}", user_config_path);
-            match ConfigOverlay::load(&user_config_path) {
-                Ok(overlay) => {
-                    overlay.apply_to(&mut config);
-                    debug!("Loaded user configuration from {:?}", user_config_path);
-                }
-                Err(e) => {
-                    warn!(
-                        "Ignoring malformed user config at {:?}: {}. Using defaults.",
-                        user_config_path, e
-                    );
-                }
-            }
+            ConfigOverlay::load(&user_config_path)?.apply_to(&mut config);
         }
 
         // Load project config from .hpm/config.toml in current directory
