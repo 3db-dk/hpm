@@ -71,7 +71,8 @@ pub async fn fetch_manifest(
     );
 
     let entry = registry_set.get_version(name, &resolved_version).await?;
-    let source = PackageSource::url(entry.dl, resolved_version.clone())
+    let source = PackageSource::url(entry.dl.clone(), resolved_version.clone())
+        .and_then(|s| s.with_registry_checksum(entry.cksum.as_deref()))
         .map_err(|e| FetchManifestError::Fetch(crate::archive_fetcher::FetchError::from(e)))?;
 
     let fetcher = build_fetcher(storage)?;

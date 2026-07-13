@@ -18,6 +18,11 @@ pub enum PackageSourceError {
 
     #[error("Invalid version: {0}")]
     InvalidVersion(String),
+
+    #[error(
+        "Unsupported checksum format '{0}': expected 'sha256:<hex>' or a bare 64-char hex digest"
+    )]
+    UnsupportedChecksum(String),
 }
 
 /// Where a package archive is fetched from. URL-only by design — if you
@@ -31,6 +36,11 @@ pub struct PackageSource {
     pub url: String,
     /// Resolved package version (e.g. `"1.2.3"`).
     pub version: String,
+    /// Expected SHA-256 of the archive bytes (lowercase hex, no prefix),
+    /// from the registry entry's `cksum`. When present, the fetcher
+    /// verifies the downloaded archive against it before extraction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_sha256: Option<String>,
 }
 
 impl PackageSource {
@@ -64,7 +74,29 @@ impl PackageSource {
             )));
         }
 
-        Ok(Self { url, version })
+        Ok(Self {
+            url,
+            version,
+            expected_sha256: None,
+        })
+    }
+
+    /// Attach the registry entry's `cksum` (e.g. `"sha256:<hex>"` or bare
+    /// hex) as the expected archive digest. A checksum in a format hpm
+    /// cannot verify is an error — silently skipping verification because
+    /// the format is unrecognized would defeat the check.
+    pub fn with_registry_checksum(
+        mut self,
+        cksum: Option<&str>,
+    ) -> Result<Self, PackageSourceError> {
+        if let Some(raw) = cksum {
+            let hex = raw.strip_prefix("sha256:").unwrap_or(raw);
+            if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(PackageSourceError::UnsupportedChecksum(raw.to_string()));
+            }
+            self.expected_sha256 = Some(hex.to_ascii_lowercase());
+        }
+        Ok(self)
     }
 
     /// Returns true if the source uses secure transport (HTTPS).

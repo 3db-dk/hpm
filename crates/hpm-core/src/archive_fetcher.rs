@@ -303,6 +303,23 @@ fn validate_path_safety_sync(path: &Path) -> Result<(), FetchError> {
     Ok(())
 }
 
+/// SHA-256 of a file's bytes, streamed (blocking operation). Used to verify
+/// a downloaded archive against the registry entry's `cksum`.
+fn compute_file_sha256_sync(path: &Path) -> Result<String, FetchError> {
+    let mut hasher = Sha256::new();
+    let mut file = std::fs::File::open(path)?;
+    let mut buffer = [0u8; 8192];
+    loop {
+        let bytes_read = file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+    let result = hasher.finalize();
+    Ok(result.iter().map(|b| format!("{:02x}", b)).collect())
+}
+
 /// Compute a SHA-256 checksum of a directory's contents (blocking operation).
 ///
 /// Always computed from the actual tree — never cached on disk. A stored
@@ -439,16 +456,23 @@ impl ArchiveFetcher {
         source: &PackageSource,
         package_name: &str,
     ) -> Result<FetchResult, FetchError> {
-        self.fetch_direct_url(&source.url, &source.version, package_name)
-            .await
+        self.fetch_direct_url(
+            &source.url,
+            &source.version,
+            package_name,
+            source.expected_sha256.as_deref(),
+        )
+        .await
     }
 
-    /// Fetch a package from a direct URL.
+    /// Fetch a package from a direct URL, verifying the archive bytes
+    /// against `expected_sha256` (when known) before extraction.
     async fn fetch_direct_url(
         &self,
         url: &str,
         version: &str,
         package_name: &str,
+        expected_sha256: Option<&str>,
     ) -> Result<FetchResult, FetchError> {
         let package_dir = fetcher_install_dir(&self.packages_dir, package_name, version);
         // The download cache file (a sibling, with the archive bytes) is
@@ -484,6 +508,33 @@ impl ArchiveFetcher {
 
         // Download the archive directly from the URL
         let archive_path = self.download_archive(url, &cache_key).await?;
+
+        // Verify the archive bytes against the registry checksum before
+        // anything is extracted. A corrupt or tampered cached archive is
+        // removed so the next attempt re-downloads instead of failing on
+        // the same bad bytes forever.
+        if let Some(expected) = expected_sha256 {
+            let expected = expected.to_string();
+            let path_for_verify = archive_path.clone();
+            let actual =
+                tokio::task::spawn_blocking(move || compute_file_sha256_sync(&path_for_verify))
+                    .await
+                    .map_err(|e| {
+                        FetchError::ExtractionError(format!("Checksum task join error: {}", e))
+                    })??;
+            if actual != expected {
+                if let Err(e) = tokio::fs::remove_file(&archive_path).await {
+                    warn!("Failed to remove corrupt archive {:?}: {}", archive_path, e);
+                }
+                return Err(FetchError::ChecksumMismatch { expected, actual });
+            }
+            debug!("Archive checksum verified for {}", cache_key);
+        } else {
+            warn!(
+                "No registry checksum for {}; installing archive unverified",
+                cache_key
+            );
+        }
 
         // Extract the archive
         info!("Extracting package to {:?}", package_dir);
@@ -790,5 +841,90 @@ mod tests {
             find_common_root_prefix(&names),
             Some(PathBuf::from("pkg-1.0"))
         );
+    }
+
+    /// Build a small in-memory zip archive with one file.
+    fn make_test_zip() -> Vec<u8> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+            zip.start_file("pkg-1.0/hpm.toml", options).unwrap();
+            use std::io::Write;
+            zip.write_all(b"[package]\n").unwrap();
+            zip.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect()
+    }
+
+    /// A checksum mismatch must abort before extraction and remove the
+    /// corrupt cached archive so a later attempt re-downloads.
+    #[tokio::test]
+    async fn test_fetch_rejects_checksum_mismatch() {
+        let temp = TempDir::new().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let packages_dir = temp.path().join("packages");
+        let fetcher = ArchiveFetcher::new(cache_dir.clone(), packages_dir.clone()).unwrap();
+
+        // Pre-place the archive in the download cache so no network happens.
+        let archive_path = cache_dir.join("pkg-1.0.0");
+        std::fs::write(&archive_path, make_test_zip()).unwrap();
+
+        let wrong = "0".repeat(64);
+        let result = fetcher
+            .fetch_direct_url(
+                "https://example.invalid/pkg.zip",
+                "1.0.0",
+                "pkg",
+                Some(&wrong),
+            )
+            .await;
+
+        match result {
+            Err(FetchError::ChecksumMismatch { expected, .. }) => assert_eq!(expected, wrong),
+            other => panic!("Expected ChecksumMismatch, got {:?}", other),
+        }
+        assert!(
+            !archive_path.exists(),
+            "corrupt cached archive must be removed"
+        );
+        assert!(
+            !fetcher_install_dir(&packages_dir, "pkg", "1.0.0").exists(),
+            "nothing may be extracted from an unverified archive"
+        );
+    }
+
+    /// A matching checksum extracts normally.
+    #[tokio::test]
+    async fn test_fetch_accepts_matching_checksum() {
+        let temp = TempDir::new().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let packages_dir = temp.path().join("packages");
+        let fetcher = ArchiveFetcher::new(cache_dir.clone(), packages_dir.clone()).unwrap();
+
+        let bytes = make_test_zip();
+        let digest = sha256_hex(&bytes);
+        std::fs::write(cache_dir.join("pkg-1.0.0"), &bytes).unwrap();
+
+        let result = fetcher
+            .fetch_direct_url(
+                "https://example.invalid/pkg.zip",
+                "1.0.0",
+                "pkg",
+                Some(&digest),
+            )
+            .await
+            .expect("verified archive should extract");
+        assert!(result.package_path.join("hpm.toml").exists());
     }
 }

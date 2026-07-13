@@ -225,7 +225,8 @@ impl ProjectManager {
 
         let entry = self.resolve_registry_entry(&registry_set, spec).await?;
         let version = entry.version.clone();
-        let source = PackageSource::url(entry.dl, entry.version)?;
+        let source = PackageSource::url(entry.dl.clone(), entry.version.clone())?
+            .with_registry_checksum(entry.cksum.as_deref())?;
         self.fetch_and_install_pkg(&spec.name, &version, source)
             .await
     }
@@ -1231,7 +1232,8 @@ async fn install_one_dep(
                 }
             })?;
             let url = entry.dl.clone();
-            let source = PackageSource::url(url.clone(), version)?;
+            let source = PackageSource::url(url.clone(), version)?
+                .with_registry_checksum(entry.cksum.as_deref())?;
             let (package, checksum) =
                 fetch_and_install_pkg(storage, fetcher, name, version, source).await?;
             Ok(InstallOutcome {
