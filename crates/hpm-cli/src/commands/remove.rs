@@ -46,9 +46,10 @@
 //! - Graceful handling of edge cases (empty dependencies, missing sections)
 //! - Comprehensive error reporting with actionable guidance
 
-use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifest};
+use super::manifest_utils::{determine_manifest_path, load_manifest};
 use anyhow::{Context, Result};
 use hpm_config::Config;
+use hpm_core::project::manifest_edit;
 use std::path::PathBuf;
 use tracing::info;
 
@@ -64,40 +65,20 @@ pub async fn remove_package(
     let manifest_path = determine_manifest_path(manifest_path)?;
     info!("Using manifest: {}", manifest_path.display());
 
-    // Load existing manifest
-    let mut manifest = load_manifest(&manifest_path)
+    // Validate the manifest before editing it. The edit below goes through
+    // toml_edit (formatting-preserving), not a serde round-trip.
+    load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
 
-    if manifest.dependencies.is_empty() {
-        anyhow::bail!(
-            "No dependencies found in manifest. Package '{}' is not a dependency.",
-            package_name
-        );
-    }
-
-    let dependencies = &mut manifest.dependencies;
-
-    // Check if the dependency exists
-    if !dependencies.contains_key(&package_name) {
+    let removed = manifest_edit::remove_dependency(&manifest_path, &package_name)
+        .with_context(|| format!("Failed to update manifest at {}", manifest_path.display()))?;
+    if !removed {
         anyhow::bail!(
             "Package '{}' is not a dependency in this manifest.",
             package_name
         );
     }
-
-    // Remove the dependency
-    dependencies.shift_remove(&package_name);
     info!("Removed dependency: {}", package_name);
-
-    // If dependencies is now empty, we could optionally remove the section
-    if dependencies.is_empty() {
-        info!("Dependencies section is now empty");
-        // Keep the empty dependencies section for consistency
-    }
-
-    // Save updated manifest
-    save_manifest(&manifest, &manifest_path)
-        .with_context(|| format!("Failed to save manifest to {}", manifest_path.display()))?;
 
     // Update lock file by running install (which regenerates the lock
     // file). A failure here leaves hpm.toml and hpm.lock out of sync, so
@@ -121,6 +102,7 @@ pub async fn remove_package(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::manifest_utils::save_manifest;
     use crate::commands::test_fixtures::{CwdGuard, TestManifestOpts, write_test_manifest};
     use hpm_package::{DependencySpec, PackagePath};
     use indexmap::IndexMap;
@@ -274,7 +256,7 @@ mod tests {
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("No dependencies found"));
+        assert!(error_msg.contains("is not a dependency"));
     }
 
     #[test]

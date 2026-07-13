@@ -24,11 +24,12 @@
 //! matching the spec on every install; re-running `hpm install` is
 //! enough to update them.
 
-use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifest};
+use super::manifest_utils::{determine_manifest_path, load_manifest};
 use crate::console::Console;
 use crate::output::OutputFormat;
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
+use hpm_core::project::manifest_edit;
 use hpm_core::{LockFile, registry::RegistrySet};
 use hpm_package::DependencySpec;
 use std::collections::HashSet;
@@ -71,7 +72,7 @@ struct Candidate {
 
 pub async fn update_packages(config: &Config, options: UpdateOptions) -> Result<()> {
     let manifest_path = determine_manifest_path(options.package.clone())?;
-    let mut manifest = load_manifest(&manifest_path)?;
+    let manifest = load_manifest(&manifest_path)?;
     let project_dir = manifest_path
         .parent()
         .context("Manifest file has no parent directory")?;
@@ -107,10 +108,9 @@ pub async fn update_packages(config: &Config, options: UpdateOptions) -> Result<
         return Ok(());
     }
 
-    // Mutate the manifest's spec to the resolved exact version for each
-    // candidate. Save, then run install to fetch + lock the new versions.
-    apply_updates(&mut manifest, &candidates);
-    save_manifest(&manifest, &manifest_path)
+    // Rewrite each candidate's spec to the resolved exact version through
+    // the formatting-preserving editor, then run install to fetch + lock.
+    apply_updates(&manifest, &manifest_path, &candidates)
         .with_context(|| format!("Failed to write {}", manifest_path.display()))?;
 
     super::install::install_dependencies(config, Some(manifest_path), false)
@@ -260,19 +260,32 @@ fn print_candidates(candidates: &[Candidate], output: OutputFormat) {
 /// resolved exact version. `Simple` becomes `Simple(new_version)`;
 /// `Registry { version, .. }` retains its `registry` / `optional` fields
 /// with `version` replaced.
-fn apply_updates(manifest: &mut hpm_package::PackageManifest, candidates: &[Candidate]) {
+fn apply_updates(
+    manifest: &hpm_package::PackageManifest,
+    manifest_path: &std::path::Path,
+    candidates: &[Candidate],
+) -> Result<()> {
     for c in candidates {
-        let Some(spec) = manifest.dependencies.get_mut(&c.name) else {
+        let Some(spec) = manifest.dependencies.get(&c.name) else {
             continue;
         };
-        match spec {
-            DependencySpec::Simple(v) => *v = c.latest.clone(),
-            DependencySpec::Registry { version, .. } => *version = c.latest.clone(),
+        let new_spec = match spec {
+            DependencySpec::Simple(_) => DependencySpec::Simple(c.latest.clone()),
+            DependencySpec::Registry {
+                registry, optional, ..
+            } => DependencySpec::Registry {
+                version: c.latest.clone(),
+                registry: registry.clone(),
+                optional: *optional,
+            },
             DependencySpec::Url { .. } | DependencySpec::Path { .. } => {
                 // collect_candidates already filtered these out.
+                continue;
             }
-        }
+        };
+        manifest_edit::upsert_dependency(manifest_path, &c.name, &new_spec)?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -290,28 +303,25 @@ mod tests {
 
     #[test]
     fn apply_updates_rewrites_simple_specs() {
-        use hpm_package::{PackageManifest, PackagePath};
-        use indexmap::IndexMap;
+        use hpm_package::PackageManifest;
 
-        let mut manifest = PackageManifest::new(
-            PackagePath::new("studio/project").unwrap(),
-            "project".to_string(),
-            "1.0.0".to_string(),
-            None,
-            Vec::new(),
-            None,
-        );
-        let mut deps = IndexMap::new();
-        deps.insert("foo".to_string(), DependencySpec::Simple("^1.0.0".into()));
-        deps.insert(
-            "bar".to_string(),
-            DependencySpec::Registry {
-                version: "^2.0.0".to_string(),
-                registry: Some("main".to_string()),
-                optional: false,
-            },
-        );
-        manifest.dependencies = deps;
+        let dir = tempfile::TempDir::new().unwrap();
+        let manifest_path = dir.path().join("hpm.toml");
+        std::fs::write(
+            &manifest_path,
+            r#"# top comment
+[package]
+path = "studio/project"
+name = "project"
+version = "1.0.0"
+
+[dependencies]
+foo = "^1.0.0"
+bar = { version = "^2.0.0", registry = "main" }
+"#,
+        )
+        .unwrap();
+        let manifest = PackageManifest::from_path(&manifest_path).unwrap();
 
         let candidates = vec![
             Candidate {
@@ -328,14 +338,14 @@ mod tests {
             },
         ];
 
-        apply_updates(&mut manifest, &candidates);
+        apply_updates(&manifest, &manifest_path, &candidates).unwrap();
 
-        let deps = &manifest.dependencies;
-        match &deps["foo"] {
+        let updated = PackageManifest::from_path(&manifest_path).unwrap();
+        match &updated.dependencies["foo"] {
             DependencySpec::Simple(v) => assert_eq!(v, "1.0.5"),
             other => panic!("expected Simple, got {:?}", other),
         }
-        match &deps["bar"] {
+        match &updated.dependencies["bar"] {
             DependencySpec::Registry {
                 version, registry, ..
             } => {
@@ -344,5 +354,8 @@ mod tests {
             }
             other => panic!("expected Registry, got {:?}", other),
         }
+        // Formatting-preserving edit: comments survive.
+        let content = std::fs::read_to_string(&manifest_path).unwrap();
+        assert!(content.contains("# top comment"));
     }
 }

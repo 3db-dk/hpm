@@ -24,6 +24,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
 pub mod error;
+pub mod manifest_edit;
 pub mod types;
 
 pub use error::ProjectError;
@@ -1007,106 +1008,24 @@ impl ProjectManager {
         })
     }
 
-    /// Read hpm.toml, parse as a `toml_edit::DocumentMut`, hand it to `f`,
-    /// then write back. The caller is responsible for any pre-condition
-    /// check (e.g. existence) — this helper assumes the manifest is there.
-    fn with_manifest_edit<F>(&self, f: F) -> Result<(), ProjectError>
-    where
-        F: FnOnce(&mut toml_edit::DocumentMut) -> Result<(), ProjectError>,
-    {
-        let path = self.project_paths.manifest_file.clone();
-
-        let content = std::fs::read_to_string(&path).map_err(|source| {
-            if source.kind() == std::io::ErrorKind::NotFound {
-                ProjectError::Manifest(ManifestLoadError::NotFound { path: path.clone() })
-            } else {
-                ProjectError::Io(IoOp::wrap("read project manifest", &path, source))
-            }
-        })?;
-
-        let mut doc: toml_edit::DocumentMut =
-            content
-                .parse()
-                .map_err(|source: toml_edit::TomlError| ProjectError::ManifestEdit {
-                    path: path.clone(),
-                    source,
-                })?;
-
-        f(&mut doc)?;
-
-        std::fs::write(&path, doc.to_string())
-            .map_err(|e| IoOp::wrap("write project manifest", &path, e).into())
-    }
-
     fn update_project_manifest(&self, spec: &PackageSpec) -> Result<(), ProjectError> {
-        let manifest_path = self.project_paths.manifest_file.clone();
+        let manifest_path = &self.project_paths.manifest_file;
         if !manifest_path.exists() {
             return Err(ProjectError::Manifest(ManifestLoadError::NotFound {
-                path: manifest_path,
+                path: manifest_path.clone(),
             }));
         }
-
-        let version_str = spec.version_req.as_str().to_string();
-        let name = spec.name.clone();
-
-        self.with_manifest_edit(|doc| {
-            if !doc.contains_key("dependencies") {
-                doc["dependencies"] = toml_edit::Item::Table(toml_edit::Table::new());
-            }
-
-            let deps_table = doc["dependencies"].as_table_mut().ok_or_else(|| {
-                ProjectError::ManifestStructure {
-                    path: manifest_path.clone(),
-                    message: "[dependencies] is not a table".to_string(),
-                }
-            })?;
-
-            // Simple string form for ^/~/>/< prefixes, exact, and "*";
-            // anything else (e.g. registry-named specs) goes through an
-            // inline table so toml_edit picks the right shape.
-            let bare_form = version_str == "*"
-                || version_str.starts_with(['^', '~', '>', '<'])
-                || version_str
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_digit());
-
-            if bare_form {
-                deps_table[&name] = toml_edit::value(&version_str);
-            } else {
-                let mut inline = toml_edit::InlineTable::new();
-                inline.insert("version", version_str.as_str().into());
-                deps_table[&name] = toml_edit::Item::Value(toml_edit::Value::InlineTable(inline));
-            }
-
-            Ok(())
-        })?;
-
-        info!(
-            "Updated hpm.toml with dependency: {} = \"{}\"",
-            spec.name, version_str
-        );
+        manifest_edit::upsert_dependency(
+            manifest_path,
+            &spec.name,
+            &hpm_package::DependencySpec::Simple(spec.version_req.as_str().to_string()),
+        )?;
         Ok(())
     }
 
     fn remove_from_project_manifest(&self, name: &str) -> Result<(), ProjectError> {
-        if !self.project_paths.manifest_file.exists() {
-            return Ok(()); // Nothing to remove
-        }
-
-        let dep_name = name.to_string();
-        self.with_manifest_edit(|doc| {
-            for section in ["dependencies", "dev-dependencies"] {
-                if let Some(deps) = doc.get_mut(section)
-                    && let Some(table) = deps.as_table_mut()
-                    && table.contains_key(&dep_name)
-                {
-                    table.remove(&dep_name);
-                    info!("Removed {} from [{}]", dep_name, section);
-                }
-            }
-            Ok(())
-        })
+        manifest_edit::remove_dependency(&self.project_paths.manifest_file, name)?;
+        Ok(())
     }
 
     pub fn list_dependencies(&self) -> Result<Vec<ProjectDependency>, ProjectError> {

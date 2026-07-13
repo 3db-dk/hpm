@@ -161,7 +161,14 @@ pub fn save_manifest(manifest: &PackageManifest, manifest_path: &Path) -> Result
     let toml_content =
         toml::to_string_pretty(manifest).context("Failed to serialize manifest to TOML")?;
 
-    std::fs::write(manifest_path, toml_content)
+    if let Some(parent) = manifest_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!("Failed to create manifest directory: {}", parent.display())
+        })?;
+    }
+    hpm_package::atomic_write(manifest_path, toml_content)
         .with_context(|| format!("Failed to write manifest file: {}", manifest_path.display()))?;
 
     Ok(())

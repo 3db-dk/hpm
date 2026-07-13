@@ -32,9 +32,10 @@
 //! hpm add geometry-tools --package /path/to/project/
 //! ```
 
-use super::manifest_utils::{determine_manifest_path, load_manifest, save_manifest};
+use super::manifest_utils::{determine_manifest_path, load_manifest};
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
+use hpm_core::project::manifest_edit;
 use hpm_core::registry::RegistrySet;
 use hpm_package::DependencySpec;
 use std::path::PathBuf;
@@ -92,11 +93,10 @@ pub async fn add_packages(
     let manifest_path = determine_manifest_path(manifest_path)?;
     info!("Using manifest: {}", manifest_path.display());
 
-    // Load existing manifest
-    let mut manifest = load_manifest(&manifest_path)
+    // Validate the manifest before editing it. Edits below go through
+    // toml_edit (formatting-preserving), not a serde round-trip.
+    load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
-
-    let dependencies = &mut manifest.dependencies;
 
     // Add each package
     for package_name in &package_names {
@@ -166,18 +166,16 @@ pub async fn add_packages(
             }
         };
 
-        // Check if dependency already exists
-        if dependencies.contains_key(package_name) {
-            warn!("Dependency '{}' already exists, updating...", package_name);
+        let replaced =
+            manifest_edit::upsert_dependency(&manifest_path, package_name, &dependency_spec)
+                .with_context(|| {
+                    format!("Failed to update manifest at {}", manifest_path.display())
+                })?;
+        if replaced {
+            warn!("Dependency '{}' already existed, updated it", package_name);
         }
-
-        dependencies.insert(package_name.clone(), dependency_spec);
         info!("Added dependency: {}", package_name);
     }
-
-    // Save updated manifest
-    save_manifest(&manifest, &manifest_path)
-        .with_context(|| format!("Failed to save manifest to {}", manifest_path.display()))?;
 
     info!("Successfully added {} dependencies", package_names.len());
 
@@ -197,6 +195,7 @@ pub async fn add_packages(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::manifest_utils::save_manifest;
     use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
     use hpm_package::{PackageManifest, PackagePath};
     use proptest::prelude::*;
