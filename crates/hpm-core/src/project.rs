@@ -636,9 +636,7 @@ impl ProjectManager {
             .map(|p| p.manifest.clone())
             .collect();
         let project_houdini_version = self
-            .load_project_manifest()
-            .ok()
-            .flatten()
+            .load_project_manifest()?
             .and_then(|m| m.compat.houdini_min());
         let collected = collect_python_dependencies(project_houdini_version.as_deref(), &manifests)
             .await
@@ -711,12 +709,20 @@ impl ProjectManager {
             ))
         })?;
 
+        // The manifest path always has a parent (it is `<root>/hpm.toml`);
+        // never fall back to cwd, which would silently resolve python/ and
+        // dependency paths against wherever the process happens to run.
         let project_root = self
             .project_paths
             .manifest_file
             .parent()
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+            .ok_or_else(|| {
+                ProjectError::PackageEnvNotReady(format!(
+                    "Manifest path {} has no parent directory",
+                    self.project_paths.manifest_file.display()
+                ))
+            })?;
 
         // Locked, already-installed dependency packages (read-only).
         let dep_packages = self.installed_dependency_closure(&project_manifest)?;
@@ -1130,14 +1136,8 @@ impl ProjectManager {
                             .find(|p| p.manifest.package.slug() == package_name)
                             .cloned();
 
-                        let version = installed_package
-                            .as_ref()
-                            .map(|p| p.version.clone())
-                            .unwrap_or_else(|| "unknown".to_string());
-
                         dependencies.push(ProjectDependency {
                             name: package_name.to_string(),
-                            version,
                             installed_package,
                         });
                     }

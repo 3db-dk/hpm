@@ -473,7 +473,7 @@ fn chrono_now() -> String {
     let format =
         time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
     now.format(format)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+        .expect("formatting a UTC timestamp with a static format description cannot fail")
 }
 
 /// Get the current platform identifier

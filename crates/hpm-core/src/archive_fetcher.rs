@@ -303,25 +303,11 @@ fn validate_path_safety_sync(path: &Path) -> Result<(), FetchError> {
     Ok(())
 }
 
-/// Get the checksum for a directory, using cache if available (blocking operation).
-fn get_directory_checksum_sync(dir: &Path) -> Result<String, FetchError> {
-    // Try to read from cache first
-    let checksum_file = dir.join(CHECKSUM_CACHE_FILE);
-    if let Ok(cached) = std::fs::read_to_string(&checksum_file) {
-        debug!("Using cached checksum for {:?}", dir);
-        return Ok(cached.trim().to_string());
-    }
-
-    // Compute checksum and cache it
-    let checksum = compute_directory_checksum_sync(dir)?;
-    if let Err(e) = std::fs::write(&checksum_file, &checksum) {
-        warn!("Failed to cache checksum: {}", e);
-        // Non-fatal - we still have the checksum
-    }
-    Ok(checksum)
-}
-
 /// Compute a SHA-256 checksum of a directory's contents (blocking operation).
+///
+/// Always computed from the actual tree — never cached on disk. A stored
+/// checksum can go stale without anything invalidating it, silently
+/// misreporting the package hash that feeds lockfile verification.
 fn compute_directory_checksum_sync(dir: &Path) -> Result<String, FetchError> {
     let mut hasher = Sha256::new();
 
@@ -331,7 +317,8 @@ fn compute_directory_checksum_sync(dir: &Path) -> Result<String, FetchError> {
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
-        // Skip the checksum cache file itself
+        // Skip stray `.hpm-checksum` cache files written by earlier hpm
+        // versions so they can't perturb the digest.
         .filter(|e| e.file_name() != CHECKSUM_CACHE_FILE)
         .collect();
 
@@ -371,6 +358,9 @@ pub enum FetchError {
 
     #[error("Failed to create cache directory: {0}")]
     CacheDirectoryError(std::io::Error),
+
+    #[error("Failed to probe cache path: {0}")]
+    CacheProbeError(std::io::Error),
 
     #[error("Failed to write archive to disk: {0}")]
     WriteError(std::io::Error),
@@ -470,15 +460,19 @@ impl ArchiveFetcher {
             .into_owned();
 
         // Check if already extracted
-        if tokio::fs::try_exists(&package_dir).await.unwrap_or(false) {
+        if tokio::fs::try_exists(&package_dir)
+            .await
+            .map_err(FetchError::CacheProbeError)?
+        {
             info!("Package {} already cached at {:?}", cache_key, package_dir);
             let dir_for_checksum = package_dir.clone();
-            let checksum =
-                tokio::task::spawn_blocking(move || get_directory_checksum_sync(&dir_for_checksum))
-                    .await
-                    .map_err(|e| {
-                        FetchError::ExtractionError(format!("Checksum task join error: {}", e))
-                    })??;
+            let checksum = tokio::task::spawn_blocking(move || {
+                compute_directory_checksum_sync(&dir_for_checksum)
+            })
+            .await
+            .map_err(|e| {
+                FetchError::ExtractionError(format!("Checksum task join error: {}", e))
+            })??;
             return Ok(FetchResult {
                 package_path: package_dir,
                 checksum,
@@ -504,7 +498,7 @@ impl ArchiveFetcher {
         // Compute checksum
         let package_dir_for_checksum = package_dir.clone();
         let checksum = tokio::task::spawn_blocking(move || {
-            get_directory_checksum_sync(&package_dir_for_checksum)
+            compute_directory_checksum_sync(&package_dir_for_checksum)
         })
         .await
         .map_err(|e| FetchError::ExtractionError(format!("Checksum task join error: {}", e)))??;
@@ -529,7 +523,10 @@ impl ArchiveFetcher {
         let archive_path = self.cache_dir.join(cache_key);
 
         // Check if already downloaded
-        if tokio::fs::try_exists(&archive_path).await.unwrap_or(false) {
+        if tokio::fs::try_exists(&archive_path)
+            .await
+            .map_err(FetchError::CacheProbeError)?
+        {
             debug!("Archive already cached at {:?}", archive_path);
             return Ok(archive_path);
         }

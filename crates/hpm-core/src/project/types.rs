@@ -4,10 +4,14 @@
 use crate::lock::LockedSource;
 use crate::storage::InstalledPackage;
 
+/// A dependency recorded in the project's `.hpm/packages/` directory.
+///
+/// `installed_package` is `None` when the recorded package is missing from
+/// the global store (a stale Houdini manifest or a removed package) — that
+/// desync is represented explicitly rather than with placeholder values.
 #[derive(Debug, Clone)]
 pub struct ProjectDependency {
     pub name: String,
-    pub version: String,
     pub installed_package: Option<InstalledPackage>,
 }
 
