@@ -42,7 +42,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::dependency::DependencySpec;
-use crate::env_value::{Condition, EnvValue, ExpressionError, HoudiniRange};
+use crate::env_value::{EnvValue, ExpressionError, HoudiniRange};
 use crate::houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 use crate::package_path::PackagePath;
 use crate::platform::Platform;
@@ -317,6 +317,8 @@ impl PackageManifest {
                 continue;
             }
             for variant in variants {
+                // The `os` axis itself is typed (`OsKey`), so an unknown
+                // keyword already failed at manifest load.
                 if variant.when.houdini.is_some()
                     || variant.when.python.is_some()
                     || variant.when.install_source.is_some()
@@ -326,15 +328,6 @@ impl PackageManifest {
                          `houdini`, `python`, and `install_source` axes have no meaning at `hpm run` time",
                         name
                     ));
-                    continue;
-                }
-                if let Some(os) = &variant.when.os
-                    && let Err(e) = crate::env_value::compile_condition(&Condition {
-                        os: Some(os.clone()),
-                        ..Default::default()
-                    })
-                {
-                    report.errors.push(format!("script '{}': {}", name, e));
                 }
             }
         }

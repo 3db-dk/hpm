@@ -169,9 +169,6 @@ fn display_tree(manifest: &PackageManifest, console: &mut Console) {
 /// Format source info for tree display (compact format)
 fn format_tree_source_info(spec: &DependencySpec) -> String {
     match spec {
-        DependencySpec::Simple(version) => {
-            format!("(registry@{})", version)
-        }
         DependencySpec::Registry {
             version,
             registry: Some(r),
@@ -272,9 +269,6 @@ fn display_python_dependencies(manifest: &PackageManifest, console: &mut Console
 /// * Path: `{path: "../local"}` → `"path: ../local"`
 fn format_dependency_spec(spec: &DependencySpec) -> String {
     match spec {
-        DependencySpec::Simple(version) => {
-            format!("registry (version: {})", version)
-        }
         DependencySpec::Registry {
             version,
             registry: Some(r),

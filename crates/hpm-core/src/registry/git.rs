@@ -15,7 +15,7 @@
 //! Each `.json` file contains one JSON object per line (one per version).
 
 use super::types::{RegistryEntry, SearchResults};
-use super::{Registry, RegistryError};
+use super::{Registry, RegistryError, select_build_for_host};
 use async_trait::async_trait;
 use hpm_package::IoOp;
 use std::path::PathBuf;
@@ -251,13 +251,20 @@ impl Registry for GitRegistry {
 
     async fn get_version(&self, name: &str, version: &str) -> Result<RegistryEntry, RegistryError> {
         let entries = self.get_versions(name).await?;
-        entries
+        // A version may have several per-platform build entries. Mirror
+        // ApiRegistry: host-platform match first, then universal, else
+        // NoCompatibleBuild — never just the first version-string match.
+        let builds: Vec<RegistryEntry> = entries
             .into_iter()
-            .find(|e| e.version == version)
-            .ok_or_else(|| RegistryError::VersionNotFound {
+            .filter(|e| e.version == version)
+            .collect();
+        if builds.is_empty() {
+            return Err(RegistryError::VersionNotFound {
                 name: name.to_string(),
                 version: version.to_string(),
-            })
+            });
+        }
+        select_build_for_host(&builds, name, version).cloned()
     }
 
     async fn refresh(&self) -> Result<(), RegistryError> {
@@ -307,6 +314,68 @@ mod tests {
         let reg = GitRegistry::new("test", "https://example.com", tmp.path());
         let result = reg.read_entries("creator/nonexistent");
         assert!(matches!(result, Err(RegistryError::PackageNotFound { .. })));
+    }
+
+    /// A git index serving several per-platform builds of the same version
+    /// must resolve to the host's build, exactly like ApiRegistry — not the
+    /// first version-string match in file order.
+    #[tokio::test]
+    async fn get_version_selects_host_platform_build() {
+        let tmp = TempDir::new().unwrap();
+        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
+        // Mark the cache as populated so get_versions doesn't try to clone.
+        std::fs::write(tmp.path().join("config.json"), "{}").unwrap();
+
+        let host = hpm_package::Platform::current().expect("host platform detectable");
+        // A tagged non-host build first in the file: first-match would pick it.
+        let other = if host == hpm_package::Platform::LinuxX86_64 {
+            hpm_package::Platform::WindowsX86_64
+        } else {
+            hpm_package::Platform::LinuxX86_64
+        };
+
+        let path = reg.index_path("acme/native").unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let line = |platform: &str, dl: &str| {
+            format!(
+                r#"{{"name":"acme/native","vers":"1.0.0","deps":[],"dl":"{dl}","platform":"{platform}","yanked":false}}"#
+            )
+        };
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                line(other.as_str(), "https://example.com/other.zip"),
+                line(host.as_str(), "https://example.com/host.zip"),
+            ),
+        )
+        .unwrap();
+
+        let entry = reg.get_version("acme/native", "1.0.0").await.unwrap();
+        assert_eq!(entry.dl, "https://example.com/host.zip");
+    }
+
+    /// Same-version builds that are all tagged for foreign platforms (and no
+    /// universal entry) must fail with NoCompatibleBuild, not silently pick one.
+    #[tokio::test]
+    async fn get_version_errors_when_no_compatible_build() {
+        let tmp = TempDir::new().unwrap();
+        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
+        std::fs::write(tmp.path().join("config.json"), "{}").unwrap();
+
+        let path = reg.index_path("acme/native").unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"name":"acme/native","vers":"1.0.0","deps":[],"dl":"https://example.com/a.zip","platform":"plan9-amd64","yanked":false}"#,
+        )
+        .unwrap();
+
+        let result = reg.get_version("acme/native", "1.0.0").await;
+        assert!(matches!(
+            result,
+            Err(RegistryError::NoCompatibleBuild { .. })
+        ));
     }
 
     #[test]

@@ -642,7 +642,7 @@ value = [
         // Houdini's expression grammar has no `true` literal to key a
         // conditional-array element with.
         HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method, "prepend");
+            assert_eq!(method.as_str(), "prepend");
             assert_eq!(value, &vec!["$HPM_PACKAGE_ROOT/dso".to_string()]);
         }
         other => panic!("expected the collapsed fallback value, got {other:?}"),
@@ -724,7 +724,7 @@ fn generate_houdini_package_includes_user_env() {
     let val = last.get("MY_VAR").unwrap();
     match val {
         HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method, "replace");
+            assert_eq!(method.as_str(), "replace");
             assert_eq!(value, &vec!["$HPM_PACKAGE_ROOT/data".to_string()]);
         }
         _ => panic!("Expected Detailed variant"),
@@ -961,7 +961,7 @@ MY_VAR = { method = "prepend", value = "$HPM_PACKAGE_ROOT/scripts" }
                 value,
                 &vec!["$HOUDINI_PACKAGE_PATH/my-tool/scripts".to_string()]
             );
-            assert_eq!(method, "prepend");
+            assert_eq!(method.as_str(), "prepend");
         }
         _ => panic!("Expected Detailed variant"),
     }
@@ -1335,7 +1335,7 @@ fn generate_houdini_native_package_env_root_replacement() {
                     "$HOUDINI_PACKAGE_PATH/test-pkg/b:$HOUDINI_PACKAGE_PATH/test-pkg/c".to_string()
                 ]
             );
-            assert_eq!(method, "append");
+            assert_eq!(method.as_str(), "append");
         }
         _ => panic!("Expected Detailed"),
     }
@@ -1399,7 +1399,7 @@ value = [
         .unwrap();
     match lowered {
         HoudiniEnvValue::DetailedConditional { method, value } => {
-            assert_eq!(method, "prepend");
+            assert_eq!(method.as_str(), "prepend");
             assert_eq!(value.len(), 2);
             let first = &value[0];
             let key = first.keys().next().unwrap();

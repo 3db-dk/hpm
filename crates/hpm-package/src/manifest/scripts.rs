@@ -168,7 +168,7 @@ fn script_condition_matches(condition: &Condition, host_os: Option<&str>) -> boo
     }
     match (&condition.os, host_os) {
         (None, _) => true,
-        (Some(req), Some(host)) => req == host,
+        (Some(req), Some(host)) => req.as_str() == host,
         (Some(_), None) => false,
     }
 }

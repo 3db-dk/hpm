@@ -173,7 +173,11 @@ fn create_houdini_package_with_project_env_overrides() {
         .unwrap();
     match my_config_entry.get("MY_CONFIG").unwrap() {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method, "replace", "hpm's `set` must lower to `replace`");
+            assert_eq!(
+                method.as_str(),
+                "replace",
+                "hpm's `set` must lower to `replace`"
+            );
             assert_eq!(value.len(), 1);
             assert!(value[0].ends_with("/default-config"));
         }
@@ -205,7 +209,7 @@ fn create_houdini_package_with_project_env_overrides() {
         .expect("a valued override must produce an overrides manifest");
     match find_env_entry(&overrides_pkg, "MY_CONFIG").unwrap() {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method, "replace");
+            assert_eq!(method.as_str(), "replace");
             assert_eq!(value, &vec!["/custom/config/path".to_string()]);
         }
         _ => panic!("Expected Detailed env value"),
@@ -286,7 +290,7 @@ async fn create_houdini_package_required_env_without_override_errors() {
     match find_env_entry(&overrides_pkg, "PROJECT_ROOT").unwrap() {
         hpm_package::HoudiniEnvValue::Detailed { value, method } => {
             assert_eq!(value, &vec!["/work/project".to_string()]);
-            assert_eq!(method, "replace");
+            assert_eq!(method.as_str(), "replace");
         }
         _ => panic!("Expected Detailed env value"),
     }
@@ -308,7 +312,7 @@ fn dev_only_runtime_entry(value: &str) -> ManifestEnvEntry {
         method: hpm_package::EnvMethod::Prepend,
         value: Some(EnvValue::Conditional(vec![EnvValueBranch {
             when: Condition {
-                install_source: Some("dev".to_string()),
+                install_source: Some(hpm_package::InstallSource::Dev),
                 ..Default::default()
             },
             set: value.to_string(),
@@ -373,7 +377,7 @@ fn runtime_install_source_dev_gates_emission() {
     // to key a conditional-array element with.
     match entry {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method, "prepend");
+            assert_eq!(method.as_str(), "prepend");
             assert_eq!(
                 value,
                 &vec![format!("{}/build/Release", package_path.display())]
@@ -454,7 +458,7 @@ fn project_prepend_override_combines_with_dev_variant() {
     );
     match entries[0] {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method, "prepend");
+            assert_eq!(method.as_str(), "prepend");
             assert_eq!(
                 value,
                 &vec![format!("{}/build/Release", package_path.display())]
@@ -467,7 +471,7 @@ fn project_prepend_override_combines_with_dev_variant() {
         .expect("a valued override must produce an overrides manifest");
     match find_env_entry(&overrides_pkg, "HOUDINI_DSO_PATH").unwrap() {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method, "prepend");
+            assert_eq!(method.as_str(), "prepend");
             assert_eq!(value, &vec!["/opt/forced/dso".to_string()]);
         }
         other => panic!("expected the project's prepend in the overrides manifest, got {other:?}"),
@@ -535,7 +539,7 @@ fn project_append_override_combines_with_package_value() {
     );
     match entries[0] {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method, "append");
+            assert_eq!(method.as_str(), "append");
             assert_eq!(value, &vec![format!("{}/python", package_path.display())]);
         }
         other => panic!("expected the package value, got {other:?}"),
@@ -546,7 +550,7 @@ fn project_append_override_combines_with_package_value() {
         .expect("a valued override must produce an overrides manifest");
     match find_env_entry(&overrides_pkg, "PYTHONPATH").unwrap() {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method, "append");
+            assert_eq!(method.as_str(), "append");
             assert_eq!(value, &vec!["/work/project/extra".to_string()]);
         }
         other => panic!("expected the project's append in the overrides manifest, got {other:?}"),
@@ -615,7 +619,11 @@ fn project_set_override_still_replaces_package_value() {
         .expect("a valued override must produce an overrides manifest");
     match find_env_entry(&overrides_pkg, "MY_CONFIG").unwrap() {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method, "replace", "hpm's `set` must lower to `replace`");
+            assert_eq!(
+                method.as_str(),
+                "replace",
+                "hpm's `set` must lower to `replace`"
+            );
             assert_eq!(value, &vec!["/custom".to_string()]);
         }
         other => panic!("expected Detailed env value, got {other:?}"),
@@ -679,7 +687,7 @@ async fn install_one_dep_short_circuits_on_scoped_name() {
     // registry_set: None — if the short-circuit misses, install_one_dep
     // would panic on `expect("registry set built when registry deps
     // present")`. Reaching that panic is exactly the bug.
-    let spec = hpm_package::DependencySpec::Simple("1.1.20".to_string());
+    let spec = hpm_package::DependencySpec::registry("1.1.20", None);
     let outcome = install_one_dep(
         &storage_manager,
         &fetcher,
@@ -693,7 +701,7 @@ async fn install_one_dep_short_circuits_on_scoped_name() {
 
     assert_eq!(outcome.package.slug(), "tumblepipe");
     assert_eq!(outcome.package.version, "1.1.20");
-    // Short-circuited Simple/Registry: no fresh fetch -> no checksum / source.
+    // Short-circuited Registry: no fresh fetch -> no checksum / source.
     assert!(outcome.checksum.is_none());
     assert!(outcome.source.is_none());
 }
@@ -714,7 +722,7 @@ async fn install_one_dep_no_registries_reports_not_configured() {
     // Empty registry set, and no matching installed package, so the
     // resolution branch is reached with nothing to resolve against.
     let registry_set = crate::registry::RegistrySet::new();
-    let spec = hpm_package::DependencySpec::Simple("1.12.2".to_string());
+    let spec = hpm_package::DependencySpec::registry("1.12.2", None);
     let err = install_one_dep(
         &storage_manager,
         &fetcher,

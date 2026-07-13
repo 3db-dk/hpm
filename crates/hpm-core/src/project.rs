@@ -620,7 +620,7 @@ impl ProjectManager {
         manifest_edit::upsert_dependency(
             manifest_path,
             &spec.name,
-            &hpm_package::DependencySpec::Simple(spec.version_req.as_str().to_string()),
+            &hpm_package::DependencySpec::registry(spec.version_req.as_str(), None),
         )?;
         Ok(())
     }
@@ -686,8 +686,8 @@ impl ProjectManager {
 ///
 /// Returns `InstallOutcome` with `checksum` / `source` populated only when
 /// they're known: fresh fetches get both, `Url`-spec short-circuits get the
-/// URL only, `Simple`/`Registry` short-circuits get neither (the lockfile
-/// builder can backfill those from the prior lockfile).
+/// URL only, `Registry` short-circuits get neither (the lockfile builder
+/// can backfill those from the prior lockfile).
 async fn install_one_dep(
     storage: &StorageManager,
     fetcher: &ArchiveFetcher,
@@ -698,7 +698,7 @@ async fn install_one_dep(
 ) -> Result<InstallOutcome, ProjectError> {
     use hpm_package::DependencySpec;
     match spec {
-        DependencySpec::Simple(version) | DependencySpec::Registry { version, .. } => {
+        DependencySpec::Registry { version, .. } => {
             if let Some(pkg) = all_installed
                 .iter()
                 .find(|p| ProjectManager::matches_spec_name(p, name) && p.version == *version)
@@ -762,7 +762,7 @@ async fn install_one_dep(
             })
         }
         DependencySpec::Path { path, link, .. } => {
-            // Unlike the Simple/Registry/Url arms there's no `all_installed`
+            // Unlike the Registry/Url arms there's no `all_installed`
             // skip here: a path dep's workspace can change between syncs, so we
             // always re-enter the installer. `install_inner` content-addresses
             // dev copies (`_dev/<slug>@<version>/<source-hash>/`), so an

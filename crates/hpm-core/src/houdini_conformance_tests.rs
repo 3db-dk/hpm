@@ -208,11 +208,11 @@ fn houdini_resolves_generated_packages_per_method() {
     // must not use the broken `{"true": ...}` encoding, which defines a
     // stray variable named `true` instead.)
     let current_os = if cfg!(target_os = "macos") {
-        "macos"
+        hpm_package::OsKey::Macos
     } else if cfg!(windows) {
-        "windows"
+        hpm_package::OsKey::Windows
     } else {
-        "linux"
+        hpm_package::OsKey::Linux
     };
     let conditional_entry =
         |method: EnvMethod, when: hpm_package::Condition, matched: &str| ManifestEnvEntry {
@@ -240,7 +240,7 @@ fn houdini_resolves_generated_packages_per_method() {
     let os_gated = conditional_entry(
         EnvMethod::Append,
         hpm_package::Condition {
-            os: Some(current_os.to_string()),
+            os: Some(current_os),
             ..Default::default()
         },
         "os-matched",

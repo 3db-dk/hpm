@@ -17,7 +17,7 @@ use thiserror::Error;
 
 pub use api::ApiRegistry;
 pub use git::GitRegistry;
-pub use types::{RegistryDependency, RegistryEntry, SearchResults};
+pub use types::{PlatformTag, RegistryDependency, RegistryEntry, SearchResults};
 
 /// Errors that can occur during registry operations.
 #[derive(Error, Debug)]
@@ -259,6 +259,47 @@ impl RegistrySet {
                 version: req.to_string(),
             })
     }
+}
+
+/// Pick the best build for the host: exact platform match first, then a
+/// universal entry. No silent positional fallback — if the registry
+/// annotates every build but none match the host, the caller should error.
+///
+/// Shared by both registry implementations so a git index serving
+/// per-platform builds selects exactly like the API registry does.
+pub(crate) fn select_build(
+    builds: &[RegistryEntry],
+    host: Option<hpm_package::Platform>,
+) -> Option<&RegistryEntry> {
+    if let Some(host) = host
+        && let Some(b) = builds
+            .iter()
+            .find(|b| b.platform.as_ref().is_some_and(|tag| tag.matches(host)))
+    {
+        return Some(b);
+    }
+    builds
+        .iter()
+        .find(|b| b.platform.as_ref().is_none_or(PlatformTag::is_universal))
+}
+
+/// [`select_build`] against the current host, erroring with
+/// [`RegistryError::NoCompatibleBuild`] when nothing matches. `builds`
+/// must already be filtered to the requested `name`/`version` — they only
+/// feed the error message.
+pub(crate) fn select_build_for_host<'a>(
+    builds: &'a [RegistryEntry],
+    name: &str,
+    version: &str,
+) -> Result<&'a RegistryEntry, RegistryError> {
+    let host = hpm_package::Platform::current();
+    select_build(builds, host).ok_or_else(|| RegistryError::NoCompatibleBuild {
+        name: name.to_string(),
+        version: version.to_string(),
+        host: host
+            .map(|p| p.as_str().to_string())
+            .unwrap_or_else(|| format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)),
+    })
 }
 
 /// The entry with the highest non-yanked semver version matching `req`.

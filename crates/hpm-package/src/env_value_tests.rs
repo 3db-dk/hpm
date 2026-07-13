@@ -90,7 +90,7 @@ fn single_equals_aliases_exact_version() {
 fn os_translates_to_houdini_os() {
     assert_eq!(
         compile_condition(&Condition {
-            os: Some("linux".to_string()),
+            os: Some(OsKey::Linux),
             ..Default::default()
         })
         .unwrap()
@@ -100,14 +100,35 @@ fn os_translates_to_houdini_os() {
 }
 
 #[test]
-fn unknown_os_rejected() {
-    assert!(
-        compile_condition(&Condition {
-            os: Some("bsd".to_string()),
+fn unknown_os_rejected_at_parse() {
+    // The `os` axis is a typed enum: an unknown keyword fails at manifest
+    // load rather than at compile/emit time.
+    #[derive(Deserialize)]
+    struct Holder {
+        #[allow(dead_code)]
+        when: Condition,
+    }
+    let res: Result<Holder, _> = toml::from_str(r#"when = { os = "bsd" }"#);
+    assert!(res.is_err());
+
+    let ok: Holder = toml::from_str(r#"when = { os = "windows" }"#).unwrap();
+    assert_eq!(ok.when.os, Some(OsKey::Windows));
+}
+
+#[test]
+fn os_serialized_form_unchanged() {
+    // `when = { os = "windows" }` must keep the same TOML wire form.
+    #[derive(Serialize, Deserialize)]
+    struct Holder {
+        when: Condition,
+    }
+    let h = Holder {
+        when: Condition {
+            os: Some(OsKey::Windows),
             ..Default::default()
-        })
-        .is_err()
-    );
+        },
+    };
+    assert_eq!(toml::to_string(&h).unwrap(), "[when]\nos = \"windows\"\n");
 }
 
 #[test]
@@ -136,7 +157,7 @@ fn python_translates_with_or_without_python_prefix() {
 fn multiple_axes_combine_with_and() {
     let s = compile_condition(&Condition {
         houdini: Some(HoudiniRange::parse("^21").unwrap()),
-        os: Some("linux".to_string()),
+        os: Some(OsKey::Linux),
         python: None,
         install_source: None,
     })
@@ -273,7 +294,7 @@ fn install_source_dev_filters_out_for_registry_install() {
     let variants = vec![
         EnvValueBranch {
             when: Condition {
-                install_source: Some("dev".to_string()),
+                install_source: Some(InstallSource::Dev),
                 ..Default::default()
             },
             set: "build/Release".to_string(),
@@ -305,7 +326,7 @@ fn install_source_strips_from_runtime_expression() {
     let variants = vec![EnvValueBranch {
         when: Condition {
             houdini: Some(HoudiniRange::parse("^21").unwrap()),
-            install_source: Some("dev".to_string()),
+            install_source: Some(InstallSource::Dev),
             ..Default::default()
         },
         set: "x".to_string(),
@@ -321,7 +342,7 @@ fn install_source_strips_from_runtime_expression() {
 fn install_source_registry_filters_out_for_dev_install() {
     let variants = vec![EnvValueBranch {
         when: Condition {
-            install_source: Some("registry".to_string()),
+            install_source: Some(InstallSource::Registry),
             ..Default::default()
         },
         set: "dso".to_string(),
@@ -337,15 +358,19 @@ fn install_source_registry_filters_out_for_dev_install() {
 }
 
 #[test]
-fn unknown_install_source_rejected() {
-    let variants = vec![EnvValueBranch {
-        when: Condition {
-            install_source: Some("ci".to_string()),
-            ..Default::default()
-        },
-        set: "x".to_string(),
-    }];
-    assert!(lower_conditional(&variants, &[], true).is_err());
+fn unknown_install_source_rejected_at_parse() {
+    // The axis is a typed enum: a typo like "ci" fails at manifest load
+    // instead of silently dropping the variant at install time.
+    #[derive(Deserialize)]
+    struct Holder {
+        #[allow(dead_code)]
+        when: Condition,
+    }
+    let res: Result<Holder, _> = toml::from_str(r#"when = { install_source = "ci" }"#);
+    assert!(res.is_err());
+
+    let ok: Holder = toml::from_str(r#"when = { install_source = "dev" }"#).unwrap();
+    assert_eq!(ok.when.install_source, Some(InstallSource::Dev));
 }
 
 #[test]

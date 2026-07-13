@@ -10,6 +10,11 @@ use serde::{Deserialize, Serialize};
 /// HPM resolves packages through a registry at install/sync time.
 /// URL and local path dependencies are also supported.
 ///
+/// A bare version string (`my-package = "1.0.0"`) is shorthand for a
+/// registry-resolved dependency with no options; it deserializes to
+/// [`DependencySpec::Registry`] with `registry: None` and
+/// `optional: false`, and that shape serializes back to the bare string.
+///
 /// # Examples
 ///
 /// ```toml
@@ -29,13 +34,21 @@ use serde::{Deserialize, Serialize};
 /// # Local path dependency installed as a symlink/junction (live edits)
 /// my-local-pkg = { path = "../my-local-package", link = true }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum DependencySpec {
-    /// Bare version string shorthand (e.g., `"1.0.0"`)
+    /// Registry-resolved dependency.
     ///
-    /// Resolved through the configured registries at install time.
-    Simple(String),
+    /// Resolved through the configured registries (or a specific one) at
+    /// install time. The bare-string manifest shorthand maps here with
+    /// `registry: None` and `optional: false`.
+    Registry {
+        /// The version (e.g., "1.0.0")
+        version: String,
+        /// Optional registry name to resolve from
+        registry: Option<String>,
+        /// Whether this dependency is optional
+        optional: bool,
+    },
 
     /// Direct URL download (for registry-hosted archives)
     Url {
@@ -44,7 +57,6 @@ pub enum DependencySpec {
         /// The version (e.g., "1.0.0")
         version: String,
         /// Whether this dependency is optional
-        #[serde(default)]
         optional: bool,
     },
 
@@ -53,29 +65,136 @@ pub enum DependencySpec {
         /// Path to the package directory (absolute or relative to manifest)
         path: String,
         /// Whether this dependency is optional
-        #[serde(default)]
         optional: bool,
         /// Install the package as a symlink/junction into the dev subtree
         /// instead of copying the contents. Lets working-tree edits reach a
         /// live Houdini session without re-running `hpm sync`. Opt-in: the
         /// default keeps snapshot-copy semantics.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         link: bool,
     },
+}
 
-    /// Registry-resolved dependency with options
-    ///
-    /// Resolved through the configured registries (or a specific one) at install time.
-    Registry {
-        /// The version (e.g., "1.0.0")
+/// Serde wire shape for [`DependencySpec`].
+///
+/// The bare-string shorthand is a distinct untagged variant here so
+/// `my-pkg = "1.0.0"` round-trips: it deserializes into the `Registry`
+/// public variant, and a `Registry` with no options serializes back to
+/// the bare string.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum DependencySpecRepr {
+    Simple(String),
+    Url {
+        url: String,
         version: String,
-        /// Optional registry name to resolve from
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        registry: Option<String>,
-        /// Whether this dependency is optional
         #[serde(default)]
         optional: bool,
     },
+    Path {
+        path: String,
+        #[serde(default)]
+        optional: bool,
+        // Omitted when false so existing manifests don't churn.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        link: bool,
+    },
+    Registry {
+        version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        registry: Option<String>,
+        #[serde(default)]
+        optional: bool,
+    },
+}
+
+impl From<DependencySpecRepr> for DependencySpec {
+    fn from(repr: DependencySpecRepr) -> Self {
+        match repr {
+            DependencySpecRepr::Simple(version) => DependencySpec::Registry {
+                version,
+                registry: None,
+                optional: false,
+            },
+            DependencySpecRepr::Url {
+                url,
+                version,
+                optional,
+            } => DependencySpec::Url {
+                url,
+                version,
+                optional,
+            },
+            DependencySpecRepr::Path {
+                path,
+                optional,
+                link,
+            } => DependencySpec::Path {
+                path,
+                optional,
+                link,
+            },
+            DependencySpecRepr::Registry {
+                version,
+                registry,
+                optional,
+            } => DependencySpec::Registry {
+                version,
+                registry,
+                optional,
+            },
+        }
+    }
+}
+
+impl From<&DependencySpec> for DependencySpecRepr {
+    fn from(spec: &DependencySpec) -> Self {
+        match spec {
+            DependencySpec::Registry {
+                version,
+                registry: None,
+                optional: false,
+            } => DependencySpecRepr::Simple(version.clone()),
+            DependencySpec::Registry {
+                version,
+                registry,
+                optional,
+            } => DependencySpecRepr::Registry {
+                version: version.clone(),
+                registry: registry.clone(),
+                optional: *optional,
+            },
+            DependencySpec::Url {
+                url,
+                version,
+                optional,
+            } => DependencySpecRepr::Url {
+                url: url.clone(),
+                version: version.clone(),
+                optional: *optional,
+            },
+            DependencySpec::Path {
+                path,
+                optional,
+                link,
+            } => DependencySpecRepr::Path {
+                path: path.clone(),
+                optional: *optional,
+                link: *link,
+            },
+        }
+    }
+}
+
+impl Serialize for DependencySpec {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        DependencySpecRepr::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DependencySpec {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        DependencySpecRepr::deserialize(deserializer).map(DependencySpec::from)
+    }
 }
 
 impl DependencySpec {
@@ -130,18 +249,14 @@ impl DependencySpec {
         matches!(self, DependencySpec::Path { .. })
     }
 
-    /// Check if this is a registry-resolved dependency (Simple or Registry).
+    /// Check if this is a registry-resolved dependency.
     pub fn is_registry(&self) -> bool {
-        matches!(
-            self,
-            DependencySpec::Simple(_) | DependencySpec::Registry { .. }
-        )
+        matches!(self, DependencySpec::Registry { .. })
     }
 
     /// Check if this dependency is optional.
     pub fn is_optional(&self) -> bool {
         match self {
-            DependencySpec::Simple(_) => false,
             DependencySpec::Url { optional, .. }
             | DependencySpec::Path { optional, .. }
             | DependencySpec::Registry { optional, .. } => *optional,
@@ -151,9 +266,9 @@ impl DependencySpec {
     /// Get the version if available.
     pub fn version(&self) -> Option<&str> {
         match self {
-            DependencySpec::Simple(version)
-            | DependencySpec::Url { version, .. }
-            | DependencySpec::Registry { version, .. } => Some(version),
+            DependencySpec::Url { version, .. } | DependencySpec::Registry { version, .. } => {
+                Some(version)
+            }
             DependencySpec::Path { .. } => None,
         }
     }
@@ -179,7 +294,7 @@ impl DependencySpec {
     /// Validate the dependency spec.
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            DependencySpec::Simple(version) | DependencySpec::Registry { version, .. } => {
+            DependencySpec::Registry { version, .. } => {
                 if version.is_empty() {
                     return Err("Version cannot be empty".to_string());
                 }
@@ -280,22 +395,68 @@ my-pkg = { path = "../local" }
         }
     }
 
+    #[derive(Serialize, Deserialize)]
+    struct Wrapper {
+        deps: indexmap::IndexMap<String, DependencySpec>,
+    }
+
     #[test]
-    fn dependency_spec_simple_toml_roundtrip() {
-        // Bare string in a dependencies table
+    fn dependency_spec_bare_string_deserializes_to_registry() {
+        // Bare string in a dependencies table is registry shorthand.
         let toml_str = r#"
 [deps]
 test = "1.0.0"
 "#;
-        #[derive(Deserialize)]
-        struct Wrapper {
-            deps: indexmap::IndexMap<String, DependencySpec>,
-        }
         let parsed: Wrapper = toml::from_str(toml_str).unwrap();
         let spec = &parsed.deps["test"];
-        assert!(matches!(spec, DependencySpec::Simple(v) if v == "1.0.0"));
+        assert!(matches!(
+            spec,
+            DependencySpec::Registry {
+                version,
+                registry: None,
+                optional: false,
+            } if version == "1.0.0"
+        ));
         assert!(spec.is_registry());
         assert_eq!(spec.version(), Some("1.0.0"));
+    }
+
+    #[test]
+    fn dependency_spec_bare_string_toml_roundtrip() {
+        // A no-options Registry spec serializes back to the bare string,
+        // so round-tripped manifests keep the idiomatic shorthand.
+        let toml_str = "[deps]\ntest = \"1.0.0\"\n";
+        let parsed: Wrapper = toml::from_str(toml_str).unwrap();
+        let rendered = toml::to_string(&parsed).unwrap();
+        assert_eq!(rendered, toml_str);
+    }
+
+    #[test]
+    fn dependency_spec_no_option_registry_serializes_bare() {
+        let spec = DependencySpec::registry("1.0.0", None);
+        let json = serde_json::to_string(&spec).unwrap();
+        assert_eq!(json, "\"1.0.0\"");
+    }
+
+    #[test]
+    fn dependency_spec_registry_with_options_serializes_table() {
+        let spec = DependencySpec::Registry {
+            version: "1.0.0".to_string(),
+            registry: Some("houdinihub".to_string()),
+            optional: false,
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains("\"version\""));
+        assert!(json.contains("\"registry\""));
+
+        let optional_only = DependencySpec::Registry {
+            version: "1.0.0".to_string(),
+            registry: None,
+            optional: true,
+        };
+        let json = serde_json::to_string(&optional_only).unwrap();
+        assert!(json.contains("\"optional\":true"));
+        assert!(!json.contains("registry"));
     }
 
     #[test]
@@ -304,10 +465,6 @@ test = "1.0.0"
 [deps]
 test = { version = "2.0.0", registry = "houdinihub", optional = true }
 "#;
-        #[derive(Deserialize)]
-        struct Wrapper {
-            deps: indexmap::IndexMap<String, DependencySpec>,
-        }
         let parsed: Wrapper = toml::from_str(toml_str).unwrap();
         let spec = &parsed.deps["test"];
         assert!(
@@ -316,6 +473,18 @@ test = { version = "2.0.0", registry = "houdinihub", optional = true }
         assert!(spec.is_registry());
         assert!(spec.is_optional());
         assert_eq!(spec.registry_name(), Some("houdinihub"));
+
+        // Options present: the table form survives re-serialization.
+        let rendered = toml::to_string(&parsed).unwrap();
+        let reparsed: Wrapper = toml::from_str(&rendered).unwrap();
+        assert!(matches!(
+            &reparsed.deps["test"],
+            DependencySpec::Registry {
+                registry: Some(_),
+                optional: true,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -325,10 +494,6 @@ test = { version = "2.0.0", registry = "houdinihub", optional = true }
 [deps]
 test = { version = "1.0.0" }
 "#;
-        #[derive(Deserialize)]
-        struct Wrapper {
-            deps: indexmap::IndexMap<String, DependencySpec>,
-        }
         let parsed: Wrapper = toml::from_str(toml_str).unwrap();
         let spec = &parsed.deps["test"];
         // This should match Registry (not Url, which requires `url` field)
@@ -391,13 +556,13 @@ test = { version = "1.0.0" }
 
     #[test]
     fn registry_dependency_validation() {
-        let valid = DependencySpec::Simple("1.0.0".to_string());
+        let valid = DependencySpec::registry("1.0.0", None);
         assert!(valid.validate().is_ok());
 
-        let empty = DependencySpec::Simple("".to_string());
+        let empty = DependencySpec::registry("", None);
         assert!(empty.validate().is_err());
 
-        let invalid_start = DependencySpec::Simple(".1.0.0".to_string());
+        let invalid_start = DependencySpec::registry(".1.0.0", None);
         assert!(invalid_start.validate().is_err());
 
         let registry = DependencySpec::registry("2.0.0", Some("houdinihub".to_string()));
@@ -422,13 +587,13 @@ test = { version = "1.0.0" }
         assert_eq!(path_dep.version(), None);
         assert_eq!(path_dep.local_path(), Some("../local"));
 
-        let simple_dep = DependencySpec::Simple("1.0.0".to_string());
-        assert!(!simple_dep.is_url());
-        assert!(!simple_dep.is_path());
-        assert!(simple_dep.is_registry());
-        assert!(!simple_dep.is_optional());
-        assert_eq!(simple_dep.version(), Some("1.0.0"));
-        assert_eq!(simple_dep.registry_name(), None);
+        let bare_dep = DependencySpec::registry("1.0.0", None);
+        assert!(!bare_dep.is_url());
+        assert!(!bare_dep.is_path());
+        assert!(bare_dep.is_registry());
+        assert!(!bare_dep.is_optional());
+        assert_eq!(bare_dep.version(), Some("1.0.0"));
+        assert_eq!(bare_dep.registry_name(), None);
 
         let registry_dep = DependencySpec::Registry {
             version: "2.0.0".to_string(),

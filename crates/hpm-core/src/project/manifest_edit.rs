@@ -41,13 +41,17 @@ pub fn with_manifest_edit(
 }
 
 /// Render a [`DependencySpec`] as the `toml_edit` item it takes in
-/// `[dependencies]`: the bare version-string shorthand for `Simple`, an
-/// inline table for everything else. Mirrors the serde shapes in
-/// `hpm_package::dependency`.
+/// `[dependencies]`: the bare version-string shorthand for a no-options
+/// registry spec, an inline table for everything else. Mirrors the serde
+/// shapes in `hpm_package::dependency`.
 fn dependency_item(spec: &DependencySpec) -> toml_edit::Item {
     let mut inline = toml_edit::InlineTable::new();
     match spec {
-        DependencySpec::Simple(version) => return toml_edit::value(version),
+        DependencySpec::Registry {
+            version,
+            registry: None,
+            optional: false,
+        } => return toml_edit::value(version),
         DependencySpec::Registry {
             version,
             registry,
@@ -167,7 +171,7 @@ existing = "1.2.3" # keep me
         let added = upsert_dependency(
             &path,
             "acme/tools",
-            &DependencySpec::Simple("2.0.0".to_string()),
+            &DependencySpec::registry("2.0.0", None),
         )
         .unwrap();
         assert!(!added, "new entry is not a replacement");
@@ -184,12 +188,8 @@ existing = "1.2.3" # keep me
         let dir = TempDir::new().unwrap();
         let path = write_manifest(&dir);
 
-        let replaced = upsert_dependency(
-            &path,
-            "existing",
-            &DependencySpec::Simple("9.9.9".to_string()),
-        )
-        .unwrap();
+        let replaced =
+            upsert_dependency(&path, "existing", &DependencySpec::registry("9.9.9", None)).unwrap();
         assert!(replaced);
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains(r#"existing = "9.9.9""#));

@@ -145,14 +145,10 @@ pub async fn add_packages(
 
             info!("Resolved {} -> {}", pkg_name, entry.version);
 
-            if optional {
-                DependencySpec::Registry {
-                    version: entry.version.clone(),
-                    registry: None,
-                    optional: true,
-                }
-            } else {
-                DependencySpec::Simple(entry.version.clone())
+            DependencySpec::Registry {
+                version: entry.version.clone(),
+                registry: None,
+                optional,
             }
         };
 

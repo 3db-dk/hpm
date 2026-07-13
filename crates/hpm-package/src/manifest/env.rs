@@ -2,7 +2,7 @@
 //! Houdini `package.json`.
 
 use crate::env_value::{EnvValue, ExpressionError, LoweredConditional, lower_conditional};
-use crate::houdini::HoudiniEnvValue;
+use crate::houdini::{HoudiniEnvValue, HoudiniMethod};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -26,15 +26,15 @@ impl EnvMethod {
         }
     }
 
-    /// Method string emitted into Houdini's package.json. Houdini accepts
-    /// only `prepend` / `append` / `replace` — there is no `set` (it warns
+    /// Method emitted into Houdini's package.json. Houdini accepts only
+    /// `prepend` / `append` / `replace` — there is no `set` (it warns
     /// `Unsupported method value: set`), so hpm's `set` lowers to
-    /// `replace`. Verified against Houdini 21.0.688.
-    pub fn houdini_method(&self) -> &'static str {
+    /// [`HoudiniMethod::Replace`]. Verified against Houdini 21.0.688.
+    pub fn houdini_method(&self) -> HoudiniMethod {
         match self {
-            EnvMethod::Set => "replace",
-            EnvMethod::Prepend => "prepend",
-            EnvMethod::Append => "append",
+            EnvMethod::Set => HoudiniMethod::Replace,
+            EnvMethod::Prepend => HoudiniMethod::Prepend,
+            EnvMethod::Append => HoudiniMethod::Append,
         }
     }
 }
@@ -120,7 +120,7 @@ impl ManifestEnvEntry {
                 // string marks the variable non-mergeable and every later
                 // entry silently overwrites it, whatever its method says.
                 HoudiniEnvValue::Detailed {
-                    method: method.to_string(),
+                    method,
                     value: vec![out],
                 }
             }
@@ -132,7 +132,7 @@ impl ManifestEnvEntry {
                     // no always-true expression to put in a conditional
                     // array.
                     LoweredConditional::Unconditional(value) => HoudiniEnvValue::Detailed {
-                        method: method.to_string(),
+                        method,
                         value: vec![value],
                     },
                     LoweredConditional::Branches(branches) => {
@@ -143,7 +143,7 @@ impl ManifestEnvEntry {
                             return Ok(None);
                         }
                         HoudiniEnvValue::DetailedConditional {
-                            method: method.to_string(),
+                            method,
                             value: branches,
                         }
                     }

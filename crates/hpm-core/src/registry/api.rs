@@ -4,7 +4,7 @@
 //! such as `https://api.3db.dk/v1/registry`.
 
 use super::types::{RegistryEntry, SearchResults};
-use super::{Registry, RegistryError};
+use super::{Registry, RegistryError, select_build_for_host};
 use async_trait::async_trait;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use tracing::{debug, info};
@@ -191,16 +191,7 @@ impl Registry for ApiRegistry {
             });
         }
 
-        let host = hpm_package::Platform::current();
-        select_build(&wrapper.builds, host).cloned().ok_or_else(|| {
-            RegistryError::NoCompatibleBuild {
-                name: name.to_string(),
-                version: version.to_string(),
-                host: host.map(|p| p.as_str().to_string()).unwrap_or_else(|| {
-                    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
-                }),
-            }
-        })
+        select_build_for_host(&wrapper.builds, name, version).cloned()
     }
 
     async fn refresh(&self) -> Result<(), RegistryError> {
@@ -230,50 +221,6 @@ fn encode_package_path(name: &str) -> String {
     } else {
         urlencoded(name)
     }
-}
-
-/// Map a registry platform identifier to hpm's canonical
-/// [`hpm_package::Platform`]. Only the canonical arch-suffixed form
-/// (`"windows-x86_64"`, `"macos-aarch64"`, …) is accepted; a bare OS tag
-/// is ambiguous (it says nothing about the architecture) and returns
-/// `None` rather than guessing. The universal sentinel is handled
-/// separately by [`is_universal`].
-fn normalize_platform(s: &str) -> Option<hpm_package::Platform> {
-    use hpm_package::Platform;
-    match s.parse::<Platform>() {
-        Ok(Platform::Universal) => None,
-        Ok(p) => Some(p),
-        Err(_) => None,
-    }
-}
-
-/// A build entry counts as universal when the registry omits the platform
-/// or tags it `"universal"` (case-insensitive).
-fn is_universal(platform: Option<&str>) -> bool {
-    match platform {
-        None => true,
-        Some(s) => s.eq_ignore_ascii_case("universal"),
-    }
-}
-
-/// Pick the best build for the host: exact platform match first, then a
-/// universal entry. No silent positional fallback — if the registry
-/// annotates every build but none match the host, the caller should error.
-fn select_build(
-    builds: &[RegistryEntry],
-    host: Option<hpm_package::Platform>,
-) -> Option<&RegistryEntry> {
-    if let Some(host) = host
-        && let Some(b) = builds.iter().find(|b| {
-            b.platform
-                .as_deref()
-                .and_then(normalize_platform)
-                .is_some_and(|bp| bp == host)
-        })
-    {
-        return Some(b);
-    }
-    builds.iter().find(|b| is_universal(b.platform.as_deref()))
 }
 
 #[cfg(test)]
@@ -338,6 +285,8 @@ mod tests {
         assert!(matches!(result, Err(RegistryError::ParseError(_))));
     }
 
+    use super::super::select_build;
+    use super::super::types::PlatformTag;
     use hpm_package::Platform;
 
     fn build_with(platform: Option<&str>, dl: &str) -> RegistryEntry {
@@ -350,62 +299,12 @@ mod tests {
             sig: None,
             kid: None,
             houdini_compat: None,
-            platform: platform.map(|s| s.to_string()),
+            platform: platform.map(|s| PlatformTag::from(s.to_string())),
             yanked: false,
             description: None,
             author: None,
             created_at: None,
         }
-    }
-
-    #[test]
-    fn normalize_accepts_canonical_long_form() {
-        assert_eq!(
-            normalize_platform("windows-x86_64"),
-            Some(Platform::WindowsX86_64)
-        );
-        assert_eq!(
-            normalize_platform("linux-x86_64"),
-            Some(Platform::LinuxX86_64)
-        );
-        assert_eq!(
-            normalize_platform("linux-aarch64"),
-            Some(Platform::LinuxAarch64)
-        );
-        assert_eq!(
-            normalize_platform("macos-x86_64"),
-            Some(Platform::MacosX86_64)
-        );
-        assert_eq!(
-            normalize_platform("macos-aarch64"),
-            Some(Platform::MacosAarch64)
-        );
-        assert_eq!(
-            normalize_platform("windows-aarch64"),
-            Some(Platform::WindowsAarch64)
-        );
-    }
-
-    #[test]
-    fn normalize_rejects_bare_os_tags() {
-        // A bare OS tag says nothing about the architecture; matching it
-        // to x86_64 would be a guess that misroutes ARM hosts.
-        assert_eq!(normalize_platform("WINDOWS"), None);
-        assert_eq!(normalize_platform("Linux"), None);
-        assert_eq!(normalize_platform("macos"), None);
-    }
-
-    #[test]
-    fn normalize_rejects_universal_and_unknown() {
-        // "universal" parses as Platform::Universal, but normalize routes it
-        // to None so the is_universal fallback path handles selection.
-        assert_eq!(normalize_platform("universal"), None);
-        assert_eq!(normalize_platform(""), None);
-        // The legacy macos-universal tag is no longer recognized; data tagged
-        // that way needs to be re-registered with the new arch suffixes.
-        assert_eq!(normalize_platform("macos-universal"), None);
-        // arm64 (vs aarch64) is the wrong spelling for hpm's enum.
-        assert_eq!(normalize_platform("linux-arm64"), None);
     }
 
     #[test]

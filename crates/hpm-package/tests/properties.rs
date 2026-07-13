@@ -95,8 +95,8 @@ pub fn houdini_version_strategy() -> impl Strategy<Value = String> {
 /// Strategy to generate dependency specifications
 pub fn dependency_spec_strategy() -> impl Strategy<Value = DependencySpec> {
     prop_oneof![
-        // Simple bare version
-        version_strategy().prop_map(DependencySpec::Simple),
+        // Bare version shorthand (registry spec with no options)
+        version_strategy().prop_map(|version| DependencySpec::registry(version, None)),
         // URL dependency
         (url_strategy(), version_strategy(), any::<bool>()).prop_map(|(url, version, optional)| {
             DependencySpec::Url {
@@ -550,12 +550,12 @@ proptest! {
                         HoudiniEnvValue::Simple(s) => {
                             prop_assert!(!s.is_empty(), "Simple env value should not be empty");
                         }
-                        HoudiniEnvValue::Detailed { method, value } => {
-                            prop_assert!(!method.is_empty(), "Env method should not be empty");
+                        // `method` is a typed enum (HoudiniMethod), so only the
+                        // value shape needs checking here.
+                        HoudiniEnvValue::Detailed { value, .. } => {
                             prop_assert!(!value.is_empty(), "Detailed env value should not be empty");
                         }
-                        HoudiniEnvValue::DetailedConditional { method, value } => {
-                            prop_assert!(!method.is_empty(), "Env method should not be empty");
+                        HoudiniEnvValue::DetailedConditional { value, .. } => {
                             prop_assert!(
                                 !value.is_empty(),
                                 "Conditional env value list should not be empty"

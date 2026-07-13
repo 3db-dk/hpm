@@ -44,6 +44,36 @@ pub struct HoudiniPackage {
     pub recommends: Option<Vec<String>>,
 }
 
+/// Env-application method accepted by Houdini's package system.
+///
+/// These are the only method values Houdini accepts — anything else
+/// (notably `set`) draws `WARNING: Unsupported method value`. Verified
+/// against Houdini 21.0.688.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HoudiniMethod {
+    Prepend,
+    Append,
+    Replace,
+}
+
+impl HoudiniMethod {
+    /// The package.json string form (`"prepend"` / `"append"` / `"replace"`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HoudiniMethod::Prepend => "prepend",
+            HoudiniMethod::Append => "append",
+            HoudiniMethod::Replace => "replace",
+        }
+    }
+}
+
+impl std::fmt::Display for HoudiniMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Environment variable value in Houdini package.json
 ///
 /// Supports three formats:
@@ -55,9 +85,8 @@ pub struct HoudiniPackage {
 /// `Detailed` values are always emitted as JSON lists, never flat strings.
 /// Houdini only honors `method` on a custom (non-registered) variable when
 /// the variable's first definition uses a list value; with a flat string
-/// every later entry silently overwrites, regardless of method. The valid
-/// methods are `prepend` / `append` / `replace` — `set` is rejected with
-/// `Unsupported method value: set`. Verified against Houdini 21.0.688.
+/// every later entry silently overwrites, regardless of method. hpm's
+/// `set` lowers to [`HoudiniMethod::Replace`] — Houdini has no `set`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum HoudiniEnvValue {
@@ -65,8 +94,8 @@ pub enum HoudiniEnvValue {
     Simple(String),
     /// Detailed value with method specification
     Detailed {
-        /// How to apply the value: "prepend", "append", or "replace"
-        method: String,
+        /// How to apply the value
+        method: HoudiniMethod,
         /// The value elements to apply
         value: Vec<String>,
     },
@@ -77,7 +106,7 @@ pub enum HoudiniEnvValue {
     /// branch excludes all earlier branches' conditions) — at most one
     /// element fires, giving the manifest's first-match semantics.
     DetailedConditional {
-        method: String,
+        method: HoudiniMethod,
         value: Vec<HashMap<String, String>>,
     },
 }
@@ -91,7 +120,7 @@ impl HoudiniEnvValue {
     /// Create a prepend environment value.
     pub fn prepend(value: impl Into<String>) -> Self {
         HoudiniEnvValue::Detailed {
-            method: "prepend".to_string(),
+            method: HoudiniMethod::Prepend,
             value: vec![value.into()],
         }
     }
@@ -99,7 +128,7 @@ impl HoudiniEnvValue {
     /// Create an append environment value.
     pub fn append(value: impl Into<String>) -> Self {
         HoudiniEnvValue::Detailed {
-            method: "append".to_string(),
+            method: HoudiniMethod::Append,
             value: vec![value.into()],
         }
     }
@@ -108,7 +137,7 @@ impl HoudiniEnvValue {
     /// Houdini has no `set` method).
     pub fn replace(value: impl Into<String>) -> Self {
         HoudiniEnvValue::Detailed {
-            method: "replace".to_string(),
+            method: HoudiniMethod::Replace,
             value: vec![value.into()],
         }
     }
@@ -223,7 +252,7 @@ mod tests {
 
         match prepend {
             HoudiniEnvValue::Detailed { method, value } => {
-                assert_eq!(method, "prepend");
+                assert_eq!(method, HoudiniMethod::Prepend);
                 assert_eq!(value, vec!["value"]);
             }
             _ => panic!("Expected Detailed variant"),
@@ -231,7 +260,7 @@ mod tests {
 
         match append {
             HoudiniEnvValue::Detailed { method, value } => {
-                assert_eq!(method, "append");
+                assert_eq!(method, HoudiniMethod::Append);
                 assert_eq!(value, vec!["value"]);
             }
             _ => panic!("Expected Detailed variant"),
@@ -239,7 +268,7 @@ mod tests {
 
         match replace {
             HoudiniEnvValue::Detailed { method, value } => {
-                assert_eq!(method, "replace");
+                assert_eq!(method, HoudiniMethod::Replace);
                 assert_eq!(value, vec!["value"]);
             }
             _ => panic!("Expected Detailed variant"),

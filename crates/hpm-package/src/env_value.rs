@@ -57,6 +57,67 @@ pub struct EnvValueBranch {
     pub set: String,
 }
 
+/// Houdini OS keyword for `when.os` selectors — the values Houdini's
+/// `houdini_os` variable takes. Matches [`crate::Platform::os_key`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OsKey {
+    Linux,
+    Macos,
+    Windows,
+}
+
+impl OsKey {
+    /// The `houdini_os` keyword (`"linux"`, `"macos"`, `"windows"`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OsKey::Linux => "linux",
+            OsKey::Macos => "macos",
+            OsKey::Windows => "windows",
+        }
+    }
+}
+
+impl std::str::FromStr for OsKey {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "linux" => Ok(OsKey::Linux),
+            "macos" => Ok(OsKey::Macos),
+            "windows" => Ok(OsKey::Windows),
+            other => Err(format!(
+                "unknown os '{other}' (expected 'linux', 'macos', or 'windows')"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for OsKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Install-source axis for `when.install_source` selectors: `dev` matches a
+/// path-installed (dev) package, `registry` a registry/URL install.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum InstallSource {
+    Dev,
+    Registry,
+}
+
+impl InstallSource {
+    /// Manifest string form (`"dev"` / `"registry"`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            InstallSource::Dev => "dev",
+            InstallSource::Registry => "registry",
+        }
+    }
+}
+
 /// Selector axes for a conditional env-value branch.
 ///
 /// The `houdini`, `os`, and `python` axes are *runtime-evaluated by Houdini*
@@ -76,9 +137,10 @@ pub struct Condition {
     /// install/emit time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub houdini: Option<HoudiniRange>,
-    /// Houdini OS keyword: `"linux"`, `"macos"`, or `"windows"`.
+    /// Houdini OS keyword: `"linux"`, `"macos"`, or `"windows"`. Typed, so
+    /// an unknown keyword fails at manifest load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub os: Option<String>,
+    pub os: Option<OsKey>,
     /// Houdini Python identifier: `"3.11"`, `"3.10"`, etc. Compiles to
     /// `houdini_python == 'python3.11'`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,7 +150,7 @@ pub struct Condition {
     /// Houdini — so a branch gated `install_source = "dev"` disappears
     /// entirely from a published consumer's `package.json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub install_source: Option<String>,
+    pub install_source: Option<InstallSource>,
 }
 
 impl Condition {
@@ -102,15 +164,11 @@ impl Condition {
     /// True when this selector's `install_source` axis matches the given
     /// install context. A `None` axis matches both. Other axes are ignored
     /// here — those are evaluated by Houdini, not hpm.
-    ///
-    /// Errors on an unknown `install_source` value so the typo surfaces at
-    /// install time rather than silently dropping the variant.
-    pub fn matches_install_source(&self, is_dev: bool) -> Result<bool, ExpressionError> {
-        match self.install_source.as_deref() {
-            None => Ok(true),
-            Some("dev") => Ok(is_dev),
-            Some("registry") => Ok(!is_dev),
-            Some(other) => Err(ExpressionError::UnknownInstallSource(other.to_string())),
+    pub fn matches_install_source(&self, is_dev: bool) -> bool {
+        match self.install_source {
+            None => true,
+            Some(InstallSource::Dev) => is_dev,
+            Some(InstallSource::Registry) => !is_dev,
         }
     }
 }
@@ -165,9 +223,6 @@ impl ConditionAtom {
 /// encoding for "always true" (Houdini has no boolean literals in this
 /// grammar); [`lower_conditional`] handles unconditional branches
 /// structurally instead.
-///
-/// Also validates `install_source` is one of `"dev"` / `"registry"` —
-/// unknown values would otherwise silently drop the branch at install time.
 pub fn compile_condition(selector: &Condition) -> Result<Option<String>, ExpressionError> {
     let atoms = condition_atoms(selector)?;
     if atoms.is_empty() {
@@ -184,8 +239,9 @@ pub fn compile_condition(selector: &Condition) -> Result<Option<String>, Express
 }
 
 /// The atomic comparisons of a `Condition`'s runtime axes, in axis order
-/// (houdini, os, python). Empty for an always-true selector. Validates
-/// every axis, including the runtime-irrelevant `install_source`.
+/// (houdini, os, python). Empty for an always-true selector. The `os` and
+/// `install_source` axes are typed, so only the string-shaped axes
+/// (`houdini`, `python`) can fail here.
 fn condition_atoms(selector: &Condition) -> Result<Vec<ConditionAtom>, ExpressionError> {
     let mut atoms: Vec<ConditionAtom> = Vec::new();
 
@@ -193,12 +249,7 @@ fn condition_atoms(selector: &Condition) -> Result<Vec<ConditionAtom>, Expressio
         atoms.extend(houdini_req_atoms(range.as_str())?);
     }
     if let Some(os) = &selector.os {
-        match os.as_str() {
-            "linux" | "macos" | "windows" => {
-                atoms.push(ConditionAtom::new("houdini_os", "==", os));
-            }
-            _ => return Err(ExpressionError::UnknownOs(os.to_string())),
-        }
+        atoms.push(ConditionAtom::new("houdini_os", "==", os.as_str()));
     }
     if let Some(py) = &selector.python {
         atoms.push(ConditionAtom::new(
@@ -206,12 +257,6 @@ fn condition_atoms(selector: &Condition) -> Result<Vec<ConditionAtom>, Expressio
             "==",
             python_identifier(py)?,
         ));
-    }
-    if let Some(src) = &selector.install_source {
-        match src.as_str() {
-            "dev" | "registry" => {}
-            _ => return Err(ExpressionError::UnknownInstallSource(src.clone())),
-        }
     }
 
     Ok(atoms)
@@ -541,12 +586,8 @@ impl<'a> std::fmt::Display for DisplayVersion<'a> {
 pub enum ExpressionError {
     #[error("invalid houdini version requirement: {0}")]
     InvalidHoudiniReq(String),
-    #[error("unknown os '{0}' (expected 'linux', 'macos', or 'windows')")]
-    UnknownOs(String),
     #[error("invalid python identifier: {0}")]
     InvalidPython(String),
-    #[error("unknown install_source '{0}' (expected 'dev' or 'registry')")]
-    UnknownInstallSource(String),
 }
 
 /// Lower a `Conditional` env value into Houdini's `[{ "<expr>": "<val>" }, …]`
@@ -596,7 +637,7 @@ pub fn lower_conditional(
     let mut prior_negations: Vec<String> = Vec::new();
 
     for variant in variants {
-        if !variant.when.matches_install_source(is_dev)? {
+        if !variant.when.matches_install_source(is_dev) {
             continue;
         }
         // Strip the install_source axis before compiling — it must not

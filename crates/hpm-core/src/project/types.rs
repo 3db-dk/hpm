@@ -20,8 +20,8 @@ pub struct ProjectDependency {
 ///
 /// `checksum` and `source` are `Option` because a sync that short-circuits
 /// on the CAS (already-installed package) doesn't re-fetch from the
-/// registry, so it has no fresh SHA-256 and (for `Simple`/`Registry` specs)
-/// no fresh URL to record. Callers wanting lockfile fidelity can backfill
+/// registry, so it has no fresh SHA-256 and (for `Registry` specs) no
+/// fresh URL to record. Callers wanting lockfile fidelity can backfill
 /// those `None` fields from a prior lockfile entry.
 #[derive(Debug, Clone)]
 pub struct InstallOutcome {
@@ -30,6 +30,6 @@ pub struct InstallOutcome {
     /// `None` for path deps and short-circuited CAS hits.
     pub checksum: Option<String>,
     /// Lockfile source — `Some` when we know the URL (fresh fetch or `Url`
-    /// spec) or for path deps, `None` for `Simple`/`Registry` short-circuits.
+    /// spec) or for path deps, `None` for `Registry` short-circuits.
     pub source: Option<LockedSource>,
 }

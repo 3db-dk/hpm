@@ -121,11 +121,13 @@ pub mod toml_file_error;
 pub use atomic_write::atomic_write;
 pub use dependency::DependencySpec;
 pub use env_value::{
-    Condition, EnvValue, EnvValueBranch, ExpressionError, HoudiniRange, LoweredConditional,
-    compile_condition, compile_houdini_req, houdini_req_has_upper_bound, houdini_req_lower_bound,
-    lower_conditional,
+    Condition, EnvValue, EnvValueBranch, ExpressionError, HoudiniRange, InstallSource,
+    LoweredConditional, OsKey, compile_condition, compile_houdini_req, houdini_req_has_upper_bound,
+    houdini_req_lower_bound, lower_conditional,
 };
-pub use houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
+pub use houdini::{
+    HoudiniEnvValue, HoudiniMethod, HoudiniNativePackage, HoudiniPackage, HpackageMetadata,
+};
 pub use io_error::IoOp;
 pub use manifest::{
     CompatConfig, EnvMethod, ManifestEnvEntry, ManifestLoadError, PackageInfo, PackageManifest,

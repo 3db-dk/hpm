@@ -155,7 +155,7 @@ async fn collect_candidates(
         }
         // URL and Path deps don't update through a registry.
         let ver_req_str = match spec {
-            DependencySpec::Simple(v) | DependencySpec::Registry { version: v, .. } => v,
+            DependencySpec::Registry { version: v, .. } => v,
             DependencySpec::Url { .. } | DependencySpec::Path { .. } => continue,
         };
 
@@ -246,9 +246,9 @@ fn print_candidates(candidates: &[Candidate], output: OutputFormat, console: &mu
 }
 
 /// Mutate `manifest.dependencies` so each candidate's spec becomes the
-/// resolved exact version. `Simple` becomes `Simple(new_version)`;
-/// `Registry { version, .. }` retains its `registry` / `optional` fields
-/// with `version` replaced.
+/// resolved exact version. `Registry { version, .. }` retains its
+/// `registry` / `optional` fields with `version` replaced, so a bare-string
+/// shorthand stays a bare string when written back.
 fn apply_updates(
     manifest: &hpm_package::PackageManifest,
     manifest_path: &std::path::Path,
@@ -259,7 +259,6 @@ fn apply_updates(
             continue;
         };
         let new_spec = match spec {
-            DependencySpec::Simple(_) => DependencySpec::Simple(c.latest.clone()),
             DependencySpec::Registry {
                 registry, optional, ..
             } => DependencySpec::Registry {
@@ -331,8 +330,12 @@ bar = { version = "^2.0.0", registry = "main" }
 
         let updated = PackageManifest::from_path(&manifest_path).unwrap();
         match &updated.dependencies["foo"] {
-            DependencySpec::Simple(v) => assert_eq!(v, "1.0.5"),
-            other => panic!("expected Simple, got {:?}", other),
+            DependencySpec::Registry {
+                version,
+                registry: None,
+                optional: false,
+            } => assert_eq!(version, "1.0.5"),
+            other => panic!("expected bare registry spec, got {:?}", other),
         }
         match &updated.dependencies["bar"] {
             DependencySpec::Registry {
