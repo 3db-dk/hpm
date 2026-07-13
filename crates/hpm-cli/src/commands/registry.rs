@@ -12,7 +12,7 @@
 
 use anyhow::{Result, bail};
 use console::style;
-use hpm_config::{Config, RegistrySourceConfig, RegistryType};
+use hpm_config::{Config, ConfigOverlay, RegistrySourceConfig, RegistryType};
 use hpm_core::registry::Registry;
 use tracing::info;
 
@@ -20,12 +20,23 @@ use tracing::info;
 // (`RegistrySet::from_config(&Config)` in hpm-core); this module owns the
 // imperative `hpm registry …` subcommands only.
 
-/// Add a new registry.
+/// Load the user config file as an overlay for editing.
 ///
-/// `config` is taken by value because the registry add mutates it and then
-/// persists the result; the caller's copy is discarded on return.
+/// Registry add/remove edit the user config *file* rather than re-saving the
+/// resolved [`Config`]: dumping the resolved config would bake the current
+/// defaults (and any project-layer values) into the user file, pinning them
+/// forever.
+fn load_user_overlay() -> Result<ConfigOverlay> {
+    let path = Config::user_config_path();
+    if path.exists() {
+        Ok(ConfigOverlay::load(&path)?)
+    } else {
+        Ok(ConfigOverlay::default())
+    }
+}
+
+/// Add a new registry to the user config file.
 pub async fn add_registry(
-    mut config: Config,
     url: String,
     name: Option<String>,
     registry_type: Option<String>,
@@ -61,7 +72,9 @@ pub async fn add_registry(
         registry_type: reg_type.clone(),
     };
 
-    if !config.add_registry(registry_config) {
+    let mut overlay = load_user_overlay()?;
+    let registries = overlay.registries.get_or_insert_with(Vec::new);
+    if registries.iter().any(|r| r.name == display_name) {
         if if_not_exists {
             // Idempotent path: a registry by this name is already present, so
             // there is nothing to do. Report the no-op rather than erroring so
@@ -83,8 +96,8 @@ pub async fn add_registry(
             display_name
         );
     }
-
-    config.save_user_config()?;
+    registries.push(registry_config);
+    overlay.save(&Config::user_config_path())?;
 
     info!("Added registry '{}' at {}", display_name, url);
     println!(
@@ -140,13 +153,16 @@ pub async fn list_registries(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Remove a registry by name.
-pub async fn remove_registry(mut config: Config, name: String) -> Result<()> {
-    if !config.remove_registry(&name) {
+/// Remove a registry by name from the user config file.
+pub async fn remove_registry(name: String) -> Result<()> {
+    let mut overlay = load_user_overlay()?;
+    let registries = overlay.registries.get_or_insert_with(Vec::new);
+    let before = registries.len();
+    registries.retain(|r| r.name != name);
+    if registries.len() == before {
         bail!("Registry '{}' not found.", name);
     }
-
-    config.save_user_config()?;
+    overlay.save(&Config::user_config_path())?;
 
     println!(
         "{} Removed registry '{}'",

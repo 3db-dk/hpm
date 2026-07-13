@@ -912,9 +912,7 @@ async fn run_command(
                 registry_type,
                 if_not_exists,
             } => {
-                let config = load_cli_config()?;
                 commands::registry::add_registry(
-                    config,
                     url.clone(),
                     name.clone(),
                     registry_type.clone(),
@@ -930,8 +928,7 @@ async fn run_command(
                     .map_err(|e| CliError::config(e, None))?;
             }
             RegistryAction::Remove { name } => {
-                let config = load_cli_config()?;
-                commands::registry::remove_registry(config, name.clone())
+                commands::registry::remove_registry(name.clone())
                     .await
                     .cli_config("registry remove")?;
             }

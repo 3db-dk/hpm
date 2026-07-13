@@ -2,10 +2,12 @@
 //!
 //! Layered configuration for HPM: built-in defaults are overridden by the user
 //! config at `~/.hpm/config.toml`, which is in turn overridden by the project
-//! config at `<cwd>/.hpm/config.toml`. The merge happens in [`Config::load`].
+//! config at `<cwd>/.hpm/config.toml`. Files are parsed as presence-aware
+//! [`ConfigOverlay`]s and layered in [`Config::load`].
 //!
 //! Each section lives in its own module:
 //!
+//! - [`overlay`] — presence-aware partial config, the shape files parse as
 //! - [`install`] — where packages land inside a project, download parallelism
 //! - [`storage`] — global on-disk layout (`~/.hpm/packages/`, caches)
 //! - [`projects`] — project-discovery roots and ignore patterns
@@ -38,6 +40,7 @@
 pub mod builder;
 pub mod error;
 pub mod install;
+pub mod overlay;
 pub mod project_paths;
 pub mod projects;
 pub mod registry;
@@ -47,6 +50,7 @@ pub mod storage;
 pub use builder::ConfigBuilder;
 pub use error::ConfigError;
 pub use install::InstallConfig;
+pub use overlay::ConfigOverlay;
 pub use project_paths::ProjectPaths;
 pub use projects::ProjectsConfig;
 pub use registry::{RegistrySourceConfig, RegistryType};
@@ -76,6 +80,11 @@ impl Config {
         storage::default_home_dir()
     }
 
+    /// Path of the user config file (`~/.hpm/config.toml`).
+    pub fn user_config_path() -> PathBuf {
+        Self::default_home_dir().join("config.toml")
+    }
+
     /// Load configuration from the standard locations.
     ///
     /// This loads configuration in the following order (later sources override earlier):
@@ -83,22 +92,24 @@ impl Config {
     /// 2. User config: `~/.hpm/config.toml`
     /// 3. Project config: `.hpm/config.toml` in current directory (if it exists)
     ///
-    /// If no config files exist, returns the default configuration.
+    /// Config files are parsed as [`ConfigOverlay`]s, so each layer overrides
+    /// exactly the values it sets. If no config files exist, returns the
+    /// default configuration.
     pub fn load() -> Result<Self, ConfigError> {
         let mut config = Self::default();
 
         // Load user config from ~/.hpm/config.toml.
         // A malformed user config must not lock the user out: every CLI
         // command calls `load()`, so propagating a parse error here leaves
-        // no way to run `hpm config ...` to repair it. Fall back to defaults
+        // no way to run registry commands to repair it. Fall back to defaults
         // and warn instead. Project configs below are user-authored and
         // project-scoped, so those still fail hard.
-        let user_config_path = Self::default_home_dir().join("config.toml");
+        let user_config_path = Self::user_config_path();
         if user_config_path.exists() {
             debug!("Loading user config from {:?}", user_config_path);
-            match Self::load_from_path(&user_config_path) {
-                Ok(user_config) => {
-                    config.merge(user_config);
+            match ConfigOverlay::load(&user_config_path) {
+                Ok(overlay) => {
+                    overlay.apply_to(&mut config);
                     debug!("Loaded user configuration from {:?}", user_config_path);
                 }
                 Err(e) => {
@@ -115,8 +126,7 @@ impl Config {
             let project_config_path = current_dir.join(".hpm").join("config.toml");
             if project_config_path.exists() {
                 debug!("Loading project config from {:?}", project_config_path);
-                let project_config = Self::load_from_path(&project_config_path)?;
-                config.merge(project_config);
+                ConfigOverlay::load(&project_config_path)?.apply_to(&mut config);
                 debug!(
                     "Loaded project configuration from {:?}",
                     project_config_path
@@ -127,60 +137,12 @@ impl Config {
         Ok(config)
     }
 
-    /// Load configuration from a specific path.
+    /// Load the configuration from a single file, resolved over the defaults.
     pub fn load_from_path(path: &Path) -> Result<Self, ConfigError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| hpm_package::IoOp::wrap("read TOML file", path, e))?;
-        Self::parse_toml(&content, path)
-    }
-
-    /// Parse configuration from a TOML string.
-    fn parse_toml(content: &str, path: &Path) -> Result<Self, ConfigError> {
-        toml::from_str(content).map_err(|e| ConfigError::Parse {
-            path: path.to_path_buf(),
-            source: Box::new(e),
-        })
-    }
-
-    /// Merge another configuration into this one.
-    /// Values from `other` override values in `self` if they are set.
-    pub fn merge(&mut self, other: Self) {
-        // Install config
-        self.install.path = other.install.path;
-        self.install.parallel_downloads = other.install.parallel_downloads;
-
-        // Storage config - only override if different from defaults
-        // (partial config might contain defaults we don't want to override)
-        if other.storage.home_dir != Self::default().storage.home_dir {
-            self.storage.home_dir = other.storage.home_dir.clone();
-            self.storage.cache_dir = other.storage.cache_dir;
-            self.storage.packages_dir = other.storage.packages_dir;
-            self.storage.registry_cache_dir = other.storage.registry_cache_dir;
-        }
-
-        // Projects config
-        if !other.projects.explicit_paths.is_empty() {
-            self.projects.explicit_paths = other.projects.explicit_paths;
-        }
-        if !other.projects.search_roots.is_empty() {
-            self.projects.search_roots = other.projects.search_roots;
-        }
-        if other.projects.max_search_depth != ProjectsConfig::default().max_search_depth {
-            self.projects.max_search_depth = other.projects.max_search_depth;
-        }
-        if other.projects.ignore_patterns != ProjectsConfig::default().ignore_patterns {
-            self.projects.ignore_patterns = other.projects.ignore_patterns;
-        }
-
-        // Registries config - replace if other has any
-        if !other.registries.is_empty() {
-            self.registries = other.registries;
-        }
-
-        // Signing config
-        if other.signing.key_path.is_some() {
-            self.signing.key_path = other.signing.key_path;
-        }
+        let overlay = ConfigOverlay::load(path)?;
+        let mut config = Self::default();
+        overlay.apply_to(&mut config);
+        Ok(config)
     }
 
     /// Add a registry to the configuration.
@@ -338,20 +300,6 @@ path = "custom/hpm"
 
         assert_eq!(loaded_config.install.path, "custom/install/path");
         assert_eq!(loaded_config.install.parallel_downloads, 4);
-    }
-
-    #[test]
-    fn config_merge() {
-        let mut base = Config::default();
-        let mut override_config = Config::default();
-
-        override_config.install.path = "override/path".to_string();
-        override_config.install.parallel_downloads = 32;
-
-        base.merge(override_config);
-
-        assert_eq!(base.install.path, "override/path");
-        assert_eq!(base.install.parallel_downloads, 32);
     }
 
     #[test]
