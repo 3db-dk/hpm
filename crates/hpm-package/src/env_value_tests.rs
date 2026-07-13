@@ -72,6 +72,20 @@ fn invalid_houdini_req_rejected() {
     assert!(compile_houdini_req(">=").is_err());
 }
 
+/// `=` is documented as an exact-version alias of `==`; it used to fall
+/// through to the bare-version (caret) parser and error out.
+#[test]
+fn single_equals_aliases_exact_version() {
+    assert_eq!(
+        compile_houdini_req("=21").unwrap(),
+        "houdini_version == '21'"
+    );
+    assert_eq!(
+        compile_houdini_req("==21").unwrap(),
+        "houdini_version == '21'"
+    );
+}
+
 #[test]
 fn os_translates_to_houdini_os() {
     assert_eq!(
@@ -139,46 +153,123 @@ fn empty_when_compiles_to_none() {
     assert!(compile_condition(&Condition::default()).unwrap().is_none());
 }
 
-#[test]
-fn lower_conditional_substitutes_pkg_root_per_branch() {
-    let variants = vec![
-        EnvValueBranch {
-            when: Condition {
-                houdini: Some(HoudiniRange::parse("^21").unwrap()),
-                ..Default::default()
-            },
-            set: "$HPM_PACKAGE_ROOT/h21/x".to_string(),
+/// Helper: unwrap the Branches variant.
+fn branches(lowered: LoweredConditional) -> Vec<std::collections::HashMap<String, String>> {
+    match lowered {
+        LoweredConditional::Branches(b) => b,
+        other => panic!("expected Branches, got {other:?}"),
+    }
+}
+
+fn houdini_branch(req: &str, set: &str) -> EnvValueBranch {
+    EnvValueBranch {
+        when: Condition {
+            houdini: Some(HoudiniRange::parse(req).unwrap()),
+            ..Default::default()
         },
-        EnvValueBranch {
-            when: Condition {
-                houdini: Some(HoudiniRange::parse("^22").unwrap()),
-                ..Default::default()
-            },
-            set: "$HPM_PACKAGE_ROOT/h22/x".to_string(),
-        },
-    ];
-    let lowered =
-        lower_conditional(&variants, &[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false).unwrap();
-    assert_eq!(lowered.len(), 2);
-    let first = &lowered[0];
-    let key = first.keys().next().unwrap();
-    assert!(key.contains("21"));
-    assert_eq!(first[key], "/abs/pkg/h21/x");
+        set: set.to_string(),
+    }
 }
 
 #[test]
-fn empty_when_lowered_as_true_branch() {
+fn lower_conditional_substitutes_pkg_root_per_branch() {
+    let variants = vec![
+        houdini_branch("^21", "$HPM_PACKAGE_ROOT/h21/x"),
+        houdini_branch("^22", "$HPM_PACKAGE_ROOT/h22/x"),
+    ];
+    let lowered = branches(
+        lower_conditional(&variants, &[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false).unwrap(),
+    );
+    assert_eq!(lowered.len(), 2);
+    let key = lowered[0].keys().next().unwrap();
+    assert!(key.contains("21"));
+    assert_eq!(lowered[0][key], "/abs/pkg/h21/x");
+}
+
+/// Houdini applies every matching conditional-array element, so later
+/// branches must carry the negation of every earlier branch to deliver
+/// the documented first-match semantics. Negation is comparison-flipping
+/// joined with `or` — the expression grammar has no `not`.
+#[test]
+fn lower_conditional_compiles_branches_mutually_exclusive() {
+    let variants = vec![
+        houdini_branch("^21", "a"),
+        houdini_branch("^22", "b"),
+        EnvValueBranch {
+            when: Condition::default(),
+            set: "fallback".to_string(),
+        },
+    ];
+    let lowered = branches(lower_conditional(&variants, &[], false).unwrap());
+    assert_eq!(lowered.len(), 3);
+    assert_eq!(
+        lowered[0].keys().next().unwrap(),
+        "houdini_version >= '21' and houdini_version < '22'"
+    );
+    assert_eq!(
+        lowered[1].keys().next().unwrap(),
+        "houdini_version >= '22' and houdini_version < '23' \
+         and ( houdini_version < '21' or houdini_version >= '22' )"
+    );
+    // The fallback's expression is exactly "no earlier branch matched" —
+    // there is no always-true expression in Houdini's grammar.
+    assert_eq!(
+        lowered[2].keys().next().unwrap(),
+        "( houdini_version < '21' or houdini_version >= '22' ) \
+         and ( houdini_version < '22' or houdini_version >= '23' )"
+    );
+    assert_eq!(lowered[2].values().next().unwrap(), "fallback");
+}
+
+/// A lone empty `when` collapses to an unconditional value — the broken
+/// `{"true": ...}` encoding (Houdini has no `true` literal; it defined a
+/// stray variable named `true`) must never be emitted.
+#[test]
+fn empty_when_lowers_unconditional() {
     let variants = vec![EnvValueBranch {
         when: Condition::default(),
         set: "default".to_string(),
     }];
-    let lowered = lower_conditional(&variants, &[], false).unwrap();
-    assert_eq!(lowered.len(), 1);
-    assert_eq!(lowered[0]["true"], "default");
+    assert_eq!(
+        lower_conditional(&variants, &[], false).unwrap(),
+        LoweredConditional::Unconditional("default".to_string())
+    );
+}
+
+/// Branches after an unconditional branch are unreachable under
+/// first-match semantics and must be dropped.
+#[test]
+fn branches_after_unconditional_are_pruned() {
+    let variants = vec![
+        EnvValueBranch {
+            when: Condition::default(),
+            set: "wins".to_string(),
+        },
+        houdini_branch("^21", "unreachable"),
+    ];
+    assert_eq!(
+        lower_conditional(&variants, &[], false).unwrap(),
+        LoweredConditional::Unconditional("wins".to_string())
+    );
+
+    // Same when the unconditional branch is not first: it terminates the
+    // list after itself.
+    let variants = vec![
+        houdini_branch("^21", "a"),
+        EnvValueBranch {
+            when: Condition::default(),
+            set: "fallback".to_string(),
+        },
+        houdini_branch("^22", "unreachable"),
+    ];
+    let lowered = branches(lower_conditional(&variants, &[], false).unwrap());
+    assert_eq!(lowered.len(), 2);
+    assert_eq!(lowered[1].values().next().unwrap(), "fallback");
 }
 
 #[test]
 fn install_source_dev_filters_out_for_registry_install() {
+    // The canonical HDK pattern: dev build dir, published dso fallback.
     let variants = vec![
         EnvValueBranch {
             when: Condition {
@@ -192,15 +283,18 @@ fn install_source_dev_filters_out_for_registry_install() {
             set: "dso".to_string(),
         },
     ];
-    // Registry install: dev variant drops.
-    let lowered = lower_conditional(&variants, &[], false).unwrap();
-    assert_eq!(lowered.len(), 1);
-    assert_eq!(lowered[0]["true"], "dso");
-    // Dev install: both fire, dev first.
-    let lowered = lower_conditional(&variants, &[], true).unwrap();
-    assert_eq!(lowered.len(), 2);
-    assert_eq!(lowered[0]["true"], "build/Release");
-    assert_eq!(lowered[1]["true"], "dso");
+    // Registry install: dev variant drops, fallback is unconditional.
+    assert_eq!(
+        lower_conditional(&variants, &[], false).unwrap(),
+        LoweredConditional::Unconditional("dso".to_string())
+    );
+    // Dev install: the dev branch is unconditional at runtime and wins;
+    // the dso fallback is unreachable and must NOT also fire (it used to,
+    // shadowing the dev build under `prepend`).
+    assert_eq!(
+        lower_conditional(&variants, &[], true).unwrap(),
+        LoweredConditional::Unconditional("build/Release".to_string())
+    );
 }
 
 #[test]
@@ -216,7 +310,7 @@ fn install_source_strips_from_runtime_expression() {
         },
         set: "x".to_string(),
     }];
-    let lowered = lower_conditional(&variants, &[], true).unwrap();
+    let lowered = branches(lower_conditional(&variants, &[], true).unwrap());
     assert_eq!(lowered.len(), 1);
     let key = lowered[0].keys().next().unwrap();
     assert!(key.contains("houdini_version"));
@@ -232,8 +326,14 @@ fn install_source_registry_filters_out_for_dev_install() {
         },
         set: "dso".to_string(),
     }];
-    assert_eq!(lower_conditional(&variants, &[], true).unwrap().len(), 0);
-    assert_eq!(lower_conditional(&variants, &[], false).unwrap().len(), 1);
+    assert_eq!(
+        lower_conditional(&variants, &[], true).unwrap(),
+        LoweredConditional::Branches(Vec::new())
+    );
+    assert_eq!(
+        lower_conditional(&variants, &[], false).unwrap(),
+        LoweredConditional::Unconditional("dso".to_string())
+    );
 }
 
 #[test]

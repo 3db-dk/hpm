@@ -17,22 +17,30 @@ use std::collections::HashMap;
 /// {
 ///   "hpath": ["$HPM_PACKAGE_ROOT"],
 ///   "env": [
-///     {"PYTHONPATH": {"method": "prepend", "value": "$HPM_PACKAGE_ROOT/python"}}
+///     {"PYTHONPATH": {"method": "prepend", "value": ["$HPM_PACKAGE_ROOT/python"]}}
 ///   ],
 ///   "enable": "houdini_version >= '20.5'"
 /// }
 /// ```
+/// Absent fields are omitted from the JSON rather than serialized as
+/// `null` — Houdini logs `WARNING: Unsupported value for requires` (etc.)
+/// for explicit nulls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HoudiniPackage {
     /// Houdini path entries (for HOUDINI_OTLSCAN_PATH, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hpath: Option<Vec<String>>,
     /// Environment variable definitions
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<Vec<HashMap<String, HoudiniEnvValue>>>,
     /// Conditional enable expression
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub enable: Option<String>,
     /// Required packages
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub requires: Option<Vec<String>>,
     /// Recommended packages
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub recommends: Option<Vec<String>>,
 }
 
@@ -40,9 +48,16 @@ pub struct HoudiniPackage {
 ///
 /// Supports three formats:
 /// - Simple: direct string value
-/// - Detailed: method (prepend/append/set) with a flat string value
+/// - Detailed: method (prepend/append/replace) with a list value
 /// - DetailedConditional: method plus an ordered list of `{ "<expr>": "<v>" }`
-///   maps; Houdini picks the first whose expression matches.
+///   maps; every map whose expression matches contributes its value.
+///
+/// `Detailed` values are always emitted as JSON lists, never flat strings.
+/// Houdini only honors `method` on a custom (non-registered) variable when
+/// the variable's first definition uses a list value; with a flat string
+/// every later entry silently overwrites, regardless of method. The valid
+/// methods are `prepend` / `append` / `replace` — `set` is rejected with
+/// `Unsupported method value: set`. Verified against Houdini 21.0.688.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum HoudiniEnvValue {
@@ -50,14 +65,17 @@ pub enum HoudiniEnvValue {
     Simple(String),
     /// Detailed value with method specification
     Detailed {
-        /// How to apply the value: "prepend", "append", or "set"
+        /// How to apply the value: "prepend", "append", or "replace"
         method: String,
-        /// The value to apply
-        value: String,
+        /// The value elements to apply
+        value: Vec<String>,
     },
     /// Detailed value where the value is a Houdini conditional-object array.
-    /// Each map has a single entry `"<houdini-expression>": "<value>"`;
-    /// Houdini evaluates the expressions in order and applies the first match.
+    /// Each map has a single entry `"<houdini-expression>": "<value>"`.
+    /// Houdini applies *every* map whose expression matches, so hpm's
+    /// lowering compiles the expressions to be mutually exclusive (each
+    /// branch excludes all earlier branches' conditions) — at most one
+    /// element fires, giving the manifest's first-match semantics.
     DetailedConditional {
         method: String,
         value: Vec<HashMap<String, String>>,
@@ -74,7 +92,7 @@ impl HoudiniEnvValue {
     pub fn prepend(value: impl Into<String>) -> Self {
         HoudiniEnvValue::Detailed {
             method: "prepend".to_string(),
-            value: value.into(),
+            value: vec![value.into()],
         }
     }
 
@@ -82,25 +100,23 @@ impl HoudiniEnvValue {
     pub fn append(value: impl Into<String>) -> Self {
         HoudiniEnvValue::Detailed {
             method: "append".to_string(),
-            value: value.into(),
+            value: vec![value.into()],
         }
     }
 
-    /// Create a set environment value.
-    pub fn set(value: impl Into<String>) -> Self {
+    /// Create a replace environment value (hpm's `set` lowers to this —
+    /// Houdini has no `set` method).
+    pub fn replace(value: impl Into<String>) -> Self {
         HoudiniEnvValue::Detailed {
-            method: "set".to_string(),
-            value: value.into(),
+            method: "replace".to_string(),
+            value: vec![value.into()],
         }
     }
 
-    /// Create a conditional environment value with the given method.
-    pub fn conditional(method: &str, value: Vec<HashMap<String, String>>) -> Self {
-        HoudiniEnvValue::DetailedConditional {
-            method: method.to_string(),
-            value,
-        }
-    }
+    // No conditional() constructor on purpose: conditional-object arrays
+    // must go through `lower_conditional`, which compiles the branch
+    // expressions to be mutually exclusive. A hand-built array would
+    // reintroduce Houdini's every-match behavior.
 }
 
 /// Houdini-native package.json for direct use by Houdini's package system.
@@ -198,7 +214,7 @@ mod tests {
         let simple = HoudiniEnvValue::simple("value");
         let prepend = HoudiniEnvValue::prepend("value");
         let append = HoudiniEnvValue::append("value");
-        let set = HoudiniEnvValue::set("value");
+        let replace = HoudiniEnvValue::replace("value");
 
         match simple {
             HoudiniEnvValue::Simple(v) => assert_eq!(v, "value"),
@@ -208,7 +224,7 @@ mod tests {
         match prepend {
             HoudiniEnvValue::Detailed { method, value } => {
                 assert_eq!(method, "prepend");
-                assert_eq!(value, "value");
+                assert_eq!(value, vec!["value"]);
             }
             _ => panic!("Expected Detailed variant"),
         }
@@ -216,18 +232,27 @@ mod tests {
         match append {
             HoudiniEnvValue::Detailed { method, value } => {
                 assert_eq!(method, "append");
-                assert_eq!(value, "value");
+                assert_eq!(value, vec!["value"]);
             }
             _ => panic!("Expected Detailed variant"),
         }
 
-        match set {
+        match replace {
             HoudiniEnvValue::Detailed { method, value } => {
-                assert_eq!(method, "set");
-                assert_eq!(value, "value");
+                assert_eq!(method, "replace");
+                assert_eq!(value, vec!["value"]);
             }
             _ => panic!("Expected Detailed variant"),
         }
+    }
+
+    #[test]
+    fn detailed_values_serialize_as_lists() {
+        // Regression: a flat-string value marks a custom variable
+        // non-mergeable in Houdini, so every Detailed value must hit the
+        // package.json as a JSON array.
+        let json = serde_json::to_string(&HoudiniEnvValue::append("v")).unwrap();
+        assert_eq!(json, r#"{"method":"append","value":["v"]}"#);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! `[runtime]` entries: env-var contributions baked into the generated
 //! Houdini `package.json`.
 
-use crate::env_value::{EnvValue, ExpressionError, lower_conditional};
+use crate::env_value::{EnvValue, ExpressionError, LoweredConditional, lower_conditional};
 use crate::houdini::HoudiniEnvValue;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -16,10 +16,23 @@ pub enum EnvMethod {
 }
 
 impl EnvMethod {
-    /// String form used in Houdini's package.json (`"set"`, `"prepend"`, `"append"`).
+    /// Manifest string form (`"set"`, `"prepend"`, `"append"`), for error
+    /// messages that quote `hpm.toml` back at the author.
     pub fn as_str(&self) -> &'static str {
         match self {
             EnvMethod::Set => "set",
+            EnvMethod::Prepend => "prepend",
+            EnvMethod::Append => "append",
+        }
+    }
+
+    /// Method string emitted into Houdini's package.json. Houdini accepts
+    /// only `prepend` / `append` / `replace` — there is no `set` (it warns
+    /// `Unsupported method value: set`), so hpm's `set` lowers to
+    /// `replace`. Verified against Houdini 21.0.688.
+    pub fn houdini_method(&self) -> &'static str {
+        match self {
+            EnvMethod::Set => "replace",
             EnvMethod::Prepend => "prepend",
             EnvMethod::Append => "append",
         }
@@ -93,28 +106,46 @@ impl ManifestEnvEntry {
         let Some(value) = self.value.as_ref() else {
             return Ok(None);
         };
-        let method = self.method.as_str();
+        let method = self.method.houdini_method();
         let lowered = match value {
             EnvValue::Flat(s) => {
                 let mut out = s.clone();
                 for (from, to) in substitutions {
                     out = out.replace(from, to);
                 }
+                // Emitted as a single-element list, never a flat string:
+                // Houdini only honors `method` on a custom variable when
+                // its first definition uses a JSON list value. A flat
+                // string marks the variable non-mergeable and every later
+                // entry silently overwrites it, whatever its method says.
                 HoudiniEnvValue::Detailed {
                     method: method.to_string(),
-                    value: out,
+                    value: vec![out],
                 }
             }
             EnvValue::Conditional(variants) => {
-                let lowered = lower_conditional(variants, substitutions, is_dev)?;
-                if lowered.is_empty() {
-                    // Every branch filtered out by install_source — treat
-                    // the entry as inert in this install context.
-                    return Ok(None);
-                }
-                HoudiniEnvValue::DetailedConditional {
-                    method: method.to_string(),
-                    value: lowered,
+                match lower_conditional(variants, substitutions, is_dev)? {
+                    // First surviving branch is unconditional — the value
+                    // is effectively flat in this install context. Emitted
+                    // like a flat value (single-element list); Houdini has
+                    // no always-true expression to put in a conditional
+                    // array.
+                    LoweredConditional::Unconditional(value) => HoudiniEnvValue::Detailed {
+                        method: method.to_string(),
+                        value: vec![value],
+                    },
+                    LoweredConditional::Branches(branches) => {
+                        if branches.is_empty() {
+                            // Every branch filtered out by install_source —
+                            // treat the entry as inert in this install
+                            // context.
+                            return Ok(None);
+                        }
+                        HoudiniEnvValue::DetailedConditional {
+                            method: method.to_string(),
+                            value: branches,
+                        }
+                    }
                 }
             }
         };

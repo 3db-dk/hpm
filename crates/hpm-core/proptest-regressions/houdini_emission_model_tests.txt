@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 569d179be8948ef8cc306b94b0a7f8dfa39808d464f171d9134976f1b26e5471 # shrinks to declarations = [[None, None, Some(0)], [None, None, None], [None, None, None]], overrides = [Some(0), None, None]

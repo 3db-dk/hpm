@@ -605,13 +605,15 @@ value = [
         .expect("HOUDINI_DSO_PATH should be emitted for published consumer");
     let value = &dso_entry["HOUDINI_DSO_PATH"];
     match value {
-        HoudiniEnvValue::DetailedConditional { value, .. } => {
-            assert_eq!(value.len(), 1);
-            // The single surviving branch is the empty `when = {}` fallback,
-            // which lowers to the literal "true" expression.
-            assert_eq!(value[0]["true"], "$HPM_PACKAGE_ROOT/dso");
+        // The single surviving branch is the empty `when = {}` fallback,
+        // which is unconditional and collapses to a plain (list) value —
+        // Houdini's expression grammar has no `true` literal to key a
+        // conditional-array element with.
+        HoudiniEnvValue::Detailed { method, value } => {
+            assert_eq!(method, "prepend");
+            assert_eq!(value, &vec!["$HPM_PACKAGE_ROOT/dso".to_string()]);
         }
-        other => panic!("expected conditional value, got {other:?}"),
+        other => panic!("expected the collapsed fallback value, got {other:?}"),
     }
 }
 
@@ -690,8 +692,8 @@ fn generate_houdini_package_includes_user_env() {
     let val = last.get("MY_VAR").unwrap();
     match val {
         HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method, "set");
-            assert_eq!(value, "$HPM_PACKAGE_ROOT/data");
+            assert_eq!(method, "replace");
+            assert_eq!(value, &vec!["$HPM_PACKAGE_ROOT/data".to_string()]);
         }
         _ => panic!("Expected Detailed variant"),
     }
@@ -923,7 +925,10 @@ MY_VAR = { method = "prepend", value = "$HPM_PACKAGE_ROOT/scripts" }
     let my_var = second_env.get("MY_VAR").unwrap();
     match my_var {
         crate::houdini::HoudiniEnvValue::Detailed { value, method } => {
-            assert_eq!(value, "$HOUDINI_PACKAGE_PATH/my-tool/scripts");
+            assert_eq!(
+                value,
+                &vec!["$HOUDINI_PACKAGE_PATH/my-tool/scripts".to_string()]
+            );
             assert_eq!(method, "prepend");
         }
         _ => panic!("Expected Detailed variant"),
@@ -1285,7 +1290,7 @@ fn generate_houdini_native_package_env_root_replacement() {
     // PATH_A
     match pkg.env[1].get("PATH_A").unwrap() {
         crate::houdini::HoudiniEnvValue::Detailed { value, .. } => {
-            assert_eq!(value, "$HOUDINI_PACKAGE_PATH/test-pkg/a");
+            assert_eq!(value, &vec!["$HOUDINI_PACKAGE_PATH/test-pkg/a".to_string()]);
         }
         _ => panic!("Expected Detailed"),
     }
@@ -1294,7 +1299,9 @@ fn generate_houdini_native_package_env_root_replacement() {
         crate::houdini::HoudiniEnvValue::Detailed { value, method } => {
             assert_eq!(
                 value,
-                "$HOUDINI_PACKAGE_PATH/test-pkg/b:$HOUDINI_PACKAGE_PATH/test-pkg/c"
+                &vec![
+                    "$HOUDINI_PACKAGE_PATH/test-pkg/b:$HOUDINI_PACKAGE_PATH/test-pkg/c".to_string()
+                ]
             );
             assert_eq!(method, "append");
         }
@@ -1368,9 +1375,13 @@ value = [
             assert_eq!(first[key], "/abs/pkg/h21/r");
             let second = &value[1];
             let key2 = second.keys().next().unwrap();
+            // The second branch carries the negation of the first, so at
+            // most one branch fires (Houdini applies every matching
+            // element, not the first match).
             assert_eq!(
                 key2,
-                "houdini_version >= '22' and houdini_version < '23' and houdini_os == 'linux'"
+                "houdini_version >= '22' and houdini_version < '23' and houdini_os == 'linux' \
+                 and ( houdini_version < '21' or houdini_version >= '22' )"
             );
             assert_eq!(second[key2], "/abs/pkg/h22/r");
         }
@@ -1484,8 +1495,8 @@ fn env_pass_through_preserves_houdini_vars_in_flat_value() {
     match entry {
         HoudiniEnvValue::Detailed { value, .. } => {
             assert!(
-                value.contains("$HOUDINI_MAJOR_RELEASE"),
-                "Houdini var must pass through verbatim, got: {}",
+                value.iter().any(|v| v.contains("$HOUDINI_MAJOR_RELEASE")),
+                "Houdini var must pass through verbatim, got: {:?}",
                 value
             );
         }

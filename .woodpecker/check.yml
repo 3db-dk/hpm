@@ -10,6 +10,10 @@ skip_clone: true
 steps:
   - name: check
     image: bash
+    environment:
+      # The workers have Houdini installed (/opt/hfs*), so the hconfig
+      # conformance test must run rather than silently skip.
+      HPM_REQUIRE_HOUDINI: "1"
     commands:
       - git init
       - git remote add origin ${CI_REPO_CLONE_URL}

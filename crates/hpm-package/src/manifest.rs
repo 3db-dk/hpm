@@ -465,10 +465,7 @@ impl PackageManifest {
         let mut python_env = HashMap::new();
         python_env.insert(
             "PYTHONPATH".to_string(),
-            HoudiniEnvValue::Detailed {
-                method: "prepend".to_string(),
-                value: "$HPM_PACKAGE_ROOT/python".to_string(),
-            },
+            HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"),
         );
         env.push(python_env);
 
@@ -476,10 +473,7 @@ impl PackageManifest {
         let mut scripts_env = HashMap::new();
         scripts_env.insert(
             "HOUDINI_SCRIPT_PATH".to_string(),
-            HoudiniEnvValue::Detailed {
-                method: "prepend".to_string(),
-                value: "$HPM_PACKAGE_ROOT/scripts".to_string(),
-            },
+            HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/scripts"),
         );
         env.push(scripts_env);
 

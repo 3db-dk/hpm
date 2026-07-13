@@ -4,7 +4,9 @@ use tempfile::TempDir;
 
 /// Build the `(Config, StorageManager)` pair every `ProjectManager` test
 /// needs, rooted inside `temp_dir`. The CAS lives at `<temp>/.hpm/packages`.
-fn test_setup(temp_dir: &Path) -> (Arc<Config>, Arc<StorageManager>) {
+/// Shared with the sibling emission-model and Houdini-conformance test
+/// modules.
+pub(crate) fn test_setup(temp_dir: &Path) -> (Arc<Config>, Arc<StorageManager>) {
     let storage_config = hpm_config::StorageConfig {
         home_dir: temp_dir.join(".hpm"),
         cache_dir: temp_dir.join(".hpm").join("cache"),
@@ -169,13 +171,16 @@ fn create_houdini_package_with_project_env_overrides() {
         .find(|m| m.contains_key("MY_CONFIG"))
         .unwrap();
     match my_config_entry.get("MY_CONFIG").unwrap() {
-        hpm_package::HoudiniEnvValue::Detailed { value, .. } => {
-            assert!(value.ends_with("/default-config"));
+        hpm_package::HoudiniEnvValue::Detailed { method, value } => {
+            assert_eq!(method, "replace", "hpm's `set` must lower to `replace`");
+            assert_eq!(value.len(), 1);
+            assert!(value[0].ends_with("/default-config"));
         }
         _ => panic!("Expected Detailed env value"),
     }
 
-    // With project override: should use override value
+    // With a `set` project override: the package's entry is suppressed —
+    // the value is carried by the project overrides manifest instead.
     let mut project_overrides = IndexMap::new();
     project_overrides.insert(
         "MY_CONFIG".to_string(),
@@ -189,15 +194,18 @@ fn create_houdini_package_with_project_env_overrides() {
     let houdini_package = project_manager
         .create_houdini_package_with_python(&installed_package, None, &project_overrides)
         .unwrap();
-    let env_entries = houdini_package.env.as_ref().unwrap();
-    let my_config_entry = env_entries
-        .iter()
-        .find(|m| m.contains_key("MY_CONFIG"))
-        .unwrap();
-    match my_config_entry.get("MY_CONFIG").unwrap() {
+    assert!(
+        find_env_entry(&houdini_package, "MY_CONFIG").is_none(),
+        "a `set` override must suppress the package's own entry"
+    );
+
+    let overrides_pkg = ProjectManager::build_project_overrides_package(&project_overrides)
+        .unwrap()
+        .expect("a valued override must produce an overrides manifest");
+    match find_env_entry(&overrides_pkg, "MY_CONFIG").unwrap() {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(value, "/custom/config/path");
-            assert_eq!(method, "set");
+            assert_eq!(method, "replace");
+            assert_eq!(value, &vec!["/custom/config/path".to_string()]);
         }
         _ => panic!("Expected Detailed env value"),
     }
@@ -252,7 +260,9 @@ async fn create_houdini_package_required_env_without_override_errors() {
         other => panic!("Expected MissingRequiredEnv, got {:?}", other),
     }
 
-    // Project override supplies a value: should succeed and emit it.
+    // Project override supplies a value: the package generates cleanly
+    // (nothing to emit for the placeholder) and the overrides manifest
+    // carries the value.
     let mut overrides = IndexMap::new();
     overrides.insert(
         "PROJECT_ROOT".to_string(),
@@ -265,17 +275,17 @@ async fn create_houdini_package_required_env_without_override_errors() {
     let pkg = project_manager
         .create_houdini_package_with_python(&installed_package, None, &overrides)
         .unwrap();
-    let entry = pkg
-        .env
-        .as_ref()
+    assert!(
+        find_env_entry(&pkg, "PROJECT_ROOT").is_none(),
+        "a valueless placeholder has nothing to emit in the package file"
+    );
+    let overrides_pkg = ProjectManager::build_project_overrides_package(&overrides)
         .unwrap()
-        .iter()
-        .find(|m| m.contains_key("PROJECT_ROOT"))
-        .unwrap();
-    match entry.get("PROJECT_ROOT").unwrap() {
+        .expect("a valued override must produce an overrides manifest");
+    match find_env_entry(&overrides_pkg, "PROJECT_ROOT").unwrap() {
         hpm_package::HoudiniEnvValue::Detailed { value, method } => {
-            assert_eq!(value, "/work/project");
-            assert_eq!(method, "set");
+            assert_eq!(value, &vec!["/work/project".to_string()]);
+            assert_eq!(method, "replace");
         }
         _ => panic!("Expected Detailed env value"),
     }
@@ -356,18 +366,19 @@ fn runtime_install_source_dev_gates_emission() {
     let pkg = project_manager.create_houdini_package(&dev).unwrap();
     let entry = find_env_entry(&pkg, "HOUDINI_DSO_PATH")
         .expect("dev-gated variant must be emitted for dev installs");
-    // Conditional values lower to DetailedConditional with one entry
-    // keyed by the runtime expression ("true" for an install-source-only
-    // gate, since install_source is stripped before compile_condition).
+    // An install-source-only gate is unconditional at runtime (the axis is
+    // stripped before compilation), so the value collapses to a plain
+    // Detailed list — Houdini's expression grammar has no `true` literal
+    // to key a conditional-array element with.
     match entry {
-        hpm_package::HoudiniEnvValue::DetailedConditional { method, value } => {
+        hpm_package::HoudiniEnvValue::Detailed { method, value } => {
             assert_eq!(method, "prepend");
-            assert_eq!(value.len(), 1);
-            let v = value[0].values().next().unwrap();
-            let expected = format!("{}/build/Release", package_path.display());
-            assert_eq!(v, &expected);
+            assert_eq!(
+                value,
+                &vec![format!("{}/build/Release", package_path.display())]
+            );
         }
-        other => panic!("expected DetailedConditional env value, got {other:?}"),
+        other => panic!("expected the collapsed dev value, got {other:?}"),
     }
 }
 
@@ -431,28 +442,34 @@ fn project_prepend_override_combines_with_dev_variant() {
         .unwrap();
 
     // A `prepend` override combines: the package's own (dev-gated)
-    // contribution is emitted first, then the project's prepend, so
-    // Houdini merges both in load order.
+    // contribution stays in the package file; the project's prepend is
+    // carried once by the overrides manifest, which Houdini processes
+    // after every package file.
     let entries = collect_env_entries(&pkg, "HOUDINI_DSO_PATH");
     assert_eq!(
         entries.len(),
-        2,
-        "prepend override must combine with the package value, not replace it"
+        1,
+        "the package file must carry only the package's own value"
     );
     match entries[0] {
-        hpm_package::HoudiniEnvValue::DetailedConditional { method, value } => {
-            assert_eq!(method, "prepend");
-            let v = value[0].values().next().unwrap();
-            assert_eq!(v, &format!("{}/build/Release", package_path.display()));
-        }
-        other => panic!("expected the package's dev variant first, got {other:?}"),
-    }
-    match entries[1] {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
             assert_eq!(method, "prepend");
-            assert_eq!(value, "/opt/forced/dso");
+            assert_eq!(
+                value,
+                &vec![format!("{}/build/Release", package_path.display())]
+            );
         }
-        other => panic!("expected the project's prepend second, got {other:?}"),
+        other => panic!("expected the package's dev variant, got {other:?}"),
+    }
+    let overrides_pkg = ProjectManager::build_project_overrides_package(&overrides)
+        .unwrap()
+        .expect("a valued override must produce an overrides manifest");
+    match find_env_entry(&overrides_pkg, "HOUDINI_DSO_PATH").unwrap() {
+        hpm_package::HoudiniEnvValue::Detailed { method, value } => {
+            assert_eq!(method, "prepend");
+            assert_eq!(value, &vec!["/opt/forced/dso".to_string()]);
+        }
+        other => panic!("expected the project's prepend in the overrides manifest, got {other:?}"),
     }
 }
 
@@ -512,23 +529,26 @@ fn project_append_override_combines_with_package_value() {
     let entries = collect_env_entries(&pkg, "PYTHONPATH");
     assert_eq!(
         entries.len(),
-        2,
-        "append override must combine with the package value, not replace it"
+        1,
+        "append override must leave the package value in place, not replace it"
     );
-    // Package value first, then the project's append.
     match entries[0] {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
             assert_eq!(method, "append");
-            assert_eq!(value, &format!("{}/python", package_path.display()));
+            assert_eq!(value, &vec![format!("{}/python", package_path.display())]);
         }
-        other => panic!("expected the package value first, got {other:?}"),
+        other => panic!("expected the package value, got {other:?}"),
     }
-    match entries[1] {
+    // The project's append is carried once by the overrides manifest.
+    let overrides_pkg = ProjectManager::build_project_overrides_package(&overrides)
+        .unwrap()
+        .expect("a valued override must produce an overrides manifest");
+    match find_env_entry(&overrides_pkg, "PYTHONPATH").unwrap() {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
             assert_eq!(method, "append");
-            assert_eq!(value, "/work/project/extra");
+            assert_eq!(value, &vec!["/work/project/extra".to_string()]);
         }
-        other => panic!("expected the project's append second, got {other:?}"),
+        other => panic!("expected the project's append in the overrides manifest, got {other:?}"),
     }
 }
 
@@ -584,11 +604,18 @@ fn project_set_override_still_replaces_package_value() {
         .unwrap();
 
     let entries = collect_env_entries(&pkg, "MY_CONFIG");
-    assert_eq!(entries.len(), 1, "set override must replace, not combine");
-    match entries[0] {
+    assert_eq!(
+        entries.len(),
+        0,
+        "set override must suppress the package's entry"
+    );
+    let overrides_pkg = ProjectManager::build_project_overrides_package(&overrides)
+        .unwrap()
+        .expect("a valued override must produce an overrides manifest");
+    match find_env_entry(&overrides_pkg, "MY_CONFIG").unwrap() {
         hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method, "set");
-            assert_eq!(value, "/custom");
+            assert_eq!(method, "replace", "hpm's `set` must lower to `replace`");
+            assert_eq!(value, &vec!["/custom".to_string()]);
         }
         other => panic!("expected Detailed env value, got {other:?}"),
     }
@@ -775,6 +802,80 @@ fn sweep_stale_houdini_manifests_empty_set_clears_all_json() {
         !dev_only.exists(),
         "stale manifest must be swept even when the dep set is empty"
     );
+}
+
+/// The project overrides manifest is not a per-package file — the sweep
+/// must leave it alone even though its stem is not an installed slug.
+#[test]
+fn sweep_stale_houdini_manifests_keeps_project_overrides_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+
+    let overrides_file = project_manager
+        .project_paths
+        .packages_dir
+        .join(PROJECT_OVERRIDES_FILE);
+    std::fs::write(&overrides_file, b"{}").unwrap();
+
+    project_manager.sweep_stale_houdini_manifests(&[]).unwrap();
+
+    assert!(
+        overrides_file.exists(),
+        "the project overrides manifest must survive the sweep"
+    );
+}
+
+/// `write_project_overrides_manifest` writes the file when the project has
+/// `[runtime]` entries and removes it again when they are gone, so a stale
+/// override never outlives its hpm.toml entry.
+#[test]
+fn write_project_overrides_manifest_lifecycle() {
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+
+    let overrides_file = project_manager
+        .project_paths
+        .packages_dir
+        .join(PROJECT_OVERRIDES_FILE);
+
+    let mut overrides = IndexMap::new();
+    overrides.insert(
+        "TOOL_PATH".to_string(),
+        ManifestEnvEntry {
+            method: hpm_package::EnvMethod::Append,
+            value: Some("/studio/tools".into()),
+            required: false,
+        },
+    );
+    project_manager
+        .write_project_overrides_manifest(&overrides)
+        .unwrap();
+    assert!(overrides_file.exists());
+
+    // The emitted JSON must be list-valued with a Houdini-valid method.
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&overrides_file).unwrap()).unwrap();
+    let entry = &json["env"][0]["TOOL_PATH"];
+    assert_eq!(entry["method"], "append");
+    assert_eq!(entry["value"], serde_json::json!(["/studio/tools"]));
+
+    // Empty table: the file is removed. Removing again is a no-op.
+    project_manager
+        .write_project_overrides_manifest(&IndexMap::new())
+        .unwrap();
+    assert!(
+        !overrides_file.exists(),
+        "an empty [runtime] table must remove the overrides manifest"
+    );
+    project_manager
+        .write_project_overrides_manifest(&IndexMap::new())
+        .unwrap();
 }
 
 // ---- Property test for install_source filter --------------------------

@@ -5,8 +5,11 @@
 //! `{ when, set }` variants. Each `when` is a structured selector that hpm
 //! translates to a Houdini-side expression like
 //! `houdini_version >= '21' and houdini_version < '22' and houdini_os == 'linux'`.
-//! Houdini evaluates the expressions at startup and picks the first matching
-//! branch — see <https://www.sidefx.com/docs/houdini/ref/plugins.html>.
+//! Houdini evaluates the expressions at startup — and applies **every**
+//! matching element, not the first match, so hpm compiles the branches to
+//! be mutually exclusive (see [`lower_conditional`]) to deliver the
+//! documented first-match semantics.
+//! See <https://www.sidefx.com/docs/houdini/ref/plugins.html>.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -112,29 +115,97 @@ impl Condition {
     }
 }
 
+/// One atomic comparison in a compiled runtime condition
+/// (`houdini_version >= '21'`, `houdini_os == 'linux'`, ...).
+///
+/// Kept structured so a branch condition can also be emitted *negated*.
+/// Houdini's package-expression grammar (verified with hconfig on
+/// 21.0.688 / 21.0.729) has `and`, `or`, parentheses, and the comparison
+/// operators — but no `not` and no boolean literals — so negation happens
+/// by flipping each comparison and joining with `or` (De Morgan).
+#[derive(Debug, Clone)]
+struct ConditionAtom {
+    lhs: &'static str,
+    op: &'static str,
+    rhs: String,
+}
+
+impl ConditionAtom {
+    fn new(lhs: &'static str, op: &'static str, rhs: impl Into<String>) -> Self {
+        Self {
+            lhs,
+            op,
+            rhs: rhs.into(),
+        }
+    }
+
+    fn compile(&self) -> String {
+        format!("{} {} '{}'", self.lhs, self.op, self.rhs)
+    }
+
+    fn compile_negated(&self) -> String {
+        let flipped = match self.op {
+            ">=" => "<",
+            "<" => ">=",
+            "<=" => ">",
+            ">" => "<=",
+            "==" => "!=",
+            "!=" => "==",
+            other => unreachable!("unknown comparison operator {other}"),
+        };
+        format!("{} {} '{}'", self.lhs, flipped, self.rhs)
+    }
+}
+
 /// Compile a `Condition` into the Houdini-side expression string.
 ///
 /// Returns `Ok(None)` if the selector contributes nothing to the runtime
 /// expression (empty selector, or `install_source`-only — that axis is
-/// filtered at install time, not by Houdini). The caller decides how to
-/// encode `None` — typically as a literal `true` expression at the end of
-/// the conditional array.
+/// filtered at install time, not by Houdini). There is no expression
+/// encoding for "always true" (Houdini has no boolean literals in this
+/// grammar); [`lower_conditional`] handles unconditional branches
+/// structurally instead.
 ///
 /// Also validates `install_source` is one of `"dev"` / `"registry"` —
 /// unknown values would otherwise silently drop the branch at install time.
 pub fn compile_condition(selector: &Condition) -> Result<Option<String>, ExpressionError> {
-    let mut parts: Vec<String> = Vec::new();
+    let atoms = condition_atoms(selector)?;
+    if atoms.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(
+            atoms
+                .iter()
+                .map(ConditionAtom::compile)
+                .collect::<Vec<_>>()
+                .join(" and "),
+        ))
+    }
+}
+
+/// The atomic comparisons of a `Condition`'s runtime axes, in axis order
+/// (houdini, os, python). Empty for an always-true selector. Validates
+/// every axis, including the runtime-irrelevant `install_source`.
+fn condition_atoms(selector: &Condition) -> Result<Vec<ConditionAtom>, ExpressionError> {
+    let mut atoms: Vec<ConditionAtom> = Vec::new();
 
     if let Some(range) = &selector.houdini {
-        // Range parsed and validated at deserialize time; emission is
-        // infallible.
-        parts.push(range.to_enable_expression());
+        atoms.extend(houdini_req_atoms(range.as_str())?);
     }
     if let Some(os) = &selector.os {
-        parts.push(compile_os(os)?);
+        match os.as_str() {
+            "linux" | "macos" | "windows" => {
+                atoms.push(ConditionAtom::new("houdini_os", "==", os));
+            }
+            _ => return Err(ExpressionError::UnknownOs(os.to_string())),
+        }
     }
     if let Some(py) = &selector.python {
-        parts.push(compile_python(py)?);
+        atoms.push(ConditionAtom::new(
+            "houdini_python",
+            "==",
+            python_identifier(py)?,
+        ));
     }
     if let Some(src) = &selector.install_source {
         match src.as_str() {
@@ -143,21 +214,12 @@ pub fn compile_condition(selector: &Condition) -> Result<Option<String>, Express
         }
     }
 
-    if parts.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(parts.join(" and ")))
-    }
+    Ok(atoms)
 }
 
-fn compile_os(os: &str) -> Result<String, ExpressionError> {
-    match os {
-        "linux" | "macos" | "windows" => Ok(format!("houdini_os == '{}'", os)),
-        _ => Err(ExpressionError::UnknownOs(os.to_string())),
-    }
-}
-
-fn compile_python(py: &str) -> Result<String, ExpressionError> {
+/// Normalize a python axis value (`"3.11"` or `"python3.11"`) to the
+/// `python<v>` identifier Houdini compares `houdini_python` against.
+fn python_identifier(py: &str) -> Result<String, ExpressionError> {
     if py.is_empty() {
         return Err(ExpressionError::InvalidPython(py.to_string()));
     }
@@ -165,7 +227,7 @@ fn compile_python(py: &str) -> Result<String, ExpressionError> {
     if !trimmed.chars().all(|c| c.is_ascii_digit() || c == '.') {
         return Err(ExpressionError::InvalidPython(py.to_string()));
     }
-    Ok(format!("houdini_python == 'python{}'", trimmed))
+    Ok(format!("python{}", trimmed))
 }
 
 /// A validated Cargo-style Houdini version range, e.g. `"^21"`,
@@ -347,56 +409,69 @@ pub fn compile_houdini_req(req: &str) -> Result<String, ExpressionError> {
 }
 
 fn expand_comparator(part: &str) -> Option<String> {
-    if let Some(rest) = part.strip_prefix(">=") {
-        let v = rest.trim();
-        if !is_simple_version(v) {
-            return None;
-        }
-        return Some(format!("houdini_version >= '{}'", v));
+    let atoms = comparator_atoms(part)?;
+    Some(
+        atoms
+            .iter()
+            .map(ConditionAtom::compile)
+            .collect::<Vec<_>>()
+            .join(" and "),
+    )
+}
+
+/// The whole requirement as a flat conjunction of atoms (comma-separated
+/// comparators all AND together).
+fn houdini_req_atoms(req: &str) -> Result<Vec<ConditionAtom>, ExpressionError> {
+    let trimmed = req.trim();
+    if trimmed.is_empty() {
+        return Err(ExpressionError::InvalidHoudiniReq(req.to_string()));
     }
-    if let Some(rest) = part.strip_prefix("<=") {
-        let v = rest.trim();
-        if !is_simple_version(v) {
-            return None;
+    let mut atoms: Vec<ConditionAtom> = Vec::new();
+    for raw_part in trimmed.split(',') {
+        let part = raw_part.trim();
+        if part.is_empty() {
+            return Err(ExpressionError::InvalidHoudiniReq(req.to_string()));
         }
-        return Some(format!("houdini_version <= '{}'", v));
+        atoms.extend(
+            comparator_atoms(part)
+                .ok_or_else(|| ExpressionError::InvalidHoudiniReq(req.to_string()))?,
+        );
     }
-    if let Some(rest) = part.strip_prefix("==") {
-        let v = rest.trim();
-        if !is_simple_version(v) {
-            return None;
+    Ok(atoms)
+}
+
+fn comparator_atoms(part: &str) -> Option<Vec<ConditionAtom>> {
+    // Prefix order matters: two-character operators before their
+    // one-character prefixes, and `=` (alias of `==`) after both.
+    for (prefix, op) in [
+        (">=", ">="),
+        ("<=", "<="),
+        ("==", "=="),
+        (">", ">"),
+        ("<", "<"),
+        ("=", "=="),
+    ] {
+        if let Some(rest) = part.strip_prefix(prefix) {
+            let v = rest.trim();
+            if !is_simple_version(v) {
+                return None;
+            }
+            return Some(vec![ConditionAtom::new("houdini_version", op, v)]);
         }
-        return Some(format!("houdini_version == '{}'", v));
-    }
-    if let Some(rest) = part.strip_prefix(">") {
-        let v = rest.trim();
-        if !is_simple_version(v) {
-            return None;
-        }
-        return Some(format!("houdini_version > '{}'", v));
-    }
-    if let Some(rest) = part.strip_prefix("<") {
-        let v = rest.trim();
-        if !is_simple_version(v) {
-            return None;
-        }
-        return Some(format!("houdini_version < '{}'", v));
     }
 
     if let Some(rest) = part.strip_prefix('^') {
-        let v = rest.trim();
-        return caret_range(v);
+        return caret_atoms(rest.trim());
     }
     if let Some(rest) = part.strip_prefix('~') {
-        let v = rest.trim();
-        return tilde_range(v);
+        return tilde_atoms(rest.trim());
     }
 
     // Bare version is shorthand for caret.
-    caret_range(part)
+    caret_atoms(part)
 }
 
-fn caret_range(v: &str) -> Option<String> {
+fn caret_atoms(v: &str) -> Option<Vec<ConditionAtom>> {
     let parts = parse_simple_version(v)?;
     let lower = format!("{}", DisplayVersion(&parts));
     let upper = match parts.as_slice() {
@@ -408,13 +483,13 @@ fn caret_range(v: &str) -> Option<String> {
         [maj] => format!("{}", maj + 1),
         _ => return None,
     };
-    Some(format!(
-        "houdini_version >= '{}' and houdini_version < '{}'",
-        lower, upper
-    ))
+    Some(vec![
+        ConditionAtom::new("houdini_version", ">=", lower),
+        ConditionAtom::new("houdini_version", "<", upper),
+    ])
 }
 
-fn tilde_range(v: &str) -> Option<String> {
+fn tilde_atoms(v: &str) -> Option<Vec<ConditionAtom>> {
     let parts = parse_simple_version(v)?;
     let lower = format!("{}", DisplayVersion(&parts));
     let upper = match parts.as_slice() {
@@ -423,10 +498,10 @@ fn tilde_range(v: &str) -> Option<String> {
         [maj] => format!("{}", maj + 1),
         _ => return None,
     };
-    Some(format!(
-        "houdini_version >= '{}' and houdini_version < '{}'",
-        lower, upper
-    ))
+    Some(vec![
+        ConditionAtom::new("houdini_version", ">=", lower),
+        ConditionAtom::new("houdini_version", "<", upper),
+    ])
 }
 
 fn parse_simple_version(v: &str) -> Option<Vec<u64>> {
@@ -477,22 +552,49 @@ pub enum ExpressionError {
 /// Lower a `Conditional` env value into Houdini's `[{ "<expr>": "<val>" }, …]`
 /// shape, applying the supplied substitutions to each branch's `set` string.
 ///
+/// Result of lowering a `Conditional` env value for one install context.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoweredConditional {
+    /// The first surviving branch is unconditional, so the whole value
+    /// collapses to its string — under first-match semantics the later
+    /// branches are unreachable and are dropped.
+    Unconditional(String),
+    /// Ordered `{ "<expr>": "<value>" }` branches for Houdini's
+    /// conditional-object array form. May be empty when every branch was
+    /// filtered out by `install_source`.
+    Branches(Vec<HashMap<String, String>>),
+}
+
 /// Variants whose `install_source` axis does not match `is_dev` are
 /// filtered out before lowering, so install-time gates never reach the
 /// Houdini-side expression. The `install_source` axis is also stripped
 /// from surviving variants when compiling the runtime `when` expression.
+/// Substitutions are applied verbatim with `String::replace`, mirroring
+/// the flat-value path.
 ///
-/// Returns an empty vec if every variant is filtered out. Callers that
-/// treat that as "no effective value" can short-circuit emission.
-/// Substitutions are applied verbatim with `String::replace`, mirroring the
-/// flat-value path. An empty `when` is encoded as the literal `"true"`
-/// expression so it acts as a fallback branch.
+/// The manifest promises first-match semantics, but Houdini's package
+/// system applies *every* element of a conditional-object array whose
+/// expression matches (verified with hconfig on 21.0.688 / 21.0.729). So
+/// each branch's expression is emitted with the negation of every earlier
+/// branch AND-ed on — negation by comparison-flipping joined with `or`,
+/// since the expression grammar has no `not`. Houdini also has no boolean
+/// literals (`{"true": v}` silently defines a *variable named `true`*
+/// instead of applying `v` — the old encoding of unconditional branches
+/// was broken), so unconditional branches are handled structurally: a
+/// leading one collapses the whole value to
+/// [`LoweredConditional::Unconditional`], and a trailing fallback's
+/// expression is just the accumulated negations. Either way, anything
+/// after an unconditional branch is unreachable and is dropped.
 pub fn lower_conditional(
     variants: &[EnvValueBranch],
     substitutions: &[(&str, &str)],
     is_dev: bool,
-) -> Result<Vec<HashMap<String, String>>, ExpressionError> {
-    let mut out = Vec::with_capacity(variants.len());
+) -> Result<LoweredConditional, ExpressionError> {
+    let mut branches: Vec<HashMap<String, String>> = Vec::new();
+    // One entry per emitted branch: its condition negated, parenthesized
+    // when it is a multi-atom disjunction.
+    let mut prior_negations: Vec<String> = Vec::new();
+
     for variant in variants {
         if !variant.when.matches_install_source(is_dev)? {
             continue;
@@ -503,16 +605,40 @@ pub fn lower_conditional(
             install_source: None,
             ..variant.when.clone()
         };
-        let expr = compile_condition(&runtime_when)?.unwrap_or_else(|| "true".to_string());
+        let atoms = condition_atoms(&runtime_when)?;
+
         let mut value = variant.set.clone();
         for (from, to) in substitutions {
             value = value.replace(from, to);
         }
+
+        if atoms.is_empty() && prior_negations.is_empty() {
+            // The first surviving branch always matches: the value is
+            // effectively flat in this install context.
+            return Ok(LoweredConditional::Unconditional(value));
+        }
+
+        let mut parts: Vec<String> = atoms.iter().map(ConditionAtom::compile).collect();
+        parts.extend(prior_negations.iter().cloned());
         let mut map = HashMap::new();
-        map.insert(expr, value);
-        out.push(map);
+        map.insert(parts.join(" and "), value);
+        branches.push(map);
+
+        if atoms.is_empty() {
+            // Unconditional fallback after conditional branches: it fires
+            // iff none of them matched, and shadows everything after it.
+            break;
+        }
+
+        let negated: Vec<String> = atoms.iter().map(ConditionAtom::compile_negated).collect();
+        prior_negations.push(if negated.len() == 1 {
+            negated.into_iter().next().expect("len checked")
+        } else {
+            format!("( {} )", negated.join(" or "))
+        });
     }
-    Ok(out)
+
+    Ok(LoweredConditional::Branches(branches))
 }
 
 #[cfg(test)]
