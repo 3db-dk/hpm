@@ -18,7 +18,8 @@
 
 use super::tests::test_setup;
 use super::*;
-use hpm_package::PackagePath;
+use hpm_package::{EnvMethod, ManifestEnvEntry, PackagePath};
+use indexmap::IndexMap;
 use std::collections::HashMap as StdHashMap;
 use tempfile::TempDir;
 

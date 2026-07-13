@@ -17,7 +17,8 @@
 use super::houdini_env_model::{VarState, apply_package_files};
 use super::tests::test_setup;
 use super::*;
-use hpm_package::PackagePath;
+use hpm_package::{EnvMethod, ManifestEnvEntry, PackagePath};
+use indexmap::IndexMap;
 use proptest::prelude::*;
 use tempfile::TempDir;
 

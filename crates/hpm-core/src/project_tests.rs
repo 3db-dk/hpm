@@ -1,5 +1,6 @@
 use super::*;
-use hpm_package::PackagePath;
+use hpm_package::{ManifestEnvEntry, PackagePath};
+use indexmap::IndexMap;
 use tempfile::TempDir;
 
 /// Build the `(Config, StorageManager)` pair every `ProjectManager` test

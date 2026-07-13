@@ -1,4 +1,5 @@
 use super::*;
+use hpm_config::ProjectsConfig;
 use tempfile::TempDir;
 
 #[test]
