@@ -87,10 +87,9 @@ pub enum ProjectError {
     NoMatchingVersion { name: String, version_req: String },
 
     /// Python dependency collection / resolution / venv creation failed.
-    /// `python` returns `anyhow::Error`; we erase the source via a
-    /// trait object here to keep `ProjectError` free of structural
-    /// dependence on `anyhow`'s type — it could move to `thiserror`-only
-    /// later without breaking this enum.
+    /// `python` returns [`crate::python::PythonError`]; the source stays
+    /// erased behind a trait object so this enum has no structural
+    /// dependence on the python subsystem's error type.
     #[error("Python dependency resolution failed")]
     PythonResolution(#[source] Box<dyn std::error::Error + Send + Sync>),
 

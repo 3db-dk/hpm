@@ -1,8 +1,8 @@
 //! Python virtual environment cleanup integration
 
+use super::error::PythonError;
 use super::types::OrphanedVenv;
 use super::venv::VenvManager;
-use anyhow::Result;
 use tracing::{debug, info};
 
 /// Python cleanup analyzer for virtual environments
@@ -11,7 +11,7 @@ pub struct PythonCleanupAnalyzer {
 }
 
 impl PythonCleanupAnalyzer {
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<Self, PythonError> {
         Ok(Self {
             venv_manager: VenvManager::new()?,
         })
@@ -29,7 +29,7 @@ impl PythonCleanupAnalyzer {
     pub async fn analyze_orphaned_venvs(
         &self,
         active_packages: &[String],
-    ) -> Result<Vec<OrphanedVenv>> {
+    ) -> Result<Vec<OrphanedVenv>, PythonError> {
         debug!(
             "Analyzing orphaned virtual environments for {} active packages",
             active_packages.len()
@@ -49,7 +49,7 @@ impl PythonCleanupAnalyzer {
         &self,
         orphaned_venvs: &[OrphanedVenv],
         dry_run: bool,
-    ) -> Result<CleanupResult> {
+    ) -> Result<CleanupResult, PythonError> {
         let mut result = CleanupResult::default();
 
         for venv in orphaned_venvs {
@@ -67,7 +67,7 @@ impl PythonCleanupAnalyzer {
     }
 
     /// Get virtual environment usage statistics
-    pub async fn get_venv_stats(&self) -> Result<VenvStats> {
+    pub async fn get_venv_stats(&self) -> Result<VenvStats, PythonError> {
         let all_venvs = self.venv_manager.list_all_venvs().await?;
         let mut stats = VenvStats::default();
 

@@ -4,7 +4,8 @@
 //! invocations run against HPM's isolated cache and config — we never fall
 //! back to a system UV.
 
-use anyhow::{Context, Result};
+use super::error::PythonError;
+use hpm_package::IoOp;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -13,7 +14,7 @@ use tracing::{debug, info};
 
 const UV_VERSION: &str = "0.5.9";
 
-fn hpm_dir() -> Result<PathBuf> {
+fn hpm_dir() -> Result<PathBuf, PythonError> {
     super::hpm_root()
 }
 
@@ -67,7 +68,7 @@ fn uv_binary_name() -> &'static str {
 
 /// Env vars every UV invocation must run under so that UV never touches
 /// system caches or configuration.
-fn uv_env() -> Result<[(&'static str, PathBuf); 6]> {
+fn uv_env() -> Result<[(&'static str, PathBuf); 6], PythonError> {
     let hpm = hpm_dir()?;
     Ok([
         ("UV_CACHE_DIR", hpm.join("uv-cache")),
@@ -90,7 +91,7 @@ fn uv_env() -> Result<[(&'static str, PathBuf); 6]> {
 ///
 /// Returns the path to the bundled UV binary. Errors if UV cannot be
 /// downloaded or the current platform is unsupported — no system-UV fallback.
-pub async fn ensure_uv_binary() -> Result<PathBuf> {
+pub async fn ensure_uv_binary() -> Result<PathBuf, PythonError> {
     let hpm_dir = hpm_dir()?;
     let tools_dir = hpm_dir.join("tools");
     let uv_path = tools_dir.join(uv_binary_name());
@@ -106,31 +107,38 @@ pub async fn ensure_uv_binary() -> Result<PathBuf> {
     Ok(uv_path)
 }
 
-async fn download_uv(target_path: &Path) -> Result<()> {
-    let download_url = uv_download_url()
-        .ok_or_else(|| anyhow::anyhow!("UV is not available for this platform"))?;
+async fn download_uv(target_path: &Path) -> Result<(), PythonError> {
+    let download_url = uv_download_url().ok_or(PythonError::UnsupportedPlatform)?;
 
     info!("Downloading UV from {}", download_url);
 
     if let Some(parent) = target_path.parent() {
-        fs::create_dir_all(parent).await?;
+        fs::create_dir_all(parent)
+            .await
+            .map_err(|e| IoOp::wrap("create directory", parent, e))?;
     }
 
-    let client = crate::http::client_builder(std::time::Duration::from_secs(300)).build()?;
+    let uv_download = |source: reqwest::Error| PythonError::UvDownload {
+        url: download_url.clone(),
+        source,
+    };
+    let client = crate::http::client_builder(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(uv_download)?;
     let response = client
         .get(&download_url)
         .send()
         .await
-        .context("Failed to download UV")?;
+        .map_err(uv_download)?;
 
     if !response.status().is_success() {
-        return Err(anyhow::anyhow!(
-            "Failed to download UV: HTTP {}",
-            response.status()
-        ));
+        return Err(PythonError::UvDownloadStatus {
+            url: download_url,
+            status: response.status(),
+        });
     }
 
-    let archive_data = response.bytes().await?;
+    let archive_data = response.bytes().await.map_err(uv_download)?;
     info!("Downloaded {} bytes", archive_data.len());
 
     if download_url.ends_with(".zip") {
@@ -138,27 +146,27 @@ async fn download_uv(target_path: &Path) -> Result<()> {
     } else if download_url.ends_with(".tar.gz") {
         extract_tar_gz(&archive_data, target_path).await?;
     } else {
-        return Err(anyhow::anyhow!("Unknown archive format"));
+        return Err(PythonError::UnknownArchiveFormat { url: download_url });
     }
 
     if !target_path.exists() {
-        return Err(anyhow::anyhow!(
-            "UV binary not found after extraction at {:?}",
-            target_path
-        ));
+        return Err(PythonError::UvBinaryMissing {
+            path: target_path.to_path_buf(),
+        });
     }
 
     info!("UV binary installed at {:?}", target_path);
     Ok(())
 }
 
-async fn extract_zip(archive_data: &[u8], target_path: &Path) -> Result<()> {
+async fn extract_zip(archive_data: &[u8], target_path: &Path) -> Result<(), PythonError> {
     let uv_binary_name = uv_binary_name();
     let target_dir = target_path.parent().unwrap().to_path_buf();
     let target_path = target_path.to_path_buf();
     let archive_data = archive_data.to_vec();
 
-    let contents = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+    let read_target = target_path.clone();
+    let contents = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, PythonError> {
         use std::io::{Cursor, Read};
 
         let cursor = Cursor::new(archive_data);
@@ -170,31 +178,38 @@ async fn extract_zip(archive_data: &[u8], target_path: &Path) -> Result<()> {
 
             if name.ends_with(uv_binary_name) || name == uv_binary_name {
                 let mut contents = Vec::new();
-                file.read_to_end(&mut contents)?;
+                file.read_to_end(&mut contents)
+                    .map_err(|e| IoOp::wrap("read UV binary from archive for", read_target, e))?;
                 return Ok(contents);
             }
         }
 
-        Err(anyhow::anyhow!("UV binary not found in archive"))
+        Err(PythonError::UvBinaryNotInArchive)
     })
     .await??;
 
-    fs::create_dir_all(&target_dir).await?;
-    fs::write(&target_path, &contents).await?;
+    fs::create_dir_all(&target_dir)
+        .await
+        .map_err(|e| IoOp::wrap("create directory", &target_dir, e))?;
+    fs::write(&target_path, &contents)
+        .await
+        .map_err(|e| IoOp::wrap("write", &target_path, e))?;
 
     info!("Extracted UV to {:?}", target_path);
     Ok(())
 }
 
-async fn extract_tar_gz(archive_data: &[u8], target_path: &Path) -> Result<()> {
+async fn extract_tar_gz(archive_data: &[u8], target_path: &Path) -> Result<(), PythonError> {
     let uv_binary_name = uv_binary_name();
     let target_dir = target_path.parent().unwrap().to_path_buf();
     let target_path = target_path.to_path_buf();
     let archive_data = archive_data.to_vec();
 
-    fs::create_dir_all(&target_dir).await?;
+    fs::create_dir_all(&target_dir)
+        .await
+        .map_err(|e| IoOp::wrap("create directory", &target_dir, e))?;
 
-    tokio::task::spawn_blocking(move || -> Result<()> {
+    tokio::task::spawn_blocking(move || -> Result<(), PythonError> {
         use flate2::read::GzDecoder;
         use std::io::Cursor;
         use tar::Archive;
@@ -203,19 +218,32 @@ async fn extract_tar_gz(archive_data: &[u8], target_path: &Path) -> Result<()> {
         let gz = GzDecoder::new(cursor);
         let mut archive = Archive::new(gz);
 
-        for entry in archive.entries()? {
-            let mut entry = entry?;
-            let path_str = entry.path()?.to_string_lossy().to_string();
+        // Tar/gzip failures surface as io::Error without a filesystem path;
+        // report them against the extraction target so the message stays
+        // actionable.
+        let read_err = |e: std::io::Error| IoOp::wrap("read UV tar archive for", &target_path, e);
+        for entry in archive.entries().map_err(read_err)? {
+            let mut entry = entry.map_err(read_err)?;
+            let path_str = entry
+                .path()
+                .map_err(read_err)?
+                .to_string_lossy()
+                .to_string();
 
             if path_str.ends_with(uv_binary_name) {
-                entry.unpack(&target_path)?;
+                entry
+                    .unpack(&target_path)
+                    .map_err(|e| IoOp::wrap("unpack UV binary to", &target_path, e))?;
 
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let mut perms = std::fs::metadata(&target_path)?.permissions();
+                    let mut perms = std::fs::metadata(&target_path)
+                        .map_err(|e| IoOp::wrap("stat", &target_path, e))?
+                        .permissions();
                     perms.set_mode(0o755);
-                    std::fs::set_permissions(&target_path, perms)?;
+                    std::fs::set_permissions(&target_path, perms)
+                        .map_err(|e| IoOp::wrap("set permissions on", &target_path, e))?;
                 }
 
                 info!("Extracted {} to {:?}", path_str, target_path);
@@ -223,21 +251,25 @@ async fn extract_tar_gz(archive_data: &[u8], target_path: &Path) -> Result<()> {
             }
         }
 
-        Err(anyhow::anyhow!("UV binary not found in archive"))
+        Err(PythonError::UvBinaryNotInArchive)
     })
     .await??;
 
     Ok(())
 }
 
-async fn setup_uv_isolation(hpm_dir: &Path) -> Result<()> {
+async fn setup_uv_isolation(hpm_dir: &Path) -> Result<(), PythonError> {
     debug!("Setting up UV isolation in {:?}", hpm_dir);
 
     let cache_dir = hpm_dir.join("uv-cache");
     let config_dir = hpm_dir.join("uv-config");
 
-    fs::create_dir_all(&cache_dir).await?;
-    fs::create_dir_all(&config_dir).await?;
+    fs::create_dir_all(&cache_dir)
+        .await
+        .map_err(|e| IoOp::wrap("create directory", &cache_dir, e))?;
+    fs::create_dir_all(&config_dir)
+        .await
+        .map_err(|e| IoOp::wrap("create directory", &config_dir, e))?;
 
     // Forward slashes keep the TOML cross-platform (Windows backslashes trigger unicode escapes).
     let cache_dir_str = cache_dir.to_string_lossy().replace('\\', "/");
@@ -247,7 +279,10 @@ cache-dir = "{cache_dir_str}"
 "#
     );
 
-    fs::write(config_dir.join("uv.toml"), uv_config).await?;
+    let config_path = config_dir.join("uv.toml");
+    fs::write(&config_path, uv_config)
+        .await
+        .map_err(|e| IoOp::wrap("write", &config_path, e))?;
 
     info!("UV isolation configured");
     Ok(())
@@ -273,7 +308,7 @@ fn installed_python_versions() -> &'static Mutex<HashSet<String>> {
 /// without forcing every command to go via `--python-preference managed`
 /// (which would also force-download Python on Linux/macOS dev boxes that
 /// already have a working interpreter).
-pub async fn ensure_managed_python(version: &str) -> Result<()> {
+pub async fn ensure_managed_python(version: &str) -> Result<(), PythonError> {
     {
         let cache = installed_python_versions().lock().unwrap();
         if cache.contains(version) {
@@ -284,7 +319,7 @@ pub async fn ensure_managed_python(version: &str) -> Result<()> {
     debug!("Ensuring managed Python {} is available", version);
     run_uv_command(&["python", "install", version])
         .await
-        .with_context(|| format!("Failed to install managed Python {}", version))?;
+        .map_err(|e| e.uv_context(format!("Failed to install managed Python {}", version)))?;
 
     installed_python_versions()
         .lock()
@@ -294,12 +329,12 @@ pub async fn ensure_managed_python(version: &str) -> Result<()> {
 }
 
 /// Run UV with HPM's isolated cache and config applied per-invocation.
-pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output> {
+pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output, PythonError> {
     let uv_path = ensure_uv_binary().await?;
 
     debug!("Running UV command: {:?} {:?}", uv_path, args);
 
-    let mut cmd = tokio::process::Command::new(uv_path);
+    let mut cmd = tokio::process::Command::new(&uv_path);
     cmd.args(args);
     for (key, value) in uv_env()? {
         cmd.env(key, value);
@@ -309,7 +344,10 @@ pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output> {
     // otherwise show when spawned from a GUI parent on Windows.
     crate::process_util::hide_console_tokio(&mut cmd);
 
-    let output = cmd.output().await?;
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| IoOp::wrap("run", &uv_path, e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -318,7 +356,12 @@ pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output> {
             output.status.code()
         );
         debug!("UV stderr: {}", stderr);
-        return Err(anyhow::anyhow!("UV command failed: {}", stderr));
+        // Callers replace `context` via `PythonError::uv_context` with the
+        // operation they were attempting; the arg list is the fallback.
+        return Err(PythonError::UvCommand {
+            context: format!("UV command `uv {}` failed", args.join(" ")),
+            stderr: stderr.into_owned(),
+        });
     }
 
     Ok(output)

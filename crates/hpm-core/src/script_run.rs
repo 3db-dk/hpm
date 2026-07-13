@@ -18,14 +18,78 @@
 //! desktop direct-spawns and streams to xterm events plus a build log. Each
 //! embedder wraps [`PreparedScript::command_line`] in its own shell.
 
-use crate::project::PackageRunEnv;
-use anyhow::{Context, Result, anyhow, bail};
+use crate::project::{PackageRunEnv, ProjectError};
+use crate::python::PythonError;
+use crate::storage::StorageError;
 use async_trait::async_trait;
 use hpm_package::{PackageManifest, Platform, ScriptEntry};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::debug;
+
+/// Failures raised by the shared `[scripts]` runner.
+///
+/// The [`ScriptSink`] trait itself stays on `anyhow::Result` — out-of-repo
+/// embedders implement it — so sink failures are erased into
+/// [`Sink`](Self::Sink) at the call sites instead of leaking `anyhow` into
+/// this enum.
+#[derive(Debug, thiserror::Error)]
+pub enum ScriptRunError {
+    #[error("No script '{name}' defined in package manifest")]
+    ScriptNotFound { name: String },
+
+    #[error("[stage].prepack references '{name}' but no such [scripts] entry exists")]
+    PrepackScriptNotFound { name: String },
+
+    #[error(
+        "Script '{name}' has no command for host OS {host_os} — its conditional \
+         cmd only matches other platforms"
+    )]
+    NoCommandForHost { name: String, host_os: String },
+
+    #[error("Prepack script '{name}' exited with status {code} — aborting build")]
+    PrepackExit { name: String, code: i32 },
+
+    /// Per-script venv preparation failed (uv bootstrap, interpreter
+    /// download, dependency resolve).
+    #[error("Preparing environment for script '{name}'")]
+    EnvPreparation {
+        name: String,
+        #[source]
+        source: PythonError,
+    },
+
+    /// A `package-env` script's project environment could not be resolved.
+    /// Boxed: `ProjectError` is large and this is a cold path.
+    #[error("Preparing package environment for script '{name}'")]
+    PackageEnv {
+        name: String,
+        #[source]
+        source: Box<ProjectError>,
+    },
+
+    #[error("Failed to load HPM configuration")]
+    Config(#[from] hpm_package::TomlFileError),
+
+    /// Global package storage could not be initialized. Boxed; see
+    /// [`PackageEnv`](Self::PackageEnv).
+    #[error("Failed to initialize package storage")]
+    Storage(#[source] Box<StorageError>),
+
+    /// The embedder's [`ScriptSink::run`] failed. Erased to a trait object
+    /// so this enum has no structural dependence on `anyhow`.
+    #[error(transparent)]
+    Sink(Box<dyn std::error::Error + Send + Sync>),
+}
+
+// Hand-written so call sites can `?` from the unboxed error type; see
+// `ProjectError`'s From impls for the same pattern.
+impl From<StorageError> for ScriptRunError {
+    fn from(err: StorageError) -> Self {
+        Self::Storage(Box::new(err))
+    }
+}
 
 /// A fully-resolved script invocation, ready for an embedder to spawn.
 ///
@@ -77,7 +141,11 @@ pub trait ScriptSink: Send {
     }
 
     /// Spawn `script`, stream its output, and return the process exit code.
-    async fn run(&mut self, script: &PreparedScript) -> Result<i32>;
+    ///
+    /// Stays on `anyhow::Result` deliberately — embedders outside this repo
+    /// implement the trait; the runner maps failures into
+    /// [`ScriptRunError::Sink`].
+    async fn run(&mut self, script: &PreparedScript) -> anyhow::Result<i32>;
 }
 
 /// Compose the environment and command line for `entry`.
@@ -97,15 +165,15 @@ pub async fn prepare_script(
     extra_args: &[String],
     extra_env: &HashMap<String, String>,
     sink: &mut dyn ScriptSink,
-) -> Result<PreparedScript> {
+) -> Result<PreparedScript, ScriptRunError> {
     let host_os = Platform::current().and_then(|p| p.os_key().map(str::to_string));
-    let resolved_cmd = entry.resolve_cmd(host_os.as_deref()).with_context(|| {
-        format!(
-            "Script '{}' has no command for host OS {} — its conditional cmd only matches other platforms",
-            name,
-            host_os.as_deref().unwrap_or("<unknown>")
-        )
-    })?;
+    let resolved_cmd =
+        entry
+            .resolve_cmd(host_os.as_deref())
+            .ok_or_else(|| ScriptRunError::NoCommandForHost {
+                name: name.to_string(),
+                host_os: host_os.as_deref().unwrap_or("<unknown>").to_string(),
+            })?;
     let command_line = build_command_string(&resolved_cmd, extra_args);
     debug!("hpm script {}: {}", name, command_line);
 
@@ -125,9 +193,7 @@ pub async fn prepare_script(
         // every involved package's python/ on PYTHONPATH. Resolved read-only
         // from hpm.lock + the global store via ProjectManager.
         sink.info("Preparing package environment");
-        let run_env = resolve_package_env(package_root, entry.requirements())
-            .await
-            .with_context(|| format!("Preparing package environment for script '{}'", name))?;
+        let run_env = resolve_package_env(package_root, entry.requirements(), name).await?;
         apply_package_env(&run_env, &mut env);
         if let Some(bin) = &run_env.venv_bin {
             debug!(
@@ -145,7 +211,10 @@ pub async fn prepare_script(
         }
         let env_handle = crate::python::prepare_script_env(entry)
             .await
-            .with_context(|| format!("Preparing environment for script '{}'", name))?;
+            .map_err(|e| ScriptRunError::EnvPreparation {
+                name: name.to_string(),
+                source: e,
+            })?;
         if let Some(venv_bin) = &env_handle.path_prepend {
             debug!("hpm script {}: using venv bin {}", name, venv_bin.display());
         }
@@ -172,12 +241,17 @@ pub async fn run_script(
     extra_args: &[String],
     extra_env: &HashMap<String, String>,
     sink: &mut dyn ScriptSink,
-) -> Result<i32> {
+) -> Result<i32, ScriptRunError> {
     let entry = manifest
         .script_for(name)
-        .ok_or_else(|| anyhow!("No script '{}' defined in package manifest", name))?;
+        .ok_or_else(|| ScriptRunError::ScriptNotFound {
+            name: name.to_string(),
+        })?;
     let prepared = prepare_script(&entry, name, package_root, extra_args, extra_env, sink).await?;
-    let code = sink.run(&prepared).await?;
+    let code = sink
+        .run(&prepared)
+        .await
+        .map_err(|e| ScriptRunError::Sink(e.into()))?;
     if code != 0 {
         sink.warn(&format!("Script '{}' exited with status {}", name, code));
     }
@@ -198,23 +272,25 @@ pub async fn run_prepack(
     package_root: &Path,
     extra_env: &HashMap<String, String>,
     sink: &mut dyn ScriptSink,
-) -> Result<()> {
+) -> Result<(), ScriptRunError> {
     for name in names {
-        let entry = manifest.script_for(name).ok_or_else(|| {
-            anyhow!(
-                "[stage].prepack references '{}' but no such [scripts] entry exists",
-                name
-            )
-        })?;
+        let entry =
+            manifest
+                .script_for(name)
+                .ok_or_else(|| ScriptRunError::PrepackScriptNotFound {
+                    name: name.to_string(),
+                })?;
         sink.info(&format!("prepack: {}", name));
         let prepared = prepare_script(&entry, name, package_root, &[], extra_env, sink).await?;
-        let code = sink.run(&prepared).await?;
+        let code = sink
+            .run(&prepared)
+            .await
+            .map_err(|e| ScriptRunError::Sink(e.into()))?;
         if code != 0 {
-            bail!(
-                "Prepack script '{}' exited with status {} — aborting build",
-                name,
-                code
-            );
+            return Err(ScriptRunError::PrepackExit {
+                name: name.clone(),
+                code,
+            });
         }
     }
     Ok(())
@@ -227,22 +303,24 @@ pub async fn run_prepack(
 async fn resolve_package_env(
     package_root: &Path,
     extra_requirements: &[String],
-) -> Result<PackageRunEnv> {
-    let config = hpm_config::Config::load().context("Failed to load HPM configuration")?;
-    let storage_manager = Arc::new(
-        crate::StorageManager::new(config.storage.clone())
-            .context("Failed to initialize package storage")?,
-    );
+    name: &str,
+) -> Result<PackageRunEnv, ScriptRunError> {
+    let package_env = |e: ProjectError| ScriptRunError::PackageEnv {
+        name: name.to_string(),
+        source: Box::new(e),
+    };
+    let config = hpm_config::Config::load()?;
+    let storage_manager = Arc::new(crate::StorageManager::new(config.storage.clone())?);
     let project_manager = crate::ProjectManager::new(
         package_root.to_path_buf(),
         storage_manager,
         Arc::new(config),
     )
-    .context("Failed to open project")?;
+    .map_err(package_env)?;
     project_manager
         .resolve_package_env(extra_requirements)
         .await
-        .map_err(Into::into)
+        .map_err(package_env)
 }
 
 /// Fold a [`PackageRunEnv`] into the subprocess env map: `VIRTUAL_ENV`,

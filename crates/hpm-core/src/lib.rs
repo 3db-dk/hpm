@@ -251,7 +251,9 @@ pub use project::{InstallOutcome, PackageRunEnv, ProjectDependency, ProjectError
 // Shared `[scripts]` runner. Embedders implement `ScriptSink` (spawn +
 // diagnostics) and drive `run_script` / `run_prepack`; the script-env
 // contract (PATH/VIRTUAL_ENV/PYTHONPATH/HPM_PACKAGE_ROOT) lives in one place.
-pub use script_run::{PreparedScript, ScriptSink, prepare_script, run_prepack, run_script};
+pub use script_run::{
+    PreparedScript, ScriptRunError, ScriptSink, prepare_script, run_prepack, run_script,
+};
 
 // Configuration. Re-exported from hpm-config so a single `hpm-core` dep
 // covers both for embedded callers.

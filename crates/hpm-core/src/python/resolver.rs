@@ -1,8 +1,8 @@
 //! Python dependency resolution using UV
 
 use super::bundled::{ensure_managed_python, run_uv_command};
+use super::error::PythonError;
 use super::types::{PythonDependencies, PythonVersion, ResolvedDependencySet};
-use anyhow::{Context, Result};
 use std::io::Write;
 use tempfile::NamedTempFile;
 use tracing::{debug, info};
@@ -39,7 +39,7 @@ use tracing::{debug, info};
 /// ```rust,no_run
 /// use hpm_core::python::{resolve_dependencies, PythonDependencies, PythonDependency, VersionSpec};
 ///
-/// # async fn example() -> anyhow::Result<()> {
+/// # async fn example() -> Result<(), hpm_core::python::PythonError> {
 /// let mut deps = PythonDependencies::new();
 /// deps.add_dependency(PythonDependency::new("numpy", VersionSpec::new(">=1.20.0")));
 /// deps.add_dependency(PythonDependency::new("requests", VersionSpec::new("^2.25.0")));
@@ -56,7 +56,7 @@ use tracing::{debug, info};
 /// ```
 pub async fn resolve_dependencies(
     dependencies: &PythonDependencies,
-) -> Result<ResolvedDependencySet> {
+) -> Result<ResolvedDependencySet, PythonError> {
     info!(
         "Resolving {} Python dependencies",
         dependencies.dependencies.len()
@@ -69,7 +69,7 @@ pub async fn resolve_dependencies(
 
     let resolved = compile_requirements(&requirement_lines(dependencies), python_version)
         .await
-        .context("Failed to run UV dependency resolution")?;
+        .map_err(|e| e.uv_context("Failed to run UV dependency resolution"))?;
 
     info!("Resolved {} Python packages", resolved.packages.len());
     Ok(resolved)
@@ -94,7 +94,7 @@ pub async fn resolve_dependencies(
 pub async fn resolve_combined(
     collected: &PythonDependencies,
     extra_requirements: &[String],
-) -> Result<ResolvedDependencySet> {
+) -> Result<ResolvedDependencySet, PythonError> {
     let python_version = collected
         .python_version
         .clone()
@@ -121,7 +121,7 @@ pub async fn resolve_combined(
 
     let resolved = compile_requirements(&lines, python_version)
         .await
-        .context("Failed to resolve package environment dependencies")?;
+        .map_err(|e| e.uv_context("Failed to resolve package environment dependencies"))?;
     info!(
         "Resolved {} packages for package environment",
         resolved.packages.len()
@@ -153,19 +153,27 @@ fn requirement_lines(dependencies: &PythonDependencies) -> Vec<String> {
 }
 
 /// Write requirement lines to a temp requirements file, skipping blank lines.
-pub(super) fn write_requirements_file(lines: &[String]) -> Result<NamedTempFile> {
-    let mut temp_file =
-        NamedTempFile::new().context("Failed to create temporary requirements file")?;
+pub(super) fn write_requirements_file(lines: &[String]) -> Result<NamedTempFile, PythonError> {
+    let mut temp_file = NamedTempFile::new().map_err(|e| PythonError::RequirementsFile {
+        op: "create",
+        source: e,
+    })?;
     for line in lines {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        writeln!(temp_file, "{}", line).context("Failed to write to requirements file")?;
+        writeln!(temp_file, "{}", line).map_err(|e| PythonError::RequirementsFile {
+            op: "write",
+            source: e,
+        })?;
     }
     temp_file
         .flush()
-        .context("Failed to flush requirements file")?;
+        .map_err(|e| PythonError::RequirementsFile {
+            op: "flush",
+            source: e,
+        })?;
     debug!("Created requirements file: {:?}", temp_file.path());
     Ok(temp_file)
 }
@@ -176,7 +184,7 @@ pub(super) fn write_requirements_file(lines: &[String]) -> Result<NamedTempFile>
 pub(super) async fn compile_requirements(
     lines: &[String],
     python_version: PythonVersion,
-) -> Result<ResolvedDependencySet> {
+) -> Result<ResolvedDependencySet, PythonError> {
     let req_file = write_requirements_file(lines)?;
     let py_str = python_version.to_string();
     ensure_managed_python(&py_str).await?;

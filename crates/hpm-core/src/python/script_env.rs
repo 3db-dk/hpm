@@ -19,9 +19,9 @@
 //! Houdini 21.x's bundled interpreter, which is the most common case for
 //! the out-of-process hooks (`tt_setup`, etc.) this feature exists to serve.
 
+use super::error::PythonError;
 use super::types::{PythonVersion, ResolvedDependencySet};
 use super::venv::VenvManager;
-use anyhow::{Context, Result};
 use hpm_package::ScriptEntry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -41,10 +41,11 @@ use tracing::info;
 pub async fn ensure_script_venv(
     python_version: Option<&str>,
     requirements: &[String],
-) -> Result<PathBuf> {
+) -> Result<PathBuf, PythonError> {
     let py_str = python_version.unwrap_or(super::DEFAULT_PYTHON_VERSION);
-    let parsed = PythonVersion::from_str(py_str)
-        .with_context(|| format!("Invalid python version '{}' in script entry", py_str))?;
+    // The FromStr error already names the offending input, so the prior
+    // "in script entry" context adds nothing typed callers can't see.
+    let parsed = PythonVersion::from_str(py_str)?;
 
     let resolved = if requirements.is_empty() {
         info!("Preparing script venv (python {}, no requirements)", py_str);
@@ -57,7 +58,7 @@ pub async fn ensure_script_venv(
         );
         super::resolver::compile_requirements(requirements, parsed)
             .await
-            .context("Failed to resolve script requirements")?
+            .map_err(|e| e.uv_context("Failed to resolve script requirements"))?
     };
 
     let manager = VenvManager::new()?;
@@ -149,16 +150,12 @@ fn compose_path(prefix: &Path, existing: &str) -> String {
 /// Surfaces `ensure_script_venv` failures (uv bootstrap, interpreter
 /// download, dependency resolve). Callers typically wrap the error with
 /// a `"preparing script venv for <name>"` context.
-pub async fn prepare_script_env(entry: &ScriptEntry) -> Result<ScriptEnvHandle> {
+pub async fn prepare_script_env(entry: &ScriptEntry) -> Result<ScriptEnvHandle, PythonError> {
     if !entry.needs_venv() {
         return Ok(ScriptEnvHandle::default());
     }
-    super::initialize()
-        .await
-        .context("Failed to initialize bundled uv")?;
-    let venv_path = ensure_script_venv(entry.python(), entry.requirements())
-        .await
-        .context("Failed to prepare script venv")?;
+    super::initialize().await?;
+    let venv_path = ensure_script_venv(entry.python(), entry.requirements()).await?;
     let bin_dir = super::venv_layout::bin_dir(&venv_path);
     let mut env = HashMap::new();
     env.insert(

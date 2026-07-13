@@ -1,6 +1,6 @@
 //! Types for Python dependency management
 
-use anyhow::Result;
+use super::error::PythonError;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -133,24 +133,32 @@ impl PythonVersion {
 }
 
 impl FromStr for PythonVersion {
-    type Err = anyhow::Error;
+    type Err = PythonError;
 
     fn from_str(version: &str) -> Result<Self, Self::Err> {
+        let invalid = |reason: &str| PythonError::InvalidPythonVersion {
+            input: version.to_string(),
+            reason: reason.to_string(),
+        };
         let parts: Vec<&str> = version.split('.').collect();
         if parts.is_empty() {
-            return Err(anyhow::anyhow!("Empty version string"));
+            return Err(invalid("empty version string"));
         }
         if parts.len() > 3 {
-            return Err(anyhow::anyhow!("Too many version components"));
+            return Err(invalid("too many version components"));
         }
-        let major = parts[0].parse()?;
+        let parse_component = |s: &str| {
+            s.parse::<u8>()
+                .map_err(|e| invalid(&format!("not a numeric component: {}", e)))
+        };
+        let major = parse_component(parts[0])?;
         let minor = if parts.len() > 1 {
-            parts[1].parse()?
+            parse_component(parts[1])?
         } else {
             0
         };
         let patch = if parts.len() > 2 {
-            Some(parts[2].parse()?)
+            Some(parse_component(parts[2])?)
         } else {
             None
         };
@@ -230,16 +238,15 @@ impl PythonDependencies {
         self.python_version = Some(version);
     }
 
-    pub fn merge(&mut self, other: &Self) -> Result<()> {
+    pub fn merge(&mut self, other: &Self) -> Result<(), PythonError> {
         for (name, dep) in &other.dependencies {
             if let Some(existing) = self.dependencies.get(name) {
                 if existing.version != dep.version {
-                    return Err(anyhow::anyhow!(
-                        "Conflicting versions for package {}: {} vs {}",
-                        name,
-                        existing.version,
-                        dep.version
-                    ));
+                    return Err(PythonError::DependencyVersionConflict {
+                        package: name.clone(),
+                        existing: existing.version.to_string(),
+                        requested: dep.version.to_string(),
+                    });
                 }
             } else {
                 self.dependencies.insert(name.clone(), dep.clone());
@@ -249,11 +256,10 @@ impl PythonDependencies {
         if let Some(other_py) = &other.python_version {
             if let Some(existing_py) = &self.python_version {
                 if existing_py != other_py {
-                    return Err(anyhow::anyhow!(
-                        "Conflicting Python versions: {} vs {}",
-                        existing_py,
-                        other_py
-                    ));
+                    return Err(PythonError::PythonVersionConflict {
+                        existing: existing_py.to_string(),
+                        requested: other_py.to_string(),
+                    });
                 }
             } else {
                 self.python_version = Some(other_py.clone());

@@ -32,7 +32,7 @@ pub async fn run_script(
         .unwrap_or_else(|| PathBuf::from("."));
 
     let mut sink = ConsoleSink::new(console);
-    hpm_core::script_run::run_script(
+    let code = hpm_core::script_run::run_script(
         &manifest,
         script,
         &package_root,
@@ -40,5 +40,6 @@ pub async fn run_script(
         extra_env,
         &mut sink,
     )
-    .await
+    .await?;
+    Ok(code)
 }

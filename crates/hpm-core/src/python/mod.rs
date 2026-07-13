@@ -97,7 +97,7 @@
 //! use hpm_core::python::{initialize, collect_python_dependencies, resolve_dependencies, VenvManager};
 //! use hpm_package::PackageManifest;
 //!
-//! # async fn example() -> anyhow::Result<()> {
+//! # async fn example() -> Result<(), hpm_core::python::PythonError> {
 //! // 1. Initialize the Python dependency system
 //! initialize().await?;
 //!
@@ -123,7 +123,7 @@
 //! ```rust,no_run
 //! use hpm_core::python::cleanup::PythonCleanupAnalyzer;
 //!
-//! # async fn cleanup_example() -> anyhow::Result<()> {
+//! # async fn cleanup_example() -> Result<(), hpm_core::python::PythonError> {
 //! let analyzer = PythonCleanupAnalyzer::new()?;
 //! let active_packages = vec!["package-a@1.0.0".to_string()];
 //!
@@ -144,7 +144,7 @@
 //! ```rust,no_run
 //! use hpm_core::python::resolve_dependencies;
 //!
-//! # async fn conflict_example() -> anyhow::Result<()> {
+//! # async fn conflict_example() -> Result<(), hpm_core::python::PythonError> {
 //! # use hpm_core::python::types::PythonDependencies;
 //! # let collected_deps = PythonDependencies::default();
 //! match resolve_dependencies(&collected_deps).await {
@@ -160,6 +160,7 @@
 pub mod bundled;
 pub mod cleanup;
 pub mod collection;
+pub mod error;
 pub mod pep503;
 pub mod resolver;
 pub mod script_env;
@@ -184,22 +185,14 @@ pub(crate) fn default_python_version() -> types::PythonVersion {
 /// invoking environment. Previously this silently fell back to `"."`,
 /// which scattered uv binaries and venvs across whichever cwd hpm
 /// happened to run from. Hard error catches the misconfiguration up front.
-pub(crate) fn hpm_root() -> anyhow::Result<std::path::PathBuf> {
+pub(crate) fn hpm_root() -> Result<std::path::PathBuf, PythonError> {
     hpm_package::user_home()
         .map(|home| home.join(".hpm"))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Could not locate the user's home directory ({}). HPM stores \
-                 its tools, caches, and venvs under ~/.hpm — set the variable \
-                 or run from a shell where it is available.",
-                if cfg!(windows) {
-                    "%USERPROFILE%"
-                } else {
-                    "$HOME"
-                }
-            )
-        })
+        .ok_or(PythonError::HomeDirNotFound)
 }
+
+// Typed error surface for the whole python subsystem
+pub use error::PythonError;
 
 // Dependency collection
 pub use collection::collect_python_dependencies;
@@ -220,7 +213,6 @@ pub use venv::VenvManager;
 pub use script_env::{ScriptEnvHandle, ensure_script_venv, prepare_script_env};
 pub use venv_layout::bin_dir as venv_bin_dir;
 
-use anyhow::Result;
 use std::path::PathBuf;
 
 /// Initialize Python dependency management system
@@ -240,13 +232,13 @@ use std::path::PathBuf;
 /// # Example
 ///
 /// ```rust,no_run
-/// # async fn example() -> anyhow::Result<()> {
+/// # async fn example() -> Result<(), hpm_core::python::PythonError> {
 /// hpm_core::python::initialize().await?;
 /// // Python dependency management is now ready to use
 /// # Ok(())
 /// # }
 /// ```
-pub async fn initialize() -> Result<()> {
+pub async fn initialize() -> Result<(), PythonError> {
     bundled::ensure_uv_binary().await?;
     Ok(())
 }
@@ -267,6 +259,6 @@ pub async fn initialize() -> Result<()> {
 /// ```
 ///
 /// Errors via `hpm_root` when the user's home directory is unset.
-pub fn get_venvs_dir() -> anyhow::Result<PathBuf> {
+pub fn get_venvs_dir() -> Result<PathBuf, PythonError> {
     hpm_root().map(|root| root.join("venvs"))
 }

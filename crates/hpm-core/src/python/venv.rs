@@ -1,9 +1,10 @@
 //! Virtual environment management
 
 use super::bundled::{ensure_managed_python, run_uv_command};
+use super::error::PythonError;
 use super::get_venvs_dir;
 use super::types::{OrphanedVenv, PythonVersion, ResolvedDependencySet, VenvMetadata};
-use anyhow::{Context, Result};
+use hpm_package::IoOp;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{debug, info, warn};
@@ -19,7 +20,7 @@ use tracing::{debug, info, warn};
 /// ```rust,no_run
 /// use hpm_core::python::{VenvManager, ResolvedDependencySet, PythonVersion};
 ///
-/// # async fn example() -> anyhow::Result<()> {
+/// # async fn example() -> Result<(), hpm_core::python::PythonError> {
 /// let manager = VenvManager::new()?;
 ///
 /// // Create a resolved dependency set
@@ -43,7 +44,7 @@ impl VenvManager {
     /// Errors when the user's home directory cannot be resolved (no
     /// `$HOME` / `%USERPROFILE%`). Tests that want a controlled location
     /// should use [`with_venvs_dir`](Self::with_venvs_dir) instead.
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<Self, PythonError> {
         Ok(Self {
             venvs_dir: get_venvs_dir()?,
         })
@@ -88,7 +89,7 @@ impl VenvManager {
     /// ```rust,no_run
     /// use hpm_core::python::{VenvManager, ResolvedDependencySet, PythonVersion};
     ///
-    /// # async fn example() -> anyhow::Result<()> {
+    /// # async fn example() -> Result<(), hpm_core::python::PythonError> {
     /// let manager = VenvManager::new()?;
     /// let mut resolved = ResolvedDependencySet::new(PythonVersion::new(3, 9, None));
     /// resolved.add_package("numpy", "1.24.0");
@@ -101,7 +102,7 @@ impl VenvManager {
     pub async fn ensure_virtual_environment(
         &self,
         resolved_deps: &ResolvedDependencySet,
-    ) -> Result<PathBuf> {
+    ) -> Result<PathBuf, PythonError> {
         let hash = resolved_deps.hash();
         let venv_path = self.venvs_dir.join(&hash);
 
@@ -119,22 +120,19 @@ impl VenvManager {
                 warn!("Rebuilding venv {}: {}", hash, reason);
                 fs::remove_dir_all(&venv_path)
                     .await
-                    .context("Failed to remove stale virtual environment")?;
+                    .map_err(|e| IoOp::wrap("remove stale virtual environment", &venv_path, e))?;
             }
         }
 
         if !venv_path.exists() {
             info!("Creating virtual environment for dependency set {}", hash);
             self.create_virtual_environment(&venv_path, resolved_deps)
-                .await
-                .context("Failed to create virtual environment")?;
+                .await?;
         } else {
             debug!("Using existing virtual environment: {}", hash);
         }
 
-        self.update_venv_metadata(&venv_path, resolved_deps)
-            .await
-            .context("Failed to update virtual environment metadata")?;
+        self.update_venv_metadata(&venv_path, resolved_deps).await?;
 
         Ok(venv_path)
     }
@@ -185,11 +183,11 @@ impl VenvManager {
         &self,
         venv_path: &Path,
         resolved_deps: &ResolvedDependencySet,
-    ) -> Result<()> {
+    ) -> Result<(), PythonError> {
         // Ensure parent directory exists
         fs::create_dir_all(&self.venvs_dir)
             .await
-            .context("Failed to create venvs directory")?;
+            .map_err(|e| IoOp::wrap("create venvs directory", &self.venvs_dir, e))?;
 
         // Create virtual environment using UV
         let python_version = resolved_deps.python_version.to_string();
@@ -205,13 +203,11 @@ impl VenvManager {
             &python_version,
         ])
         .await
-        .context("Failed to create virtual environment")?;
+        .map_err(|e| e.uv_context("Failed to create virtual environment"))?;
 
         // Install resolved dependencies
         if !resolved_deps.packages.is_empty() {
-            self.install_packages(venv_path, resolved_deps)
-                .await
-                .context("Failed to install packages in virtual environment")?;
+            self.install_packages(venv_path, resolved_deps).await?;
         }
 
         info!("Virtual environment created at {:?}", venv_path);
@@ -223,12 +219,11 @@ impl VenvManager {
         &self,
         venv_path: &Path,
         resolved_deps: &ResolvedDependencySet,
-    ) -> Result<()> {
+    ) -> Result<(), PythonError> {
         // Create a requirements file with exact versions
         let req_file = self
             .create_resolved_requirements_file(resolved_deps)
-            .await
-            .context("Failed to create resolved requirements file")?;
+            .await?;
 
         // Install into the venv's own Python. `--target` would drop files at an
         // arbitrary path that the venv interpreter doesn't import from — that
@@ -237,7 +232,9 @@ impl VenvManager {
         let python_exe = venv_python_executable(venv_path);
         let python_str = python_exe
             .to_str()
-            .context("Venv Python path is not UTF-8")?;
+            .ok_or_else(|| PythonError::NonUtf8Path {
+                path: python_exe.clone(),
+            })?;
         run_uv_command(&[
             "pip",
             "install",
@@ -247,7 +244,7 @@ impl VenvManager {
             python_str,
         ])
         .await
-        .context("Failed to install packages into virtual environment")?;
+        .map_err(|e| e.uv_context("Failed to install packages into virtual environment"))?;
 
         // Confirm at least one requested package actually landed in the venv
         // before we write metadata claiming success. This would have caught
@@ -258,10 +255,7 @@ impl VenvManager {
             let populated = fs::metadata(&site_packages).await.is_ok()
                 && any_package_present(&site_packages, resolved_deps).await;
             if !populated {
-                return Err(anyhow::anyhow!(
-                    "uv reported success but {} is missing the installed packages",
-                    site_packages.display()
-                ));
+                return Err(PythonError::VenvVerification { site_packages });
             }
         }
 
@@ -276,7 +270,7 @@ impl VenvManager {
     async fn create_resolved_requirements_file(
         &self,
         resolved_deps: &ResolvedDependencySet,
-    ) -> Result<tempfile::NamedTempFile> {
+    ) -> Result<tempfile::NamedTempFile, PythonError> {
         let lines: Vec<String> = resolved_deps
             .packages
             .iter()
@@ -290,17 +284,13 @@ impl VenvManager {
         &self,
         venv_path: &Path,
         resolved_deps: &ResolvedDependencySet,
-    ) -> Result<()> {
+    ) -> Result<(), PythonError> {
         let hash = resolved_deps.hash();
         let metadata_path = venv_path.join("metadata.json");
 
         let mut metadata = if metadata_path.exists() {
             // Load existing metadata
-            let content = fs::read_to_string(&metadata_path)
-                .await
-                .context("Failed to read metadata file")?;
-            serde_json::from_str::<VenvMetadata>(&content)
-                .context("Failed to parse metadata file")?
+            self.load_venv_metadata(&metadata_path).await?
         } else {
             // Create new metadata
             VenvMetadata::new(hash, resolved_deps.clone(), venv_path.to_path_buf())
@@ -309,32 +299,29 @@ impl VenvManager {
         metadata.last_used = Some(std::time::SystemTime::now());
 
         let metadata_json =
-            serde_json::to_string_pretty(&metadata).context("Failed to serialize metadata")?;
+            serde_json::to_string_pretty(&metadata).map_err(PythonError::MetadataSerialize)?;
         let metadata_path_owned = metadata_path.clone();
         tokio::task::spawn_blocking(move || {
             hpm_package::atomic_write(&metadata_path_owned, metadata_json)
         })
-        .await
-        .context("Failed to join metadata write task")?
-        .context("Failed to atomically write metadata file")?;
+        .await??;
 
         Ok(())
     }
 
     /// List all virtual environments
-    pub async fn list_all_venvs(&self) -> Result<Vec<VenvMetadata>> {
+    pub async fn list_all_venvs(&self) -> Result<Vec<VenvMetadata>, PythonError> {
         let mut venvs = Vec::new();
 
         if !self.venvs_dir.exists() {
             return Ok(venvs);
         }
 
-        let mut dir_entries = fs::read_dir(&self.venvs_dir)
-            .await
-            .context("Failed to read venvs directory")?;
+        let read_err = |e: std::io::Error| IoOp::wrap("read venvs directory", &self.venvs_dir, e);
+        let mut dir_entries = fs::read_dir(&self.venvs_dir).await.map_err(read_err)?;
 
-        while let Some(entry) = dir_entries.next_entry().await? {
-            if entry.file_type().await?.is_dir() {
+        while let Some(entry) = dir_entries.next_entry().await.map_err(read_err)? {
+            if entry.file_type().await.map_err(read_err)?.is_dir() {
                 let metadata_path = entry.path().join("metadata.json");
                 if metadata_path.exists() {
                     match self.load_venv_metadata(&metadata_path).await {
@@ -349,12 +336,16 @@ impl VenvManager {
     }
 
     /// Load virtual environment metadata
-    async fn load_venv_metadata(&self, metadata_path: &Path) -> Result<VenvMetadata> {
+    async fn load_venv_metadata(&self, metadata_path: &Path) -> Result<VenvMetadata, PythonError> {
         let content = fs::read_to_string(metadata_path)
             .await
-            .context("Failed to read metadata file")?;
-        let metadata = serde_json::from_str::<VenvMetadata>(&content)
-            .context("Failed to parse metadata file")?;
+            .map_err(|e| IoOp::wrap("read venv metadata file", metadata_path, e))?;
+        let metadata = serde_json::from_str::<VenvMetadata>(&content).map_err(|e| {
+            PythonError::MetadataParse {
+                path: metadata_path.to_path_buf(),
+                source: e,
+            }
+        })?;
         Ok(metadata)
     }
 
@@ -362,7 +353,7 @@ impl VenvManager {
     pub async fn find_orphaned_venvs(
         &self,
         active_packages: &[String],
-    ) -> Result<Vec<OrphanedVenv>> {
+    ) -> Result<Vec<OrphanedVenv>, PythonError> {
         let all_venvs = self.list_all_venvs().await?;
         let mut orphaned = Vec::new();
 
@@ -389,14 +380,21 @@ impl VenvManager {
     }
 
     /// Calculate the size of a virtual environment
-    pub async fn calculate_venv_size(&self, venv_path: &Path) -> Result<u64> {
+    pub async fn calculate_venv_size(&self, venv_path: &Path) -> Result<u64, PythonError> {
         let mut total_size = 0u64;
         let mut stack = vec![venv_path.to_path_buf()];
 
         while let Some(current_path) = stack.pop() {
             if let Ok(mut dir_entries) = fs::read_dir(&current_path).await {
-                while let Some(entry) = dir_entries.next_entry().await? {
-                    let metadata = entry.metadata().await?;
+                while let Some(entry) = dir_entries
+                    .next_entry()
+                    .await
+                    .map_err(|e| IoOp::wrap("read directory", &current_path, e))?
+                {
+                    let metadata = entry
+                        .metadata()
+                        .await
+                        .map_err(|e| IoOp::wrap("stat", entry.path(), e))?;
                     if metadata.is_dir() {
                         stack.push(entry.path());
                     } else {
@@ -410,11 +408,11 @@ impl VenvManager {
     }
 
     /// Remove a virtual environment
-    pub async fn remove_venv(&self, venv_path: &Path) -> Result<()> {
+    pub async fn remove_venv(&self, venv_path: &Path) -> Result<(), PythonError> {
         if venv_path.exists() {
             fs::remove_dir_all(venv_path)
                 .await
-                .context("Failed to remove virtual environment directory")?;
+                .map_err(|e| IoOp::wrap("remove virtual environment directory", venv_path, e))?;
             info!("Removed virtual environment: {:?}", venv_path);
         }
         Ok(())

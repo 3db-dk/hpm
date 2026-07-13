@@ -1,7 +1,7 @@
 //! Dependency collection and management
 
+use super::error::PythonError;
 use super::types::{PythonDependencies, PythonDependency, PythonVersion, VersionSpec};
-use anyhow::Result;
 use hpm_package::{PackageManifest, PythonDependencySpec};
 
 /// Collect Python dependencies from HPM package manifests.
@@ -37,7 +37,7 @@ use hpm_package::{PackageManifest, PythonDependencySpec};
 /// use hpm_core::python::collect_python_dependencies;
 /// use hpm_package::PackageManifest;
 ///
-/// # async fn example() -> anyhow::Result<()> {
+/// # async fn example() -> Result<(), hpm_core::python::PythonError> {
 /// let packages: Vec<PackageManifest> = vec![]; // Load your package manifests
 /// let dependencies = collect_python_dependencies(Some("22.0.307"), &packages).await?;
 ///
@@ -51,7 +51,7 @@ use hpm_package::{PackageManifest, PythonDependencySpec};
 pub async fn collect_python_dependencies(
     project_houdini_version: Option<&str>,
     packages: &[PackageManifest],
-) -> Result<PythonDependencies> {
+) -> Result<PythonDependencies, PythonError> {
     let mut all_deps = PythonDependencies::new();
 
     // The project's own Houdini version is authoritative — Houdini ships a
@@ -89,7 +89,7 @@ pub async fn collect_python_dependencies(
 fn extract_python_dependencies(
     manifest: &PackageManifest,
     project_overrides_python_version: bool,
-) -> Result<Option<PythonDependencies>> {
+) -> Result<Option<PythonDependencies>, PythonError> {
     if manifest.python_dependencies.is_empty() {
         return Ok(None);
     }
@@ -108,7 +108,10 @@ fn extract_python_dependencies(
 }
 
 /// Convert PythonDependencySpec to PythonDependency
-fn convert_spec_to_dependency(name: &str, spec: &PythonDependencySpec) -> Result<PythonDependency> {
+fn convert_spec_to_dependency(
+    name: &str,
+    spec: &PythonDependencySpec,
+) -> Result<PythonDependency, PythonError> {
     match spec {
         PythonDependencySpec::Simple(version_spec) => {
             Ok(PythonDependency::new(name, VersionSpec::new(version_spec)))
@@ -144,17 +147,13 @@ fn convert_spec_to_dependency(name: &str, spec: &PythonDependencySpec) -> Result
 ///
 /// Houdini 19.x (Python 3.7) and 20.0–20.4 (Python 3.9) are intentionally
 /// unsupported: their Python interpreters are past upstream EOL.
-fn map_houdini_to_python_version(houdini_version: &str) -> Result<PythonVersion> {
+fn map_houdini_to_python_version(houdini_version: &str) -> Result<PythonVersion, PythonError> {
     let mut parts = houdini_version.split('.');
-    let major: u32 = parts
-        .next()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Could not parse Houdini version '{}': expected a numeric major version (e.g. '21' or '20.5')",
-                houdini_version
-            )
-        })?;
+    let major: u32 = parts.next().and_then(|s| s.parse().ok()).ok_or_else(|| {
+        PythonError::HoudiniVersionParse {
+            input: houdini_version.to_string(),
+        }
+    })?;
     let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
 
     match (major, minor) {
@@ -164,11 +163,9 @@ fn map_houdini_to_python_version(houdini_version: &str) -> Result<PythonVersion>
         (20, 5..) => Ok(PythonVersion::new(3, 11, None)),
         (21, _) => Ok(PythonVersion::new(3, 11, None)),
         (22, _) => Ok(PythonVersion::new(3, 13, None)),
-        _ => Err(anyhow::anyhow!(
-            "No Python version mapping for Houdini {}; supported versions are 20.5+, 21, 22. \
-             Houdini 19.x (Python 3.7) and 20.0–20.4 (Python 3.9) are past EOL.",
-            houdini_version
-        )),
+        _ => Err(PythonError::UnsupportedHoudiniVersion {
+            version: houdini_version.to_string(),
+        }),
     }
 }
 

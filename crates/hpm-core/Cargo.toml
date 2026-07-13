@@ -41,7 +41,8 @@ base64.workspace = true
 glob = "0.3"
 time.workspace = true
 petgraph.workspace = true
-# Python module: uv download/extract + venv management raises anyhow.
+# Only for `ScriptSink::run`'s return type — out-of-repo embedders
+# implement the trait against anyhow; hpm-core's own errors are thiserror.
 anyhow.workspace = true
 tempfile.workspace = true
 
