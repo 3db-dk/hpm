@@ -91,18 +91,8 @@ async fn validate_manifest_file(
     let content = fs::read_to_string(manifest_path).context("Failed to read hpm.toml")?;
 
     match hpm_package::parse_manifest_str(&content) {
-        Ok((manifest, migration)) => {
+        Ok(manifest) => {
             result.add_info("[OK] hpm.toml has valid TOML syntax".to_string());
-            if let Some(report) = migration {
-                result.add_warning(format!(
-                    "hpm.toml uses the pre-0.16 format; run `hpm migrate` to update it \
-                     (legacy support is removed in {}).",
-                    hpm_package::LEGACY_MANIFEST_SUNSET
-                ));
-                for w in &report.warnings {
-                    result.add_warning(format!("migration note: {}", w));
-                }
-            }
             Ok(Some(manifest))
         }
         Err(e) => {

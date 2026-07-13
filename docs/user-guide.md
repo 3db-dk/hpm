@@ -304,38 +304,6 @@ Check runs:
 
 Check is advisory — warnings do not fail the command.
 
-### `hpm migrate`
-
-Rewrite a pre-0.16 (`Manifest 1.x`) `hpm.toml` to the current schema.
-
-```
-hpm migrate [OPTIONS]
-```
-
-| Option | Description |
-|--------|-------------|
-| `-p`, `--package <PATH>` | Path to `hpm.toml` or its directory (defaults to the current directory). |
-| `--stdout` | Print the migrated manifest to stdout instead of writing it. |
-| `--check` | Only report whether migration is needed; exit non-zero if so and write nothing. Useful as a CI gate. |
-
-The 0.16.0 "Manifest 2.0" refactor renamed and reshaped five sections
-(`[houdini]` -> `[compat].houdini`, `[env]` + `[dev.env]` -> `[runtime]`,
-`[native]` -> `[compat].platforms` + `[stage]`, `[scripts.platform.<os>]`
--> conditional `cmd`). Old-format manifests are still **read
-automatically** — every command converts them on load and prints a
-deprecation warning — but that compatibility is removed in **0.20.0**, so
-migrate before then.
-
-Behaviour of the default (no-flag) form:
-
-- Backs the original up as `hpm.toml.bak`, then writes the converted
-  manifest in place with a comment header recording the migration.
-- The `[native]` -> `[stage]` conversion is **best-effort**: the old
-  `files` entries were include-filters, while `[stage.platform].place`
-  rules need a destination, so each derived `to` path is flagged for
-  review (in the terminal and in the file header). Verify them — the
-  guess is correct for the common `dso/<plat>/*` layout but not for
-  relocating layouts.
 
 ### `hpm run`
 

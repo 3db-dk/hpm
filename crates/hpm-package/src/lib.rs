@@ -128,10 +128,10 @@ pub use env_value::{
 pub use houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
 pub use io_error::IoOp;
 pub use manifest::{
-    CompatConfig, EnvMethod, LEGACY_MANIFEST_SUNSET, ManifestEnvEntry, ManifestLoadError,
-    MigrationReport, MigrationWarning, PackageInfo, PackageManifest, PackageScripts, PlaceRule,
-    PlatformStaging, RegistryConfig, RegistryType, ScriptEntry, ScriptEnv, StageConfig,
-    StagePlatformRules, ValidationLevel, ValidationReport, parse_manifest_str,
+    CompatConfig, EnvMethod, ManifestEnvEntry, ManifestLoadError, PackageInfo, PackageManifest,
+    PackageScripts, PlaceRule, PlatformStaging, RegistryConfig, RegistryType, ScriptEntry,
+    ScriptEnv, StageConfig, StagePlatformRules, ValidationLevel, ValidationReport,
+    parse_manifest_str,
 };
 pub use package_path::{PackagePath, PackagePathError};
 pub use path_util::user_home;

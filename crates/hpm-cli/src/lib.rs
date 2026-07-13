@@ -488,24 +488,6 @@ pub enum Commands {
     },
     /// Validate package configuration
     Check,
-    /// Migrate a pre-0.16 hpm.toml to the current schema.
-    ///
-    /// Old-format manifests are still read transparently (with a deprecation
-    /// warning) until the format is removed; this rewrites the file so it is
-    /// on the current schema. The lossy `[native]` -> `[stage]` conversion is
-    /// best-effort and flags derived placement rules for review.
-    Migrate {
-        /// Path to hpm.toml or its directory (defaults to cwd).
-        #[arg(short = 'p', long = "package")]
-        manifest: Option<std::path::PathBuf>,
-        /// Print the migrated manifest to stdout instead of writing it.
-        #[arg(long)]
-        stdout: bool,
-        /// Only report whether migration is needed (exit non-zero if so);
-        /// write nothing.
-        #[arg(long)]
-        check: bool,
-    },
     /// Materialise the install image into a directory (defaults to
     /// `[stage].output_dir`, typically `dist/`).
     ///
@@ -839,21 +821,6 @@ async fn run_command(
 
             if output_format == OutputFormat::Human {
                 console.success("Package configuration is valid");
-            }
-        }
-        Commands::Migrate {
-            manifest,
-            stdout,
-            check,
-        } => {
-            let needs_migration =
-                commands::migrate::migrate_manifest(manifest.clone(), *stdout, *check, console)
-                    .await
-                    .cli_package("migrate")?;
-            // Under --check, a manifest that still needs migrating is a
-            // non-zero exit so CI can gate on it.
-            if *check && needs_migration {
-                return Ok(ExitStatus::Failure);
             }
         }
         Commands::Build {

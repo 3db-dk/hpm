@@ -55,7 +55,7 @@ kind = "dso"
 type_name = "studio::fast_scatter"
 category = "Sop"
 "#;
-    let (m, _) = parse_manifest_str(toml).unwrap();
+    let m = parse_manifest_str(toml).unwrap();
     assert_eq!(m.operators.len(), 2);
     assert_eq!(m.operators[0].kind, OperatorKind::Hda);
     assert_eq!(m.operators[0].type_name, "studio::rbd_configure::2.0");
@@ -94,7 +94,7 @@ type_name = "studio::fast_scatter"
 category = "Sop"
 source = { linux-x86_64 = "dso/linux-x86_64/scatter.so", macos-aarch64 = "dso/macos-aarch64/scatter.dylib" }
 "#;
-    let (m, _) = parse_manifest_str(toml).unwrap();
+    let m = parse_manifest_str(toml).unwrap();
     assert!(m.validate().is_ok(), "{:?}", m.validate());
     let resolved = m.operators[0].resolved_source(Some(&Platform::LinuxX86_64));
     assert_eq!(
@@ -123,7 +123,7 @@ type_name = "studio::fast_scatter"
 category = "Sop"
 source = { macos-aarch64 = "dso/macos-aarch64/scatter.dylib" }
 "#;
-    let (m, _) = parse_manifest_str(toml).unwrap();
+    let m = parse_manifest_str(toml).unwrap();
     let report = m.validate_with(ValidationLevel::Strict);
     assert!(!report.is_ok());
     assert!(
