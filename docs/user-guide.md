@@ -210,7 +210,7 @@ hpm add studio/a@1.0.0 studio/b@2.0.0
 hpm add local-tools --path ../local-tools
 hpm add local-tools --path ../local-tools --link  # live edits → Houdini
 hpm add studio/visualize@1.0.0 --optional
-hpm add studio/lib@1.0.0 -p /path/to/project
+hpm add studio/lib@1.0.0 -m /path/to/project
 ```
 
 ### `hpm remove`
