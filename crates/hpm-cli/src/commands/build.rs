@@ -18,14 +18,11 @@
 //! paths is the user's responsibility, not a background-service concern.
 
 use anyhow::{Context, Result, bail};
-use hpm_core::packer::StageFilter;
-use hpm_package::path_util::relative_path_to_forward_slash;
+use hpm_core::packer::{StageFilter, build_ignore_rules, stage_to_dir};
 use hpm_package::{PackageManifest, Platform};
-use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 use crate::commands::manifest_utils::{determine_manifest_path, load_manifest};
 use crate::console::Console;
@@ -129,49 +126,10 @@ pub async fn build(options: BuildOptions, console: &mut Console) -> Result<()> {
     let ignore = build_ignore_rules(&package_root)
         .with_context(|| format!("Failed to read ignore rules in {}", package_root.display()))?;
 
-    let mut copied = 0usize;
-    for entry in WalkDir::new(&package_root).sort_by_file_name() {
-        let entry = entry.map_err(|e| anyhow::anyhow!("Walk error: {}", e))?;
-        let path = entry.path();
-        if path == package_root {
-            continue;
-        }
-        let relative = path.strip_prefix(&package_root).unwrap_or(path);
-
-        // Always skip the output_dir if it sits inside the package root —
-        // otherwise a re-run would recursively pack the previous staging
-        // output. External --output paths (a temp dir per Houdini session,
-        // typically) live outside the workspace so this check is a no-op.
-        if let Ok(out_rel) = output_dir.strip_prefix(&package_root)
-            && relative.starts_with(out_rel)
-        {
-            continue;
-        }
-
-        let is_dir = entry.file_type().is_dir();
-        if ignore
-            .matched_path_or_any_parents(relative, is_dir)
-            .is_ignore()
-        {
-            continue;
-        }
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let rel_str = relative_path_to_forward_slash(relative);
-        let archive_path = match filter.archive_path_for(&rel_str) {
-            Some(p) => p,
-            None => continue,
-        };
-        let dest = output_dir.join(&archive_path);
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create {}", parent.display()))?;
-        }
-        fs::copy(path, &dest)
-            .with_context(|| format!("Failed to copy {} -> {}", path.display(), dest.display()))?;
-        copied += 1;
-    }
+    // The staging walk is shared with `hpm pack` (packer::create_archive),
+    // so build and pack can never disagree on what ships where.
+    let copied = stage_to_dir(&package_root, &output_dir, &ignore, Some(&filter))
+        .with_context(|| format!("Failed to stage into {}", output_dir.display()))?;
 
     console.success(format!(
         "Built {} v{} ({} file(s), profile={}{})",
@@ -239,25 +197,6 @@ fn normalize_houdini_majors(flag: Option<&str>) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
-}
-
-fn build_ignore_rules(dir: &Path) -> Result<Gitignore> {
-    let mut builder = GitignoreBuilder::new(dir);
-    builder
-        .add_line(None, ".git/")
-        .context("Adding .git/ to ignore rules")?;
-    builder
-        .add_line(None, ".hpm/")
-        .context("Adding .hpm/ to ignore rules")?;
-    let gitignore = dir.join(".gitignore");
-    if gitignore.exists() {
-        builder.add(gitignore);
-    }
-    let hpmignore = dir.join(".hpmignore");
-    if hpmignore.exists() {
-        builder.add(hpmignore);
-    }
-    Ok(builder.build()?)
 }
 
 #[cfg(test)]

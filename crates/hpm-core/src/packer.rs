@@ -212,32 +212,19 @@ pub fn build_ignore_rules(dir: &Path) -> Result<Gitignore, PackError> {
     Ok(builder.build()?)
 }
 
-/// Create a zip archive of the package directory, filtering via ignore
-/// rules and `[stage]`.
+/// Collect the install image: every workspace file that survives the ignore
+/// rules and `[stage]` filter, paired with its archive-relative destination
+/// path. Sorted for deterministic output.
 ///
-/// Files are added in sorted order for deterministic output. When a `[stage]`
-/// filter is supplied, each file's archive path is rewritten via the
-/// matching `place` rule; unmatched files ship at their workspace-relative
-/// path.
-pub fn create_archive(
+/// `skip_prefix` (relative to `package_dir`) excludes a subtree — used by
+/// [`stage_to_dir`] when the output directory sits inside the package root,
+/// so a re-run never re-stages its own previous output.
+fn collect_stage_entries(
     package_dir: &Path,
-    name: &str,
-    version: &str,
-    output_dir: &Path,
     ignore: &Gitignore,
-    platform: Option<&Platform>,
     stage_filter: Option<&StageFilter>,
-    inject_files: &[(String, Vec<u8>)],
-) -> Result<PathBuf, PackError> {
-    // Replace `/` with `-` in package name for flat archive filenames
-    let safe_name = name.replace('/', "-");
-    let archive_name = match platform {
-        Some(p) => format!("{}-{}-{}.zip", safe_name, version, p),
-        None => format!("{}-{}.zip", safe_name, version),
-    };
-    let archive_path = output_dir.join(&archive_name);
-
-    // Collect (source path, archive path) pairs, sorted for determinism.
+    skip_prefix: Option<&Path>,
+) -> Result<Vec<(PathBuf, String)>, PackError> {
     let mut entries: Vec<(PathBuf, String)> = Vec::new();
     for entry in WalkDir::new(package_dir).sort_by_file_name() {
         let entry = entry.map_err(|e| {
@@ -253,6 +240,12 @@ pub fn create_archive(
 
         // Skip the root directory itself
         if relative == Path::new("") {
+            continue;
+        }
+
+        if let Some(skip) = skip_prefix
+            && relative.starts_with(skip)
+        {
             continue;
         }
 
@@ -282,6 +275,64 @@ pub fn create_archive(
         };
         entries.push((path.to_path_buf(), archive_path));
     }
+    Ok(entries)
+}
+
+/// Materialise the install image into `output_dir` — the same file set and
+/// placement [`create_archive`] would put in a zip, as a directory tree.
+/// Returns the number of files copied. Backs `hpm build`.
+pub fn stage_to_dir(
+    package_dir: &Path,
+    output_dir: &Path,
+    ignore: &Gitignore,
+    stage_filter: Option<&StageFilter>,
+) -> Result<usize, PackError> {
+    // If the output dir sits inside the package root, exclude it from the
+    // walk — otherwise a re-run would recursively stage the previous output.
+    let skip = output_dir
+        .strip_prefix(package_dir)
+        .ok()
+        .map(Path::to_path_buf);
+    let entries = collect_stage_entries(package_dir, ignore, stage_filter, skip.as_deref())?;
+
+    for (source, archive_path) in &entries {
+        let dest = output_dir.join(archive_path);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| IoOp::wrap("create staging directory", parent, e))?;
+        }
+        fs::copy(source, &dest).map_err(|e| IoOp::wrap("copy staged file to", &dest, e))?;
+    }
+    Ok(entries.len())
+}
+
+/// Create a zip archive of the package directory, filtering via ignore
+/// rules and `[stage]`.
+///
+/// Files are added in sorted order for deterministic output. When a `[stage]`
+/// filter is supplied, each file's archive path is rewritten via the
+/// matching `place` rule; unmatched files ship at their workspace-relative
+/// path.
+pub fn create_archive(
+    package_dir: &Path,
+    name: &str,
+    version: &str,
+    output_dir: &Path,
+    ignore: &Gitignore,
+    platform: Option<&Platform>,
+    stage_filter: Option<&StageFilter>,
+    inject_files: &[(String, Vec<u8>)],
+) -> Result<PathBuf, PackError> {
+    // Replace `/` with `-` in package name for flat archive filenames
+    let safe_name = name.replace('/', "-");
+    let archive_name = match platform {
+        Some(p) => format!("{}-{}-{}.zip", safe_name, version, p),
+        None => format!("{}-{}.zip", safe_name, version),
+    };
+    let archive_path = output_dir.join(&archive_name);
+
+    // Collect (source path, archive path) pairs, sorted for determinism.
+    let entries = collect_stage_entries(package_dir, ignore, stage_filter, None)?;
 
     // Create zip
     let file = fs::File::create(&archive_path)
