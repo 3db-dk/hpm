@@ -44,10 +44,17 @@ hpm_version = "0.7.2"
 platform = "linux-x86_64"
 ```
 
-On every `hpm install`, HPM verifies each cached package in `~/.hpm/packages/`
-against the checksum in `hpm.lock` before using it. A mismatch aborts the
-install with a clear error — corrupted or tampered packages never silently
-reach Houdini.
+Verification happens at two points:
+
+- **On download**: the archive bytes are hashed and compared against the
+  registry entry's `cksum` before anything is extracted. A mismatch removes
+  the corrupt cached archive and aborts the install. Registry entries
+  without a checksum install with a warning.
+- **On every `hpm install`**: each cached package in `~/.hpm/packages/` is
+  verified against the checksum in `hpm.lock` before use.
+
+A mismatch at either point aborts with a clear error — corrupted or
+tampered packages never silently reach Houdini.
 
 ### Lock file pinning
 

@@ -145,10 +145,11 @@ pub struct PackageInfo {
 }
 
 pub enum DependencySpec {
-    Simple(String),                                          // "1.0.0"
+    // The bare-string shorthand `pkg = "1.0.0"` (de)serializes as
+    // Registry { registry: None, optional: false }.
+    Registry { version: String, registry: Option<String>, optional: bool },
     Url { url: String, version: String, optional: bool },
     Path { path: String, optional: bool, link: bool },       // link=true → symlink/junction install
-    Registry { version: String, registry: Option<String>, optional: bool },
 }
 
 pub enum Platform {
@@ -166,7 +167,6 @@ pub enum Platform {
 
 ```rust
 pub struct LockFile {
-    pub version: u32,
     pub package: LockPackageInfo,
     pub dependencies: BTreeMap<String, LockedDependency>,
     pub python_dependencies: BTreeMap<String, LockedPythonDependency>,
@@ -177,7 +177,6 @@ pub struct LockedDependency {
     pub version: String,
     pub checksum: Option<String>,    // "sha256:<hex>"
     pub source: LockedSource,        // Url { url, version } | Path { path }
-    pub dependencies: Vec<String>,   // transitive names
 }
 
 #[async_trait]
@@ -186,7 +185,6 @@ pub trait Registry: Send + Sync {
     async fn get_versions(&self, name: &str) -> Result<Vec<RegistryEntry>, RegistryError>;
     async fn get_version(&self, name: &str, version: &str) -> Result<RegistryEntry, RegistryError>;
     async fn refresh(&self) -> Result<(), RegistryError>;
-    async fn config(&self) -> Result<RegistryConfig, RegistryError>;
     fn name(&self) -> &str;
 }
 ```
@@ -202,7 +200,7 @@ pub struct PythonVersion {
 
 pub struct ResolvedDependencySet {
     pub python_version: PythonVersion,
-    pub packages: BTreeMap<String, ResolvedPackage>,
+    pub packages: BTreeMap<String, String>,   // name → exact version
 }
 
 pub struct VenvManager { /* … */ }
@@ -210,8 +208,8 @@ pub struct VenvManager { /* … */ }
 impl VenvManager {
     pub async fn ensure_virtual_environment(
         &self,
-        resolved: &ResolvedDependencies
-    ) -> Result<PathBuf>;
+        resolved: &ResolvedDependencySet
+    ) -> Result<PathBuf, PythonError>;
 }
 ```
 
@@ -234,8 +232,10 @@ pub struct StorageConfig {
 }
 ```
 
-Configuration merges in this order: defaults → `~/.hpm/config.toml` →
-`<cwd>/.hpm/config.toml` → environment → CLI flags.
+Configuration is layered: defaults → `~/.hpm/config.toml` →
+`<cwd>/.hpm/config.toml`. Files are parsed as presence-aware overlays
+(`ConfigOverlay`), so each layer overrides exactly the values it sets — a
+file that omits a section leaves the lower layers untouched.
 
 ## Dependency resolution
 
@@ -275,7 +275,7 @@ clients run the same flow.
  │       verify cached packages against stored checksums                │
  │       warn if metadata.generated_at > 90 days                        │
  │  3. Fetch + install in parallel (one task per dep, JoinSet):         │
- │       Simple/Registry → query registry, exact-version lookup         │
+ │       Registry        → query registry, exact-version lookup         │
  │                       → ArchiveFetcher → ~/.hpm/fetch/               │
  │                       → install_into_cas → ~/.hpm/packages/<slug>@<v>/ │
  │       Url             → ArchiveFetcher (no registry query)           │
@@ -497,8 +497,7 @@ second session still had mapped failed on Windows with `os error 5` /
 `StorageError::PackageInUse`; that failure is now structurally impossible on all
 platforms. At install time only a stale *link* left by a prior `link = true`
 install is cleared (`clear_container_link`, link-safe); the directory of live
-hashes is left in place, and legacy flat content from pre-content-addressing
-installs is pruned best-effort (`prune_legacy_dev_content`).
+hashes is left in place.
 
 Superseded hash directories accumulate across a dev-iteration loop and are
 reclaimed by `hpm clean`: `cleanup_unused_dev_installs` removes whole orphan

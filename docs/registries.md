@@ -154,7 +154,7 @@ With `--output json`, results are emitted as a JSON array suitable for
 piping into other tooling:
 
 ```sh
-hpm search geometry --output json | jq '.packages[].name'
+hpm search geometry --output json | jq '.[].name'
 ```
 
 Each entry includes the package name, version, optional description, and

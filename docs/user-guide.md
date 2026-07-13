@@ -1235,7 +1235,13 @@ in (`[compat].platforms` + `[stage]`), and the supported Houdini range is
 ## Global configuration
 
 HPM reads `~/.hpm/config.toml` if it exists, then `<cwd>/.hpm/config.toml`
-(project override) if it exists. Any missing sections fall back to defaults.
+(project override) if it exists. Layering is presence-aware: each file
+overrides exactly the values it sets, so a project config that omits a
+section (or a single key) leaves the user-level value in place, and
+anything no file sets falls back to the built-in default. Setting only
+`storage.home_dir` re-derives the cache/packages/registry directories
+under it unless they are set explicitly. A malformed config file is a
+hard error, not a silent fallback to defaults.
 
 ```toml
 [install]
@@ -1379,6 +1385,11 @@ flag selects a machine-readable format instead:
 | `json-lines` | One JSON object per line. Good for streaming and log ingestion. |
 | `json-compact` | Single-line JSON. Minimal bandwidth. |
 
+Structured output is supported by `list`, `check`, `update`, `search`, and
+`pack`. Commands whose output is inherently interactive (`init`, `add`,
+`remove`, `install`, `build`, `audit`, `run`, `clean`, `registry`) reject a
+non-human `--output` with a clear error rather than silently ignoring it.
+
 Errors in any machine-readable format are also emitted as JSON, with fields
 `success`, `error`, `error_type`, and `elapsed_ms`.
 
@@ -1388,7 +1399,7 @@ A typical CI recipe:
 set -e
 hpm install --frozen-lockfile                 # fail if lock is stale
 hpm audit                                       # warn on security issues
-hpm pack --json --output dist/                  # produce archive + manifest
+hpm pack --json                                 # produce archive + manifest
 ```
 
 `hpm update --dry-run --output json` is useful for nightly jobs that want to
