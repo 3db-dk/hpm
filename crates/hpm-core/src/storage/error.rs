@@ -18,9 +18,6 @@ pub enum StorageError {
     #[error("Package not found: {0}")]
     PackageNotFound(String),
 
-    #[error("Feature not implemented: {0}")]
-    NotImplemented(String),
-
     #[error(transparent)]
     ProjectDiscovery(#[from] DiscoveryError),
 

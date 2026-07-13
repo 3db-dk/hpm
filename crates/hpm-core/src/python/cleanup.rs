@@ -65,34 +65,6 @@ impl PythonCleanupAnalyzer {
 
         Ok(result)
     }
-
-    /// Get virtual environment usage statistics
-    pub async fn get_venv_stats(&self) -> Result<VenvStats, PythonError> {
-        let all_venvs = self.venv_manager.list_all_venvs().await?;
-        let mut stats = VenvStats::default();
-
-        for venv_meta in all_venvs {
-            stats.total_count += 1;
-
-            if venv_meta.is_orphaned() {
-                stats.orphaned_count += 1;
-            } else {
-                stats.active_count += 1;
-            }
-
-            if let Ok(size) = self.venv_manager.calculate_venv_size(&venv_meta.path).await {
-                stats.total_size += size;
-
-                if venv_meta.is_orphaned() {
-                    stats.orphaned_size += size;
-                } else {
-                    stats.active_size += size;
-                }
-            }
-        }
-
-        Ok(stats)
-    }
 }
 
 // No `Default` impl: `Self::new()` is fallible (depends on `$HOME` /
@@ -125,34 +97,6 @@ impl CleanupResult {
     /// Format the space that would be freed in a human-readable way
     pub fn format_space_that_would_be_freed(&self) -> String {
         format_size(self.space_that_would_be_freed)
-    }
-}
-
-/// Virtual environment statistics
-#[derive(Debug, Default)]
-pub struct VenvStats {
-    pub total_count: usize,
-    pub active_count: usize,
-    pub orphaned_count: usize,
-    pub total_size: u64,
-    pub active_size: u64,
-    pub orphaned_size: u64,
-}
-
-impl VenvStats {
-    /// Format total size in a human-readable way
-    pub fn format_total_size(&self) -> String {
-        format_size(self.total_size)
-    }
-
-    /// Format active size in a human-readable way
-    pub fn format_active_size(&self) -> String {
-        format_size(self.active_size)
-    }
-
-    /// Format orphaned size in a human-readable way
-    pub fn format_orphaned_size(&self) -> String {
-        format_size(self.orphaned_size)
     }
 }
 

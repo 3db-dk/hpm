@@ -309,32 +309,6 @@ impl ArchiveFetcher {
 
         Ok(archive_path)
     }
-
-    /// Check if a package is already extracted in the staging dir.
-    pub fn is_cached(&self, source: &PackageSource, package_name: &str) -> bool {
-        fetcher_install_dir(&self.packages_dir, package_name, &source.version).exists()
-    }
-
-    /// Get the staging path for a package, if it's already been extracted.
-    pub fn cache_path(&self, source: &PackageSource, package_name: &str) -> Option<PathBuf> {
-        let path = fetcher_install_dir(&self.packages_dir, package_name, &source.version);
-        path.exists().then_some(path)
-    }
-
-    /// Remove a staged package, returning whether anything was removed.
-    pub fn remove_cached(
-        &self,
-        source: &PackageSource,
-        package_name: &str,
-    ) -> Result<bool, FetchError> {
-        match self.cache_path(source, package_name) {
-            Some(path) => {
-                std::fs::remove_dir_all(&path)?;
-                Ok(true)
-            }
-            None => Ok(false),
-        }
-    }
 }
 
 #[cfg(test)]

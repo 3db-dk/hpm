@@ -95,9 +95,6 @@ pub struct RegistryEntry {
     /// Version string (semver)
     #[serde(rename = "vers")]
     pub version: String,
-    /// Dependencies
-    #[serde(default)]
-    pub deps: Vec<RegistryDependency>,
     /// SHA-256 checksum of the package archive (hex-encoded, prefixed with "sha256:")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cksum: Option<String>,
@@ -130,18 +127,6 @@ pub struct RegistryEntry {
     pub created_at: Option<String>,
 }
 
-/// A dependency listed in a registry entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RegistryDependency {
-    /// Scoped package path of the dependency (e.g. `creator/slug`).
-    pub name: String,
-    /// Version requirement (e.g., ">=2.0", "^1.5")
-    pub req: String,
-    /// Whether this is an optional dependency
-    #[serde(default)]
-    pub optional: bool,
-}
-
 /// Search results returned from a registry search.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResults {
@@ -149,22 +134,6 @@ pub struct SearchResults {
     pub packages: Vec<RegistryEntry>,
     /// Total number of matches (may be more than returned)
     pub total: usize,
-}
-
-impl RegistryEntry {
-    /// Returns the scoped package path (e.g. `creator/slug`).
-    ///
-    /// This is an alias for the `name` field, which contains the full scoped path.
-    pub fn identifier(&self) -> &str {
-        &self.name
-    }
-
-    /// Returns the SHA-256 checksum without the "sha256:" prefix, if present.
-    pub fn checksum_hex(&self) -> Option<&str> {
-        self.cksum
-            .as_deref()
-            .map(|c| c.strip_prefix("sha256:").unwrap_or(c))
-    }
 }
 
 #[cfg(test)]

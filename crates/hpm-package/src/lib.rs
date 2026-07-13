@@ -120,11 +120,7 @@ pub mod toml_file_error;
 // Re-exports for convenient access
 pub use atomic_write::atomic_write;
 pub use dependency::DependencySpec;
-pub use env_value::{
-    Condition, EnvValue, EnvValueBranch, ExpressionError, HoudiniRange, InstallSource,
-    LoweredConditional, OsKey, compile_condition, compile_houdini_req, houdini_req_has_upper_bound,
-    houdini_req_lower_bound, lower_conditional,
-};
+pub use env_value::{Condition, EnvValue, EnvValueBranch, HoudiniRange, InstallSource, OsKey};
 pub use houdini::{
     HoudiniEnvValue, HoudiniMethod, HoudiniNativePackage, HoudiniPackage, HpackageMetadata,
 };

@@ -127,18 +127,6 @@ impl ProjectDiscovery {
 
         Ok(projects)
     }
-
-    pub fn discover_project_dependencies(&self, projects: &[DiscoveredProject]) -> Vec<String> {
-        let mut dependencies = HashSet::new();
-
-        for project in projects {
-            for dep_name in project.manifest.dependencies.keys() {
-                dependencies.insert(dep_name.clone());
-            }
-        }
-
-        dependencies.into_iter().collect()
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -154,7 +142,6 @@ pub enum DiscoveryError {
 mod tests {
     use super::*;
     use hpm_config::ProjectsConfig;
-    use hpm_package::PackagePath;
     use tempfile::TempDir;
 
     #[test]
@@ -280,68 +267,5 @@ description = "Test project {}"
 
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].manifest.package.path, "studio/shallow");
-    }
-
-    #[test]
-    fn discover_project_dependencies() {
-        let temp_dir = TempDir::new().unwrap();
-
-        let manifest1 = hpm_package::PackageManifest::new(
-            PackagePath::new("studio/project-1").unwrap(),
-            "Project 1".to_string(),
-            "1.0.0".to_string(),
-            None,
-            Vec::new(),
-            None,
-        );
-
-        let mut manifest2 = hpm_package::PackageManifest::new(
-            PackagePath::new("studio/project-2").unwrap(),
-            "Project 2".to_string(),
-            "1.0.0".to_string(),
-            None,
-            Vec::new(),
-            None,
-        );
-
-        // Add dependencies to project-2
-        let mut deps = indexmap::IndexMap::new();
-        deps.insert(
-            "utility-nodes".to_string(),
-            hpm_package::DependencySpec::Url {
-                url: "https://example.com/packages/utility-nodes/1.0.0/utility-nodes-1.0.0.zip"
-                    .to_string(),
-                version: "1.0.0".to_string(),
-                optional: false,
-            },
-        );
-        deps.insert(
-            "material-lib".to_string(),
-            hpm_package::DependencySpec::Path {
-                path: "../material-lib".to_string(),
-                optional: false,
-                link: false,
-            },
-        );
-        manifest2.dependencies = deps;
-
-        let projects = vec![
-            DiscoveredProject {
-                path: temp_dir.path().join("project-1"),
-                manifest: manifest1,
-            },
-            DiscoveredProject {
-                path: temp_dir.path().join("project-2"),
-                manifest: manifest2,
-            },
-        ];
-
-        let config = ProjectsConfig::default();
-        let discovery = ProjectDiscovery::new(config);
-        let deps = discovery.discover_project_dependencies(&projects);
-
-        assert_eq!(deps.len(), 2);
-        assert!(deps.contains(&"utility-nodes".to_string()));
-        assert!(deps.contains(&"material-lib".to_string()));
     }
 }

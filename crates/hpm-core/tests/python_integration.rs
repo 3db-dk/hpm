@@ -161,15 +161,13 @@ async fn test_end_to_end_python_workflow() {
     let cleanup_analyzer = cleanup::PythonCleanupAnalyzer::with_venv_manager(
         venv::VenvManager::with_venvs_dir(venvs_tmp.path().to_path_buf()),
     );
-    let venv_stats = cleanup_analyzer
-        .get_venv_stats()
+    let orphaned = cleanup_analyzer
+        .analyze_orphaned_venvs(&[])
         .await
-        .expect("Failed to get venv stats");
+        .expect("Failed to analyze orphaned venvs");
 
-    // Since no actual venvs exist in test, stats should be empty
-    assert_eq!(venv_stats.total_count, 0);
-    assert_eq!(venv_stats.active_count, 0);
-    assert_eq!(venv_stats.orphaned_count, 0);
+    // Since no actual venvs exist in test, nothing can be orphaned
+    assert!(orphaned.is_empty());
 }
 
 #[tokio::test]

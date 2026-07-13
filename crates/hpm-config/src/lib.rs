@@ -14,7 +14,6 @@
 //! - [`project_paths`] — per-project derived paths (`hpm.lock`, `hpm.toml`)
 //! - [`registry`] — registry source list
 //! - [`signing`] — package-signing key path
-//! - [`builder`] — programmatic [`Config`] construction
 //!
 //! Errors are the shared [`hpm_package::TomlFileError`] — configuration is
 //! just a TOML file on disk, with no failure modes of its own.
@@ -39,7 +38,6 @@
 //! config.projects.max_search_depth = 4;
 //! ```
 
-pub mod builder;
 pub mod install;
 pub mod overlay;
 pub mod project_paths;
@@ -48,7 +46,6 @@ pub mod registry;
 pub mod signing;
 pub mod storage;
 
-pub use builder::ConfigBuilder;
 pub use install::InstallConfig;
 pub use overlay::ConfigOverlay;
 pub use project_paths::ProjectPaths;
@@ -77,13 +74,9 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn default_home_dir() -> PathBuf {
-        storage::default_home_dir()
-    }
-
     /// Path of the user config file (`~/.hpm/config.toml`).
     pub fn user_config_path() -> PathBuf {
-        Self::default_home_dir().join("config.toml")
+        storage::default_home_dir().join("config.toml")
     }
 
     /// Load configuration from the standard locations.
@@ -170,14 +163,7 @@ impl Config {
 
     /// Save the configuration to the user's config file (~/.hpm/config.toml).
     pub fn save_user_config(&self) -> Result<(), TomlFileError> {
-        let path = Self::default_home_dir().join("config.toml");
-        self.save(&path)
-    }
-
-    /// Create a `ConfigBuilder` for constructing a `Config` programmatically
-    /// without reading from disk.
-    pub fn builder() -> ConfigBuilder {
-        ConfigBuilder::default()
+        self.save(&Self::user_config_path())
     }
 
     pub fn project_paths(project_root: &Path) -> ProjectPaths {

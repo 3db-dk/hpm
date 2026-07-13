@@ -635,17 +635,20 @@ OS-specific joiner. Generator lives in
 
 ### Programmatic configuration
 
-The library crates can be used without the CLI. `hpm-config::ConfigBuilder`
-builds a `Config` in-memory for embedders (desktop apps, pipeline tools):
+The library crates can be used without the CLI. Embedders (desktop apps,
+pipeline tools) build a `Config` in-memory by starting from
+`Config::default()` and setting the fields they need:
 
 ```rust
-use hpm_config::{Config, RegistryType};
+use hpm_config::{Config, RegistrySourceConfig, RegistryType};
 
-let config = Config::builder()
-    .registry("houdinihub", "https://api.3db.dk/v1/registry", RegistryType::Api)
-    .storage_dir("/studio/shared/.hpm")
-    .install_path("packages/hpm")
-    .build();
+let mut config = Config::default();
+config.add_registry(RegistrySourceConfig {
+    name: "houdinihub".into(),
+    url: "https://api.3db.dk/v1/registry".into(),
+    registry_type: RegistryType::Api,
+});
+config.install.path = "packages/hpm".into();
 ```
 
 ### Registry trait

@@ -241,7 +241,7 @@ mod tests {
             Ok(())
         }
         fn via_storage() -> Result<(), ProjectError> {
-            Err(StorageError::NotImplemented("x".to_string()))?;
+            Err(StorageError::PackageNotFound("x".to_string()))?;
             Ok(())
         }
         fn via_fetch() -> Result<(), ProjectError> {

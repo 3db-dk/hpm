@@ -105,7 +105,6 @@ fn unknown_os_rejected_at_parse() {
     // load rather than at compile/emit time.
     #[derive(Deserialize)]
     struct Holder {
-        #[allow(dead_code)]
         when: Condition,
     }
     let res: Result<Holder, _> = toml::from_str(r#"when = { os = "bsd" }"#);
@@ -363,7 +362,6 @@ fn unknown_install_source_rejected_at_parse() {
     // instead of silently dropping the variant at install time.
     #[derive(Deserialize)]
     struct Holder {
-        #[allow(dead_code)]
         when: Condition,
     }
     let res: Result<Holder, _> = toml::from_str(r#"when = { install_source = "ci" }"#);

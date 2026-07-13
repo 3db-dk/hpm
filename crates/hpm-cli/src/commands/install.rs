@@ -186,7 +186,6 @@ fn build_lock_file(
                 version: outcome.package.version.clone(),
                 checksum,
                 source,
-                dependencies: Vec::new(),
             },
         );
     }

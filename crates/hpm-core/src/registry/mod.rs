@@ -17,7 +17,7 @@ use thiserror::Error;
 
 pub use api::ApiRegistry;
 pub use git::GitRegistry;
-pub use types::{PlatformTag, RegistryDependency, RegistryEntry, SearchResults};
+pub use types::{PlatformTag, RegistryEntry, SearchResults};
 
 /// Errors that can occur during registry operations.
 #[derive(Error, Debug)]
@@ -48,9 +48,6 @@ pub enum RegistryError {
 
     #[error("Git operation failed: {0}")]
     GitError(String),
-
-    #[error("Registry not configured: {0}")]
-    NotConfigured(String),
 
     #[error("Checksum mismatch for {name}@{version}: expected {expected}, got {actual}")]
     ChecksumMismatch {

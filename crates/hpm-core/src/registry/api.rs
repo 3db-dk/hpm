@@ -79,25 +79,6 @@ impl ApiRegistry {
             client,
         })
     }
-
-    /// Create with a custom reqwest client (for testing).
-    ///
-    /// For attaching an auth token, prefer [`Self::with_auth_token`].
-    pub fn with_client(
-        name: impl Into<String>,
-        base_url: impl Into<String>,
-        client: reqwest::Client,
-    ) -> Self {
-        let mut url = base_url.into();
-        while url.ends_with('/') {
-            url.pop();
-        }
-        Self {
-            display_name: name.into(),
-            base_url: url,
-            client,
-        }
-    }
 }
 
 #[derive(serde::Deserialize)]
@@ -293,7 +274,6 @@ mod tests {
         RegistryEntry {
             name: "tumblehead/tumblerig".to_string(),
             version: "1.0.0".to_string(),
-            deps: vec![],
             cksum: None,
             dl: dl.to_string(),
             sig: None,

@@ -47,15 +47,6 @@ impl PythonDependencySpec {
         PythonDependencySpec::Simple(version.into())
     }
 
-    /// Create a detailed Python dependency.
-    pub fn detailed(version: Option<String>, extras: Option<Vec<String>>, optional: bool) -> Self {
-        PythonDependencySpec::Detailed {
-            version,
-            extras,
-            optional: Some(optional),
-        }
-    }
-
     /// Get the version constraint string.
     pub fn version(&self) -> Option<&str> {
         match self {
@@ -95,11 +86,11 @@ mod tests {
 
     #[test]
     fn detailed_python_dependency() {
-        let dep = PythonDependencySpec::detailed(
-            Some(">=1.0.0".to_string()),
-            Some(vec!["dev".to_string(), "test".to_string()]),
-            true,
-        );
+        let dep = PythonDependencySpec::Detailed {
+            version: Some(">=1.0.0".to_string()),
+            extras: Some(vec!["dev".to_string(), "test".to_string()]),
+            optional: Some(true),
+        };
         assert_eq!(dep.version(), Some(">=1.0.0"));
         assert!(dep.is_optional());
         assert_eq!(

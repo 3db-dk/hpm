@@ -12,9 +12,6 @@ use std::path::{Path, PathBuf};
 /// The lock file structure, representing resolved dependencies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockFile {
-    /// Lock file format version
-    pub version: u32,
-
     /// The root package metadata
     pub package: LockPackageInfo,
 
@@ -55,10 +52,6 @@ pub struct LockedDependency {
     /// (which is URL-only and feeds the fetcher) so the lockfile can
     /// faithfully reproduce both flavours.
     pub source: LockedSource,
-
-    /// Transitive dependencies (just names, versions are in the main dependencies map)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dependencies: Vec<String>,
 }
 
 /// Origin of a locked dependency. Used only by the lockfile schema —
@@ -95,18 +88,6 @@ impl LockedSource {
 pub struct LockedPythonDependency {
     /// Exact resolved version
     pub version: String,
-
-    /// SHA256 checksum of the wheel/sdist
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub checksum: Option<String>,
-
-    /// Source URL (PyPI or custom index)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-
-    /// Platform markers (if any)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub markers: Option<String>,
 }
 
 /// Metadata about the lock file generation
@@ -174,9 +155,6 @@ pub enum LockError {
         package: String,
         expected_dir: PathBuf,
     },
-
-    #[error("Lock file version {version} is not supported (max: {max_supported})")]
-    UnsupportedVersion { version: u32, max_supported: u32 },
 }
 
 // Bridge the workspace-canonical IoOp directly into LockError, so the
@@ -195,13 +173,9 @@ impl From<toml::ser::Error> for LockError {
 }
 
 impl LockFile {
-    /// Current lock file format version
-    pub const CURRENT_VERSION: u32 = 1;
-
     /// Create a new empty lock file for the given package
     pub fn new(name: String, version: String) -> Self {
         Self {
-            version: Self::CURRENT_VERSION,
             package: LockPackageInfo { name, version },
             dependencies: BTreeMap::new(),
             python_dependencies: BTreeMap::new(),
@@ -223,13 +197,6 @@ impl LockFile {
                 path: path.to_path_buf(),
                 source: Box::new(e),
             })?;
-
-        if lock_file.version > Self::CURRENT_VERSION {
-            return Err(LockError::UnsupportedVersion {
-                version: lock_file.version,
-                max_supported: Self::CURRENT_VERSION,
-            });
-        }
 
         Ok(lock_file)
     }
@@ -269,16 +236,6 @@ impl LockFile {
     /// Get a locked dependency by name
     pub fn get_dependency(&self, name: &str) -> Option<&LockedDependency> {
         self.dependencies.get(name)
-    }
-
-    /// Get a locked Python dependency by name
-    pub fn get_python_dependency(&self, name: &str) -> Option<&LockedPythonDependency> {
-        self.python_dependencies.get(name)
-    }
-
-    /// Check if the lock file has any dependencies
-    pub fn is_empty(&self) -> bool {
-        self.dependencies.is_empty() && self.python_dependencies.is_empty()
     }
 
     /// Verify all checksums in the lock file against installed packages.
@@ -349,86 +306,10 @@ impl LockFile {
     }
 }
 
-impl LockedDependency {
-    /// Create a new locked dependency from a URL source.
-    ///
-    /// # Arguments
-    /// * `version` - The resolved version (from package manifest)
-    /// * `url` - The download URL
-    /// * `checksum` - SHA256 checksum of the extracted package contents
-    pub fn from_url(version: String, url: String, checksum: Option<String>) -> Self {
-        Self {
-            version: version.clone(),
-            checksum,
-            source: LockedSource::url(url, version),
-            dependencies: Vec::new(),
-        }
-    }
-
-    /// Create a new locked dependency from a local path.
-    ///
-    /// # Arguments
-    /// * `version` - The resolved version (from package manifest)
-    /// * `path` - Path to the package directory
-    /// * `checksum` - SHA256 checksum of the package contents
-    pub fn from_path(
-        version: String,
-        path: impl Into<std::path::PathBuf>,
-        checksum: Option<String>,
-    ) -> Self {
-        Self {
-            version,
-            checksum,
-            source: LockedSource::path(path),
-            dependencies: Vec::new(),
-        }
-    }
-
-    /// Add a transitive dependency reference.
-    pub fn add_dependency(&mut self, name: String) {
-        if !self.dependencies.contains(&name) {
-            self.dependencies.push(name);
-        }
-    }
-
-    /// Check if this is a URL dependency.
-    pub fn is_url(&self) -> bool {
-        self.source.is_url()
-    }
-
-    /// Check if this is a path dependency.
-    pub fn is_path(&self) -> bool {
-        self.source.is_path()
-    }
-}
-
 impl LockedPythonDependency {
     /// Create a new locked Python dependency
     pub fn new(version: String) -> Self {
-        Self {
-            version,
-            checksum: None,
-            source: None,
-            markers: None,
-        }
-    }
-
-    /// Set the checksum
-    pub fn with_checksum(mut self, checksum: String) -> Self {
-        self.checksum = Some(checksum);
-        self
-    }
-
-    /// Set the source URL
-    pub fn with_source(mut self, source: String) -> Self {
-        self.source = Some(source);
-        self
-    }
-
-    /// Set platform markers
-    pub fn with_markers(mut self, markers: String) -> Self {
-        self.markers = Some(markers);
-        self
+        Self { version }
     }
 }
 
@@ -507,7 +388,6 @@ mod tests {
                 version: "1.0.0".to_string(),
                 checksum: Some("0".repeat(64)),
                 source: LockedSource::url("https://example.com/foo.zip", "1.0.0"),
-                dependencies: Vec::new(),
             },
         );
 
@@ -541,7 +421,6 @@ mod tests {
                 version: "1.0.0".to_string(),
                 checksum: Some(actual),
                 source: LockedSource::url("https://example.com/foo.zip", "1.0.0"),
-                dependencies: Vec::new(),
             },
         );
 
@@ -564,7 +443,6 @@ mod tests {
                 version: "1.0.0".to_string(),
                 checksum: Some("0".repeat(64)),
                 source: LockedSource::url("https://example.com/foo.zip", "1.0.0"),
-                dependencies: Vec::new(),
             },
         );
 
@@ -603,6 +481,37 @@ mod tests {
         assert_eq!(loaded.package.name, "acme/widget");
     }
 
+    /// Old lockfiles carried a `version = 1` format field (and per-entry
+    /// keys like `dependencies` on locked deps). Those fields are gone, but
+    /// existing lockfiles on disk still contain them — parsing must tolerate
+    /// the unknown keys rather than erroring.
+    #[test]
+    fn load_tolerates_legacy_version_field() {
+        let toml_str = r#"
+version = 1
+
+[package]
+name = "acme/widget"
+version = "1.0.0"
+
+[dependencies."creator/foo"]
+version = "1.0.0"
+dependencies = []
+
+[dependencies."creator/foo".source]
+type = "url"
+url = "https://example.com/foo.zip"
+version = "1.0.0"
+
+[python_dependencies.numpy]
+version = ">=1.20"
+"#;
+        let lock: LockFile = toml::from_str(toml_str).expect("legacy lockfile must parse");
+        assert_eq!(lock.package.name, "acme/widget");
+        assert!(lock.dependencies.contains_key("creator/foo"));
+        assert_eq!(lock.python_dependencies["numpy"].version, ">=1.20");
+    }
+
     // Property-based tests cover all other functionality with better coverage
     use proptest::prelude::*;
 
@@ -639,8 +548,10 @@ mod tests {
                 git_url_strategy(),
                 checksum_strategy()
             )
-                .prop_map(|(version, url, checksum)| {
-                    LockedDependency::from_url(version, url, checksum)
+                .prop_map(|(version, url, checksum)| LockedDependency {
+                    version: version.clone(),
+                    checksum,
+                    source: LockedSource::url(url, version),
                 }),
             // Path dependency
             (
@@ -648,33 +559,17 @@ mod tests {
                 "[a-z/]{1,20}",
                 checksum_strategy()
             )
-                .prop_map(|(version, path, checksum)| {
-                    LockedDependency::from_path(version, format!("../{}", path), checksum)
+                .prop_map(|(version, path, checksum)| LockedDependency {
+                    version,
+                    checksum,
+                    source: LockedSource::path(format!("../{}", path)),
                 }),
         ]
     }
 
     /// Strategy to generate LockedPythonDependency
     fn locked_python_dependency_strategy() -> impl Strategy<Value = LockedPythonDependency> {
-        (
-            version_string_strategy(),
-            prop::option::of("[a-f0-9]{64}"),
-            prop::option::of(Just("https://pypi.org/simple".to_string())),
-            prop::option::of(Just("sys_platform == 'linux'".to_string())),
-        )
-            .prop_map(|(version, checksum, source, markers)| {
-                let mut dep = LockedPythonDependency::new(version);
-                if let Some(cs) = checksum {
-                    dep = dep.with_checksum(cs);
-                }
-                if let Some(src) = source {
-                    dep = dep.with_source(src);
-                }
-                if let Some(mrk) = markers {
-                    dep = dep.with_markers(mrk);
-                }
-                dep
-            })
+        version_string_strategy().prop_map(LockedPythonDependency::new)
     }
 
     /// Strategy to generate LockFile with HPM and Python dependencies
@@ -714,12 +609,6 @@ mod tests {
             let toml_str = lock.to_toml().expect("Should serialize to TOML");
             let parsed: LockFile = toml::from_str(&toml_str).expect("Should parse TOML");
 
-            // Verify is_empty consistency (check before moving values)
-            prop_assert_eq!(lock.is_empty(), parsed.is_empty());
-
-            // Verify version field preserved
-            prop_assert_eq!(lock.version, parsed.version);
-
             // Verify package info preserved (use references to avoid moves)
             prop_assert_eq!(&lock.package.name, &parsed.package.name);
             prop_assert_eq!(&lock.package.version, &parsed.package.version);
@@ -732,8 +621,7 @@ mod tests {
                 let parsed_dep = parsed_dep.unwrap();
                 prop_assert_eq!(&dep.version, &parsed_dep.version);
                 prop_assert_eq!(&dep.checksum, &parsed_dep.checksum);
-                prop_assert_eq!(dep.is_url(), parsed_dep.is_url());
-                prop_assert_eq!(dep.is_path(), parsed_dep.is_path());
+                prop_assert_eq!(&dep.source, &parsed_dep.source);
             }
 
             // Verify Python dependencies preserved
@@ -743,7 +631,6 @@ mod tests {
                 prop_assert!(parsed_dep.is_some(), "Missing Python dependency: {}", name);
                 let parsed_dep = parsed_dep.unwrap();
                 prop_assert_eq!(&dep.version, &parsed_dep.version);
-                prop_assert_eq!(&dep.source, &parsed_dep.source);
             }
         }
 
@@ -755,9 +642,6 @@ mod tests {
 
             lock.save(&lock_path).expect("Should save lock file");
             let loaded = LockFile::load(&lock_path).expect("Should load lock file");
-
-            // Verify is_empty consistency (check before moving values)
-            prop_assert_eq!(lock.is_empty(), loaded.is_empty());
 
             // Verify all data preserved (use references)
             prop_assert_eq!(&lock.package.name, &loaded.package.name);
@@ -799,7 +683,7 @@ mod tests {
         #[test]
         fn prop_locked_dependency_source_types(dep in locked_dependency_strategy()) {
             // Exactly one of is_url or is_path should be true
-            prop_assert!(dep.is_url() != dep.is_path());
+            prop_assert!(dep.source.is_url() != dep.source.is_path());
         }
     }
 }

@@ -125,14 +125,6 @@ impl HoudiniEnvValue {
         }
     }
 
-    /// Create an append environment value.
-    pub fn append(value: impl Into<String>) -> Self {
-        HoudiniEnvValue::Detailed {
-            method: HoudiniMethod::Append,
-            value: vec![value.into()],
-        }
-    }
-
     /// Create a replace environment value (hpm's `set` lowers to this —
     /// Houdini has no `set` method).
     pub fn replace(value: impl Into<String>) -> Self {
@@ -182,67 +174,14 @@ pub struct HpackageMetadata {
     pub version: String,
 }
 
-impl HoudiniPackage {
-    /// Create an empty Houdini package.
-    pub fn new() -> Self {
-        Self {
-            hpath: None,
-            env: None,
-            enable: None,
-            requires: None,
-            recommends: None,
-        }
-    }
-
-    /// Add an hpath entry.
-    pub fn add_hpath(&mut self, path: impl Into<String>) {
-        self.hpath.get_or_insert_with(Vec::new).push(path.into());
-    }
-
-    /// Add an environment variable.
-    pub fn add_env(&mut self, key: impl Into<String>, value: HoudiniEnvValue) {
-        let mut env_map = HashMap::new();
-        env_map.insert(key.into(), value);
-        self.env.get_or_insert_with(Vec::new).push(env_map);
-    }
-
-    /// Set the enable condition.
-    pub fn set_enable(&mut self, condition: impl Into<String>) {
-        self.enable = Some(condition.into());
-    }
-}
-
-impl Default for HoudiniPackage {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn houdini_package_builder() {
-        let mut pkg = HoudiniPackage::new();
-        pkg.add_hpath("$HPM_PACKAGE_ROOT");
-        pkg.add_env(
-            "PYTHONPATH",
-            HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"),
-        );
-        pkg.set_enable("houdini_version >= '20.5'");
-
-        assert!(pkg.hpath.is_some());
-        assert_eq!(pkg.hpath.as_ref().unwrap().len(), 1);
-        assert!(pkg.env.is_some());
-        assert!(pkg.enable.is_some());
-    }
-
-    #[test]
     fn houdini_env_value_constructors() {
         let simple = HoudiniEnvValue::simple("value");
         let prepend = HoudiniEnvValue::prepend("value");
-        let append = HoudiniEnvValue::append("value");
         let replace = HoudiniEnvValue::replace("value");
 
         match simple {
@@ -253,14 +192,6 @@ mod tests {
         match prepend {
             HoudiniEnvValue::Detailed { method, value } => {
                 assert_eq!(method, HoudiniMethod::Prepend);
-                assert_eq!(value, vec!["value"]);
-            }
-            _ => panic!("Expected Detailed variant"),
-        }
-
-        match append {
-            HoudiniEnvValue::Detailed { method, value } => {
-                assert_eq!(method, HoudiniMethod::Append);
                 assert_eq!(value, vec!["value"]);
             }
             _ => panic!("Expected Detailed variant"),
@@ -280,18 +211,30 @@ mod tests {
         // Regression: a flat-string value marks a custom variable
         // non-mergeable in Houdini, so every Detailed value must hit the
         // package.json as a JSON array.
-        let json = serde_json::to_string(&HoudiniEnvValue::append("v")).unwrap();
+        let append = HoudiniEnvValue::Detailed {
+            method: HoudiniMethod::Append,
+            value: vec!["v".to_string()],
+        };
+        let json = serde_json::to_string(&append).unwrap();
         assert_eq!(json, r#"{"method":"append","value":["v"]}"#);
     }
 
     #[test]
     fn houdini_package_serialization() {
-        let mut pkg = HoudiniPackage::new();
-        pkg.add_hpath("$HPM_PACKAGE_ROOT");
-        pkg.add_env(
-            "PYTHONPATH",
-            HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"),
-        );
+        let pkg = HoudiniPackage {
+            hpath: Some(vec!["$HPM_PACKAGE_ROOT".to_string()]),
+            env: Some(vec![{
+                let mut m = HashMap::new();
+                m.insert(
+                    "PYTHONPATH".to_string(),
+                    HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"),
+                );
+                m
+            }]),
+            enable: None,
+            requires: None,
+            recommends: None,
+        };
 
         let json = serde_json::to_string_pretty(&pkg).unwrap();
         assert!(json.contains("hpath"));

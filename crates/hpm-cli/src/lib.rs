@@ -22,7 +22,6 @@
 //! 2 internal error, N for a forwarded external command exit code.
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
-use std::collections::HashMap;
 use std::process::ExitCode;
 use std::time::Instant;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -345,8 +344,6 @@ pub async fn run() -> ExitCode {
                         CliError::Package { .. } => "package",
                         CliError::Network { .. } => "network",
                         CliError::Io { .. } => "io",
-                        CliError::Internal { .. } => "internal",
-                        CliError::External { .. } => "external",
                     },
                     "elapsed_ms": start_time.elapsed().as_millis()
                 });
@@ -458,10 +455,9 @@ async fn run_command(
         }
         Commands::Run { script, args } => {
             require_human("run", output)?;
-            let exit_code =
-                commands::run::run_script(&script, &args, directory, &HashMap::new(), console)
-                    .await
-                    .cli_package("run")?;
+            let exit_code = commands::run::run_script(&script, &args, directory, console)
+                .await
+                .cli_package("run")?;
             return Ok(if exit_code == 0 {
                 ExitStatus::Success
             } else {

@@ -44,7 +44,7 @@ codes and help hints.
 | `GlobalDependencyGraph` | Reachability-based orphan detection for `hpm clean`. |
 | `LockFile`, `LockedDependency`, `LockedPythonDependency`, `LockMetadata` | `hpm.lock` types. |
 | `LockedSource` | Origin recorded in the lockfile for each dep — `Url { url, version }` or `Path { path }`. |
-| `LockError` | `Read`/`Parse`/`Write`/`Serialize` plus `ChecksumMismatch`, `PackageMissing { package, expected_dir }`, and `UnsupportedVersion`. |
+| `LockError` | `Read`/`Parse`/`Write`/`Serialize` plus `ChecksumMismatch` and `PackageMissing { package, expected_dir }`. |
 | `PackageSource` | URL-only struct `{ url, version }` — what `ArchiveFetcher` downloads. Path deps bypass the fetcher and use `LockedSource::Path` in the lockfile. |
 | `cas_install_dir(packages_dir, name, version)` | Canonical install path `<packages_dir>/<slug>@<version>` for a lockfile dep name. Used by `LockFile::verify_checksums` and any consumer that needs to find an installed package off the lockfile alone. |
 | `fetcher_install_dir(packages_dir, name, version)` | Staging path `<packages_dir>/<safe_name>-<version>` used by `ArchiveFetcher` while extracting; the result is then copied into the canonical CAS via `install_into_cas`. |
@@ -107,7 +107,6 @@ codes and help hints.
 | Type | Purpose |
 |------|---------|
 | `Config` | Top-level config (defaults < `~/.hpm/config.toml` < project config < env < flags). |
-| `ConfigBuilder` | In-memory `Config` construction for library consumers. |
 | `StorageConfig` | `home_dir`, `cache_dir`, `packages_dir`, `registry_cache_dir`. |
 | `InstallConfig` | `path`, `parallel_downloads`. |
 | `ProjectsConfig` | `explicit_paths`, `search_roots`, `max_search_depth`, `ignore_patterns`. |

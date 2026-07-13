@@ -25,7 +25,6 @@ Every package HPM installs is hashed end-to-end, and the hash is recorded in
 
 ```toml
 # hpm.lock (excerpt)
-version = 1
 
 [package]
 name = "my-studio/my-tools"

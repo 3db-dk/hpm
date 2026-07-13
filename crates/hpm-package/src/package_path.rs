@@ -88,11 +88,6 @@ impl PackagePath {
     pub fn slug(&self) -> &str {
         &self.full[self.sep + 1..]
     }
-
-    /// Consume `self` and return the underlying owned string.
-    pub fn into_string(self) -> String {
-        self.full
-    }
 }
 
 fn is_valid_segment(s: &str) -> bool {

@@ -112,15 +112,6 @@ impl DependencyGraph {
         reachable
     }
 
-    pub fn get_orphaned_packages(&self, needed_packages: &HashSet<PackageId>) -> Vec<PackageId> {
-        self.graph
-            .node_weights()
-            .map(|node| &node.id)
-            .filter(|id| !needed_packages.contains(id))
-            .cloned()
-            .collect()
-    }
-
     pub fn node_count(&self) -> usize {
         self.graph.node_count()
     }
@@ -428,22 +419,6 @@ mod tests {
         assert_eq!(reachable.len(), 2);
         assert!(reachable.contains(&pkg1));
         assert!(reachable.contains(&pkg2));
-    }
-
-    #[test]
-    fn dependency_graph_orphan_detection() {
-        let mut graph = DependencyGraph::new();
-        let pkg1 = PackageId::new("needed".to_string(), "1.0.0".to_string());
-        let pkg2 = PackageId::new("orphan".to_string(), "1.0.0".to_string());
-
-        graph.add_node(make_node("needed", "1.0.0", true));
-        graph.add_node(make_node("orphan", "1.0.0", false));
-
-        let needed = vec![pkg1].into_iter().collect();
-        let orphans = graph.get_orphaned_packages(&needed);
-
-        assert_eq!(orphans.len(), 1);
-        assert!(orphans.contains(&pkg2));
     }
 
     #[test]

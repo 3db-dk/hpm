@@ -21,7 +21,6 @@ pub async fn run_script(
     script: &str,
     extra_args: &[String],
     directory: Option<PathBuf>,
-    extra_env: &HashMap<String, String>,
     console: &mut Console,
 ) -> Result<i32> {
     let manifest_path = determine_manifest_path(directory)?;
@@ -37,7 +36,7 @@ pub async fn run_script(
         script,
         &package_root,
         extra_args,
-        extra_env,
+        &HashMap::new(),
         &mut sink,
     )
     .await?;

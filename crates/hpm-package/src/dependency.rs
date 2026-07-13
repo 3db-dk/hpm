@@ -216,15 +216,6 @@ impl DependencySpec {
         }
     }
 
-    /// Create a new link-mode path dependency.
-    pub fn path_link(path: impl Into<String>) -> Self {
-        DependencySpec::Path {
-            path: path.into(),
-            optional: false,
-            link: true,
-        }
-    }
-
     /// Whether this path dependency requests link-mode install.
     pub fn is_link(&self) -> bool {
         matches!(self, DependencySpec::Path { link: true, .. })
