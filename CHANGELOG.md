@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Project `[runtime]` `append`/`prepend` overrides no longer clobber the
+  package values they were meant to extend.** Houdini only honors `method`
+  on a custom (non-registered) variable when the variable's first
+  definition uses a JSON list value; with the flat strings hpm emitted,
+  every later entry silently overwrote the variable (`WARNING: var X
+  overwritten`), so the override — emitted last — won everywhere. The
+  0.19.0 override fix appeared to work because it was validated on
+  `PYTHONPATH`, a registered path variable where methods work regardless.
+  Every emitted value is now a single-element JSON list, making all hpm
+  variables mergeable. Verified against a real Houdini (21.0.688 /
+  21.0.729) with a new license-free `hconfig` conformance test.
+- **`method = "set"` now emits Houdini's `replace`.** Houdini has no `set`
+  method (`WARNING: Unsupported method value: set`); it only appeared to
+  work because flat strings overwrote anyway.
+- **Conditional `[runtime]` values now deliver the documented first-match
+  semantics.** Houdini applies *every* matching element of a
+  conditional-object array, not the first match, so emitted branches are
+  now compiled mutually exclusive — each branch's expression AND-s on the
+  negation of every earlier branch (by comparison-flipping joined with
+  `or`; the expression grammar has no `not`).
+- **Unconditional conditional branches (`when = {}` fallbacks and
+  `install_source`-only gates) actually apply now.** They were emitted as
+  `{"true": value}`, but Houdini's expression grammar has no boolean
+  literals — that object silently defines a stray variable named `true`
+  instead. A leading unconditional branch now collapses the value to a
+  plain (list) value, and a trailing fallback's expression is exactly
+  "no earlier branch matched". In particular the canonical HDK pattern
+  (dev-gated build path plus published `dso/` fallback) now works: a dev
+  install gets exactly the build path, a registry install exactly the
+  fallback.
+- **`=` version comparators (`houdini = "=21"`) parse.** They were
+  documented as an alias of `==` but fell through to the bare-version
+  parser and errored.
+- **Generated package files no longer draw `WARNING: Unsupported value
+  for requires` (and friends) from Houdini.** Absent optional fields are
+  omitted instead of serialized as `null`.
+
+### Changed
+
+- **Project `[runtime]` entries are emitted once, in a dedicated
+  `~hpm-project-overrides.json`.** Houdini processes package files in
+  byte-wise ascending filename order and `~` sorts after every slug
+  character, so the overrides manifest always applies last: an
+  `append`/`prepend` override lands after (or before) *all* package
+  contributions and is applied exactly once, no matter how many packages
+  declare the same variable (previously it was emitted into every
+  declaring package's file). Consequences: a project `[runtime]` entry now
+  takes effect even when no package declares the variable, and
+  `$HPM_PACKAGE_ROOT` in a project-level entry — which has no owning
+  package — is passed through with a warning instead of being substituted
+  against an arbitrary package.
+
+### Added
+
+- **License-free Houdini conformance test.** Generates real package files
+  and asserts the values a real Houdini resolves, via
+  `HOUDINI_PACKAGE_VERBOSE=1 hconfig`. Auto-discovers the install (`$HFS`,
+  then platform-standard locations) and skips when none is found;
+  `HPM_REQUIRE_HOUDINI=1` (set in the CI check pipeline) turns the skip
+  into a failure. A model-based property test additionally runs randomized
+  emission output through an executable model of the verified Houdini env
+  semantics.
+
 ## [0.27.1] - 2026-07-08
 
 ### Fixed

@@ -1,8 +1,10 @@
 # Testing Guide
 
-HPM uses three layers of tests: traditional unit tests, integration tests,
-and property-based tests with [proptest](https://crates.io/crates/proptest).
-This guide covers how to run them, how to write new ones, and how to debug
+HPM uses several layers of tests: traditional unit tests, integration
+tests, property-based tests with
+[proptest](https://crates.io/crates/proptest), and a Houdini conformance
+test that checks generated package files against a real Houdini. This
+guide covers how to run them, how to write new ones, and how to debug
 failures.
 
 ## Table of contents
@@ -22,6 +24,33 @@ failures.
 | **Integration** | `#[tokio::test]` + `tempfile` | End-to-end workflows: CLI command invocation, filesystem layout, manifest roundtrips. |
 | **Property** | [proptest](https://proptest-rs.github.io/proptest/) | Generate inputs at random and assert invariants. Catches edge cases a human wouldn't think of. |
 | **Doc** | rustdoc examples | Keep public API snippets compiling. |
+| **Houdini conformance** | `hconfig` from a real Houdini install | Assert the values Houdini actually resolves from generated package files — the only layer that can catch wrong assumptions about Houdini's semantics. |
+
+### Houdini conformance test
+
+`hpm-core/src/houdini_conformance_tests.rs` writes package files through
+the real emission path, runs `HOUDINI_PACKAGE_VERBOSE=1 $HFS/bin/hconfig`
+(license-free), and asserts the merged env values from the verbose
+package log. It exists because the emission layer was once validated only
+against its own JSON output while Houdini silently ignored `method` on
+flat-string custom variables.
+
+- The Houdini install is auto-discovered: `$HFS` first, then the
+  platform-standard locations (`/opt/hfs*`, `/Applications/Houdini/...`,
+  `C:\Houdini *`).
+- Without an install the test **skips** (passing, with a `SKIPPED` note).
+  Set `HPM_REQUIRE_HOUDINI=1` to turn the skip into a failure — the CI
+  check pipeline does, since the workers all have Houdini.
+
+The semantics the emission layer targets are also captured as an
+executable model (`hpm-core/src/houdini_env_model.rs`); a property test
+(`houdini_emission_model_tests.rs`) runs randomized packages and project
+overrides through the real emission code and the model, asserting that
+package values survive overrides, overrides apply exactly once, and
+nothing emitted uses a method or value shape Houdini rejects. When a new
+question about Houdini's package semantics comes up, extend the
+conformance test to settle it empirically, then encode the answer in the
+model.
 
 ### Property test distribution
 
@@ -36,7 +65,7 @@ current number (the manifest strategies live in
 | Crate | Focus |
 |-------|-------|
 | `hpm-cli` | Argument parsing, output format round-trips (in `tests/cli_validation.rs`). |
-| `hpm-core` | Storage types, package specs, lockfile round-trips, env merge contracts. The `python` submodule covers Python versions, dependency resolution, content hashing. |
+| `hpm-core` | Storage types, package specs, lockfile round-trips, env merge contracts, and the Houdini env emission model (`houdini_emission_model_tests.rs`). The `python` submodule covers Python versions, dependency resolution, content hashing. |
 | `hpm-package` | Manifest validation, TOML round-trips, native configs (in `tests/properties.rs`). |
 
 ## Running tests

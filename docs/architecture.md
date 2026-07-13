@@ -526,9 +526,22 @@ conditional `[runtime]` variant is filtered there: variants gated to
 axis fire in both contexts. A registry-fetched install whose every
 matching variant is `install_source = "dev"` produces no entry for that
 key in the generated `package.json`, so dev-only paths never leak to a
-published consumer. Precedence at emission time: project-level
-`[runtime]` override > the package's `[runtime]` entry's surviving
-variants.
+published consumer.
+
+Emission targets Houdini's *actual* env semantics, as verified with the
+hconfig conformance harness (`hpm-core/src/houdini_conformance_tests.rs`)
+and modeled executably in `hpm-core/src/houdini_env_model.rs`: values are
+single-element JSON lists (a flat-string first definition makes a custom
+variable non-mergeable — every later entry overwrites it, whatever its
+`method`), `set` lowers to Houdini's `replace` (there is no `set`
+method), and conditional branches are compiled mutually exclusive because
+Houdini applies every matching conditional-array element, not the first
+match. Project-level `[runtime]` entries are written once to
+`~hpm-project-overrides.json` in the project packages dir; Houdini
+processes package files in byte-wise ascending filename order and `~`
+sorts after every slug character, so that file always applies last — an
+override lands exactly once, after (or, for `set`, replacing) every
+package contribution.
 
 ## Python integration
 

@@ -774,6 +774,14 @@ Use `$HPM_PACKAGE_ROOT` to refer to the installed package directory. HPM
 merges these entries with its built-in `PYTHONPATH` and `HOUDINI_SCRIPT_PATH`
 entries when generating the Houdini manifest.
 
+Note on the emitted form: in the generated Houdini `package.json`, `set`
+becomes `method = "replace"` (Houdini's package system has no `set`
+method and rejects it), and every value is written as a single-element
+JSON list. The list form matters — Houdini only honors `method` on a
+custom variable when the variable's first definition uses a list value;
+with flat strings every later entry silently overwrites the variable
+regardless of its declared method.
+
 #### Required env vars
 
 A package can declare an env var as required without giving it a value.
@@ -803,12 +811,23 @@ combines with the package's depends on the *project* entry's `method`:
 
 | Project `method` | Result |
 |------------------|--------|
-| `set` | Replaces the package's contribution wholesale — only the project's value is emitted. |
-| `prepend` / `append` | Extends it — the package's own entry is emitted first, then the project's, so Houdini merges both in load order with the requested method. |
+| `set` | Replaces every package contribution wholesale — only the project's value survives. |
+| `prepend` / `append` | Extends them — each declaring package's own entry stays in place, and the project's value merges in once, after all of them. |
 
 So a project `append`/`prepend` adds to a package-provided value (e.g.
 extending a package's `PYTHONPATH`) rather than clobbering it. Use `set`
-when you genuinely want to replace what the package contributes.
+when you genuinely want to replace what the packages contribute.
+
+Mechanically, project sync writes the project's `[runtime]` entries into
+a dedicated `~hpm-project-overrides.json` in the project packages dir.
+Houdini processes package files in byte-wise filename order and `~`
+sorts after every slug character, so the overrides file always applies
+last — after every per-package file — and each override is applied
+exactly once, no matter how many packages declare the same variable.
+This also means a project `[runtime]` entry takes effect even when no
+package declares the variable. Since a project-level entry has no owning
+package, `$HPM_PACKAGE_ROOT` is undefined there (sync warns if a project
+entry references it).
 
 #### Conditional values
 
@@ -840,10 +859,14 @@ a `"dev"` branch never ships to a registry consumer's manifest and a
 `"registry"` branch never fires in the dev's own Houdini.
 
 All present axes combine with `and` within a single `when`. Order matters:
-Houdini picks the first matching branch. An empty `when = {}` is the
-always-true fallback and should appear last. `$HPM_PACKAGE_ROOT` is
-substituted in each branch, just like in flat values; any other `$VAR`
-(e.g. `$HOUDINI_MAJOR_RELEASE`) passes through verbatim so Houdini's own
+the first matching branch wins. (Houdini itself applies *every* matching
+element of a conditional value array, so hpm compiles each emitted branch
+to exclude all earlier branches' conditions — first-match is guaranteed by
+the emitted expressions, and anything after an always-true branch is
+dropped as unreachable.) An empty `when = {}` is the always-true fallback
+and should appear last. `$HPM_PACKAGE_ROOT` is substituted in each branch,
+just like in flat values; any other `$VAR` (e.g.
+`$HOUDINI_MAJOR_RELEASE`) passes through verbatim so Houdini's own
 variable expansion handles it.
 
 Malformed selectors fail at manifest validation time, so authors find
@@ -883,8 +906,9 @@ entry's `method` decides whether it replaces or combines:
 - `set` — the project override replaces the package's `[runtime]` entry
   (with its surviving variants).
 - `prepend` / `append` — the package's `[runtime]` entry (with surviving
-  variants) is emitted first, then the project's override, and Houdini
-  merges them in load order.
+  variants) is emitted in the package's own file, and the project's
+  override merges in after every package file via the project overrides
+  manifest (see [`[runtime]`](#runtime) above).
 
 ### `[stage]`
 
