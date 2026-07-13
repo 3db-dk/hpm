@@ -7,8 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed (breaking)
+
+- **Pre-0.16 ("Manifest 1.x") manifest support and `hpm migrate`.** The
+  read-side compatibility was scheduled for removal in 0.20.0 and is
+  gone; old-format manifests now fail with a normal parse error.
+- **Git registry flat-name index layout.** Only scoped `creator/slug`
+  index paths resolve; a non-scoped package name is an error.
+- **Bare-OS registry platform tags (`"LINUX"`, `"WINDOWS"`).** These
+  carried a silent x86_64 assumption; only canonical arch-suffixed tags
+  (and `universal`) are recognized. Verified against the live
+  TumbleTrove registry: all current and historical entries already use
+  canonical tags.
+- **`-p/--package` manifest flag.** The manifest path is `-m/--manifest`
+  on every command (add, remove, update, list, install, build, audit).
+- **Lockfile format-version gate and never-populated lockfile fields**
+  (per-dependency `dependencies`, python `checksum`/`source`/`markers`).
+  Old lockfiles containing them still parse.
+- **Dead API surface**: `ConfigBuilder`, `ConfigError` alias,
+  `hpm migrate`, the unused progress-bar framework, and ~30 other items
+  with no callers (net -730 lines).
+
+### Changed (breaking)
+
+- **Unknown fields and sections in `hpm.toml` are now parse errors**
+  (`deny_unknown_fields`); a misspelled section no longer vanishes
+  silently.
+- **Config files are layered as presence-aware overlays.** Each layer
+  (user, project) overrides exactly the values it sets; a project
+  config that omits a section no longer resets it to defaults, setting
+  only `storage.cache_dir` works, and a custom `storage.home_dir`
+  re-derives its sub-directories. `hpm registry add/remove` edit the
+  user config file directly instead of re-dumping the resolved config.
+- **Silent degradations are now hard errors**: malformed user config,
+  a registry that cannot be constructed, a failed `git pull` (no more
+  silently serving the stale cache), a corrupt git-registry cache,
+  pack-time Houdini package.json or asset-index failures, and a failed
+  post-remove lock regeneration.
+- **`DependencySpec::Simple` merged into `Registry`.** The
+  `pkg = "1.0.0"` shorthand still round-trips byte-for-byte.
+- **Typed errors in hpm-core**: the python subsystem and script runner
+  return `PythonError`/`ScriptRunError` instead of `anyhow::Error`;
+  `RegistrySet::from_configs*` returns `Result`; `RegistryEntry.platform`
+  is a typed `PlatformTag`; `Condition.os`/`install_source` are enums.
+- **`--output` is never silently ignored**: commands honor JSON output
+  (list, check, update, search, pack) or reject non-human formats with
+  a clear error; `hpm check -q` now reports failures on stderr.
+
+### Added
+
+- **Archive checksum verification on install.** Registry downloads are
+  verified against the entry's `cksum` before extraction; a corrupt
+  cached archive is removed and the install fails with a checksum
+  mismatch instead of installing tampered bytes. Entries without a
+  checksum install with a warning.
+- **Git registries now perform host-platform build selection**, matching
+  the API registry: host build first, then `universal`, else a
+  no-compatible-build error.
+- `hpm search` reports registries that were unreachable instead of
+  silently returning partial results.
+
 ### Fixed
 
+- **Installs no longer silently skip unreadable files** during the copy
+  into the package store; walk errors abort the install.
+- **A malformed project `[compat]` no longer silently drops the Houdini
+  version** used for Python ABI selection (which could pin a venv to
+  the wrong CPython).
+- **Checksums are always computed from the actual tree.** The on-disk
+  `.hpm-checksum` cache (never invalidated, so silently stale) is gone,
+  and one shared tree hasher backs both install-time recording and
+  lockfile verification.
+- **`hpm add`/`remove`/`update` preserve comments and formatting** in
+  `hpm.toml` (formatting-preserving `toml_edit` editing, atomic writes).
+- **`hpm add` without a version now picks the highest non-yanked semver**
+  instead of relying on registry response order.
+- **One default Python version (3.11)**: bare resolution previously
+  defaulted to 3.9, which the Houdini ABI mapping refuses and could pin
+  an ABI-mismatched venv.
+- `hpm build` and `hpm pack` share one staging walk and can no longer
+  disagree on what ships where.
 - **Project `[runtime]` `append`/`prepend` overrides no longer clobber the
   package values they were meant to extend.** Houdini only honors `method`
   on a custom (non-registered) variable when the variable's first
