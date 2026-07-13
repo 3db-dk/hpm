@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-07-13
+
 ### Removed (breaking)
 
 - **Pre-0.16 ("Manifest 1.x") manifest support and `hpm migrate`.** The
