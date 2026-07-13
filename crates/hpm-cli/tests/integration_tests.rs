@@ -154,7 +154,7 @@ fn test_list_nonexistent_manifest() {
     let temp_dir = TempDir::new().unwrap();
 
     let output = hpm_binary()
-        .args(["list", "--package", temp_dir.path().to_str().unwrap()])
+        .args(["list", "--manifest", temp_dir.path().to_str().unwrap()])
         .output()
         .expect("Failed to execute hpm list");
 

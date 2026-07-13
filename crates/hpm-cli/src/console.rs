@@ -1,8 +1,15 @@
 //! Styled terminal output with verbosity control.
 //!
-//! Semantic colors: green for success, yellow for warnings, blue for info.
-//! Uses Unicode symbols (checkmark, info, warning) so color-blind users still
-//! see a marker. Output is routed to stdout or stderr based on message level.
+//! One `Console` is constructed in [`crate::run`] and threaded through every
+//! command; commands must not construct their own. Two kinds of output:
+//!
+//! - Result data: [`Console::stdout`] — plain lines on stdout that must
+//!   survive `--quiet` (listings, reports, JSON payloads).
+//! - Status lines: [`Console::success`] / [`Console::info`] /
+//!   [`Console::warn`] / [`Console::error`] (styled, with Unicode markers so
+//!   color-blind users still see one) and [`Console::status`] (plain,
+//!   supplementary). `info` and `status` are suppressed under `--quiet`;
+//!   warnings and errors go to stderr and always print.
 
 use console::{Term, style};
 use std::fmt::Display;
@@ -23,7 +30,7 @@ pub enum Verbosity {
     Verbose,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum ColorChoice {
     Auto,
     Always,
@@ -35,6 +42,7 @@ enum Level {
     Success,
     Info,
     Warning,
+    Error,
 }
 
 impl Console {
@@ -43,6 +51,20 @@ impl Console {
     }
 
     pub fn with_settings(verbosity: Verbosity, color: ColorChoice) -> Self {
+        // Commands embed `console::style(...)` in the strings they print, so
+        // an explicit --color choice must flip the crate-global switch too —
+        // otherwise only the level markers would obey the flag.
+        match color {
+            ColorChoice::Always => {
+                console::set_colors_enabled(true);
+                console::set_colors_enabled_stderr(true);
+            }
+            ColorChoice::Never => {
+                console::set_colors_enabled(false);
+                console::set_colors_enabled_stderr(false);
+            }
+            ColorChoice::Auto => {}
+        }
         Self {
             verbosity,
             color,
@@ -69,6 +91,29 @@ impl Console {
         }
     }
 
+    pub fn error(&mut self, message: impl Display) {
+        if self.should_show(Level::Error) {
+            self.print_styled(Level::Error, message);
+        }
+    }
+
+    /// Result data: plain line on stdout, printed even under `--quiet`.
+    /// Machine-readable payloads (`--output json*`) go through here so they
+    /// can never be suppressed.
+    pub fn stdout(&mut self, message: impl Display) {
+        writeln!(self.stdout, "{message}").ok();
+        self.stdout.flush().ok();
+    }
+
+    /// Supplementary human-facing line: plain, stdout, suppressed under
+    /// `--quiet` (structure trees, follow-up hints, cancellations).
+    pub fn status(&mut self, message: impl Display) {
+        if self.verbosity > Verbosity::Quiet {
+            writeln!(self.stdout, "{message}").ok();
+            self.stdout.flush().ok();
+        }
+    }
+
     /// Prompt the user with `<label> [y/N]: `. Returns true on `y`/`yes`.
     /// The single interactive-confirmation path for all commands.
     pub fn confirm(&mut self, label: impl Display) -> std::io::Result<bool> {
@@ -84,7 +129,7 @@ impl Console {
 
     fn should_show(&self, level: Level) -> bool {
         match (self.verbosity, level) {
-            (Verbosity::Quiet, Level::Warning | Level::Success) => true,
+            (Verbosity::Quiet, Level::Warning | Level::Success | Level::Error) => true,
             (Verbosity::Quiet, _) => false,
             (Verbosity::Normal | Verbosity::Verbose, _) => true,
         }
@@ -104,7 +149,7 @@ impl Console {
         };
 
         match level {
-            Level::Warning => {
+            Level::Warning | Level::Error => {
                 writeln!(self.stderr, "{formatted}").ok();
                 self.stderr.flush().ok();
             }
@@ -132,6 +177,12 @@ fn style_message(level: Level, message: impl Display) -> String {
             style("\u{26A0}").yellow().bold(),
             style(message).yellow()
         ),
+        // Unicode ballot X (U+2717)
+        Level::Error => format!(
+            "{} {}",
+            style("\u{2717}").red().bold(),
+            style(message).red()
+        ),
     }
 }
 
@@ -147,6 +198,7 @@ impl Level {
             Level::Success => "SUCCESS",
             Level::Info => "INFO",
             Level::Warning => "WARNING",
+            Level::Error => "ERROR",
         }
     }
 }
@@ -163,17 +215,19 @@ mod tests {
 
     #[test]
     fn test_should_show_messages() {
-        let console = Console::with_settings(Verbosity::Normal, ColorChoice::Never);
+        let console = Console::with_settings(Verbosity::Normal, ColorChoice::Auto);
         assert!(console.should_show(Level::Success));
         assert!(console.should_show(Level::Info));
         assert!(console.should_show(Level::Warning));
+        assert!(console.should_show(Level::Error));
     }
 
     #[test]
     fn test_should_show_quiet() {
-        let console = Console::with_settings(Verbosity::Quiet, ColorChoice::Never);
+        let console = Console::with_settings(Verbosity::Quiet, ColorChoice::Auto);
         assert!(console.should_show(Level::Success));
         assert!(!console.should_show(Level::Info));
         assert!(console.should_show(Level::Warning));
+        assert!(console.should_show(Level::Error));
     }
 }

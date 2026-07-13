@@ -76,7 +76,7 @@ pub fn determine_manifest_path(provided_path: Option<PathBuf>) -> Result<PathBuf
                 Ok(manifest_path)
             } else {
                 anyhow::bail!(
-                    "No hpm.toml found in current directory: {}. Use --package to specify a path.",
+                    "No hpm.toml found in current directory: {}. Use --manifest to specify a path.",
                     current_dir.display()
                 );
             }

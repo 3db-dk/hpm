@@ -5,8 +5,8 @@
 //! ## Functionality
 //!
 //! The remove command provides safe dependency removal:
-//! - Removes package dependencies from hmp.toml manifest files
-//! - Flexible manifest targeting via `--package` flag
+//! - Removes package dependencies from hpm.toml manifest files
+//! - Flexible manifest targeting via `--manifest` flag
 //! - Automatic lock file updates to maintain consistency
 //! - Preserves downloaded packages for potential reuse by other projects
 //! - Comprehensive validation and error handling
@@ -18,8 +18,8 @@
 //! hpm remove utility-nodes
 //!
 //! # Remove dependency from specific project
-//! hpm remove material-library --package /path/to/project/
-//! hpm remove geometry-tools --package /path/to/project/hpm.toml
+//! hpm remove material-library --manifest /path/to/project/
+//! hpm remove geometry-tools --manifest /path/to/project/hpm.toml
 //! ```
 //!
 //! ## Design Philosophy
@@ -47,6 +47,7 @@
 //! - Comprehensive error reporting with actionable guidance
 
 use super::manifest_utils::{determine_manifest_path, load_manifest};
+use crate::console::Console;
 use anyhow::{Context, Result};
 use hpm_config::Config;
 use hpm_core::project::manifest_edit;
@@ -56,8 +57,9 @@ use tracing::info;
 /// Remove a package dependency from hpm.toml manifest
 pub async fn remove_package(
     config: &Config,
-    package_name: String,
+    package_name: &str,
     manifest_path: Option<PathBuf>,
+    console: &mut Console,
 ) -> Result<()> {
     info!("Removing package dependency: {}", package_name);
 
@@ -70,7 +72,7 @@ pub async fn remove_package(
     load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
 
-    let removed = manifest_edit::remove_dependency(&manifest_path, &package_name)
+    let removed = manifest_edit::remove_dependency(&manifest_path, package_name)
         .with_context(|| format!("Failed to update manifest at {}", manifest_path.display()))?;
     if !removed {
         anyhow::bail!(
@@ -91,9 +93,9 @@ pub async fn remove_package(
              hpm.toml and hpm.lock are now out of sync — run 'hpm install' to reconcile",
         )?;
 
-    info!("Package '{}' removed successfully", package_name);
-    info!(
-        "Note: Downloaded packages are not deleted. Run 'hpm clean' to remove orphaned packages."
+    console.success(format!("Removed dependency '{}'", package_name));
+    console.status(
+        "Note: Downloaded packages are not deleted. Run 'hpm clean' to remove orphaned packages.",
     );
 
     Ok(())
@@ -203,8 +205,9 @@ mod tests {
         let config = Config::default();
         let _result = remove_package(
             &config,
-            "utility-nodes".to_string(),
+            "utility-nodes",
             Some(manifest_path.clone()),
+            &mut Console::new(),
         )
         .await;
 
@@ -232,8 +235,9 @@ mod tests {
         let config = Config::default();
         let result = remove_package(
             &config,
-            "non-existent-package".to_string(),
+            "non-existent-package",
             Some(manifest_path),
+            &mut Console::new(),
         )
         .await;
 
@@ -252,7 +256,13 @@ mod tests {
         let manifest_path = temp_dir.path().join("hpm.toml");
 
         let config = Config::default();
-        let result = remove_package(&config, "some-package".to_string(), Some(manifest_path)).await;
+        let result = remove_package(
+            &config,
+            "some-package",
+            Some(manifest_path),
+            &mut Console::new(),
+        )
+        .await;
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -266,7 +276,12 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let config = Config::default();
-        let result = rt.block_on(remove_package(&config, "some-package".to_string(), None));
+        let result = rt.block_on(remove_package(
+            &config,
+            "some-package",
+            None,
+            &mut Console::new(),
+        ));
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();

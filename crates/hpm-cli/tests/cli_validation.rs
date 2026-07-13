@@ -136,20 +136,20 @@ fn verbosity_strategy() -> impl Strategy<Value = u8> {
 }
 
 /// Strategy to generate CLI flag combinations
-fn cli_flags_strategy()
--> impl Strategy<Value = (bool, Option<ColorChoiceArg>, Option<OutputFormatArg>)> {
+fn cli_flags_strategy() -> impl Strategy<Value = (bool, Option<ColorChoice>, Option<OutputFormat>)>
+{
     (
         any::<bool>(), // quiet flag
         prop::option::of(prop_oneof![
-            Just(ColorChoiceArg::Auto),
-            Just(ColorChoiceArg::Always),
-            Just(ColorChoiceArg::Never),
+            Just(ColorChoice::Auto),
+            Just(ColorChoice::Always),
+            Just(ColorChoice::Never),
         ]),
         prop::option::of(prop_oneof![
-            Just(OutputFormatArg::Human),
-            Just(OutputFormatArg::Json),
-            Just(OutputFormatArg::JsonLines),
-            Just(OutputFormatArg::JsonCompact),
+            Just(OutputFormat::Human),
+            Just(OutputFormat::Json),
+            Just(OutputFormat::JsonLines),
+            Just(OutputFormat::JsonCompact),
         ]),
     )
 }
@@ -213,17 +213,13 @@ proptest! {
             prop_assert_eq!(expected_verbosity, Verbosity::Quiet);
         }
 
-        // Test color choice conversion
-        let color_choice = color
-            .map(ColorChoice::from)
-            .unwrap_or(ColorChoice::Auto);
+        // Test color choice defaulting
+        let color_choice = color.unwrap_or(ColorChoice::Auto);
 
         prop_assert!(matches!(color_choice, ColorChoice::Auto | ColorChoice::Always | ColorChoice::Never));
 
-        // Test output format conversion
-        let output_format = output
-            .map(OutputFormat::from)
-            .unwrap_or(OutputFormat::Human);
+        // Test output format defaulting
+        let output_format = output.unwrap_or(OutputFormat::Human);
 
         prop_assert!(matches!(output_format,
             OutputFormat::Human | OutputFormat::Json |

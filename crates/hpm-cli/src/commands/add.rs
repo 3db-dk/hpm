@@ -9,7 +9,7 @@
 //! - Resolves packages through configured registries
 //! - Supports local path dependencies with `--path` flag
 //! - Handles optional dependencies with `--optional` flag
-//! - Flexible manifest targeting via `--package` flag
+//! - Flexible manifest targeting via `--manifest` flag
 //! - Automatic dependency resolution and installation
 //! - Lock file generation and updates
 //!
@@ -29,10 +29,11 @@
 //! hpm add material-library --optional
 //!
 //! # Target specific manifest file
-//! hpm add geometry-tools --package /path/to/project/
+//! hpm add geometry-tools --manifest /path/to/project/
 //! ```
 
 use super::manifest_utils::{determine_manifest_path, load_manifest};
+use crate::console::Console;
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
 use hpm_core::project::manifest_edit;
@@ -63,6 +64,7 @@ fn parse_name_version(input: &str) -> (String, Option<String>) {
 /// * `link` - For path dependencies, install as symlink/junction instead of copy
 /// * `manifest_path` - Path to the manifest file or directory
 /// * `optional` - Whether the dependencies are optional
+/// * `console` - Console for user-facing output
 pub async fn add_packages(
     config: &Config,
     package_names: Vec<String>,
@@ -70,6 +72,7 @@ pub async fn add_packages(
     link: bool,
     manifest_path: Option<PathBuf>,
     optional: bool,
+    console: &mut Console,
 ) -> Result<()> {
     // Validate at least one package specified
     if package_names.is_empty() {
@@ -172,10 +175,12 @@ pub async fn add_packages(
         .await
         .context("Failed to install dependencies after adding packages")?;
 
-    info!(
-        "{} package(s) added and installed successfully",
-        package_names.len()
-    );
+    let message = if package_names.len() == 1 {
+        format!("Added dependency '{}'", package_names[0])
+    } else {
+        format!("Added {} dependencies", package_names.len())
+    };
+    console.success(message);
     Ok(())
 }
 

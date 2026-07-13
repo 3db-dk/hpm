@@ -1,44 +1,49 @@
-//! Output format options for HPM CLI
+//! Output format options for HPM CLI.
 //!
-//! This module defines the output format options for programmatic consumption
-//! of HPM command results:
-//!
-//! - **Human**: Traditional human-readable output (default)
-//! - **JSON**: Pretty-printed JSON for human-readable automation
-//! - **JSON Lines**: One JSON object per line for streaming processing
-//! - **JSON Compact**: Minified JSON for bandwidth-sensitive applications
+//! Selected by the global `--output` flag. Commands either honor the chosen
+//! format or reject it up front in the dispatcher — no command silently
+//! ignores it. `hpm update` genuinely distinguishes `json-lines` (one update
+//! per line) from `json`/`json-compact`; single-document commands render one
+//! object per [`OutputFormat::render_json`].
 
 use std::fmt::{self, Display};
 
-/// Output format options for HPM commands
-///
-/// Determines how command results are formatted and displayed.
-/// Each format serves different use cases and consumption patterns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Output format options for HPM commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum OutputFormat {
     /// Human-readable output (default)
-    ///
-    /// Traditional CLI output with colors, formatting, and user-friendly messages.
-    /// Best for interactive terminal use.
     Human,
 
-    /// JSON output for programmatic use
-    ///
-    /// Pretty-printed JSON with indentation and line breaks.
-    /// Good balance between readability and machine processing.
+    /// Pretty-printed JSON
     Json,
 
-    /// JSON Lines output for streaming
-    ///
-    /// One JSON object per line without pretty printing.
-    /// Ideal for streaming, logging, and line-by-line processing.
+    /// One JSON object per line, for streaming consumers
     JsonLines,
 
-    /// Compact JSON without pretty printing
-    ///
-    /// Minified JSON without whitespace or line breaks.
-    /// Optimal for network transmission and storage efficiency.
+    /// Minified JSON
     JsonCompact,
+}
+
+impl OutputFormat {
+    /// True for every machine-readable variant.
+    pub fn is_json(self) -> bool {
+        self != Self::Human
+    }
+
+    /// Render a single JSON document in this format. For `json-lines` the
+    /// document is emitted as one line (a one-document stream); commands with
+    /// a natural per-item stream handle `json-lines` themselves.
+    ///
+    /// Callers must gate on [`Self::is_json`]; `Human` renders pretty JSON as
+    /// a fallback but is not a supported input.
+    pub fn render_json(self, value: &serde_json::Value) -> String {
+        match self {
+            Self::Human | Self::Json => {
+                serde_json::to_string_pretty(value).expect("JSON value serializes")
+            }
+            Self::JsonLines | Self::JsonCompact => value.to_string(),
+        }
+    }
 }
 
 impl Display for OutputFormat {

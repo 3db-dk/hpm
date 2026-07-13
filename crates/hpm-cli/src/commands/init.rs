@@ -1,3 +1,4 @@
+use crate::console::Console;
 use anyhow::{Context, Result};
 use console::style;
 use hpm_package::{PackageManifest, PackagePath, PackageTemplate};
@@ -22,7 +23,7 @@ pub struct InitOptions {
     pub base_dir: Option<PathBuf>,
 }
 
-pub async fn init_package(options: InitOptions) -> Result<String> {
+pub async fn init_package(options: InitOptions, console: &mut Console) -> Result<String> {
     let (target_dir, package_name, should_create_dir) = determine_init_strategy(&options)?;
 
     // Check for existing hpm.toml
@@ -108,34 +109,26 @@ pub async fn init_package(options: InitOptions) -> Result<String> {
     }
 
     if options.bare {
-        println!(
-            "{}",
-            style(format!(
-                "Successfully created minimal Houdini package '{package_name}'"
-            ))
-            .green()
-        );
+        console.success(format!(
+            "Successfully created minimal Houdini package '{package_name}'"
+        ));
     } else {
-        println!(
-            "{}",
-            style(format!(
-                "Successfully created Houdini package '{package_name}'"
-            ))
-            .green()
-        );
+        console.success(format!(
+            "Successfully created Houdini package '{package_name}'"
+        ));
     }
 
-    println!("\n{}", style("Package structure:").bold());
-    print_directory_tree(&target_dir, 0)?;
+    console.status(format!("\n{}", style("Package structure:").bold()));
+    print_directory_tree(&target_dir, 0, console)?;
 
     if !options.bare {
-        println!("\n{}", style("Next steps:").bold());
-        println!("  {} {}", style("cd").cyan(), package_name);
-        println!(
+        console.status(format!("\n{}", style("Next steps:").bold()));
+        console.status(format!("  {} {}", style("cd").cyan(), package_name));
+        console.status(format!(
             "  {} {}",
             style("hpm add").cyan(),
             style("# Add dependencies").black().bright()
-        );
+        ));
     }
 
     Ok(package_name)
@@ -335,7 +328,7 @@ async fn init_git_repository(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn print_directory_tree(dir: &Path, depth: usize) -> Result<()> {
+fn print_directory_tree(dir: &Path, depth: usize, console: &mut Console) -> Result<()> {
     if depth > 3 {
         // Limit recursion depth
         return Ok(());
@@ -368,11 +361,11 @@ fn print_directory_tree(dir: &Path, depth: usize) -> Result<()> {
             continue;
         }
 
-        println!("{}{}", prefix, file_name);
+        console.status(format!("{}{}", prefix, file_name));
 
         // Recursively print subdirectories
         if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-            print_directory_tree(&entry.path(), depth + 1)?;
+            print_directory_tree(&entry.path(), depth + 1, console)?;
         }
     }
 
@@ -408,7 +401,7 @@ mod tests {
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
-        let result = init_package(options).await;
+        let result = init_package(options, &mut Console::new()).await;
         if let Err(e) = &result {
             eprintln!("Init package failed: {}", e);
         }
@@ -453,7 +446,7 @@ mod tests {
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
-        let result = init_package(options).await;
+        let result = init_package(options, &mut Console::new()).await;
         if let Err(e) = &result {
             eprintln!("Init package failed: {}", e);
         }
@@ -535,7 +528,7 @@ mod tests {
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
-        let result = init_package(options).await;
+        let result = init_package(options, &mut Console::new()).await;
 
         assert!(result.is_ok());
         let package_path = temp_dir.path().join("minimal-pkg");
@@ -571,7 +564,7 @@ mod tests {
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
-        let result = init_package(options).await;
+        let result = init_package(options, &mut Console::new()).await;
 
         assert!(result.is_ok());
         let package_path = temp_dir.path().join("special-chars-test");
@@ -603,7 +596,7 @@ mod tests {
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
-        let result = init_package(options).await;
+        let result = init_package(options, &mut Console::new()).await;
 
         // Should fail because directory already exists
         assert!(result.is_err());
@@ -630,7 +623,7 @@ mod tests {
             base_dir: Some(test_dir),
         };
 
-        let result = init_package(options).await;
+        let result = init_package(options, &mut Console::new()).await;
 
         // Should derive name from directory name and succeed
         assert!(result.is_ok());
@@ -654,7 +647,7 @@ mod tests {
             base_dir: Some(test_dir.clone()),
         };
 
-        let result = init_package(options).await;
+        let result = init_package(options, &mut Console::new()).await;
         assert!(result.is_ok());
         let package_name = result.unwrap();
         assert_eq!(package_name, "my-houdini-package");
@@ -681,7 +674,7 @@ mod tests {
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
-        let result = init_package(options).await;
+        let result = init_package(options, &mut Console::new()).await;
         assert!(result.is_ok());
         let package_name = result.unwrap();
         assert_eq!(package_name, "absolute-path-package");
@@ -707,7 +700,7 @@ mod tests {
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
-        let result = init_package(options).await;
+        let result = init_package(options, &mut Console::new()).await;
         assert!(result.is_ok());
         let package_name = result.unwrap();
         assert_eq!(package_name, "relative-package");
@@ -738,7 +731,7 @@ mod tests {
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
-        let result = init_package(options).await;
+        let result = init_package(options, &mut Console::new()).await;
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("hpm.toml already exists"));
@@ -764,7 +757,7 @@ mod tests {
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
-        let result = init_package(options).await;
+        let result = init_package(options, &mut Console::new()).await;
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("does not have a valid Houdini package structure"));
@@ -793,7 +786,7 @@ mod tests {
             base_dir: Some(test_dir.clone()),
         };
 
-        let result = init_package(options).await;
+        let result = init_package(options, &mut Console::new()).await;
         if let Err(e) = &result {
             eprintln!("Test error: {}", e);
         }

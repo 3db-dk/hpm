@@ -1,291 +1,25 @@
-//! # HPM CLI - Houdini Package Manager Command Line Interface
+//! HPM command-line interface.
 //!
-//! The HPM CLI provides a comprehensive, professional command-line interface for managing
-//! Houdini packages, dependencies, and project workflows. Built with industry-standard
-//! patterns and UV-inspired error handling for an optimal developer experience.
+//! Layout:
+//! - [`Cli`] / [`Commands`]: clap definitions for `hpm` and its subcommands.
+//! - [`run`]: entry point shared by the `hpm` binary and integration tests —
+//!   parses arguments, builds the single [`Console`], dispatches through
+//!   [`run_command`], and maps [`CliError`]s to exit codes.
+//! - [`commands`]: one module per subcommand. Each command owns its
+//!   user-facing output, including its success line; the dispatcher only
+//!   loads config, gates `--output`, and delegates.
 //!
-//! ## CLI Architecture
+//! Output contract:
+//! - All human-facing output flows through the [`Console`] constructed once
+//!   in [`run`]: `stdout` for result data (survives `--quiet`), `status` for
+//!   supplementary lines, and `success`/`info`/`warn`/`error` for status
+//!   lines. `tracing` macros are diagnostics only and always go to stderr.
+//! - `--output json|json-lines|json-compact` is honored by `list`, `check`,
+//!   `update`, `search`, and `pack`; every other command rejects it with an
+//!   error instead of silently ignoring it.
 //!
-//! The HPM CLI implements a modular, extensible architecture designed for reliability and user experience:
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────────────────────────┐
-//! │                              HPM CLI Architecture                               │
-//! ├─────────────────────────────────────────────────────────────────────────────────┤
-//! │                                                                                 │
-//! │  User Interface Layer                                                          │
-//! │  ┌─────────────────────────────────────────────────────────────────────────┐   │
-//! │  │                         Command Parser (Clap)                          │   │
-//! │  │  • Argument validation and type conversion                              │   │
-//! │  │  • Help generation and usage information                                │   │
-//! │  │  • Subcommand routing and option handling                               │   │
-//! │  └─────────────────────────────────────────────────────────────────────────┘   │
-//! │                                    │                                           │
-//! │                                    ▼                                           │
-//! │  Output & Console Management                                                   │
-//! │  ┌─────────────────────┐              ┌─────────────────────────────────────┐  │
-//! │  │   Console System    │              │        Output Formats              │  │
-//! │  │ • Styled output     │              │ • Human-readable (colors, icons)   │  │
-//! │  │ • Color management  │ ────────────▶│ • JSON (machine-readable)          │  │
-//! │  │ • Verbosity levels  │              │ • JSON Lines (streaming)           │  │
-//! │  └─────────────────────┘              └─────────────────────────────────────┘  │
-//! │                                    │                                           │
-//! │                                    ▼                                           │
-//! │  Error Handling & Reporting                                                    │
-//! │  ┌─────────────────────────────────────────────────────────────────────────┐   │
-//! │  │                     Structured Error System                            │   │
-//! │  │  • Domain-specific error types (Config, Package, Network, etc.)        │   │
-//! │  │  • Contextual help and suggestions                                     │   │
-//! │  │  • Standardized exit codes                                             │   │
-//! │  │  • Machine-readable error formats                                      │   │
-//! │  └─────────────────────────────────────────────────────────────────────────┘   │
-//! │                                    │                                           │
-//! │                                    ▼                                           │
-//! │  Command Implementation Layer                                                   │
-//! │  ┌─────────────────────────────────────────────────────────────────────────┐   │
-//! │  │  init   add   remove   install   list   clean   update   check   ...   │   │
-//! │  │   │      │      │        │       │      │       │       │               │   │
-//! │  │   ▼      ▼      ▼        ▼       ▼      ▼       ▼       ▼               │   │
-//! │  │                  Integration with Core Modules                          │   │
-//! │  │  ┌─────────┐  ┌─────────┐  ┌──────────┐                                │   │
-//! │  │  │hpm-core │  │hpm-pkg  │  │hpm-config│                                │   │
-//! │  │  └─────────┘  └─────────┘  └──────────┘                                │   │
-//! │  └─────────────────────────────────────────────────────────────────────────┘   │
-//! └─────────────────────────────────────────────────────────────────────────────────┘
-//! ```
-//!
-//! ## Command Categories
-//!
-//! ### Project Management Commands
-//! Commands for creating and managing Houdini package projects:
-//!
-//! - **`init`** - Initialize new Houdini packages with standardized templates
-//!   - Standard template: Full package structure with all directories
-//!   - Bare template: Minimal structure with only `hpm.toml`
-//!   - Version control integration (Git initialization)
-//!   - Configurable metadata (author, license, Houdini versions)
-//!
-//! - **`check`** - Validate package configuration and Houdini compatibility
-//!   - Manifest validation (syntax, required fields, version constraints)
-//!   - Houdini version compatibility checking
-//!   - Dependency constraint validation
-//!   - Package structure verification
-//!
-//! ### Dependency Management Commands
-//! Commands for managing package dependencies and installations:
-//!
-//! - **`add`** - Add package dependencies with semantic versioning
-//!   - Automatic dependency resolution and installation
-//!   - Version specification support (^, ~, >=, exact)
-//!   - Optional dependency marking
-//!   - Flexible manifest targeting
-//!
-//! - **`remove`** - Remove package dependencies from manifests
-//!   - Non-destructive removal (preserves downloaded packages)
-//!   - Lock file synchronization
-//!   - Validation and error handling
-//!
-//! - **`install`** - Install dependencies from `hpm.toml` manifests
-//!   - HPM package dependency resolution
-//!   - Python dependency management with virtual environments
-//!   - Project structure setup and integration
-//!   - Lock file generation and validation
-//!
-//! - **`update`** - Update packages to latest compatible versions
-//!   - Intelligent dependency resolution with conflict detection
-//!   - Dry-run mode for preview
-//!   - Selective package updates
-//!   - Multiple output formats for automation
-//!
-//! ### Information and Analysis Commands
-//! Commands for inspecting packages and dependencies:
-//!
-//! - **`list`** - Display comprehensive package information
-//!   - Package metadata (name, version, description, compatibility)
-//!   - HPM dependency specifications with version constraints
-//!   - Python dependency specifications with extras
-//!   - Optional dependency indicators
-//!
-//! ### Maintenance Commands
-//! Commands for system maintenance and optimization:
-//!
-//! - **`clean`** - Project-aware package cleanup with safety guarantees
-//!   - Orphaned package detection and removal
-//!   - Python virtual environment cleanup
-//!   - Comprehensive cleanup (packages + Python environments)
-//!   - Dry-run mode with detailed preview
-//!   - Interactive confirmation for safety
-//!
-//! ### Script Execution Commands
-//! Commands for running package-defined workflows:
-//!
-//! - **`run`** - Execute a `[scripts]` entry from `hpm.toml`
-//!   - Forwards trailing arguments to the script
-//!   - Sets `HPM_PACKAGE_ROOT` to the manifest directory
-//!   - Picks the host-matching variant from conditional `cmd` values
-//!   - Materializes a uv-managed venv on demand for table-form entries
-//!     with `python` / `requirements` set
-//!
-//! ### Future Commands (Planned)
-//! Commands planned for future releases:
-//!
-//! - **`search`** - Search registry for packages with filtering
-//!
-//! ## Error Handling Philosophy
-//!
-//! HPM CLI implements professional error handling inspired by UV's approach:
-//!
-//! ### Structured Error Types
-//! ```rust
-//! pub enum CliError {
-//!     Config { source: anyhow::Error, help: Option<String> },    // Configuration issues
-//!     Package { source: anyhow::Error, help: Option<String> },   // Package operation failures
-//!     Network { source: anyhow::Error, help: Option<String> },   // Registry connectivity issues
-//!     Io { source: anyhow::Error, help: Option<String> },        // File system operations
-//!     Internal { source: anyhow::Error, help: Option<String> },  // Unexpected errors
-//!     External { source: anyhow::Error, help: Option<String> },  // External command failures
-//! }
-//! ```
-//!
-//! ### Exit Code Standards
-//! - **0**: Success - command completed successfully
-//! - **1**: User error - configuration, input, or package issues
-//! - **2**: Internal error - bugs or unexpected conditions
-//! - **N**: External command exit code (when running external tools)
-//!
-//! ### User Experience Features
-//! - **Contextual Help**: Error messages include suggested solutions
-//! - **Progressive Verbosity**: More details available with `-v` flags
-//! - **Color-Coded Output**: Success (green), warnings (yellow), errors (red)
-//! - **Accessibility**: Symbols alongside colors for color-blind users
-//!
-//! ## Output Format Support
-//!
-//! HPM CLI supports multiple output formats for different use cases:
-//!
-//! ### Human-Readable (Default)
-//! Styled output with colors, symbols, and formatting optimized for terminal use:
-//! ```text
-//! [SUCCESS] Package 'geometry-tools' initialized successfully
-//! [WARNING] Warning: No Python dependencies specified
-//! [ERROR] Error: Package 'nonexistent-package' not found
-//! ```
-//!
-//! ### Machine-Readable Formats
-//! Structured output for automation and integration:
-//!
-//! - **JSON**: Pretty-printed for human-readable automation
-//! - **JSON Lines**: Single-line JSON for streaming and log processing
-//! - **JSON Compact**: Minimal JSON for bandwidth efficiency
-//!
-//! ```json
-//! {
-//!   "success": true,
-//!   "command": "install",
-//!   "message": "3 packages installed",
-//!   "elapsed_ms": 1250
-//! }
-//! ```
-//!
-//! ## Usage Examples
-//!
-//! ### Project Initialization
-//! ```bash
-//! # Create standard package with full structure
-//! hpm init my-houdini-tools --author "Artist <artist@studio.com>"
-//!
-//! # Create minimal package structure (Houdini 21.x only — the default)
-//! hpm init --bare minimal-package
-//!
-//! # Initialize with custom metadata, widening the Houdini range
-//! hpm init advanced-tools \
-//!   --description "Advanced geometry manipulation tools" \
-//!   --license Apache-2.0 \
-//!   --houdini ">=20.5, <22"
-//! ```
-//!
-//! ### Dependency Management
-//! ```bash
-//! # Add latest version of a package
-//! hpm add utility-nodes
-//!
-//! # Add specific version with constraints
-//! hpm add geometry-tools --version "^2.1.0"
-//!
-//! # Add optional dependency
-//! hpm add material-library --version "1.5.0" --optional
-//!
-//! # Remove dependency
-//! hpm remove old-package
-//!
-//! # Install all dependencies
-//! hpm install
-//! ```
-//!
-//! ### Package Updates
-//! ```bash
-//! # Preview available updates
-//! hpm update --dry-run
-//!
-//! # Update all packages
-//! hpm update
-//!
-//! # Update specific packages
-//! hpm update numpy geometry-tools
-//!
-//! # Automated update with JSON output
-//! hpm update --yes --output json
-//! ```
-//!
-//! ### System Maintenance
-//! ```bash
-//! # Preview cleanup operations
-//! hpm clean --dry-run
-//!
-//! # Clean orphaned packages interactively
-//! hpm clean
-//!
-//! # Automated comprehensive cleanup
-//! hpm clean --comprehensive --yes
-//!
-//! # Clean only Python virtual environments
-//! hpm clean --python-only --dry-run
-//! ```
-//!
-//! ### Information and Analysis
-//! ```bash
-//! # List dependencies from current project
-//! hpm list
-//!
-//! # List dependencies from specific project
-//! hpm list --package /path/to/project/
-//!
-//! # Validate package configuration
-//! hpm check
-//!
-//! # Check specific project
-//! hpm check --package /path/to/project/
-//! ```
-//!
-//! ## Global Options
-//!
-//! All commands support these global options for consistent behavior:
-//!
-//! - **`-v, --verbose`**: Increase verbosity (can be used multiple times)
-//! - **`-q, --quiet`**: Suppress output except for errors
-//! - **`--color <WHEN>`**: Control color output (auto, always, never)
-//! - **`--output <FORMAT>`**: Set output format (human, json, json-lines, json-compact)
-//! - **`-C, --directory <DIR>`**: Run command in specified directory
-//!
-//! ## Integration with Core Systems
-//!
-//! The CLI seamlessly integrates with all HPM subsystems:
-//!
-//! - **HPM Core**: Package storage, project discovery, dependency analysis
-//! - **HPM Python**: Python dependency management and virtual environments
-//! - **HPM Registry**: Package search and download
-//! - **HPM Config**: Configuration management and project settings
-//! - **HPM Package**: Manifest processing and Houdini integration
+//! Exit codes: 0 success, 1 user error (config/package/network/io),
+//! 2 internal error, N for a forwarded external command exit code.
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 use std::collections::HashMap;
@@ -299,10 +33,10 @@ pub mod error;
 pub mod output;
 pub mod progress;
 pub mod script_sink;
-use commands::init_package;
 pub use console::{ColorChoice, Console, Verbosity};
 use error::{CliError, CliResult, CliResultExt, ExitStatus};
 pub use output::OutputFormat;
+
 #[derive(Parser)]
 #[command(name = "hpm", version, about = "HPM - Houdini Package Manager")]
 pub struct Cli {
@@ -316,11 +50,11 @@ pub struct Cli {
 
     /// Force colors
     #[arg(long, value_enum)]
-    color: Option<ColorChoiceArg>,
+    color: Option<ColorChoice>,
 
     /// Output format
     #[arg(long, value_enum)]
-    output: Option<OutputFormatArg>,
+    output: Option<OutputFormat>,
 
     /// Directory to run command in (defaults to current directory)
     #[arg(short = 'C', long)]
@@ -328,42 +62,6 @@ pub struct Cli {
 
     #[command(subcommand)]
     command: Commands,
-}
-
-#[derive(clap::ValueEnum, Clone, Debug)]
-pub enum ColorChoiceArg {
-    Auto,
-    Always,
-    Never,
-}
-
-impl From<ColorChoiceArg> for ColorChoice {
-    fn from(choice: ColorChoiceArg) -> Self {
-        match choice {
-            ColorChoiceArg::Auto => ColorChoice::Auto,
-            ColorChoiceArg::Always => ColorChoice::Always,
-            ColorChoiceArg::Never => ColorChoice::Never,
-        }
-    }
-}
-
-#[derive(clap::ValueEnum, Clone, Debug)]
-pub enum OutputFormatArg {
-    Human,
-    Json,
-    JsonLines,
-    JsonCompact,
-}
-
-impl From<OutputFormatArg> for OutputFormat {
-    fn from(format: OutputFormatArg) -> Self {
-        match format {
-            OutputFormatArg::Human => OutputFormat::Human,
-            OutputFormatArg::Json => OutputFormat::Json,
-            OutputFormatArg::JsonLines => OutputFormat::JsonLines,
-            OutputFormatArg::JsonCompact => OutputFormat::JsonCompact,
-        }
-    }
 }
 
 #[derive(Subcommand)]
@@ -419,7 +117,7 @@ pub enum Commands {
         link: bool,
 
         /// Path to directory containing hpm.toml or direct path to hpm.toml file
-        #[arg(short = 'p', long = "package")]
+        #[arg(short, long)]
         manifest: Option<std::path::PathBuf>,
 
         /// Mark dependencies as optional
@@ -432,7 +130,7 @@ pub enum Commands {
         package: String,
 
         /// Path to directory containing hpm.toml or direct path to hpm.toml file
-        #[arg(short = 'p', long = "package")]
+        #[arg(short, long)]
         manifest: Option<std::path::PathBuf>,
     },
     /// Update packages to latest versions
@@ -442,7 +140,7 @@ pub enum Commands {
         packages: Vec<String>,
 
         /// Path to directory containing hpm.toml or direct path to hpm.toml file
-        #[arg(short = 'p', long = "package")]
+        #[arg(short, long)]
         manifest: Option<std::path::PathBuf>,
 
         /// Preview changes without applying them
@@ -456,7 +154,7 @@ pub enum Commands {
     /// Display package information and dependencies
     List {
         /// Path to directory containing hpm.toml or direct path to hpm.toml file
-        #[arg(short = 'p', long = "package")]
+        #[arg(short, long)]
         manifest: Option<std::path::PathBuf>,
 
         /// Display dependencies as a tree
@@ -478,7 +176,7 @@ pub enum Commands {
     },
     /// Install dependencies from hpm.toml
     Install {
-        /// Path to hpm.toml file (defaults to current directory)
+        /// Path to directory containing hpm.toml or direct path to hpm.toml file
         #[arg(short, long)]
         manifest: Option<std::path::PathBuf>,
 
@@ -495,7 +193,7 @@ pub enum Commands {
     /// when running multiple Houdini sessions side by side, each pointing
     /// its `HOUDINI_PACKAGE_PATH` at its own freshly built directory.
     Build {
-        /// Path to hpm.toml or its directory (defaults to cwd).
+        /// Path to directory containing hpm.toml or direct path to hpm.toml file
         #[arg(short, long)]
         manifest: Option<std::path::PathBuf>,
         /// Override `[stage].output_dir`. Relative paths resolve against
@@ -536,7 +234,8 @@ pub enum Commands {
         /// Output directory for the archive (defaults to current directory)
         #[arg(long)]
         output: Option<std::path::PathBuf>,
-        /// Output result as JSON (for CI integration)
+        /// Output result as JSON (for CI integration); equivalent to the
+        /// global `--output json`
         #[arg(long)]
         json: bool,
         /// Target platform (defaults to host platform when `[compat].platforms` is declared)
@@ -549,7 +248,7 @@ pub enum Commands {
     },
     /// Run security audit on dependencies
     Audit {
-        /// Path to hpm.toml file (defaults to current directory)
+        /// Path to directory containing hpm.toml or direct path to hpm.toml file
         #[arg(short, long)]
         manifest: Option<std::path::PathBuf>,
     },
@@ -611,19 +310,12 @@ pub async fn run() -> ExitCode {
     } else {
         match cli.verbose {
             0 => Verbosity::Normal,
-            1 => Verbosity::Verbose,
             _ => Verbosity::Verbose,
         }
     };
 
-    let color_choice = cli
-        .color
-        .map(ColorChoice::from)
-        .unwrap_or(ColorChoice::Auto);
-    let output_format = cli
-        .output
-        .map(OutputFormat::from)
-        .unwrap_or(OutputFormat::Human);
+    let color_choice = cli.color.unwrap_or(ColorChoice::Auto);
+    let output_format = cli.output.unwrap_or(OutputFormat::Human);
 
     let mut console = Console::with_settings(verbosity, color_choice);
 
@@ -631,7 +323,7 @@ pub async fn run() -> ExitCode {
     init_logging(verbosity);
 
     // Execute command and handle errors
-    let result = match run_command(&cli.command, &mut console, output_format, cli.directory).await {
+    let result = match run_command(cli.command, &mut console, output_format, cli.directory).await {
         Ok(status) => status,
         Err(error) => {
             // Print the error using our structured error system
@@ -667,10 +359,25 @@ pub async fn run() -> ExitCode {
     result.into()
 }
 
+/// Fail fast when a command has no machine-readable form: silently ignoring
+/// `--output json` would leave automation parsing human text.
+fn require_human(command: &str, output: OutputFormat) -> CliResult<()> {
+    if output.is_json() {
+        return Err(CliError::config(
+            anyhow::anyhow!("the '{command}' command does not support --output {output}"),
+            None,
+        ));
+    }
+    Ok(())
+}
+
+/// Dispatch a parsed command. Takes `Commands` by value so each arm moves its
+/// fields into the command implementation instead of cloning them. Every arm
+/// is a thin delegation; the command modules own all user-facing output.
 async fn run_command(
-    command: &Commands,
+    command: Commands,
     console: &mut Console,
-    output_format: OutputFormat,
+    output: OutputFormat,
     directory: Option<std::path::PathBuf>,
 ) -> CliResult<ExitStatus> {
     match command {
@@ -684,26 +391,21 @@ async fn run_command(
             bare,
             vcs,
         } => {
+            require_human("init", output)?;
             let options = commands::init::InitOptions {
-                name_or_path: name.clone(),
-                description: description.clone(),
-                author: author.clone(),
-                version: version.clone(),
-                license: license.clone(),
-                houdini: houdini.clone(),
-                bare: *bare,
-                vcs: vcs.clone(),
-                base_dir: directory.clone(), // Use directory from CLI flag
+                name_or_path: name,
+                description,
+                author,
+                version,
+                license,
+                houdini,
+                bare,
+                vcs,
+                base_dir: directory,
             };
-
-            let package_name = init_package(options).await.cli_package("init")?;
-
-            if output_format == OutputFormat::Human {
-                console.success(format!(
-                    "Package '{}' initialized successfully",
-                    package_name
-                ));
-            }
+            commands::init::init_package(options, console)
+                .await
+                .cli_package("init")?;
         }
         Commands::Add {
             packages,
@@ -712,36 +414,18 @@ async fn run_command(
             manifest,
             optional,
         } => {
+            require_human("add", output)?;
             let config = load_cli_config()?;
-            commands::add::add_packages(
-                &config,
-                packages.clone(),
-                path.clone(),
-                *link,
-                manifest.clone(),
-                *optional,
-            )
-            .await
-            .cli_package("add")?;
-
-            if output_format == OutputFormat::Human {
-                let msg = if packages.len() == 1 {
-                    format!("Added dependency '{}'", packages[0])
-                } else {
-                    format!("Added {} dependencies", packages.len())
-                };
-                console.success(msg);
-            }
+            commands::add::add_packages(&config, packages, path, link, manifest, optional, console)
+                .await
+                .cli_package("add")?;
         }
         Commands::Remove { package, manifest } => {
+            require_human("remove", output)?;
             let config = load_cli_config()?;
-            commands::remove::remove_package(&config, package.clone(), manifest.clone())
+            commands::remove::remove_package(&config, &package, manifest, console)
                 .await
                 .cli_package("remove")?;
-
-            if output_format == OutputFormat::Human {
-                console.success(format!("Removed dependency '{}'", package));
-            }
         }
         Commands::Update {
             packages,
@@ -749,51 +433,35 @@ async fn run_command(
             dry_run,
             yes,
         } => {
-            let options = commands::update::UpdateOptions {
-                package: manifest.clone(),
-                packages: packages.clone(),
-                dry_run: *dry_run,
-                yes: *yes,
-                output: output_format,
-            };
-
             let config = load_cli_config()?;
-            commands::update::update_packages(&config, options)
+            let options = commands::update::UpdateOptions {
+                manifest,
+                packages,
+                dry_run,
+                yes,
+                output,
+            };
+            commands::update::update_packages(&config, options, console)
                 .await
                 .cli_package("update")?;
-
-            if output_format == OutputFormat::Human {
-                console.success("Package update completed");
-            }
         }
         Commands::List { manifest, tree } => {
-            if *tree {
-                commands::list::list_dependencies_tree(manifest.clone())
-                    .await
-                    .cli_package("list")?;
-            } else {
-                commands::list::list_dependencies(manifest.clone())
-                    .await
-                    .cli_package("list")?;
-            }
+            commands::list::list_dependencies(manifest, tree, console, output)
+                .await
+                .cli_package("list")?;
         }
         Commands::Search { query } => {
-            let json_output = output_format != OutputFormat::Human;
             let config = load_cli_config()?;
-            commands::search::search_packages(&config, query.clone(), None, json_output)
+            commands::search::search_packages(&config, &query, console, output)
                 .await
                 .cli_network("search")?;
         }
         Commands::Run { script, args } => {
-            let exit_code = commands::run::run_script(
-                script,
-                args,
-                directory.clone(),
-                &HashMap::new(),
-                console,
-            )
-            .await
-            .cli_package("run")?;
+            require_human("run", output)?;
+            let exit_code =
+                commands::run::run_script(&script, &args, directory, &HashMap::new(), console)
+                    .await
+                    .cli_package("run")?;
             return Ok(if exit_code == 0 {
                 ExitStatus::Success
             } else {
@@ -805,41 +473,35 @@ async fn run_command(
             manifest,
             frozen_lockfile,
         } => {
+            require_human("install", output)?;
             let config = load_cli_config()?;
-            commands::install::install_dependencies(&config, manifest.clone(), *frozen_lockfile)
+            commands::install::execute(&config, manifest, frozen_lockfile, console)
                 .await
                 .cli_package("install")?;
-
-            if output_format == OutputFormat::Human {
-                console.success("Dependencies installed successfully");
-            }
         }
         Commands::Check => {
-            commands::check::check_package(directory.clone())
+            commands::check::check_package(directory, console, output)
                 .await
                 .cli_package("check")?;
-
-            if output_format == OutputFormat::Human {
-                console.success("Package configuration is valid");
-            }
         }
         Commands::Build {
             manifest,
-            output,
+            output: build_output,
             platform,
             profile,
             houdini_majors,
             no_prepack,
             no_clean,
         } => {
+            require_human("build", output)?;
             let options = commands::build::BuildOptions {
-                manifest: manifest.clone().or_else(|| directory.clone()),
-                output: output.clone(),
-                platform: platform.clone(),
-                profile: profile.clone(),
-                houdini_majors: houdini_majors.clone(),
-                no_prepack: *no_prepack,
-                clean: !*no_clean,
+                manifest: manifest.or(directory),
+                output: build_output,
+                platform,
+                profile,
+                houdini_majors,
+                no_prepack,
+                clean: !no_clean,
             };
             commands::build::build(options, console)
                 .await
@@ -847,84 +509,90 @@ async fn run_command(
         }
         Commands::Pack {
             key,
-            output,
+            output: pack_output,
             json,
             platform,
             verify_assets,
         } => {
             let config = load_cli_config()?;
+            // `--json` and the global `--output json*` are equivalent here:
+            // pack emits its established single-line JSON payload for CI.
+            let json = json || output.is_json();
             commands::pack::execute(
                 &config,
-                directory.clone(),
-                key.clone(),
-                output.clone(),
-                *json,
-                platform.clone(),
-                *verify_assets,
+                directory,
+                key,
+                pack_output,
+                json,
+                platform,
+                verify_assets,
                 console,
             )
             .await
             .cli_package("pack")?;
         }
         Commands::Audit { manifest } => {
+            require_human("audit", output)?;
             let config = load_cli_config()?;
-            commands::audit::audit_packages(&config, manifest.clone())
+            commands::audit::audit_packages(&config, manifest, console)
                 .await
                 .cli_package("audit")?;
         }
-        Commands::Registry { action } => match action {
-            RegistryAction::Add {
-                url,
-                name,
-                registry_type,
-                if_not_exists,
-            } => {
-                commands::registry::add_registry(
-                    url.clone(),
-                    name.clone(),
-                    registry_type.clone(),
-                    *if_not_exists,
-                )
-                .await
-                .cli_config("registry add")?;
-            }
-            RegistryAction::List => {
-                let config = load_cli_config()?;
-                commands::registry::list_registries(&config)
-                    .await
-                    .map_err(|e| CliError::config(e, None))?;
-            }
-            RegistryAction::Remove { name } => {
-                commands::registry::remove_registry(name.clone())
-                    .await
-                    .cli_config("registry remove")?;
-            }
-            RegistryAction::Update => {
-                let config = load_cli_config()?;
-                commands::registry::update_registries(&config)
-                    .await
-                    .map_err(|e| {
-                        CliError::network(
-                            e,
-                            Some("Check your internet connection and registry URLs.".to_string()),
-                        )
-                    })?;
-            }
-        },
-        Commands::Clean(args) => {
+        Commands::Registry { action } => {
+            require_human("registry", output)?;
             let config = load_cli_config()?;
-            commands::clean::execute_clean(&config, args)
-                .await
-                .cli_package("clean")?;
-
-            if output_format == OutputFormat::Human {
-                console.success("Cleanup completed successfully");
+            match action {
+                RegistryAction::Add {
+                    url,
+                    name,
+                    registry_type,
+                    if_not_exists,
+                } => {
+                    commands::registry::add_registry(
+                        url,
+                        name,
+                        registry_type,
+                        if_not_exists,
+                        console,
+                    )
+                    .await
+                    .cli_config("registry add")?;
+                }
+                RegistryAction::List => {
+                    commands::registry::list_registries(&config, console)
+                        .await
+                        .map_err(|e| CliError::config(e, None))?;
+                }
+                RegistryAction::Remove { name } => {
+                    commands::registry::remove_registry(&name, console)
+                        .await
+                        .cli_config("registry remove")?;
+                }
+                RegistryAction::Update => {
+                    commands::registry::update_registries(&config, console)
+                        .await
+                        .map_err(|e| {
+                            CliError::network(
+                                e,
+                                Some(
+                                    "Check your internet connection and registry URLs.".to_string(),
+                                ),
+                            )
+                        })?;
+                }
             }
         }
+        Commands::Clean(args) => {
+            require_human("clean", output)?;
+            let config = load_cli_config()?;
+            commands::clean::execute_clean(&config, &args, console)
+                .await
+                .cli_package("clean")?;
+        }
         Commands::Completions { shell } => {
+            require_human("completions", output)?;
             let mut cmd = Cli::command();
-            generate(*shell, &mut cmd, "hpm", &mut std::io::stdout());
-            return Ok(ExitStatus::Success);
+            generate(shell, &mut cmd, "hpm", &mut std::io::stdout());
         }
     }
 
@@ -956,8 +624,7 @@ fn init_logging(verbosity: Verbosity) {
         // Diagnostics go to stderr, never stdout. This keeps stdout clean for
         // machine-readable output — `hpm pack --json` (and any other
         // `--output json*` command) emits only its JSON payload on stdout,
-        // while `hpm check`/pack progress logs stay on stderr where consumers
-        // can ignore them.
+        // while progress logs stay on stderr where consumers can ignore them.
         .with(
             tracing_subscriber::fmt::layer()
                 .with_target(false)

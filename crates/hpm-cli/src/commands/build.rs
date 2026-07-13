@@ -142,7 +142,7 @@ pub async fn build(options: BuildOptions, console: &mut Console) -> Result<()> {
             .map(|p| format!(", platform={}", p))
             .unwrap_or_default()
     ));
-    println!("  output: {}", output_dir.display());
+    console.stdout(format!("  output: {}", output_dir.display()));
 
     Ok(())
 }

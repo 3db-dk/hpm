@@ -38,7 +38,7 @@ use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct UpdateOptions {
-    pub package: Option<PathBuf>,
+    pub manifest: Option<PathBuf>,
     pub packages: Vec<String>,
     pub dry_run: bool,
     pub yes: bool,
@@ -48,7 +48,7 @@ pub struct UpdateOptions {
 impl Default for UpdateOptions {
     fn default() -> Self {
         Self {
-            package: None,
+            manifest: None,
             packages: Vec::new(),
             dry_run: false,
             yes: false,
@@ -69,8 +69,12 @@ struct Candidate {
     locked_is_yanked: bool,
 }
 
-pub async fn update_packages(config: &Config, options: UpdateOptions) -> Result<()> {
-    let manifest_path = determine_manifest_path(options.package.clone())?;
+pub async fn update_packages(
+    config: &Config,
+    options: UpdateOptions,
+    console: &mut Console,
+) -> Result<()> {
+    let manifest_path = determine_manifest_path(options.manifest.clone())?;
     let manifest = load_manifest(&manifest_path)?;
     let project_dir = manifest_path
         .parent()
@@ -92,11 +96,16 @@ pub async fn update_packages(config: &Config, options: UpdateOptions) -> Result<
         collect_candidates(&registry_set, &manifest, existing_lock.as_ref(), &filter).await?;
 
     if candidates.is_empty() {
-        Console::new().success("All HPM packages are up to date");
+        if options.output.is_json() {
+            // Same shape as a non-empty run, so consumers parse one contract.
+            print_candidates(&candidates, options.output, console);
+        } else {
+            console.success("All HPM packages are up to date");
+        }
         return Ok(());
     }
 
-    print_candidates(&candidates, options.output);
+    print_candidates(&candidates, options.output, console);
 
     if options.dry_run {
         return Ok(());
@@ -104,9 +113,9 @@ pub async fn update_packages(config: &Config, options: UpdateOptions) -> Result<
 
     if !options.yes
         && matches!(options.output, OutputFormat::Human)
-        && !Console::new().confirm("Apply these updates?")?
+        && !console.confirm("Apply these updates?")?
     {
-        println!("Update cancelled");
+        console.status("Update cancelled");
         return Ok(());
     }
 
@@ -119,7 +128,10 @@ pub async fn update_packages(config: &Config, options: UpdateOptions) -> Result<
         .await
         .context("Failed to install the updated dependency set")?;
 
-    Console::new().success(format!("Updated {} package(s)", candidates.len()));
+    // Human-only: a trailing status line would corrupt the JSON stream.
+    if !options.output.is_json() {
+        console.success(format!("Updated {} package(s)", candidates.len()));
+    }
     Ok(())
 }
 
@@ -190,7 +202,7 @@ async fn collect_candidates(
     Ok(candidates)
 }
 
-fn print_candidates(candidates: &[Candidate], output: OutputFormat) {
+fn print_candidates(candidates: &[Candidate], output: OutputFormat, console: &mut Console) {
     match output {
         OutputFormat::Json | OutputFormat::JsonCompact => {
             let payload: Vec<_> = candidates
@@ -205,36 +217,28 @@ fn print_candidates(candidates: &[Candidate], output: OutputFormat) {
                 })
                 .collect();
             let body = serde_json::json!({"updates": payload});
-            let s = if matches!(output, OutputFormat::JsonCompact) {
-                body.to_string()
-            } else {
-                serde_json::to_string_pretty(&body).unwrap()
-            };
-            println!("{}", s);
+            console.stdout(output.render_json(&body));
         }
         OutputFormat::JsonLines => {
             for c in candidates {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "name": c.name,
-                        "current": c.locked,
-                        "latest": c.latest,
-                        "currentIsYanked": c.locked_is_yanked,
-                    })
-                );
+                console.stdout(serde_json::json!({
+                    "name": c.name,
+                    "current": c.locked,
+                    "latest": c.latest,
+                    "currentIsYanked": c.locked_is_yanked,
+                }));
             }
         }
         OutputFormat::Human => {
-            println!("Available updates:");
+            console.stdout("Available updates:");
             for c in candidates {
                 let current = c.locked.as_deref().unwrap_or("<not locked>");
-                println!("  {}: {} -> {}", c.name, current, c.latest);
+                console.stdout(format!("  {}: {} -> {}", c.name, current, c.latest));
                 if c.locked_is_yanked {
-                    println!(
+                    console.stdout(format!(
                         "    note: the locked {} {} has been yanked",
                         c.name, current
-                    );
+                    ));
                 }
             }
         }

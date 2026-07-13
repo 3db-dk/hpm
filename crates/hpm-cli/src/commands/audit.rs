@@ -21,6 +21,7 @@
 //! ```
 
 use super::manifest_utils::{determine_manifest_path, load_manifest};
+use crate::console::Console;
 use anyhow::Result;
 use console::style;
 use hpm_config::Config;
@@ -28,7 +29,11 @@ use std::path::PathBuf;
 use tracing::info;
 
 /// Run security audit on a package and its dependencies
-pub async fn audit_packages(config: &Config, manifest_path: Option<PathBuf>) -> Result<()> {
+pub async fn audit_packages(
+    config: &Config,
+    manifest_path: Option<PathBuf>,
+    console: &mut Console,
+) -> Result<()> {
     info!("Running security audit");
 
     let manifest_path = determine_manifest_path(manifest_path)?;
@@ -37,8 +42,8 @@ pub async fn audit_packages(config: &Config, manifest_path: Option<PathBuf>) -> 
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Could not determine project directory"))?;
 
-    println!("\n{}", style("HPM Security Audit").bold().cyan());
-    println!("{}\n", "=".repeat(40));
+    console.stdout(format!("\n{}", style("HPM Security Audit").bold().cyan()));
+    console.stdout(format!("{}\n", "=".repeat(40)));
 
     let mut warnings: Vec<String> = Vec::new();
     let mut passed: Vec<&str> = Vec::new();
@@ -104,21 +109,26 @@ pub async fn audit_packages(config: &Config, manifest_path: Option<PathBuf>) -> 
 
     // Print results
     for msg in &passed {
-        println!("  {} {}", style("PASS").green().bold(), msg);
+        console.stdout(format!("  {} {}", style("PASS").green().bold(), msg));
     }
     for msg in &warnings {
-        println!("  {} {}", style("WARN").yellow().bold(), msg);
+        console.stdout(format!("  {} {}", style("WARN").yellow().bold(), msg));
     }
 
-    println!();
+    console.stdout("");
     if warnings.is_empty() {
-        println!("{}", style("No security issues found.").green().bold());
+        console.stdout(
+            style("No security issues found.")
+                .green()
+                .bold()
+                .to_string(),
+        );
     } else {
-        println!(
-            "{}",
+        console.stdout(
             style(format!("Found {} warning(s).", warnings.len()))
                 .yellow()
                 .bold()
+                .to_string(),
         );
     }
 
@@ -148,7 +158,7 @@ mod tests {
 
         let manifest_path = temp_dir.path().join("hpm.toml");
         let config = Config::default();
-        let result = audit_packages(&config, Some(manifest_path)).await;
+        let result = audit_packages(&config, Some(manifest_path), &mut Console::new()).await;
 
         assert!(result.is_ok());
     }
@@ -171,7 +181,7 @@ mod tests {
 
         let manifest_path = temp_dir.path().join("hpm.toml");
         let config = Config::default();
-        let result = audit_packages(&config, Some(manifest_path)).await;
+        let result = audit_packages(&config, Some(manifest_path), &mut Console::new()).await;
 
         assert!(result.is_ok());
     }
@@ -190,7 +200,7 @@ mod tests {
 
         let manifest_path = temp_dir.path().join("hpm.toml");
         let config = Config::default();
-        let result = audit_packages(&config, Some(manifest_path)).await;
+        let result = audit_packages(&config, Some(manifest_path), &mut Console::new()).await;
 
         assert!(result.is_ok());
     }

@@ -8,6 +8,7 @@
 //! exactly the same behaviour.
 
 use super::manifest_utils::{determine_manifest_path, load_manifest};
+use crate::console::Console;
 use crate::progress::OperationProgress;
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
@@ -19,6 +20,20 @@ use hpm_package::{PackageManifest, PythonDependencySpec};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
+
+/// CLI entry for `hpm install`: sync, then report success. Internal callers
+/// (`add`/`remove`/`update`) use [`install_dependencies`] directly and own
+/// their own success line.
+pub async fn execute(
+    config: &Config,
+    manifest_path: Option<PathBuf>,
+    frozen_lockfile: bool,
+    console: &mut Console,
+) -> Result<()> {
+    install_dependencies(config, manifest_path, frozen_lockfile).await?;
+    console.success("Dependencies installed successfully");
+    Ok(())
+}
 
 /// Install dependencies from `hpm.toml`.
 ///

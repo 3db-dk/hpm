@@ -1,168 +1,114 @@
 //! HPM List Command
 //!
-//! This module implements the `hpm list` command for displaying comprehensive package information
-//! and dependencies from HPM projects. This command serves as the primary way to view package
-//! details and dependency information in HPM.
-//!
-//! ## Functionality
-//!
-//! The list command provides comprehensive package and dependency visibility:
-//! - Displays package metadata (name, version, description, Houdini compatibility)
-//! - Lists HPM package dependencies from hpm.toml manifest files
-//! - Lists Python package dependencies from hpm.toml manifest files
-//! - Supports flexible manifest targeting via `--package` flag
-//! - Clear categorization between HPM and Python dependencies
-//! - Version specifications displayed with dependency names
-//!
-//! ## Usage Examples
+//! Displays package metadata plus HPM and Python dependencies from an
+//! `hpm.toml` manifest, either as flat sections, as a tree (`--tree`), or as
+//! a single JSON document (`--output json|json-lines|json-compact`).
 //!
 //! ```bash
-//! # List dependencies from current directory's hpm.toml
-//! hpm list
-//!
-//! # List dependencies from specific manifest file
-//! hpm list --package /path/to/project/hpm.toml
-//!
-//! # List dependencies from directory containing hpm.toml
-//! hpm list --package /path/to/project/
+//! hpm list                                # current directory's hpm.toml
+//! hpm list --manifest /path/to/project/   # explicit directory or file
+//! hpm list --tree
+//! hpm list --output json
 //! ```
-//!
-//! ## Output Format
-//!
-//! The command displays information in organized sections:
-//! - Package information (name, version, description, Houdini compatibility)
-//! - HPM Dependencies section with version specs, git sources, optional markers
-//! - Python Dependencies section with version specs, extras, optional markers
-//! - Clear indication when no dependencies are found
-//!
-//! ## Example Output
-//!
-//! ```text
-//! Package: geometry-tools v1.2.0
-//! Description: Advanced geometry manipulation tools for Houdini
-//! Houdini compatibility: min: 20.5, max: 22.0
-//!
-//! HPM Dependencies:
-//!   utility-nodes ^2.1.0
-//!   material-library 1.5 (optional)
-//!   mesh-utils git: https://github.com/example/mesh-utils (tag: v1.0)
-//!
-//! Python Dependencies:
-//!   numpy >=1.20.0
-//!   matplotlib ^3.5.0 (optional)
-//!   requests >=2.25.0 [security,socks]
-//! ```
-//!
-//! ## Implementation Details
-//!
-//! The list command follows HPM's established patterns:
-//! - Uses the same manifest path resolution as other commands
-//! - Integrates with existing PackageManifest parsing
-//! - Provides comprehensive error handling and user feedback
-//! - Consistent with HPM's professional, concise output style
 
 use super::manifest_utils::{determine_manifest_path, load_manifest};
+use crate::console::Console;
+use crate::output::OutputFormat;
 use anyhow::{Context, Result};
 use console::style;
 use hpm_package::{DependencySpec, PackageManifest, PythonDependencySpec};
 use std::path::PathBuf;
 use tracing::info;
 
-/// Display comprehensive package information and dependencies from hpm.toml manifest
+/// Display package information and dependencies from an hpm.toml manifest.
 ///
-/// This is the primary command for viewing package details and dependency information in HPM.
-/// It provides a complete overview of the package including metadata, HPM dependencies, and
-/// Python dependencies.
-///
-/// # Arguments
-///
-/// * `manifest_path` - Optional path to hpm.toml file or directory containing one
-///   - If `None`, searches for hpm.toml in current directory
-///   - If `Some(path)` and path is a file, uses that file directly
-///   - If `Some(path)` and path is a directory, looks for hpm.toml in that directory
-///
-/// # Returns
-///
-/// * `Ok(())` - Successfully displayed dependencies
-/// * `Err(anyhow::Error)` - Failed to find, parse, or display manifest
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::PathBuf;
-/// use hpm_cli::commands::list::list_dependencies;
-/// # async fn example() -> anyhow::Result<()> {
-/// // List from current directory
-/// list_dependencies(None).await?;
-///
-/// // List from specific manifest
-/// list_dependencies(Some(PathBuf::from("/path/to/hpm.toml"))).await?;
-/// # Ok(())
-/// # }
-/// ```
-pub async fn list_dependencies(manifest_path: Option<PathBuf>) -> Result<()> {
+/// `manifest_path` may be a direct path to `hpm.toml`, a directory containing
+/// one, or `None` for the current directory. `tree` selects the tree view for
+/// human output; JSON output ignores it (same data either way).
+pub async fn list_dependencies(
+    manifest_path: Option<PathBuf>,
+    tree: bool,
+    console: &mut Console,
+    output: OutputFormat,
+) -> Result<()> {
     info!("Listing package dependencies");
 
-    // Determine manifest path
     let manifest_path = determine_manifest_path(manifest_path)?;
     info!("Using manifest: {}", manifest_path.display());
 
-    // Load and validate manifest
     let manifest = load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
 
-    // Display package information
-    display_package_info(&manifest);
-
-    // Display HPM dependencies
-    display_hpm_dependencies(&manifest);
-
-    // Display Python dependencies
-    display_python_dependencies(&manifest);
+    if output.is_json() {
+        console.stdout(output.render_json(&manifest_json(&manifest)));
+    } else if tree {
+        display_tree(&manifest, console);
+    } else {
+        display_package_info(&manifest, console);
+        display_hpm_dependencies(&manifest, console);
+        display_python_dependencies(&manifest, console);
+    }
 
     Ok(())
 }
 
-/// Display dependencies as a tree structure
-///
-/// Shows package dependencies in a visual tree format with box-drawing characters.
-/// This provides an easy-to-scan view of the dependency hierarchy.
-///
-/// # Arguments
-///
-/// * `manifest_path` - Optional path to hpm.toml file or directory containing one
-///
-/// # Output Format
-///
-/// ```text
-/// my-package v1.0.0
-/// ├── geometry-tools (git: github.com/...@abc1234)
-/// ├── utility-nodes (git: github.com/...@def5678) [optional]
-/// └── local-tools (path: ../local-tools)
-///
-/// Python dependencies:
-/// ├── numpy >=1.20.0
-/// └── matplotlib ^3.5.0 [optional]
-/// ```
-pub async fn list_dependencies_tree(manifest_path: Option<PathBuf>) -> Result<()> {
-    info!("Listing package dependencies as tree");
+/// Build the `--output json*` document: package metadata plus structured
+/// dependency entries (the manifest's own `DependencySpec` serialization).
+fn manifest_json(manifest: &PackageManifest) -> serde_json::Value {
+    let dependencies: Vec<_> = manifest
+        .dependencies
+        .iter()
+        .map(|(name, spec)| {
+            serde_json::json!({
+                "name": name,
+                "spec": spec,
+                "optional": is_optional_dependency(spec),
+            })
+        })
+        .collect();
 
-    // Determine manifest path
-    let manifest_path = determine_manifest_path(manifest_path)?;
-    info!("Using manifest: {}", manifest_path.display());
+    let python_dependencies: Vec<_> = manifest
+        .python_dependencies
+        .iter()
+        .map(|(name, spec)| {
+            let extras = match spec {
+                PythonDependencySpec::Detailed {
+                    extras: Some(extras),
+                    ..
+                } => extras.clone(),
+                _ => Vec::new(),
+            };
+            serde_json::json!({
+                "name": name,
+                "version": format_python_dependency_spec(spec),
+                "extras": extras,
+                "optional": is_optional_python_dependency(spec),
+            })
+        })
+        .collect();
 
-    // Load and validate manifest
-    let manifest = load_manifest(&manifest_path)
-        .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
+    serde_json::json!({
+        "package": {
+            "name": manifest.package.name,
+            "version": manifest.package.version,
+            "description": manifest.package.description,
+            "houdini": manifest.compat.houdini.as_ref().map(|r| r.to_string()),
+        },
+        "dependencies": dependencies,
+        "python_dependencies": python_dependencies,
+    })
+}
 
-    // Display package header
-    println!(
+/// Render dependencies as a tree with box-drawing characters.
+fn display_tree(manifest: &PackageManifest, console: &mut Console) {
+    // Package header
+    console.stdout(format!(
         "{} {}",
         style(&manifest.package.name).cyan().bold(),
         style(format!("v{}", manifest.package.version)).dim()
-    );
+    ));
 
-    // Display HPM dependencies as tree
+    // HPM dependencies
     if !manifest.dependencies.is_empty() {
         let count = manifest.dependencies.len();
         for (idx, (name, spec)) in manifest.dependencies.iter().enumerate() {
@@ -176,20 +122,20 @@ pub async fn list_dependencies_tree(manifest_path: Option<PathBuf>) -> Result<()
                 String::new()
             };
 
-            println!(
+            console.stdout(format!(
                 "{}{}{}{}",
                 style(prefix).dim(),
                 style(name).green(),
                 style(format!(" {}", source_info)).dim(),
                 optional_marker
-            );
+            ));
         }
     }
 
-    // Display Python dependencies as tree
+    // Python dependencies
     if !manifest.python_dependencies.is_empty() {
-        println!();
-        println!("{}", style("Python dependencies:").yellow().bold());
+        console.stdout("");
+        console.stdout(style("Python dependencies:").yellow().bold().to_string());
 
         let count = manifest.python_dependencies.len();
         for (idx, (name, spec)) in manifest.python_dependencies.iter().enumerate() {
@@ -204,23 +150,20 @@ pub async fn list_dependencies_tree(manifest_path: Option<PathBuf>) -> Result<()
                 String::new()
             };
 
-            println!(
+            console.stdout(format!(
                 "{}{}{}{}{}",
                 style(prefix).dim(),
                 style(name).green(),
                 style(format!(" {}", version_info)).dim(),
                 extras_info,
                 optional_marker
-            );
+            ));
         }
     }
 
-    // Show message if no dependencies
     if manifest.dependencies.is_empty() && manifest.python_dependencies.is_empty() {
-        println!("{}", style("  (no dependencies)").dim());
+        console.stdout(style("  (no dependencies)").dim().to_string());
     }
-
-    Ok(())
 }
 
 /// Format source info for tree display (compact format)
@@ -248,45 +191,30 @@ fn format_tree_source_info(spec: &DependencySpec) -> String {
     }
 }
 
-/// Display package information header
-///
-/// Shows package name, version, description, and Houdini compatibility information.
-/// This provides context for the dependencies that follow.
-///
-/// # Arguments
-///
-/// * `manifest` - The parsed package manifest containing package metadata
-fn display_package_info(manifest: &PackageManifest) {
-    println!(
+/// Display package name, version, description, and Houdini compatibility.
+fn display_package_info(manifest: &PackageManifest, console: &mut Console) {
+    console.stdout(format!(
         "Package: {} v{}",
         manifest.package.name, manifest.package.version
-    );
+    ));
 
     if let Some(description) = &manifest.package.description {
-        println!("Description: {}", description);
+        console.stdout(format!("Description: {}", description));
     }
 
     if let Some(req) = &manifest.compat.houdini {
-        println!("Houdini compatibility: {}", req);
+        console.stdout(format!("Houdini compatibility: {}", req));
     }
 
-    println!(); // Empty line for readability
+    console.stdout(""); // Empty line for readability
 }
 
-/// Display HPM package dependencies
-///
-/// Shows all HPM package dependencies with their version specifications.
-/// Handles both simple version strings and detailed dependency specifications
-/// including git sources, tags, branches, and optional flags.
-///
-/// # Arguments
-///
-/// * `manifest` - The parsed package manifest containing dependency information
-fn display_hpm_dependencies(manifest: &PackageManifest) {
-    println!("HPM Dependencies:");
+/// Display HPM package dependencies with their version specifications.
+fn display_hpm_dependencies(manifest: &PackageManifest, console: &mut Console) {
+    console.stdout("HPM Dependencies:");
 
     if manifest.dependencies.is_empty() {
-        println!("  (none)");
+        console.stdout("  (none)");
     } else {
         for (name, spec) in &manifest.dependencies {
             let version_info = format_dependency_spec(spec);
@@ -295,26 +223,19 @@ fn display_hpm_dependencies(manifest: &PackageManifest) {
             } else {
                 ""
             };
-            println!("  {} {}{}", name, version_info, optional_marker);
+            console.stdout(format!("  {} {}{}", name, version_info, optional_marker));
         }
     }
 
-    println!(); // Empty line for readability
+    console.stdout(""); // Empty line for readability
 }
 
-/// Display Python package dependencies
-///
-/// Shows all Python package dependencies with their version specifications.
-/// Includes support for extras (e.g., requests\[security\]) and optional dependencies.
-///
-/// # Arguments
-///
-/// * `manifest` - The parsed package manifest containing Python dependency information
-fn display_python_dependencies(manifest: &PackageManifest) {
-    println!("Python Dependencies:");
+/// Display Python package dependencies, including extras and optional flags.
+fn display_python_dependencies(manifest: &PackageManifest, console: &mut Console) {
+    console.stdout("Python Dependencies:");
 
     if manifest.python_dependencies.is_empty() {
-        println!("  (none)");
+        console.stdout("  (none)");
     } else {
         for (name, spec) in &manifest.python_dependencies {
             let version_info = format_python_dependency_spec(spec);
@@ -324,10 +245,10 @@ fn display_python_dependencies(manifest: &PackageManifest) {
                 ""
             };
             let extras_info = format_python_extras(spec);
-            println!(
+            console.stdout(format!(
                 "  {} {}{}{}",
                 name, version_info, extras_info, optional_marker
-            );
+            ));
         }
     }
 }
@@ -609,7 +530,7 @@ mod tests {
         .unwrap();
 
         let _cwd = CwdGuard::enter(temp_dir.path());
-        let result = list_dependencies(None).await;
+        let result = list_dependencies(None, false, &mut Console::new(), OutputFormat::Human).await;
 
         assert!(result.is_ok());
     }
@@ -620,7 +541,7 @@ mod tests {
         write_test_manifest(temp_dir.path(), TestManifestOpts::default()).unwrap();
 
         let _cwd = CwdGuard::enter(temp_dir.path());
-        let result = list_dependencies(None).await;
+        let result = list_dependencies(None, false, &mut Console::new(), OutputFormat::Human).await;
 
         assert!(result.is_ok());
     }
@@ -641,7 +562,13 @@ test-dep = { url = "https://example.com/packages/test-dep/1.0.0/test-dep-1.0.0.z
 "#;
         std::fs::write(&manifest_path, manifest_content).unwrap();
 
-        let result = list_dependencies(Some(manifest_path)).await;
+        let result = list_dependencies(
+            Some(manifest_path),
+            false,
+            &mut Console::new(),
+            OutputFormat::Human,
+        )
+        .await;
 
         assert!(result.is_ok());
     }
@@ -652,7 +579,12 @@ test-dep = { url = "https://example.com/packages/test-dep/1.0.0/test-dep-1.0.0.z
         let nonexistent_path = temp_dir.path().join("nonexistent.toml");
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(list_dependencies(Some(nonexistent_path)));
+        let result = rt.block_on(list_dependencies(
+            Some(nonexistent_path),
+            false,
+            &mut Console::new(),
+            OutputFormat::Human,
+        ));
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();

@@ -1,8 +1,9 @@
+use crate::console::Console;
+use crate::output::OutputFormat;
 use anyhow::{Context, Result};
 use hpm_package::PackageManifest;
 use std::fs;
 use std::path::Path;
-use tracing::{error, info, warn};
 
 #[derive(Debug, Clone)]
 pub struct ValidationResult {
@@ -42,23 +43,42 @@ impl ValidationResult {
     }
 }
 
-pub async fn check_package(directory: Option<std::path::PathBuf>) -> Result<()> {
+/// CLI entry for `hpm check`: validate, display the results through the
+/// console (or as JSON), and fail when errors were found.
+pub async fn check_package(
+    directory: Option<std::path::PathBuf>,
+    console: &mut Console,
+    output: OutputFormat,
+) -> Result<()> {
+    let result = validate_package(directory).await?;
+    display_results(&result, console, output);
+    if !result.is_valid {
+        anyhow::bail!(
+            "Package validation failed with {} error(s)",
+            result.errors.len()
+        );
+    }
+    Ok(())
+}
+
+/// Run every validation pass and collect the findings without displaying
+/// them. Also used by `hpm pack`, which must keep its stdout clean for
+/// `--json` and surfaces warnings/errors on its own terms.
+pub async fn validate_package(directory: Option<std::path::PathBuf>) -> Result<ValidationResult> {
     let current_dir = match directory {
         Some(dir) => dir,
         None => std::env::current_dir().context("Failed to get current directory")?,
     };
     let mut result = ValidationResult::new();
 
-    info!("Checking HPM package configuration...");
-
     // Check for hpm.toml existence and parse it
     let manifest_path = current_dir.join("hpm.toml");
     let manifest = match validate_manifest_file(&manifest_path, &mut result).await {
         Ok(Some(manifest)) => manifest,
-        Ok(None) => return display_results(result),
+        Ok(None) => return Ok(result),
         Err(e) => {
             result.add_error(format!("Failed to validate manifest: {}", e));
-            return display_results(result);
+            return Ok(result);
         }
     };
 
@@ -74,7 +94,7 @@ pub async fn check_package(directory: Option<std::path::PathBuf>) -> Result<()> 
     // Check for best practices
     validate_best_practices(&current_dir, &manifest, &mut result).await;
 
-    display_results(result)
+    Ok(result)
 }
 
 async fn validate_manifest_file(
@@ -377,51 +397,40 @@ async fn check_package_size(project_dir: &Path, result: &mut ValidationResult) {
     }
 }
 
-fn display_results(result: ValidationResult) -> Result<()> {
-    // Blank-line spacers bracket the tracing log lines below, which go to
-    // stderr — so the spacers must too, or they would orphan onto stdout and
-    // pollute machine-readable output (e.g. `hpm pack --json`).
-    eprintln!();
+/// Emit the validation findings. Human output goes through the console —
+/// info lines are suppressed by `--quiet` while warnings, errors, and the
+/// final verdict always show; JSON output is a single document on stdout.
+fn display_results(result: &ValidationResult, console: &mut Console, output: OutputFormat) {
+    if output.is_json() {
+        let doc = serde_json::json!({
+            "valid": result.is_valid,
+            "errors": result.errors,
+            "warnings": result.warnings,
+            "info": result.info_messages,
+        });
+        console.stdout(output.render_json(&doc));
+        return;
+    }
 
-    // Display info messages
     for info in &result.info_messages {
-        info!("{}", info);
+        console.info(info);
     }
-
-    // Display warnings
-    if !result.warnings.is_empty() {
-        eprintln!();
-        for warning in &result.warnings {
-            warn!("[WARN] {}", warning);
-        }
+    for warning in &result.warnings {
+        console.warn(warning);
     }
-
-    // Display errors
-    if !result.errors.is_empty() {
-        eprintln!();
-        for error in &result.errors {
-            error!("[ERROR] {}", error);
-        }
+    for error in &result.errors {
+        console.error(error);
     }
-
-    eprintln!();
 
     if result.is_valid {
-        info!("Package validation completed successfully!");
+        console.success("Package validation completed successfully");
         if !result.warnings.is_empty() {
-            info!(
-                "   {} warning(s) found - consider addressing them",
+            console.status(format!(
+                "  {} warning(s) found - consider addressing them",
                 result.warnings.len()
-            );
+            ));
         }
-    } else {
-        return Err(anyhow::anyhow!(
-            "Package validation failed with {} error(s)",
-            result.errors.len()
-        ));
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
