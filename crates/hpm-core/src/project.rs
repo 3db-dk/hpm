@@ -233,53 +233,29 @@ impl ProjectManager {
             .await
     }
 
-    /// Resolve a `PackageSpec` to a concrete `RegistryEntry`. If the spec's
-    /// requirement parses as an exact semver version, look it up directly;
-    /// otherwise list all versions and pick the highest matching one.
+    /// Resolve a `PackageSpec` to a concrete `RegistryEntry` via
+    /// [`crate::registry::RegistrySet::resolve`].
     async fn resolve_registry_entry(
         &self,
         registry_set: &crate::registry::RegistrySet,
         spec: &PackageSpec,
     ) -> Result<crate::registry::RegistryEntry, ProjectError> {
         let req_str = spec.version_req.as_str();
-
-        if semver::Version::parse(req_str).is_ok() {
-            return registry_set
-                .get_version(&spec.name, req_str)
-                .await
-                .map_err(|source| ProjectError::RegistryResolution {
+        registry_set
+            .resolve(&spec.name, req_str)
+            .await
+            .map_err(|source| match source {
+                crate::registry::RegistryError::VersionNotFound { .. } => {
+                    ProjectError::NoMatchingVersion {
+                        name: spec.name.clone(),
+                        version_req: req_str.to_string(),
+                    }
+                }
+                other => ProjectError::RegistryResolution {
                     name: spec.name.clone(),
                     version_req: req_str.to_string(),
-                    source: Box::new(source),
-                });
-        }
-
-        let mut versions = registry_set
-            .get_versions(&spec.name)
-            .await
-            .map_err(|source| ProjectError::RegistryResolution {
-                name: spec.name.clone(),
-                version_req: req_str.to_string(),
-                source: Box::new(source),
-            })?;
-
-        versions.retain(|v| !v.yanked && spec.version_req.matches(&v.version));
-        versions.sort_by(|a, b| {
-            match (
-                semver::Version::parse(&a.version),
-                semver::Version::parse(&b.version),
-            ) {
-                (Ok(va), Ok(vb)) => vb.cmp(&va),
-                _ => b.version.cmp(&a.version),
-            }
-        });
-
-        versions
-            .into_iter()
-            .next()
-            .ok_or_else(|| ProjectError::NoMatchingVersion {
-                name: spec.name.clone(),
-                version_req: req_str.to_string(),
+                    source: Box::new(other),
+                },
             })
     }
 

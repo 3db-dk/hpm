@@ -171,15 +171,8 @@ async fn collect_candidates(
             false
         };
 
-        let latest = entries
-            .iter()
-            .filter(|e| !e.yanked)
-            .filter_map(|e| semver::Version::parse(&e.version).ok())
-            .filter(|v| req.matches(v))
-            .max();
-
-        let latest = match latest {
-            Some(v) => v.to_string(),
+        let latest = match hpm_core::registry::highest_matching(&entries, &req) {
+            Some(entry) => entry.version.clone(),
             None => continue,
         };
 

@@ -237,6 +237,44 @@ impl RegistrySet {
     pub fn is_empty(&self) -> bool {
         self.registries.is_empty()
     }
+
+    /// Resolve a version requirement to a concrete registry entry.
+    ///
+    /// An exact semver (`"1.2.3"`) is looked up directly — this allows
+    /// pinning a yanked version deliberately. Anything else (`"^1"`,
+    /// `">=2, <3"`, `"*"`) resolves to the highest non-yanked version
+    /// matching the requirement.
+    pub async fn resolve(&self, name: &str, req: &str) -> Result<RegistryEntry, RegistryError> {
+        if semver::Version::parse(req).is_ok() {
+            return self.get_version(name, req).await;
+        }
+        let parsed = semver::VersionReq::parse(req).map_err(|e| {
+            RegistryError::ParseError(format!("Invalid version requirement '{}': {}", req, e))
+        })?;
+        let versions = self.get_versions(name).await?;
+        highest_matching(&versions, &parsed)
+            .cloned()
+            .ok_or_else(|| RegistryError::VersionNotFound {
+                name: name.to_string(),
+                version: req.to_string(),
+            })
+    }
+}
+
+/// The entry with the highest non-yanked semver version matching `req`.
+/// Entries whose version does not parse as semver cannot match a semver
+/// requirement and are skipped.
+pub fn highest_matching<'a>(
+    entries: &'a [RegistryEntry],
+    req: &semver::VersionReq,
+) -> Option<&'a RegistryEntry> {
+    entries
+        .iter()
+        .filter(|e| !e.yanked)
+        .filter_map(|e| semver::Version::parse(&e.version).ok().map(|v| (v, e)))
+        .filter(|(v, _)| req.matches(v))
+        .max_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(_, e)| e)
 }
 
 impl Default for RegistrySet {

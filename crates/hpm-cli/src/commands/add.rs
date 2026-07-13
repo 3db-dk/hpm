@@ -131,27 +131,14 @@ pub async fn add_packages(
                 );
             }
 
-            // Resolve from registry
-            let entry = if let Some(ver) = &requested_version {
-                registry_set
-                    .get_version(&pkg_name, ver)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to resolve {}@{}: {}", pkg_name, ver, e))?
-            } else {
-                // Get latest non-yanked version
-                let versions = registry_set
-                    .get_versions(&pkg_name)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to resolve {}: {}", pkg_name, e))?;
-
-                versions
-                    .into_iter()
-                    .rev()
-                    .find(|e| !e.yanked)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("No non-yanked versions found for '{}'", pkg_name)
-                    })?
-            };
+            // Resolve through the shared core resolver: an explicit version
+            // is looked up exactly; otherwise "*" picks the highest
+            // non-yanked semver.
+            let req = requested_version.as_deref().unwrap_or("*");
+            let entry = registry_set
+                .resolve(&pkg_name, req)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to resolve {}@{}: {}", pkg_name, req, e))?;
 
             info!("Resolved {} -> {}", pkg_name, entry.version);
 
