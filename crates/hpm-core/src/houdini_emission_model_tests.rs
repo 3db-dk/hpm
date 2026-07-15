@@ -11,8 +11,10 @@
 //! - a project override is applied exactly once, however many packages
 //!   declare the variable, and lands at the correct end;
 //! - a `set` override replaces every package contribution;
-//! - every emitted entry is list-valued with a Houdini-accepted method
-//!   (the model panics otherwise).
+//! - `append` / `prepend` entries are list-valued (mergeable), while a
+//!   plain `set` is emitted flat so it overwrites even a path-registered
+//!   variable; both are Houdini-accepted shapes (the model panics
+//!   otherwise).
 
 use super::houdini_env_model::{VarState, apply_package_files};
 use super::tests::test_setup;
@@ -60,15 +62,25 @@ proptest! {
         std::fs::create_dir_all(&project_root).unwrap();
         let pm = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
-        // A package-side `set` (emitted `replace`) resets whatever earlier
-        // packages contributed — legitimate for a sole declarer, but it
-        // would make "no value is lost" false by design for shared vars.
-        // Packages that share a variable extend it, so co-declarations are
-        // fixed up to `append`.
+        // A package-side `set` is emitted as a flat, non-mergeable string
+        // (it must overwrite, so a path-registered variable like OCIO is
+        // replaced rather than appended onto Houdini's seed). That makes
+        // "no value is lost" false by design in two situations: when the
+        // variable is shared by several packages (a later `set` resets the
+        // earlier ones), and when a `prepend` / `append` project override
+        // tries to merge into it (the flat value is non-mergeable, so the
+        // override overwrites it). Both are legitimate `set` semantics but
+        // outside the survival property, so those `set`s are fixed up to
+        // `append` here; a solitary `set` with no merging override still
+        // exercises the flat-overwrite path.
         let mut decls = declarations.clone();
-        for var_decls in &mut decls {
+        for (var_index, var_decls) in decls.iter_mut().enumerate() {
             let declarers = var_decls.iter().flatten().count();
-            if declarers > 1 {
+            let has_merge_override = matches!(
+                overrides[var_index].map(method_from),
+                Some(EnvMethod::Prepend | EnvMethod::Append)
+            );
+            if declarers > 1 || has_merge_override {
                 for method in var_decls.iter_mut().flatten() {
                     if method_from(*method) == EnvMethod::Set {
                         *method = 2; // append
@@ -167,11 +179,27 @@ proptest! {
                 continue;
             };
 
-            // Everything hpm emits must define the variable as mergeable.
-            prop_assert!(
-                matches!(state, VarState::List(_)),
-                "{var}: emitted as a non-mergeable flat value: {state:?}"
-            );
+            // A plain `set` is emitted flat (non-mergeable) on purpose — it
+            // overwrites, which is what makes it correct for a
+            // path-registered variable. That happens when the project
+            // overrides with `set`, or (no override) a lone package declares
+            // it with `set`; the declarers>1 fixup above rewrites shared
+            // `set`s to `append`, so a surviving `set` is always solitary.
+            // Everything else must stay list-valued (mergeable).
+            let surviving_methods: Vec<EnvMethod> = (0..SLUGS.len())
+                .filter_map(|slug_index| decls[var_index][slug_index].map(method_from))
+                .collect();
+            let flat_expected = match over_method {
+                Some(EnvMethod::Set) => true,
+                None => surviving_methods == [EnvMethod::Set],
+                _ => false,
+            };
+            if !flat_expected {
+                prop_assert!(
+                    matches!(state, VarState::List(_)),
+                    "{var}: emitted as a non-mergeable flat value: {state:?}"
+                );
+            }
             let elements = state.elements();
 
             let count = |needle: &str| elements.iter().filter(|e| *e == needle).count();

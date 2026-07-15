@@ -742,13 +742,23 @@ Use `$HPM_PACKAGE_ROOT` to refer to the installed package directory. HPM
 merges these entries with its built-in `PYTHONPATH` and `HOUDINI_SCRIPT_PATH`
 entries when generating the Houdini manifest.
 
-Note on the emitted form: in the generated Houdini `package.json`, `set`
-becomes `method = "replace"` (Houdini's package system has no `set`
-method and rejects it), and every value is written as a single-element
-JSON list. The list form matters — Houdini only honors `method` on a
-custom variable when the variable's first definition uses a list value;
-with flat strings every later entry silently overwrites the variable
-regardless of its declared method.
+Note on the emitted form: in the generated Houdini `package.json`,
+`prepend` and `append` are written as single-element JSON lists. The list
+form matters for them — Houdini only honors `method` on a *custom*
+variable when the variable's first definition uses a list value; with a
+flat string every later entry silently overwrites the variable regardless
+of its declared method.
+
+`set` is emitted as a bare flat string instead (Houdini's package system
+has no `set` method). This is deliberate: a path-registered variable that
+Houdini seeds itself — OCIO, PYTHONPATH, `HOUDINI_*_PATH` — is always
+merge-able, so a list-form `replace` *appends* onto Houdini's seed (you'd
+get `builtin;project`, which breaks OCIO) instead of replacing it. A flat
+string overwrites the seed cleanly and load-order-independent, which is
+exactly what `set` promises. (A genuinely conditional `set` value — a
+`{ when, set }` list — can't be a flat string, so it falls back to the
+list `replace` form; gate the whole package on the condition, or set such
+a path variable flat, if you need the overwrite there.)
 
 #### Required env vars
 

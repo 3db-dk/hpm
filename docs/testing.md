@@ -33,7 +33,20 @@ the real emission path, runs `HOUDINI_PACKAGE_VERBOSE=1 $HFS/bin/hconfig`
 (license-free), and asserts the merged env values from the verbose
 package log. It exists because the emission layer was once validated only
 against its own JSON output while Houdini silently ignored `method` on
-flat-string custom variables.
+flat-string custom variables. Two scenarios are covered:
+
+- `houdini_resolves_generated_packages_per_method` — packages sharing a
+  variable plus project overrides in every method (`set` / `prepend` /
+  `append`) and conditional (version/OS-gated) values.
+- `houdini_set_overwrites_path_registered_ocio_seed` — the OCIO crash on
+  H22.0.367: a project `set` on a path-registered variable must OVERWRITE
+  Houdini's own `$HFS/packages/ocio.json` seed, not append onto it. It
+  reads the real seed via a baseline `hconfig` run (skipping with a note
+  on builds that don't seed OCIO), then asserts `set` replaces it wholesale
+  rather than resolving to the two-path `builtin;project` value that
+  crashes `OCIO.Config.CreateFromFile`. The path-registered-append
+  behavior is invisible to the executable model below (it starts from an
+  empty variable set), so only this real-Houdini layer can catch it.
 
 - The Houdini install is auto-discovered: `$HFS` first, then the
   platform-standard locations (`/opt/hfs*`, `/Applications/Houdini/...`,

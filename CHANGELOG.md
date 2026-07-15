@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`method = "set"` now emits a flat string, so it overwrites
+  path-registered variables instead of appending onto them.** Houdini
+  seeds path-registered variables (OCIO, `PYTHONPATH`, `HOUDINI_*_PATH`)
+  flat-first from its own `$HFS/packages/*.json` and then treats them as
+  always-merge-able, so hpm's previous list-form `replace` for `set`
+  *appended* onto the seed (e.g. OCIO became `builtin;project`), which
+  crashed Main Preferences on H22.0.367. A `set` value is now written as
+  a bare string that overwrites the seed cleanly and
+  load-order-independent — which is what `set` promises. `prepend` /
+  `append` still emit single-element lists (they must stay merge-able).
+  A genuinely conditional `set` (`{ when, set }` list) still lowers to
+  list-form `replace`, since Houdini's conditional-object array cannot be
+  a flat string. Verified against real Houdini (H21.0.729 / H22.0.367).
+
 ## [0.28.0] - 2026-07-13
 
 ### Removed (breaking)

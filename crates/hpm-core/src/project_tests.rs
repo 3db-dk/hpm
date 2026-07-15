@@ -172,16 +172,13 @@ fn create_houdini_package_with_project_env_overrides() {
         .find(|m| m.contains_key("MY_CONFIG"))
         .unwrap();
     match my_config_entry.get("MY_CONFIG").unwrap() {
-        hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(
-                method.as_str(),
-                "replace",
-                "hpm's `set` must lower to `replace`"
-            );
-            assert_eq!(value.len(), 1);
-            assert!(value[0].ends_with("/default-config"));
+        // `set` emits a bare flat string: a later flat value overwrites a
+        // path-registered variable (OCIO, PYTHONPATH) rather than being
+        // appended onto Houdini's flat seed.
+        hpm_package::HoudiniEnvValue::Simple(value) => {
+            assert!(value.ends_with("/default-config"));
         }
-        _ => panic!("Expected Detailed env value"),
+        _ => panic!("Expected Simple env value for `set`"),
     }
 
     // With a `set` project override: the package's entry is suppressed —
@@ -208,11 +205,10 @@ fn create_houdini_package_with_project_env_overrides() {
         .unwrap()
         .expect("a valued override must produce an overrides manifest");
     match find_env_entry(&overrides_pkg, "MY_CONFIG").unwrap() {
-        hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method.as_str(), "replace");
-            assert_eq!(value, &vec!["/custom/config/path".to_string()]);
+        hpm_package::HoudiniEnvValue::Simple(value) => {
+            assert_eq!(value, "/custom/config/path");
         }
-        _ => panic!("Expected Detailed env value"),
+        _ => panic!("Expected Simple env value for `set`"),
     }
 }
 
@@ -288,11 +284,10 @@ async fn create_houdini_package_required_env_without_override_errors() {
         .unwrap()
         .expect("a valued override must produce an overrides manifest");
     match find_env_entry(&overrides_pkg, "PROJECT_ROOT").unwrap() {
-        hpm_package::HoudiniEnvValue::Detailed { value, method } => {
-            assert_eq!(value, &vec!["/work/project".to_string()]);
-            assert_eq!(method.as_str(), "replace");
+        hpm_package::HoudiniEnvValue::Simple(value) => {
+            assert_eq!(value, "/work/project");
         }
-        _ => panic!("Expected Detailed env value"),
+        _ => panic!("Expected Simple env value for `set`"),
     }
 }
 
@@ -618,15 +613,12 @@ fn project_set_override_still_replaces_package_value() {
         .unwrap()
         .expect("a valued override must produce an overrides manifest");
     match find_env_entry(&overrides_pkg, "MY_CONFIG").unwrap() {
-        hpm_package::HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(
-                method.as_str(),
-                "replace",
-                "hpm's `set` must lower to `replace`"
-            );
-            assert_eq!(value, &vec!["/custom".to_string()]);
+        // `set` emits a bare flat string so the override overwrites a
+        // path-registered variable cleanly, load-order-independent.
+        hpm_package::HoudiniEnvValue::Simple(value) => {
+            assert_eq!(value, "/custom");
         }
-        other => panic!("expected Detailed env value, got {other:?}"),
+        other => panic!("expected Simple env value for `set`, got {other:?}"),
     }
 }
 

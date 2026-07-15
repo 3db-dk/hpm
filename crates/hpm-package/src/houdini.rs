@@ -82,11 +82,20 @@ impl std::fmt::Display for HoudiniMethod {
 /// - DetailedConditional: method plus an ordered list of `{ "<expr>": "<v>" }`
 ///   maps; every map whose expression matches contributes its value.
 ///
-/// `Detailed` values are always emitted as JSON lists, never flat strings.
-/// Houdini only honors `method` on a custom (non-registered) variable when
-/// the variable's first definition uses a list value; with a flat string
-/// every later entry silently overwrites, regardless of method. hpm's
-/// `set` lowers to [`HoudiniMethod::Replace`] — Houdini has no `set`.
+/// `Detailed` (`prepend` / `append`) values are always emitted as JSON
+/// lists, never flat strings: Houdini only honors `method` on a custom
+/// (non-registered) variable when the variable's first definition uses a
+/// list value; with a flat string every later entry silently overwrites,
+/// regardless of method.
+///
+/// hpm's `set` is the deliberate exception — it emits a bare `Simple`
+/// string (see [`ManifestEnvEntry::lower`][crate::manifest::env]). Houdini
+/// has no `set` method, and a list-form `replace` *appends* onto a
+/// path-registered variable that Houdini seeded flat-first (OCIO,
+/// PYTHONPATH, ...); a flat string overwrites it, which is what `set`
+/// promises. Only a genuinely conditional `set` value falls back to
+/// `Detailed`/`DetailedConditional` with [`HoudiniMethod::Replace`], since
+/// the conditional-object array form cannot be a flat string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum HoudiniEnvValue {
@@ -125,8 +134,9 @@ impl HoudiniEnvValue {
         }
     }
 
-    /// Create a replace environment value (hpm's `set` lowers to this —
-    /// Houdini has no `set` method).
+    /// Create a `replace` environment value. Used for the list form of a
+    /// conditional `set`; flat/unconditional `set` emits [`Self::simple`]
+    /// instead (see [`ManifestEnvEntry::lower`][crate::manifest::env]).
     pub fn replace(value: impl Into<String>) -> Self {
         HoudiniEnvValue::Detailed {
             method: HoudiniMethod::Replace,

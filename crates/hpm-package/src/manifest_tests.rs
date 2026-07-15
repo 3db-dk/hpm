@@ -722,12 +722,13 @@ fn generate_houdini_package_includes_user_env() {
     assert_eq!(env_list.len(), 3);
     let last = &env_list[2];
     let val = last.get("MY_VAR").unwrap();
+    // `set` emits a bare flat string so it overwrites a path-registered
+    // variable rather than appending onto Houdini's flat seed.
     match val {
-        HoudiniEnvValue::Detailed { method, value } => {
-            assert_eq!(method.as_str(), "replace");
-            assert_eq!(value, &vec!["$HPM_PACKAGE_ROOT/data".to_string()]);
+        HoudiniEnvValue::Simple(value) => {
+            assert_eq!(value, "$HPM_PACKAGE_ROOT/data");
         }
-        _ => panic!("Expected Detailed variant"),
+        _ => panic!("Expected Simple variant for `set`"),
     }
 }
 
@@ -1319,12 +1320,13 @@ fn generate_houdini_native_package_env_root_replacement() {
 
     let (_, pkg) = manifest.generate_houdini_native_package().unwrap();
 
-    // PATH_A
+    // PATH_A — `set` emits a flat string, with $HPM_PACKAGE_ROOT still
+    // substituted.
     match pkg.env[1].get("PATH_A").unwrap() {
-        crate::houdini::HoudiniEnvValue::Detailed { value, .. } => {
-            assert_eq!(value, &vec!["$HOUDINI_PACKAGE_PATH/test-pkg/a".to_string()]);
+        crate::houdini::HoudiniEnvValue::Simple(value) => {
+            assert_eq!(value, "$HOUDINI_PACKAGE_PATH/test-pkg/a");
         }
-        _ => panic!("Expected Detailed"),
+        _ => panic!("Expected Simple for `set`"),
     }
     // PATH_B with multiple replacements
     match pkg.env[2].get("PATH_B").unwrap() {
@@ -1418,6 +1420,134 @@ value = [
             assert_eq!(second[key2], "/abs/pkg/h22/r");
         }
         _ => panic!("expected DetailedConditional"),
+    }
+}
+
+#[test]
+fn env_flat_set_lowers_to_flat_string() {
+    // Regression for the OCIO crash on H22.0.367: `set` must emit a bare
+    // flat string, not `{ method: replace, value: [...] }`. Houdini seeds
+    // a path-registered variable (OCIO, PYTHONPATH) flat-first and treats
+    // it as always-mergeable, so a list-form `replace` appends onto the
+    // seed (`builtin;project`) instead of replacing it. A flat string
+    // overwrites it cleanly.
+    let toml_str = r#"
+[package]
+path = "studio/ocio"
+name = "OCIO"
+version = "0.1.0"
+
+[runtime.OCIO]
+method = "set"
+value = "$HPM_PACKAGE_ROOT/config.ocio"
+"#;
+    let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+    let entry = manifest.runtime.get("OCIO").unwrap();
+    let lowered = entry
+        .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false)
+        .unwrap()
+        .unwrap();
+    match lowered {
+        HoudiniEnvValue::Simple(value) => assert_eq!(value, "/abs/pkg/config.ocio"),
+        other => panic!("expected Simple (flat string) for `set`, got {other:?}"),
+    }
+}
+
+#[test]
+fn env_flat_append_prepend_stay_list_form() {
+    // Only `set` goes flat; `append` / `prepend` must remain
+    // single-element lists so Houdini honors their method on a custom var.
+    for (method, want) in [("append", "append"), ("prepend", "prepend")] {
+        let toml_str = format!(
+            r#"
+[package]
+path = "studio/p"
+name = "P"
+version = "0.1.0"
+
+[runtime.MY_LIST]
+method = "{method}"
+value = "$HPM_PACKAGE_ROOT/x"
+"#
+        );
+        let manifest: PackageManifest = toml::from_str(&toml_str).unwrap();
+        let entry = manifest.runtime.get("MY_LIST").unwrap();
+        let lowered = entry
+            .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false)
+            .unwrap()
+            .unwrap();
+        match lowered {
+            HoudiniEnvValue::Detailed { method, value } => {
+                assert_eq!(method.as_str(), want);
+                assert_eq!(value, vec!["/abs/pkg/x".to_string()]);
+            }
+            other => panic!("expected Detailed list for `{method}`, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn env_conditional_set_collapsing_to_unconditional_is_flat() {
+    // A conditional `set` whose first surviving branch is unconditional
+    // is effectively flat in this context, so it emits a flat string too —
+    // same overwrite semantics as a plain flat `set`.
+    let toml_str = r#"
+[package]
+path = "studio/c"
+name = "C"
+version = "0.1.0"
+
+[runtime.OCIO]
+method = "set"
+value = [
+  { set = "$HPM_PACKAGE_ROOT/always.ocio" },
+  { when = { os = "linux" }, set = "$HPM_PACKAGE_ROOT/linux.ocio" },
+]
+"#;
+    let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+    let entry = manifest.runtime.get("OCIO").unwrap();
+    let lowered = entry
+        .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false)
+        .unwrap()
+        .unwrap();
+    match lowered {
+        HoudiniEnvValue::Simple(value) => assert_eq!(value, "/abs/pkg/always.ocio"),
+        other => panic!("expected Simple for unconditional-collapsed `set`, got {other:?}"),
+    }
+}
+
+#[test]
+fn env_conditional_set_with_branches_stays_list_replace() {
+    // A genuinely conditional `set` (multiple gated branches) can't be a
+    // flat string — Houdini's conditional-object array requires the
+    // `{ method, value: [...] }` shape — so it falls back to `replace`.
+    // This is the documented narrow gap: such a value does NOT get the
+    // path-registered-var overwrite fix.
+    let toml_str = r#"
+[package]
+path = "studio/c"
+name = "C"
+version = "0.1.0"
+
+[runtime.OCIO]
+method = "set"
+value = [
+  { when = { houdini = "^21" }, set = "$HPM_PACKAGE_ROOT/h21.ocio" },
+  { when = { houdini = "^22" }, set = "$HPM_PACKAGE_ROOT/h22.ocio" },
+]
+"#;
+    let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+    let entry = manifest.runtime.get("OCIO").unwrap();
+    let lowered = entry
+        .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false)
+        .unwrap()
+        .unwrap();
+    match lowered {
+        HoudiniEnvValue::DetailedConditional { method, value } => {
+            assert_eq!(method.as_str(), "replace");
+            assert_eq!(value.len(), 2);
+        }
+        other => panic!("expected DetailedConditional replace, got {other:?}"),
     }
 }
 

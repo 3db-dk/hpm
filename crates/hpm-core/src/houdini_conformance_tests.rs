@@ -355,3 +355,111 @@ fn houdini_resolves_generated_packages_per_method() {
         "a stray variable named 'true' was defined:\n{log}"
     );
 }
+
+/// Regression for the OCIO crash on H22.0.367: `method = "set"` on a
+/// path-registered variable must OVERWRITE Houdini's own seed, not append
+/// onto it.
+///
+/// Houdini seeds path-registered variables (OCIO, PYTHONPATH,
+/// `HOUDINI_*_PATH`) from its own `$HFS/packages/*.json` — for OCIO, via
+/// `"${OCIO-$HFS/...}"` — and then treats them as always-merge-able. hpm's
+/// pre-fix list-form `replace` for `set` therefore *appended* onto that
+/// seed, so OCIO resolved to `builtin;project` and
+/// `OCIO.Config.CreateFromFile` failed to read the two-path value — the
+/// reported Main Preferences crash. hpm now emits `set` as a bare flat
+/// string, which overwrites the seed.
+///
+/// This drives the real reproduction rather than a fabricated seed:
+/// `$HFS/packages` always loads *in addition to* `HOUDINI_PACKAGE_DIR`,
+/// and the project's `~hpm-project-overrides.json` is processed after it
+/// (the `builtin;project` order the report observed). A baseline run first
+/// confirms the running Houdini actually seeds OCIO; builds that don't
+/// (nothing to overwrite) skip the discriminating assertions with a note,
+/// since OCIO seeding is a Houdini-version capability, not a missing
+/// install.
+#[test]
+fn houdini_set_overwrites_path_registered_ocio_seed() {
+    let Some(hfs) = find_hfs() else {
+        assert!(
+            std::env::var("HPM_REQUIRE_HOUDINI").is_err(),
+            "HPM_REQUIRE_HOUDINI is set but no Houdini installation was found"
+        );
+        eprintln!(
+            "SKIPPED houdini OCIO conformance test: no Houdini installation \
+             found (set HFS to enable it)"
+        );
+        return;
+    };
+
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let pm = ProjectManager::new(project_root, storage_manager, config).unwrap();
+    std::fs::create_dir_all(&pm.project_paths.packages_dir).unwrap();
+
+    // Resolve OCIO through hconfig against the current packages-dir
+    // contents. `$HFS/packages/ocio.json` loads additively, so its seed is
+    // always in play; our project override (if any) merges after it.
+    let resolve_ocio = || -> Option<Vec<String>> {
+        let output = std::process::Command::new(hconfig_path(&hfs))
+            .env("HFS", &hfs)
+            .env("HOUDINI_PACKAGE_DIR", &pm.project_paths.packages_dir)
+            .env("HOUDINI_PACKAGE_VERBOSE", "1")
+            .output()
+            .expect("failed to spawn hconfig");
+        let log = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            log.contains("Resolved variables:"),
+            "hconfig produced no package log; output:\n{log}"
+        );
+        assert!(
+            !log.contains("Unsupported method value"),
+            "Houdini rejected an emitted method:\n{log}"
+        );
+        parse_resolved_vars(&log).get("OCIO").cloned()
+    };
+
+    // Baseline: no project OCIO entry — OCIO is whatever Houdini seeds.
+    pm.write_project_overrides_manifest(&IndexMap::new())
+        .unwrap();
+    let Some(seed) = resolve_ocio().filter(|elements| !elements.is_empty()) else {
+        eprintln!(
+            "SKIPPED OCIO overwrite assertion: this Houdini does not seed OCIO, \
+             so there is nothing for `set` to overwrite"
+        );
+        return;
+    };
+
+    // The reported scenario: the project sets OCIO via `set`. A
+    // separator-free marker sidesteps any platform path normalization —
+    // the test only cares that the seed is gone, not what replaces it.
+    let project_ocio = "hpm-conformance-ocio-marker";
+    let mut overrides = IndexMap::new();
+    overrides.insert(
+        "OCIO".to_string(),
+        runtime_entry(EnvMethod::Set, project_ocio),
+    );
+    pm.write_project_overrides_manifest(&overrides).unwrap();
+
+    let resolved = resolve_ocio().expect("OCIO missing after a `set` override");
+
+    // `set` overwrites: OCIO is exactly the project's value, with none of
+    // the builtin seed surviving. The pre-fix list-form `replace` would
+    // append the seed (`builtin;project`) — the H22.0.367 crash.
+    assert_eq!(
+        resolved,
+        vec![project_ocio.to_string()],
+        "`set` did not overwrite the OCIO seed {seed:?}; resolved OCIO: {resolved:?}"
+    );
+    for seed_element in &seed {
+        assert!(
+            !resolved.iter().any(|e| e.contains(seed_element.as_str())),
+            "OCIO still carries the builtin seed element {seed_element:?}: {resolved:?}"
+        );
+    }
+}

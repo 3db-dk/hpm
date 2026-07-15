@@ -273,8 +273,8 @@ impl ProjectManager {
         //
         // * no override — emit the package's own entry.
         // * `set` override — the package's entry is suppressed; the
-        //   overrides manifest carries a `replace` entry that would win
-        //   anyway, since it processes last.
+        //   overrides manifest carries the value (a flat string for a
+        //   plain `set`) that would win anyway, since it processes last.
         // * `append` / `prepend` override — the package's entry is
         //   emitted; the overrides manifest merges the project value in
         //   after all package contributions.
@@ -334,7 +334,8 @@ impl ProjectManager {
                     }
                     // `set` replaces the package's contribution wholesale:
                     // suppress the package entry; the overrides manifest
-                    // carries the project value.
+                    // carries the project value (emitted flat, so it
+                    // overwrites even a path-registered variable).
                     Some(over) if over.method == EnvMethod::Set => {
                         if over.value.is_none() {
                             return Err(ProjectError::MissingRequiredEnv {

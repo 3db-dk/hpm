@@ -529,11 +529,15 @@ published consumer.
 
 Emission targets Houdini's *actual* env semantics, as verified with the
 hconfig conformance harness (`hpm-core/src/houdini_conformance_tests.rs`)
-and modeled executably in `hpm-core/src/houdini_env_model.rs`: values are
-single-element JSON lists (a flat-string first definition makes a custom
-variable non-mergeable — every later entry overwrites it, whatever its
-`method`), `set` lowers to Houdini's `replace` (there is no `set`
-method), and conditional branches are compiled mutually exclusive because
+and modeled executably in `hpm-core/src/houdini_env_model.rs`: `prepend` /
+`append` values are single-element JSON lists (a flat-string first
+definition makes a custom variable non-mergeable — every later entry
+overwrites it, whatever its `method`), `set` is emitted as a bare flat
+string (Houdini has no `set` method; a list-form `replace` *appends* onto
+a path-registered variable Houdini seeded flat-first, e.g. OCIO, so only a
+flat string overwrites it cleanly — a genuinely conditional `set` still
+falls back to `replace` since it can't be flat), and conditional branches
+are compiled mutually exclusive because
 Houdini applies every matching conditional-array element, not the first
 match. Project-level `[runtime]` entries are written once to
 `~hpm-project-overrides.json` in the project packages dir; Houdini

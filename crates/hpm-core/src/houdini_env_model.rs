@@ -6,8 +6,16 @@
 //!   filename order; `env` entries within a file in array order.
 //! - A variable whose FIRST definition uses a flat string value is
 //!   non-mergeable: every later entry overwrites it wholesale, whatever
-//!   its `method` says (`WARNING: var X overwritten with ...`). This is
-//!   the failure mode behind hpm's pre-0.28 flat-string emission.
+//!   its `method` says (`WARNING: var X overwritten with ...`). Emitting
+//!   *every* value flat (hpm pre-0.28) was the failure mode — it silently
+//!   dropped `append` / `prepend` contributions. hpm now emits those
+//!   list-valued, and reserves flat strings for `set`, where overwrite is
+//!   the whole point: a path-registered variable Houdini seeds flat-first
+//!   (OCIO, PYTHONPATH, ...) treats a list-form `replace` as an *append*
+//!   onto the seed, so only a flat string overwrites it cleanly. This
+//!   model starts from an empty variable set and so does not reproduce
+//!   Houdini's own path-registered seeds — that path-var overwrite is
+//!   covered by the external hconfig harness, not here.
 //! - A variable whose first definition uses a JSON list value is
 //!   mergeable: `append` pushes elements at the end, `prepend` inserts
 //!   each element at the front in element order (so a multi-element block

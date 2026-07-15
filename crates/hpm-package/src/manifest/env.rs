@@ -26,10 +26,15 @@ impl EnvMethod {
         }
     }
 
-    /// Method emitted into Houdini's package.json. Houdini accepts only
-    /// `prepend` / `append` / `replace` — there is no `set` (it warns
-    /// `Unsupported method value: set`), so hpm's `set` lowers to
-    /// [`HoudiniMethod::Replace`]. Verified against Houdini 21.0.688.
+    /// Method emitted into Houdini's package.json for the *list* value
+    /// forms. Houdini accepts only `prepend` / `append` / `replace` — there
+    /// is no `set` (it warns `Unsupported method value: set`), so when `set`
+    /// does reach a list form (a genuinely conditional value) it maps to
+    /// [`HoudiniMethod::Replace`]. Note that flat/unconditional `set` never
+    /// reaches this method at all: [`ManifestEnvEntry::lower`] emits it as a
+    /// bare [`HoudiniEnvValue::Simple`] string so a path-registered variable
+    /// (OCIO, PYTHONPATH, ...) is overwritten rather than appended-onto.
+    /// Verified against Houdini 21.0.688.
     pub fn houdini_method(&self) -> HoudiniMethod {
         match self {
             EnvMethod::Set => HoudiniMethod::Replace,
@@ -108,33 +113,60 @@ impl ManifestEnvEntry {
             return Ok(None);
         };
         let method = self.method.houdini_method();
+        // `set` promises "this is THE value", which for a path-registered
+        // variable (OCIO, PYTHONPATH, HOUDINI_*_PATH — anything Houdini
+        // treats as a merge-able path list) only a flat string delivers.
+        // Houdini seeds those variables flat-first from its own
+        // `$HFS/packages/*.json`, then treats them as always-mergeable, so
+        // a list-form `replace` *appends* onto the seed
+        // (`builtin;project`) instead of replacing it — the OCIO crash on
+        // H22.0.367. A later flat string overwrites the seed cleanly,
+        // load-order-independent, which is exactly what `set` means.
+        // Verified against real Houdini (H21.0.729 / H22.0.367).
+        //
+        // `prepend` / `append` still emit single-element lists: those
+        // methods only merge when the variable's first definition is a
+        // list, and for a *custom* var a flat first definition would make
+        // it non-mergeable so every later entry silently overwrites it.
+        // The trade-off is deliberate — see [`EnvMethod::houdini_method`].
+        let is_set = self.method == EnvMethod::Set;
         let lowered = match value {
             EnvValue::Flat(s) => {
                 let mut out = s.clone();
                 for (from, to) in substitutions {
                     out = out.replace(from, to);
                 }
-                // Emitted as a single-element list, never a flat string:
-                // Houdini only honors `method` on a custom variable when
-                // its first definition uses a JSON list value. A flat
-                // string marks the variable non-mergeable and every later
-                // entry silently overwrites it, whatever its method says.
-                HoudiniEnvValue::Detailed {
-                    method,
-                    value: vec![out],
+                if is_set {
+                    HoudiniEnvValue::Simple(out)
+                } else {
+                    HoudiniEnvValue::Detailed {
+                        method,
+                        value: vec![out],
+                    }
                 }
             }
             EnvValue::Conditional(variants) => {
                 match lower_conditional(variants, substitutions, is_dev)? {
                     // First surviving branch is unconditional — the value
-                    // is effectively flat in this install context. Emitted
-                    // like a flat value (single-element list); Houdini has
-                    // no always-true expression to put in a conditional
-                    // array.
+                    // is effectively flat in this install context, so it
+                    // follows the flat-value rules above: `set` emits a
+                    // bare string, other methods a single-element list.
+                    LoweredConditional::Unconditional(value) if is_set => {
+                        HoudiniEnvValue::Simple(value)
+                    }
                     LoweredConditional::Unconditional(value) => HoudiniEnvValue::Detailed {
                         method,
                         value: vec![value],
                     },
+                    // Genuinely conditional `set` (a `{ when, set }` list
+                    // with more than the fallback surviving) can't collapse
+                    // to a flat string — Houdini's conditional-object array
+                    // form requires the `{ method, value: [...] }` shape.
+                    // So conditional `set` stays list-form `replace` and
+                    // does NOT get the path-registered-var overwrite fix; a
+                    // version/OS-gated OCIO would still append onto the
+                    // seed. Left as a known, narrow gap: gate the *package*
+                    // on the condition instead, or set OCIO flat.
                     LoweredConditional::Branches(branches) => {
                         if branches.is_empty() {
                             // Every branch filtered out by install_source —
