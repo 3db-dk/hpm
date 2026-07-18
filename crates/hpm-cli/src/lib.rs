@@ -264,6 +264,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: RegistryAction,
     },
+    /// Install packages into Houdini's user preferences, outside any project
+    Global {
+        #[command(subcommand)]
+        action: GlobalAction,
+    },
     /// Generate shell completions
     Completions {
         /// Target shell (bash, zsh, fish, powershell, elvish)
@@ -298,6 +303,46 @@ pub enum RegistryAction {
     },
     /// Update (refresh) all registry caches
     Update,
+}
+
+/// `hpm global` — installs that load in every Houdini session of one
+/// version, rather than only in a project.
+///
+/// `--houdini <X.Y>` is required rather than detected: hpm has no Houdini
+/// installation discovery, and the preferences directory is per-version, so
+/// guessing would silently write where the user's Houdini never looks.
+#[derive(Subcommand)]
+pub enum GlobalAction {
+    /// Install a package into Houdini's user preferences
+    Add {
+        /// Package to install, as `creator/slug` or `creator/slug@version`
+        #[arg(value_name = "PACKAGE")]
+        package: String,
+
+        /// Houdini version to install for, e.g. `21.0`
+        #[arg(long, value_name = "X.Y")]
+        houdini: String,
+
+        /// Resolve from this configured registry only
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// List packages installed into Houdini's user preferences
+    List {
+        /// Houdini version to list, e.g. `21.0`
+        #[arg(long, value_name = "X.Y")]
+        houdini: String,
+    },
+    /// Remove a package from Houdini's user preferences
+    Remove {
+        /// Package to remove, as `creator/slug`
+        #[arg(value_name = "PACKAGE")]
+        package: String,
+
+        /// Houdini version to remove from, e.g. `21.0`
+        #[arg(long, value_name = "X.Y")]
+        houdini: String,
+    },
 }
 
 /// Entry point usable by both the `hpm` binary and any external runner.
@@ -591,6 +636,37 @@ async fn run_command(
                                 ),
                             )
                         })?;
+                }
+            }
+        }
+        Commands::Global { action } => {
+            require_human("global", output)?;
+            let config = load_cli_config()?;
+            match action {
+                GlobalAction::Add {
+                    package,
+                    houdini,
+                    registry,
+                } => {
+                    commands::global::add_package(
+                        &config,
+                        &package,
+                        &houdini,
+                        registry.as_deref(),
+                        console,
+                    )
+                    .await
+                    .cli_package("global add")?;
+                }
+                GlobalAction::List { houdini } => {
+                    commands::global::list_packages(&config, &houdini, console)
+                        .await
+                        .cli_package("global list")?;
+                }
+                GlobalAction::Remove { package, houdini } => {
+                    commands::global::remove_package(&config, &package, &houdini, console)
+                        .await
+                        .cli_package("global remove")?;
                 }
             }
         }

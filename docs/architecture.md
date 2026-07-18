@@ -28,7 +28,8 @@ depend on the library crates and skip the CLI entirely).
 ┌────────────────────────────────────────────────────────────────────────┐
 │ CLI (hpm-cli)                                                          │
 │   • subcommands: init, add, remove, install, update, list, search,     │
-│     run, check, build, pack, audit, clean, registry, completions       │
+│     run, check, build, pack, audit, clean, registry, global,          │
+│     completions                                                        │
 │   • output formats: human, json, json-lines, json-compact              │
 │   • shell completions: bash, zsh, fish, powershell, elvish             │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -444,6 +445,40 @@ longer asks for it. Manifests written by an older hpm under the bare
 them on the next install — otherwise the package would load twice, once per
 filename. Note this makes `<project>/.hpm/packages/` an hpm-owned directory:
 unrecognized `.json` files placed there by hand do not survive a sync.
+
+### Global installs
+
+`hpm global` writes the same Houdini manifest into Houdini's per-user
+preferences directory (`hpm_core::houdini_prefs` resolves it per platform,
+honouring `HOUDINI_USER_PREF_DIR` and its `__HVER__` placeholder) instead of
+into a project. It reuses the whole install path — the same `RegistrySet`,
+the same CAS, the same shared venvs, and the same manifest builder
+(`build_houdini_package`, a free function precisely so both callers produce
+byte-identical output).
+
+The one structural difference is directory ownership, and it inverts the
+sweep described above. `<project>/.hpm/packages/` belongs to hpm, so the
+project installer may delete anything it does not recognise there. Houdini's
+user `packages/` directory belongs to the user: it holds files written by
+SideFX, by other tools, and by hand. Applying the sweep there would delete
+them. So global installs are tracked in a ledger at
+`~/.hpm/global/houdini-<X.Y>.json`, and every operation is driven off it —
+`list` reads it, `remove` deletes exactly the filename it records, and
+nothing ever scans the directory to decide what to delete.
+
+The ledger is also a **GC root**. `find_orphaned_packages` marks reachability
+from discovered projects, and a globally installed package belongs to no
+project; without its ledger entry it is unreferenced by construction, so
+cleanup would delete the store directory while the manifest in Houdini's
+preferences kept pointing at it. An unreadable ledger aborts cleanup rather
+than being treated as empty — "no global installs" and "cannot tell" must not
+look the same to a collector.
+
+Compatibility is checked before anything is written. The emitted `enable`
+expression is evaluated by Houdini at startup, so a package whose
+`[compat].houdini` excludes the target version would install successfully and
+then load nothing, silently. `check_compatible` turns that into an install-
+time error.
 
 Path dependencies install into `~/.hpm/packages/_dev/<slug>@<version>/`
 rather than the registry CAS at `~/.hpm/packages/<slug>@<version>/`.

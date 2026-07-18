@@ -333,3 +333,169 @@ async fn cleanup_handles_corrupted_packages() {
     // Just verify it doesn't panic - the actual behavior (error or skip) is implementation-dependent
     let _ = result;
 }
+
+/// Regression: `hpm clean` must not delete a globally installed package.
+///
+/// The mark-and-sweep roots the reachable set at *discovered projects*. A
+/// package installed with `hpm global` belongs to no project, so without the
+/// ledger contributing roots it is unreferenced by construction — cleanup
+/// deletes its store directory while its manifest stays in Houdini's
+/// packages directory, and Houdini then silently loads nothing.
+#[tokio::test]
+async fn global_installs_are_gc_roots() {
+    use hpm_core::global::ledger::{GlobalEntry, Ledger};
+    use hpm_core::houdini_prefs::HoudiniVersion;
+
+    let temp_dir = TempDir::new().unwrap();
+    let storage_root = temp_dir.path().join("hpm_storage");
+    let projects_root = temp_dir.path().join("projects");
+
+    let storage_config = StorageConfig {
+        home_dir: storage_root.clone(),
+        cache_dir: storage_root.join("cache"),
+        packages_dir: storage_root.join("packages"),
+        registry_cache_dir: storage_root.join("registry"),
+    };
+    let storage_manager = StorageManager::new(storage_config).unwrap();
+
+    let packages_dir = &storage_manager.config.packages_dir;
+    std::fs::create_dir_all(packages_dir).unwrap();
+
+    let write_pkg = |slug: &str| {
+        let dir = packages_dir.join(format!("{slug}@1.0.0"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("hpm.toml"),
+            format!(
+                "[package]\npath = \"studio/{slug}\"\nname = \"{slug}\"\nversion = \"1.0.0\"\n"
+            ),
+        )
+        .unwrap();
+        dir
+    };
+
+    // `project-dep` is referenced by a project, `global-tool` only by the
+    // global ledger, `truly-orphaned` by nothing at all.
+    write_pkg("project-dep");
+    let global_dir = write_pkg("global-tool");
+    write_pkg("truly-orphaned");
+
+    // A project is required: cleanup refuses to run when it discovers none.
+    let mut projects_config = ProjectsConfig::default();
+    projects_config.add_search_root(projects_root.clone());
+    let project_dir = projects_root.join("test-project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join("hpm.toml"),
+        r#"
+[package]
+path = "studio/test-project"
+name = "Test Project"
+version = "1.0.0"
+
+[dependencies]
+project-dep = { url = "https://example.com/p.zip", version = "1.0.0" }
+"#,
+    )
+    .unwrap();
+
+    // Record the global install exactly as `hpm global add` would.
+    let mut ledger = Ledger::default();
+    ledger.insert(
+        &hpm_package::PackagePath::new("studio/global-tool").unwrap(),
+        GlobalEntry {
+            version: "1.0.0".to_string(),
+            registry: None,
+            manifest_file: "hpm-studio.global-tool.json".to_string(),
+            install_path: global_dir.clone(),
+        },
+    );
+    ledger
+        .save(&Ledger::path_for(
+            &storage_root,
+            HoudiniVersion::parse("21.0").unwrap(),
+        ))
+        .unwrap();
+
+    let would_remove = storage_manager
+        .cleanup_unused_dry_run(&projects_config)
+        .await
+        .unwrap();
+
+    assert!(
+        !would_remove.contains(&"global-tool@1.0.0".to_string()),
+        "globally installed package must not be collected, got {would_remove:?}"
+    );
+    assert!(
+        would_remove.contains(&"truly-orphaned@1.0.0".to_string()),
+        "a genuinely unreferenced package must still be collected, got {would_remove:?}"
+    );
+
+    storage_manager
+        .cleanup_unused(&projects_config)
+        .await
+        .unwrap();
+
+    assert!(
+        storage_manager.package_exists("global-tool", "1.0.0"),
+        "global install's store directory must survive cleanup"
+    );
+    assert!(!storage_manager.package_exists("truly-orphaned", "1.0.0"));
+}
+
+/// A ledger that cannot be parsed must abort cleanup, not read as "nothing
+/// is installed globally" — that answer deletes every global install.
+#[tokio::test]
+async fn unreadable_global_ledger_aborts_cleanup() {
+    let temp_dir = TempDir::new().unwrap();
+    let storage_root = temp_dir.path().join("hpm_storage");
+    let projects_root = temp_dir.path().join("projects");
+
+    let storage_config = StorageConfig {
+        home_dir: storage_root.clone(),
+        cache_dir: storage_root.join("cache"),
+        packages_dir: storage_root.join("packages"),
+        registry_cache_dir: storage_root.join("registry"),
+    };
+    let storage_manager = StorageManager::new(storage_config).unwrap();
+
+    let packages_dir = &storage_manager.config.packages_dir;
+    std::fs::create_dir_all(packages_dir).unwrap();
+    let pkg = packages_dir.join("some-tool@1.0.0");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(
+        pkg.join("hpm.toml"),
+        "[package]\npath = \"studio/some-tool\"\nname = \"t\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+
+    let mut projects_config = ProjectsConfig::default();
+    projects_config.add_search_root(projects_root.clone());
+    let project_dir = projects_root.join("p");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join("hpm.toml"),
+        "[package]\npath = \"studio/p\"\nname = \"p\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(storage_root.join("global")).unwrap();
+    std::fs::write(
+        storage_root.join("global").join("houdini-21.0.json"),
+        b"{ truncated",
+    )
+    .unwrap();
+
+    let result = storage_manager
+        .cleanup_unused_dry_run(&projects_config)
+        .await;
+
+    assert!(
+        result.is_err(),
+        "cleanup must refuse to run when it cannot read its global roots"
+    );
+    assert!(
+        storage_manager.package_exists("some-tool", "1.0.0"),
+        "nothing may be removed when the roots are unknown"
+    );
+}

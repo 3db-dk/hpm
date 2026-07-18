@@ -61,6 +61,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`hpm global add|list|remove`** — install a package into Houdini's user
+  preferences directory so it loads in every session of one Houdini version,
+  with no project and no launcher wiring. Resolution goes through the
+  configured registries exactly like `hpm add`, including `--registry` pins,
+  and the emitted manifest is byte-identical to what a project install
+  produces.
+
+  `--houdini <X.Y>` is required rather than detected: hpm has no Houdini
+  installation discovery, and the preferences directory is per-version, so a
+  guess could write where Houdini never looks. `HOUDINI_USER_PREF_DIR` is
+  honoured when set, with `__HVER__` expanded as Houdini expands it.
+
+  Houdini's user `packages/` directory is not hpm's — it holds files from
+  SideFX, other tools, and the user. So unlike a project install, which owns
+  its output directory and sweeps unrecognized files from it, `hpm global`
+  never scans that directory to decide what to delete. Installs are recorded
+  in a ledger at `~/.hpm/global/houdini-<X.Y>.json`, and removal deletes only
+  the exact file the ledger records writing.
+
+  The ledger is also a `hpm clean` GC root. A globally installed package
+  belongs to no project, so the project-rooted mark-and-sweep would otherwise
+  classify it as unreferenced and delete its store directory while the
+  manifest kept pointing at it. An unreadable ledger aborts `hpm clean`
+  rather than being read as "nothing is installed globally".
+
+  A package whose `[compat].houdini` excludes the target version is rejected
+  before anything is written; installing it would emit a manifest whose
+  `enable` expression is false, which Houdini ignores silently.
+
+  Scope of this first cut: public packages only (the standalone CLI has
+  nowhere to store credentials, so it resolves anonymously), and no
+  `hpm global update` — with no manifest to rewrite, updating is
+  `hpm global add` at the new version, which replaces the entry in place.
+
 - **`hpm add --registry <name>`.** Resolves from a single configured
   registry and records the pin in `hpm.toml`. Previously `hpm add` always
   wrote `registry = None`, so a pin could only be created by editing the

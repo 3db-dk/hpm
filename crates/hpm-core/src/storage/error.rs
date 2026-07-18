@@ -28,6 +28,12 @@ pub enum StorageError {
     PythonCleanup(String),
 
     #[error(
+        "{message}. Refusing to clean up — without the global ledger, \
+         globally installed packages would look unreferenced and be deleted."
+    )]
+    GlobalLedger { message: String },
+
+    #[error(
         "Package {name}@{version} is in use by another process; close any \
          running Houdini that depends on it and try again ({source})"
     )]

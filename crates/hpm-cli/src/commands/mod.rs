@@ -3,6 +3,7 @@ pub mod audit;
 pub mod build;
 pub mod check;
 pub mod clean;
+pub mod global;
 pub mod init;
 pub mod install;
 pub mod list;

@@ -217,6 +217,23 @@ impl ProjectManager {
         venv_site_packages: Option<&Path>,
         project_env_overrides: &IndexMap<String, ManifestEnvEntry>,
     ) -> Result<HoudiniPackage, ProjectError> {
+        build_houdini_package(installed_package, venv_site_packages, project_env_overrides)
+    }
+}
+
+/// Build the Houdini package description hpm emits for an installed package.
+///
+/// A free function rather than a method: it reads nothing from the project —
+/// only the installed package, the venv path, and the overrides map — and
+/// `hpm global` needs the identical output for a package that has no project
+/// at all. Keeping one implementation is what guarantees a globally
+/// installed package is wired up exactly like a project-installed one.
+pub fn build_houdini_package(
+    installed_package: &InstalledPackage,
+    venv_site_packages: Option<&Path>,
+    project_env_overrides: &IndexMap<String, ManifestEnvEntry>,
+) -> Result<HoudiniPackage, ProjectError> {
+    {
         let package_path = &installed_package.install_path;
 
         // Point hpath at the package root so Houdini auto-discovers convention
@@ -382,7 +399,9 @@ impl ProjectManager {
             recommends: None,
         })
     }
+}
 
+impl ProjectManager {
     pub fn generate_houdini_manifests(&self) -> Result<(), ProjectError> {
         info!("Regenerating all Houdini manifests");
 

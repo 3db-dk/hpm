@@ -535,10 +535,77 @@ Audit checks:
 
 See [Security](security.md) for more.
 
+### `hpm global`
+
+Install a package into Houdini's user preferences, so it loads in every
+session of one Houdini version without a project or launcher wiring.
+
+```
+hpm global add    <PACKAGE> --houdini <X.Y> [--registry <name>]
+hpm global list             --houdini <X.Y>
+hpm global remove <PACKAGE> --houdini <X.Y>
+```
+
+`<PACKAGE>` is `creator/slug` or `creator/slug@version`; a bare name resolves
+to the highest non-yanked version. Resolution goes through the configured
+registries exactly like `hpm add`, including the `--registry` pin.
+
+`--houdini <X.Y>` is required and is not guessed. hpm does not discover
+Houdini installations, and the preferences directory is per-version, so a
+default would risk writing where your Houdini never looks. A full build
+string is accepted (`21.0.729`) and truncated to its `major.minor` line.
+
+The manifest is written as `hpm-<creator>.<slug>.json` into:
+
+| Platform | Directory |
+|----------|-----------|
+| Linux | `~/houdiniX.Y/packages/` |
+| macOS | `~/Library/Preferences/houdini/X.Y/packages/` |
+| Windows | `%USERPROFILE%\Documents\houdiniX.Y\packages\` |
+
+`HOUDINI_USER_PREF_DIR` takes precedence when set, with `__HVER__` expanded
+to `X.Y`, matching Houdini's own behaviour.
+
+**That directory is not hpm's.** It holds files from SideFX, other tools, and
+you. Unlike a project install — which owns `<project>/.hpm/packages/` and
+sweeps anything unrecognized out of it — `hpm global` never scans that
+directory to decide what to delete. Every removal is driven off the ledger at
+`~/.hpm/global/houdini-<X.Y>.json` and touches only files hpm recorded
+writing. Files you put there by hand are left alone.
+
+A package whose `[compat].houdini` does not include the target version is
+rejected before anything is written. Installing it anyway would emit a
+manifest whose `enable` expression is false, and Houdini would ignore it in
+silence.
+
+`hpm global remove` deletes the manifest but leaves the package in the store,
+matching `hpm remove`. Run `hpm clean` to reclaim the space.
+
+There is no `hpm global update` yet: with no manifest to rewrite, updating is
+`hpm global add` at the new version, which replaces the entry in place.
+
+**Examples**
+
+```sh
+hpm global add studio/utility-nodes --houdini 21.0
+hpm global add studio/utility-nodes@1.2.0 --houdini 21.0 --registry studio
+hpm global list --houdini 21.0
+hpm global remove studio/utility-nodes --houdini 21.0
+```
+
+Only public packages resolve today: the standalone CLI has nowhere to store
+credentials, so it always resolves anonymously. A private package fails as
+"not found".
+
 ### `hpm clean`
 
 Remove orphaned packages, dev (path-dep) installs, and/or venvs that no
 active project depends on.
+
+Globally installed packages are roots here too — they belong to no project,
+so without the global ledger they would look unreferenced and be deleted out
+from under a manifest Houdini still loads. If a ledger cannot be read,
+`hpm clean` refuses to run rather than risk that.
 
 ```
 hpm clean [OPTIONS]
@@ -1330,6 +1397,8 @@ HPM stores everything under `~/.hpm/` on every supported platform. Use
 │       ├── pyvenv.cfg
 │       ├── lib/python3.11/site-packages/   # Lib\site-packages on Windows
 │       └── metadata.json
+├── global/                          # `hpm global` ledgers, one per Houdini version
+│   └── houdini-21.0.json            # what hpm installed into Houdini's user prefs
 ├── cache/                           # download cache
 ├── registry/                        # registry index caches (one dir per registry)
 ├── tools/                           # bundled uv binary
@@ -1348,8 +1417,8 @@ Per-project layout:
 ├── .hpm/
 │   ├── config.toml                  # project-level overrides (optional)
 │   └── packages/                    # Houdini manifests, one per dependency
-│       ├── utility-nodes.json
-│       └── material-library.json
+│       ├── studio.utility-nodes.json
+│       └── studio.material-library.json
 └── (your package sources)
 ```
 
@@ -1392,6 +1461,22 @@ HOUDINI_PACKAGE_PATH="$PWD/.hpm/packages:$HOUDINI_PACKAGE_PATH" houdini
 its convention subdirectories (`otls/`, `desktop/`, `toolbar/`, `python_panels/`,
 `viewer_states/`, `python3.11libs/pythonrc.py`, `keymaps/`, …).
 
+### Project installs vs. global installs
+
+The two differ only in where the manifest lands and what may be deleted
+around it:
+
+| | `hpm install` (project) | [`hpm global add`](#hpm-global) |
+|---|---|---|
+| Manifest location | `<project>/.hpm/packages/` | Houdini's user prefs `packages/` |
+| Loaded when | Houdini is pointed at the project via `HOUDINI_PACKAGE_PATH` | Every session of that Houdini version |
+| Version scoping | `enable` expression only | `enable` plus a per-version directory |
+| Reproducible via `hpm.lock` | Yes | No — global installs are user state, not project state |
+| Unrecognized files in the target dir | Swept; hpm owns that directory | Left alone; hpm owns only files it recorded |
+
+Use a project install for anything a team needs to reproduce. Use a global
+install for tools you want in your own everyday Houdini.
+
 ## Output formats and automation
 
 All commands emit human-readable output by default. The `--output` global
@@ -1406,8 +1491,9 @@ flag selects a machine-readable format instead:
 
 Structured output is supported by `list`, `check`, `update`, `search`, and
 `pack`. Commands whose output is inherently interactive (`init`, `add`,
-`remove`, `install`, `build`, `audit`, `run`, `clean`, `registry`) reject a
-non-human `--output` with a clear error rather than silently ignoring it.
+`remove`, `install`, `build`, `audit`, `run`, `clean`, `registry`, `global`)
+reject a non-human `--output` with a clear error rather than silently
+ignoring it.
 
 Errors in any machine-readable format are also emitted as JSON, with fields
 `success`, `error`, `error_type`, and `elapsed_ms`.

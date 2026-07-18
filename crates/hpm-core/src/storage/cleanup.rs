@@ -89,11 +89,24 @@ impl StorageManager {
         );
 
         // 5. Mark all packages reachable from roots
-        let needed_packages = dependency_graph.mark_reachable_from_roots(&root_packages);
+        let mut needed_packages = dependency_graph.mark_reachable_from_roots(&root_packages);
         info!(
             "Marked {} packages as needed (including transitive dependencies)",
             needed_packages.len()
         );
+
+        // 5b. Globally installed packages are roots too. They belong to no
+        //     project, so the project-driven marking above cannot reach them:
+        //     without this, every `hpm global` install is classified as
+        //     unreferenced and its store directory deleted, leaving a manifest
+        //     in Houdini's packages directory pointing at a path that no
+        //     longer exists — Houdini then loads nothing, silently.
+        let global_roots = self.global_roots()?;
+        info!(
+            "Marked {} packages as needed by global installs",
+            global_roots.len()
+        );
+        needed_packages.extend(global_roots);
 
         // 6. Find orphaned packages by comparing all installed packages to needed packages
         let all_package_ids: HashSet<PackageId> =
@@ -105,6 +118,43 @@ impl StorageManager {
             .collect();
 
         Ok(orphaned_packages)
+    }
+
+    /// GC roots contributed by `hpm global` installs, across every Houdini
+    /// version's ledger.
+    ///
+    /// A ledger that cannot be read is a hard error rather than an empty
+    /// result: "there are no global installs" and "I cannot tell what is
+    /// installed globally" must not look the same to a garbage collector,
+    /// since the second answered as the first deletes live packages.
+    ///
+    /// Ids are built the same way [`PackageId::from`] builds them for
+    /// installed packages, so they line up with the marking set. That keying
+    /// is by bare slug, so a global install also shelters a same-slug package
+    /// from another creator at the same version. Over-protection is the safe
+    /// direction for a collector; under-protection deletes live files.
+    fn global_roots(&self) -> Result<HashSet<PackageId>, StorageError> {
+        let (entries, failures) = crate::global::ledger::all_global_entries(&self.config.home_dir);
+
+        if let Some((_path, error)) = failures.into_iter().next() {
+            // LedgerError::Parse already names the file.
+            return Err(StorageError::GlobalLedger {
+                message: error.to_string(),
+            });
+        }
+
+        Ok(entries
+            .iter()
+            .filter_map(|entry| {
+                // The ledger keys installs by scoped name; the graph keys by
+                // slug. Entries whose install path has vanished are still
+                // roots — the manifest may yet be repaired — but they cannot
+                // shelter anything that is not installed anyway.
+                let file = entry.install_path.file_name()?.to_str()?;
+                let (slug, _version) = file.rsplit_once('@')?;
+                Some(PackageId::new(slug.to_string(), entry.version.clone()))
+            })
+            .collect())
     }
 
     /// Remove orphaned packages. Returns identifiers of the packages actually removed.

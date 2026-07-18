@@ -22,7 +22,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, info};
 
 pub mod error;
-mod houdini_emit;
+pub(crate) mod houdini_emit;
 pub mod manifest_edit;
 pub mod types;
 
@@ -801,7 +801,10 @@ async fn install_one_dep(
 
 /// Fetch a remote package and copy it into the global CAS. Returns the
 /// installed package alongside the fetcher's SHA-256 of the archive.
-async fn fetch_and_install_pkg(
+///
+/// `pub(crate)` so `hpm global` installs go through the identical
+/// fetch-and-CAS path as project installs rather than reimplementing it.
+pub(crate) async fn fetch_and_install_pkg(
     storage: &StorageManager,
     fetcher: &ArchiveFetcher,
     name: &str,

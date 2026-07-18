@@ -43,7 +43,9 @@ pub mod archive_fetcher;
 pub mod asset_index;
 pub mod discovery;
 pub mod fetch_manifest;
+pub mod global;
 pub mod graph;
+pub mod houdini_prefs;
 pub(crate) mod http;
 pub mod lock;
 pub mod package_source;
@@ -102,6 +104,7 @@ pub use lock::{
 // against a custom project set.
 pub use discovery::{DiscoveredProject, DiscoveryError, ProjectDiscovery};
 pub use graph::{DependencyError, DependencyGraph, DependencyResolver, PackageId, PackageNode};
+pub use houdini_prefs::{HoudiniPrefsError, HoudiniVersion, user_packages_dir, user_pref_dir};
 
 // Lower-level building blocks. Used by the CLI's install + pack commands
 // today. Stay re-exported because the boundary between "library callers

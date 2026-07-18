@@ -328,6 +328,27 @@ impl HoudiniRange {
     pub fn has_upper_bound(&self) -> bool {
         houdini_req_has_upper_bound(&self.0)
     }
+
+    /// Whether a concrete Houdini `major.minor` satisfies this range.
+    ///
+    /// Used to check a package against a target Houdini *before* writing a
+    /// manifest for it. The emitted `enable` expression is evaluated by
+    /// Houdini at startup, so a package that doesn't satisfy the range fails
+    /// silently — it loads nothing and reports nothing. Answering the same
+    /// question up front turns that into an error at install time.
+    ///
+    /// The range grammar is Cargo-style, so it is evaluated with the same
+    /// semver semantics `enable` compilation assumes, against
+    /// `major.minor.0`.
+    pub fn matches_version(&self, major: u32, minor: u32) -> bool {
+        let Ok(req) = semver::VersionReq::parse(&self.0) else {
+            // Unreachable for a validated range, but a permissive answer is
+            // the safe failure here: it defers to Houdini's own evaluation
+            // rather than blocking an install on our parser disagreeing.
+            return true;
+        };
+        req.matches(&semver::Version::new(major as u64, minor as u64, 0))
+    }
 }
 
 impl std::str::FromStr for HoudiniRange {
