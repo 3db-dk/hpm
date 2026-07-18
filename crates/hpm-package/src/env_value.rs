@@ -338,16 +338,26 @@ impl HoudiniRange {
     /// question up front turns that into an error at install time.
     ///
     /// The range grammar is Cargo-style, so it is evaluated with the same
-    /// semver semantics `enable` compilation assumes, against
-    /// `major.minor.0`.
-    pub fn matches_version(&self, major: u32, minor: u32) -> bool {
+    /// semver semantics `enable` compilation assumes.
+    ///
+    /// `build` is the third component when the caller knows it. Pass `None`
+    /// when only `major.minor` is known: the range is then evaluated against
+    /// the *highest* build in that line rather than build 0, because a range
+    /// like `">=20.5.445"` describes a point inside the 20.5 line, and
+    /// testing `20.5.0` against it would reject every build of a line that
+    /// mostly satisfies it — leaving no answerable target at all.
+    pub fn matches_version(&self, major: u32, minor: u32, build: Option<u32>) -> bool {
         let Ok(req) = semver::VersionReq::parse(&self.0) else {
             // Unreachable for a validated range, but a permissive answer is
             // the safe failure here: it defers to Houdini's own evaluation
             // rather than blocking an install on our parser disagreeing.
             return true;
         };
-        req.matches(&semver::Version::new(major as u64, minor as u64, 0))
+        let patch = match build {
+            Some(build) => build as u64,
+            None => u64::MAX,
+        };
+        req.matches(&semver::Version::new(major as u64, minor as u64, patch))
     }
 }
 

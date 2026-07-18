@@ -20,10 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "provenance unknown" (a per-script venv, or one created by an earlier hpm)
   rather than "unused".
 
-  Consequence for existing installs: venvs created before this release carry
-  no owners and so are never collected automatically. They gain owners the
-  next time an install resolves to the same dependency set. To reclaim the
-  space now, delete `~/.hpm/venvs/` — it is a cache and is rebuilt on demand.
+  A venv with no recorded owners cannot be matched against the installed set
+  at all, so it is collected only once it has been idle for 30 days. That
+  covers both `[scripts]` venvs (which belong to a script, not a package) and
+  venvs created by earlier hpm versions, without deleting anything in active
+  use. Collecting a venv is never destructive — it is a content-addressed
+  cache, rebuilt on demand — so this only trades rebuild time against disk.
 
   Owner references are scoped (`creator/slug@version`). The previous
   comparison used the bare slug, which would have let an unrelated package

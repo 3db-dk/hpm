@@ -9,6 +9,15 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{debug, info, warn};
 
+/// How long a venv with no recorded owners must sit unused before cleanup
+/// will collect it.
+///
+/// Such a venv cannot be matched against the installed-package set, so this
+/// is the only signal available. Long enough that a tool used every few weeks
+/// keeps its venv; short enough that abandoned ones do not accumulate.
+pub const UNOWNED_VENV_IDLE: std::time::Duration =
+    std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
 /// Virtual environment manager
 ///
 /// Manages content-addressable virtual environments for Python dependencies.
@@ -382,12 +391,21 @@ impl VenvManager {
     /// `active_packages` holds `creator/slug@version` identifiers of the
     /// currently installed packages.
     ///
-    /// A venv with no recorded owners is **kept**, not collected. Empty means
-    /// "provenance unknown", not "unused": it is what venvs created before
-    /// owners were recorded look like, and it is also what a `[scripts]`
-    /// venv looks like, since those belong to a script rather than to an
-    /// installed package. Treating empty as unused is what made this collect
-    /// every venv on the system, including in-use ones.
+    /// Venvs fall into two groups:
+    ///
+    /// * **Owners recorded** — orphaned when none of those owners is still
+    ///   installed. This is the precise case.
+    /// * **No owners recorded** — provenance unknown. That is what a
+    ///   `[scripts]` venv looks like (it belongs to a script, not to an
+    ///   installed package) and what every venv created before hpm recorded
+    ///   owners looks like. These cannot be matched against `active_packages`
+    ///   at all, so they age out on [`UNOWNED_VENV_IDLE`] instead. Collecting
+    ///   them immediately would delete in-use venvs; never collecting them
+    ///   would leak every pre-existing venv forever.
+    ///
+    /// Collecting a venv is never destructive — it is a content-addressed
+    /// cache, rebuilt on demand — so the idle window only trades rebuild time
+    /// against disk.
     pub async fn find_orphaned_venvs(
         &self,
         active_packages: &[String],
@@ -396,18 +414,30 @@ impl VenvManager {
         let mut orphaned = Vec::new();
 
         for venv_meta in all_venvs {
-            if venv_meta.used_by_packages.is_empty() {
-                debug!(
-                    "Keeping venv {}: no recorded owners, provenance unknown",
-                    venv_meta.hash
-                );
-                continue;
-            }
-
-            let is_used = venv_meta
-                .used_by_packages
-                .iter()
-                .any(|pkg| active_packages.contains(pkg));
+            let is_used = if venv_meta.used_by_packages.is_empty() {
+                match venv_meta.idle_for() {
+                    Some(idle) if idle >= UNOWNED_VENV_IDLE => {
+                        debug!(
+                            "Venv {} has no recorded owners and has been idle for {} days",
+                            venv_meta.hash,
+                            idle.as_secs() / 86_400
+                        );
+                        false
+                    }
+                    _ => {
+                        debug!(
+                            "Keeping venv {}: no recorded owners, recently used",
+                            venv_meta.hash
+                        );
+                        true
+                    }
+                }
+            } else {
+                venv_meta
+                    .used_by_packages
+                    .iter()
+                    .any(|pkg| active_packages.contains(pkg))
+            };
 
             if !is_used {
                 if let Ok(size) = self.calculate_venv_size(&venv_meta.path).await {

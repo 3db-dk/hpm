@@ -423,3 +423,34 @@ value = [
     let res: Result<Holder, _> = toml::from_str(toml_str);
     assert!(res.is_err(), "deny_unknown_fields should reject 'weather'");
 }
+
+/// A range with a build-level bound must be answerable.
+///
+/// Evaluating against `major.minor.0` made `">=20.5.445"` reject every
+/// target, since the only versions the caller can express in a preferences
+/// directory are `major.minor` — the package became impossible to install.
+#[test]
+fn matches_version_handles_build_level_bounds() {
+    let range = HoudiniRange::parse(">=20.5.445, <22").unwrap();
+
+    // Known build: answered exactly.
+    assert!(range.matches_version(20, 5, Some(500)));
+    assert!(!range.matches_version(20, 5, Some(400)));
+
+    // Unknown build: the 20.5 line does contain satisfying builds, so the
+    // line must not be rejected outright.
+    assert!(range.matches_version(20, 5, None));
+
+    // Lines genuinely outside the range stay rejected either way.
+    assert!(!range.matches_version(22, 0, None));
+    assert!(!range.matches_version(19, 5, None));
+}
+
+#[test]
+fn matches_version_handles_plain_major_ranges() {
+    let range = HoudiniRange::parse("^21").unwrap();
+    assert!(range.matches_version(21, 0, None));
+    assert!(range.matches_version(21, 5, Some(729)));
+    assert!(!range.matches_version(22, 0, None));
+    assert!(!range.matches_version(20, 5, None));
+}

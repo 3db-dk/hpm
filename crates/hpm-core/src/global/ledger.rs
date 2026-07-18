@@ -114,6 +114,12 @@ impl Ledger {
     }
 }
 
+/// A ledger entry paired with the scoped `creator/slug` it is filed under.
+pub type ScopedEntry = (String, GlobalEntry);
+
+/// A ledger that could not be read, and why.
+pub type LedgerFailure = (PathBuf, LedgerError);
+
 /// Every global entry across every Houdini version's ledger under `hpm_home`.
 ///
 /// `hpm clean` uses this: a globally installed package is referenced by no
@@ -124,7 +130,7 @@ impl Ledger {
 /// A ledger that fails to parse is skipped with the error returned alongside,
 /// never treated as empty — "no roots" and "unreadable roots" must not look
 /// the same to a garbage collector.
-pub fn all_global_entries(hpm_home: &Path) -> (Vec<GlobalEntry>, Vec<(PathBuf, LedgerError)>) {
+pub fn all_global_entries(hpm_home: &Path) -> (Vec<ScopedEntry>, Vec<LedgerFailure>) {
     let dir = hpm_home.join("global");
     let mut entries = Vec::new();
     let mut failures = Vec::new();
@@ -137,11 +143,18 @@ pub fn all_global_entries(hpm_home: &Path) -> (Vec<GlobalEntry>, Vec<(PathBuf, L
 
     for dir_entry in read_dir.flatten() {
         let path = dir_entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        // Only files this module writes are ledgers. Matching every `*.json`
+        // would let an unrelated file dropped in this directory (an editor
+        // backup, a user's notes) abort cleanup as an unreadable ledger.
+        let is_ledger = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("houdini-") && n.ends_with(".json"));
+        if !is_ledger {
             continue;
         }
         match Ledger::load(&path) {
-            Ok(ledger) => entries.extend(ledger.packages.into_values()),
+            Ok(ledger) => entries.extend(ledger.packages),
             Err(e) => failures.push((path, e)),
         }
     }
@@ -247,6 +260,47 @@ mod tests {
         let (entries, failures) = all_global_entries(home);
         assert!(entries.is_empty());
         assert_eq!(failures.len(), 1);
+    }
+
+    /// Only files this module writes are ledgers. Treating every `*.json`
+    /// as one lets an unrelated file — an editor backup, a user's notes —
+    /// abort `hpm clean` as an unreadable ledger.
+    #[test]
+    fn unrelated_json_files_are_not_treated_as_ledgers() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        std::fs::create_dir_all(home.join("global")).unwrap();
+        std::fs::write(home.join("global").join("notes.json"), b"not a ledger").unwrap();
+
+        let mut ledger = Ledger::default();
+        ledger.insert(&pkg("acme/tools"), entry("1.0.0", "hpm-acme.tools.json"));
+        ledger
+            .save(&Ledger::path_for(
+                home,
+                HoudiniVersion::parse("21.0").unwrap(),
+            ))
+            .unwrap();
+
+        let (entries, failures) = all_global_entries(home);
+        assert_eq!(entries.len(), 1);
+        assert!(failures.is_empty(), "stray json must not fail the scan");
+    }
+
+    #[test]
+    fn entries_carry_their_scoped_package_name() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path();
+        let mut ledger = Ledger::default();
+        ledger.insert(&pkg("acme/tools"), entry("1.0.0", "hpm-acme.tools.json"));
+        ledger
+            .save(&Ledger::path_for(
+                home,
+                HoudiniVersion::parse("21.0").unwrap(),
+            ))
+            .unwrap();
+
+        let (entries, _) = all_global_entries(home);
+        assert_eq!(entries[0].0, "acme/tools");
     }
 
     #[test]

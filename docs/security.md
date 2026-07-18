@@ -213,6 +213,22 @@ Per-project:
 | `<project>/.hpm/packages/{creator}.{slug}.json` | Per-dependency Houdini manifest. Auto-generated. |
 | `<project>/.hpm/config.toml` | Optional project-level configuration override. |
 
+Outside both trees, `hpm global` writes into Houdini's own per-user
+preferences directory:
+
+| Path | Contents |
+|------|----------|
+| `<houdini-user-prefs>/packages/hpm-{creator}.{slug}.json` | Houdini manifest for a globally installed package. |
+| `~/.hpm/global/houdini-{X.Y}.json` | Ledger of what `hpm global` installed for that Houdini version. |
+
+This is the only directory hpm writes to that it does not own — it is shared
+with SideFX's own files, other tools, and anything you put there by hand. hpm
+therefore never scans it to decide what to delete: writes are confined to the
+`hpm-` prefixed filename for the package being installed, and deletions are
+confined to the exact filename recorded in the ledger. A global install is
+per-user state and is not captured by `hpm.lock`; prefer project installs for
+anything that has to be reproducible.
+
 The defaults live under `$HOME` on every platform. To relocate them (e.g., a
 shared cache on a fast SSD), override `[storage].home_dir` (or individual
 subdirectories) in `~/.hpm/config.toml`. Pick a path that only your user

@@ -562,8 +562,16 @@ impl ProjectManager {
         if !resolved.packages.is_empty() {
             let venv_manager =
                 VenvManager::new().map_err(|e| ProjectError::PythonResolution(e.into()))?;
+            // Record the same owners the install path records, so a venv
+            // built by `hpm run` is reclaimable once its packages are gone
+            // instead of falling into the unowned-and-aged-out bucket.
+            let used_by: Vec<String> = dep_packages
+                .iter()
+                .filter(|p| !p.manifest.python_dependencies.is_empty())
+                .map(InstalledPackage::venv_ref)
+                .collect();
             let venv_path = venv_manager
-                .ensure_virtual_environment(&resolved)
+                .ensure_virtual_environment_for(&resolved, &used_by)
                 .await
                 .map_err(|e| ProjectError::PythonResolution(e.into()))?;
             let site_packages =
@@ -660,24 +668,34 @@ impl ProjectManager {
         let installed_packages = self.storage_manager.list_installed()?;
 
         for entry in entries.flatten() {
-            if let Some(file_name) = entry.path().file_name() {
-                if let Some(name_str) = file_name.to_str() {
-                    if name_str.ends_with(".json") {
-                        let package_name = name_str.trim_end_matches(".json");
-
-                        // Find corresponding installed package
-                        let installed_package = installed_packages
-                            .iter()
-                            .find(|p| p.manifest.package.slug() == package_name)
-                            .cloned();
-
-                        dependencies.push(ProjectDependency {
-                            name: package_name.to_string(),
-                            installed_package,
-                        });
-                    }
-                }
+            let path = entry.path();
+            let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            // The overrides manifest is not a per-package file.
+            if file_name == houdini_emit::PROJECT_OVERRIDES_FILE {
+                continue;
             }
+            let Some(stem) = file_name.strip_suffix(".json") else {
+                continue;
+            };
+            // Manifests are named `<creator>.<slug>.json`. Anything else is a
+            // legacy bare-slug file or someone else's — the stale sweep deals
+            // with those; reporting them as dependencies would attach a name
+            // that matches no installed package.
+            let Some(package_path) = hpm_package::PackagePath::from_file_stem(stem) else {
+                continue;
+            };
+
+            let installed_package = installed_packages
+                .iter()
+                .find(|p| p.manifest.package.path == package_path)
+                .cloned();
+
+            dependencies.push(ProjectDependency {
+                name: package_path.as_str().to_string(),
+                installed_package,
+            });
         }
 
         Ok(dependencies)

@@ -526,3 +526,121 @@ mod venv_orphan_detection {
         );
     }
 }
+
+/// Regression: the venv active-package set and the venv owner records must
+/// use the same identity format.
+///
+/// `hpm clean --comprehensive` built its active set as bare `slug@version`
+/// while owners are recorded scoped as `creator/slug@version`. The two never
+/// compared equal, so every venv looked unowned and in-use venvs were
+/// deleted — the exact failure the owner-recording change was meant to end,
+/// surviving on a different code path.
+mod venv_identity_format {
+    use hpm_core::python::{PythonVersion, ResolvedDependencySet, VenvMetadata, cleanup, venv};
+
+    #[tokio::test]
+    async fn scoped_owner_matches_scoped_active_entry() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let venv_path = tmp.path().join("live");
+        std::fs::create_dir_all(&venv_path).unwrap();
+
+        let mut meta = VenvMetadata::new(
+            "live".to_string(),
+            ResolvedDependencySet::new(PythonVersion::new(3, 11, None)),
+            venv_path.clone(),
+        );
+        meta.add_package_reference("acme/tools@1.0.0");
+        std::fs::write(
+            venv_path.join("metadata.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+
+        let analyzer = cleanup::PythonCleanupAnalyzer::with_venv_manager(
+            venv::VenvManager::with_venvs_dir(tmp.path().to_path_buf()),
+        );
+
+        // Scoped, as every caller now builds it.
+        let orphans = analyzer
+            .analyze_orphaned_venvs(&["acme/tools@1.0.0".to_string()])
+            .await
+            .unwrap();
+        assert!(orphans.is_empty(), "in-use venv must be kept");
+
+        // Bare slug, as the comprehensive path used to build it. If a caller
+        // ever regresses to this format the venv is silently collected.
+        let orphans = analyzer
+            .analyze_orphaned_venvs(&["tools@1.0.0".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(
+            orphans.len(),
+            1,
+            "bare-slug identities do not match scoped owners; callers must use venv_ref"
+        );
+    }
+}
+
+/// A venv with no recorded owners cannot be matched against installed
+/// packages, so it ages out instead of being kept forever. Keeping it
+/// forever leaked every venv created before owners were recorded, plus
+/// every `[scripts]` venv.
+mod unowned_venv_ages_out {
+    use hpm_core::python::{PythonVersion, ResolvedDependencySet, VenvMetadata, cleanup, venv};
+    use std::time::{Duration, SystemTime};
+
+    async fn orphan_hashes(dir: &std::path::Path) -> Vec<String> {
+        let analyzer = cleanup::PythonCleanupAnalyzer::with_venv_manager(
+            venv::VenvManager::with_venvs_dir(dir.to_path_buf()),
+        );
+        analyzer
+            .analyze_orphaned_venvs(&[])
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|v| v.hash)
+            .collect()
+    }
+
+    fn seed_unowned(dir: &std::path::Path, hash: &str, last_used: SystemTime) {
+        let venv_path = dir.join(hash);
+        std::fs::create_dir_all(&venv_path).unwrap();
+        let mut meta = VenvMetadata::new(
+            hash.to_string(),
+            ResolvedDependencySet::new(PythonVersion::new(3, 11, None)),
+            venv_path.clone(),
+        );
+        meta.last_used = Some(last_used);
+        assert!(meta.used_by_packages.is_empty());
+        std::fs::write(
+            venv_path.join("metadata.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn recently_used_unowned_venv_is_kept() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        seed_unowned(tmp.path(), "recent", SystemTime::now());
+        assert!(orphan_hashes(tmp.path()).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn long_idle_unowned_venv_is_collected() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let long_ago = SystemTime::now() - Duration::from_secs(60 * 24 * 60 * 60);
+        seed_unowned(tmp.path(), "stale", long_ago);
+        assert_eq!(orphan_hashes(tmp.path()).await, vec!["stale".to_string()]);
+    }
+
+    /// A future timestamp means a clock change or a copied venv. Deleting on
+    /// the strength of a timestamp known to be wrong is worse than keeping.
+    #[tokio::test]
+    async fn future_timestamp_is_kept() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let future = SystemTime::now() + Duration::from_secs(60 * 24 * 60 * 60);
+        seed_unowned(tmp.path(), "future", future);
+        assert!(orphan_hashes(tmp.path()).await.is_empty());
+    }
+}

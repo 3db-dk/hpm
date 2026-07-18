@@ -23,6 +23,12 @@ use thiserror::Error;
 pub struct HoudiniVersion {
     pub major: u32,
     pub minor: u32,
+    /// Build number, when the user supplied a full version string.
+    ///
+    /// Not part of the preferences directory — that is per `major.minor` —
+    /// but it is what lets a `[compat].houdini` range with a build-level
+    /// bound (`">=20.5.445"`) be answered precisely instead of approximated.
+    pub build: Option<u32>,
 }
 
 #[derive(Debug, Error)]
@@ -59,15 +65,23 @@ impl HoudiniVersion {
             None => 0,
             Some(m) => m.parse().map_err(|_| bad())?,
         };
-        // Anything after major.minor is a build number; it must still be
-        // numeric, so a typo like "21.0.x" is rejected rather than silently
-        // treated as 21.0.
+        // The third component is the build number. It is kept (compat ranges
+        // may bound on it) and must be numeric, so a typo like "21.0.x" is
+        // rejected rather than silently treated as 21.0.
+        let build = match parts.next() {
+            None => None,
+            Some(b) => Some(b.parse::<u32>().map_err(|_| bad())?),
+        };
         for extra in parts {
             extra
                 .parse::<u32>()
                 .map_err(|_| HoudiniPrefsError::VersionParse(input.to_string()))?;
         }
-        Ok(Self { major, minor })
+        Ok(Self {
+            major,
+            minor,
+            build,
+        })
     }
 
     /// Rendered as Houdini writes it in directory names: `21.0`.
@@ -78,7 +92,10 @@ impl HoudiniVersion {
 
 impl std::fmt::Display for HoudiniVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.major, self.minor)
+        match self.build {
+            Some(build) => write!(f, "{}.{}.{}", self.major, self.minor, build),
+            None => write!(f, "{}.{}", self.major, self.minor),
+        }
     }
 }
 

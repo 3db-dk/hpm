@@ -143,18 +143,25 @@ impl StorageManager {
             });
         }
 
-        Ok(entries
-            .iter()
-            .filter_map(|entry| {
-                // The ledger keys installs by scoped name; the graph keys by
-                // slug. Entries whose install path has vanished are still
-                // roots — the manifest may yet be repaired — but they cannot
-                // shelter anything that is not installed anyway.
-                let file = entry.install_path.file_name()?.to_str()?;
-                let (slug, _version) = file.rsplit_once('@')?;
-                Some(PackageId::new(slug.to_string(), entry.version.clone()))
-            })
-            .collect())
+        // The ledger keys installs by scoped `creator/slug`; the graph keys by
+        // bare slug, so derive the slug from the ledger key rather than by
+        // parsing the install path — a path whose shape we fail to recognise
+        // would otherwise drop a root silently and delete a live package.
+        let mut roots = HashSet::new();
+        for (name, entry) in entries {
+            let slug = match hpm_package::PackagePath::new(name.clone()) {
+                Ok(path) => path.slug().to_string(),
+                Err(e) => {
+                    // Same reasoning as an unreadable ledger: a root we cannot
+                    // interpret must stop the collector, not vanish from it.
+                    return Err(StorageError::GlobalLedger {
+                        message: format!("global ledger entry '{name}' is not a package path: {e}"),
+                    });
+                }
+            };
+            roots.insert(PackageId::new(slug, entry.version.clone()));
+        }
+        Ok(roots)
     }
 
     /// Remove orphaned packages. Returns identifiers of the packages actually removed.
@@ -449,14 +456,20 @@ impl StorageManager {
             self.cleanup_unused_dev_installs(projects_config).await?
         };
 
-        // 3. Build the set of packages that remain (or would remain) after CAS cleanup.
+        // 3. Build the set of packages that remain (or would remain) after CAS
+        //    cleanup. Two different identity formats meet here: `removed_packages`
+        //    comes from `PackageId::identifier()`, which is `slug@version`, while
+        //    venv ownership is recorded scoped as `creator/slug@version`. Filter
+        //    in the first space and emit in the second — comparing venv owners
+        //    against bare slugs matches nothing and deletes every venv in use.
         let all_installed = self.list_installed()?;
         let remaining_packages: Vec<String> = all_installed
-            .into_iter()
-            .filter_map(|p| {
-                let id = format!("{}@{}", p.manifest.package.slug(), p.version);
-                (!removed_packages.contains(&id)).then_some(id)
+            .iter()
+            .filter(|p| {
+                let package_id = format!("{}@{}", p.manifest.package.slug(), p.version);
+                !removed_packages.contains(&package_id)
             })
+            .map(InstalledPackage::venv_ref)
             .collect();
 
         // 4. Python virtual environment cleanup against the remaining set.

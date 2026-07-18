@@ -1031,3 +1031,59 @@ proptest! {
         prop_assert_eq!(format!("{:?}", a), format!("{:?}", b));
     }
 }
+
+/// Regression: `list_dependencies` reads the manifest directory back, so it
+/// has to understand the `<creator>.<slug>.json` naming.
+///
+/// It previously trimmed `.json` and compared the result against the bare
+/// slug, which after the rename can never match — every dependency came back
+/// with `installed_package: None` and a dotted name, silently turning
+/// `generate_houdini_manifests` into a no-op.
+#[test]
+fn list_dependencies_resolves_creator_scoped_manifests() {
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+
+    // Put a real package in the store so the lookup has something to find.
+    let store_dir = config.storage.packages_dir.join("acme").join("tools@1.0.0");
+    std::fs::create_dir_all(&store_dir).unwrap();
+    std::fs::write(
+        store_dir.join("hpm.toml"),
+        "[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+
+    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+    let pkg_dir = &project_manager.project_paths.packages_dir;
+    std::fs::write(pkg_dir.join("acme.tools.json"), b"{}").unwrap();
+
+    let deps = project_manager.list_dependencies().unwrap();
+    assert_eq!(deps.len(), 1, "expected one dependency, got {deps:?}");
+    assert_eq!(deps[0].name, "acme/tools", "name must be the scoped path");
+    assert!(
+        deps[0].installed_package.is_some(),
+        "the installed package must be resolved, not reported as missing"
+    );
+}
+
+/// Files in the manifest directory that are not per-package manifests must
+/// not surface as dependencies — they would carry a name matching no
+/// installed package.
+#[test]
+fn list_dependencies_ignores_non_package_manifests() {
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+
+    let pkg_dir = &project_manager.project_paths.packages_dir;
+    std::fs::write(pkg_dir.join(PROJECT_OVERRIDES_FILE), b"{}").unwrap();
+    std::fs::write(pkg_dir.join("legacy-bare-slug.json"), b"{}").unwrap();
+    std::fs::write(pkg_dir.join("README.md"), b"hi").unwrap();
+
+    let deps = project_manager.list_dependencies().unwrap();
+    assert!(deps.is_empty(), "expected no dependencies, got {deps:?}");
+}

@@ -373,6 +373,18 @@ impl VenvMetadata {
     pub fn is_orphaned(&self) -> bool {
         self.used_by_packages.is_empty()
     }
+
+    /// How long since this venv was last used, falling back to its creation
+    /// time when `last_used` was never written.
+    ///
+    /// `None` when the timestamp is in the future — a clock adjustment or a
+    /// venv copied from another machine. Cleanup treats that as "recently
+    /// used" rather than guessing, since the alternative is deleting on the
+    /// strength of a timestamp we know to be wrong.
+    pub fn idle_for(&self) -> Option<std::time::Duration> {
+        let reference = self.last_used.unwrap_or(self.created_at);
+        std::time::SystemTime::now().duration_since(reference).ok()
+    }
 }
 
 /// Information about an orphaned virtual environment

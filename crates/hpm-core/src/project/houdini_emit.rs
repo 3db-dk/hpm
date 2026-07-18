@@ -25,9 +25,15 @@ use super::{ProjectError, ProjectManager};
 pub const PROJECT_OVERRIDES_FILE: &str = "~hpm-project-overrides.json";
 
 impl ProjectManager {
-    /// Remove `<slug>.json` files in the project's packages dir whose slug is
-    /// not in `installed_packages`. Only the per-package manifests we own are
-    /// considered — non-`.json` entries and any unknown files are left alone.
+    /// Remove `.json` files in the project's packages dir whose
+    /// `<creator>.<slug>` stem is not in `installed_packages`. Non-`.json`
+    /// entries are left alone, as is the project overrides manifest.
+    ///
+    /// This directory belongs to hpm, so an unrecognized `.json` is treated
+    /// as stale output rather than someone else's file — that includes
+    /// manifests written by an older hpm under the bare `<slug>.json` name,
+    /// which is how those get migrated. `hpm global` writes into a directory
+    /// hpm does *not* own and deliberately has no equivalent sweep.
     pub(super) fn sweep_stale_houdini_manifests(
         &self,
         installed_packages: &[InstalledPackage],

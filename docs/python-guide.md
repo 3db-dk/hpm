@@ -152,15 +152,16 @@ detect orphans. The list accumulates: one venv is shared by every project
 that resolves to the same dependency set, and each install only knows about
 its own project's packages.
 
-A venv is treated as orphaned only when it records at least one owner and
-none of those owners is still installed. A venv with **no** recorded owners
-is kept, because empty means "provenance unknown" rather than "unused" —
-that is what a per-script venv looks like, and what venvs created by hpm
-0.28.1 and earlier look like, since no version before this recorded owners.
-Those older venvs are therefore never collected automatically; they pick up
-owners the next time an install resolves to the same dependency set. To
-reclaim their space immediately, delete `~/.hpm/venvs/` — it is a cache and
-is rebuilt on demand.
+A venv that records owners is orphaned when none of those owners is still
+installed. A venv with **no** recorded owners has unknown provenance rather
+than no users — that is what a per-script venv looks like, and what venvs
+created by hpm 0.28.1 and earlier look like, since no earlier version
+recorded owners. Those cannot be matched against the installed set at all,
+so they are collected once they have been idle for 30 days (`last_used` in
+`metadata.json`, refreshed every time the venv is used).
+
+Collecting a venv is never destructive: it is a content-addressed cache and
+is rebuilt on demand. The idle window only trades rebuild time against disk.
 
 ### Per-script venvs
 

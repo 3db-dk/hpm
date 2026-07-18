@@ -72,6 +72,14 @@ pub enum GlobalError {
         version: HoudiniVersion,
     },
 
+    #[error(
+        "The global ledger records '{name}' as manifest file '{manifest_file}', which is \
+         not a filename hpm would have written. Refusing to delete it — a manifest name \
+         must be a single `hpm-*.json` component inside Houdini's packages directory. \
+         Fix or remove that ledger entry by hand."
+    )]
+    UnsafeLedgerEntry { name: String, manifest_file: String },
+
     #[error(transparent)]
     Project(#[from] Box<crate::project::ProjectError>),
 
@@ -91,6 +99,26 @@ pub enum GlobalError {
 /// creators sharing a slug do not collide here either.
 pub fn manifest_file_name(package: &PackagePath) -> String {
     format!("hpm-{}.json", package.file_stem())
+}
+
+/// Accept `candidate` only if it is a bare filename hpm itself could have
+/// written: one path component, no separators, no `..`, `hpm-` prefixed and
+/// `.json` suffixed.
+///
+/// Guards the one operation in this module that deletes: a ledger entry is
+/// user-editable data, and joining an absolute or `..`-bearing string onto
+/// the packages directory would reach outside it.
+fn safe_manifest_file_name(candidate: &str) -> Option<&str> {
+    if !candidate.starts_with("hpm-") || !candidate.ends_with(".json") {
+        return None;
+    }
+    // One `Normal` component and nothing else — rejects `/abs/path`,
+    // `../escape`, `a/b`, `.`, and (on Windows) `C:` prefixes.
+    let mut components = Path::new(candidate).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(only)), None) if only == candidate => Some(candidate),
+        _ => None,
+    }
 }
 
 /// Where the manifest for `package` goes, for one Houdini version.
@@ -157,7 +185,19 @@ pub fn remove(
             version,
         })?;
 
-    let manifest_path = user_packages_dir(version)?.join(&entry.manifest_file);
+    // The ledger is a plain JSON file the user can edit, and `Path::join`
+    // with an absolute or `..`-bearing component escapes the base directory.
+    // Deleting outside Houdini's packages directory is exactly what this
+    // module promises never to do, so the recorded name must be a bare
+    // filename hpm could itself have written.
+    let file_name = safe_manifest_file_name(&entry.manifest_file).ok_or_else(|| {
+        GlobalError::UnsafeLedgerEntry {
+            name: package.as_str().to_string(),
+            manifest_file: entry.manifest_file.clone(),
+        }
+    })?;
+
+    let manifest_path = user_packages_dir(version)?.join(file_name);
     match std::fs::remove_file(&manifest_path) {
         Ok(()) => debug!("Removed global manifest {}", manifest_path.display()),
         // Already gone is success: the ledger entry is what we're really
@@ -192,7 +232,7 @@ pub fn check_compatible(
     let Some(range) = manifest.compat.houdini.as_ref() else {
         return Ok(());
     };
-    if range.matches_version(target.major, target.minor) {
+    if range.matches_version(target.major, target.minor, target.build) {
         return Ok(());
     }
     Err(GlobalError::Incompatible {
@@ -442,5 +482,61 @@ mod tests {
     #[test]
     fn package_without_a_declared_range_is_compatible() {
         assert!(check_compatible(&manifest_with_compat(None), hv("22.0")).is_ok());
+    }
+
+    /// A build-level bound must be satisfiable. Evaluating the range against
+    /// `major.minor.0` rejected every target the user could name, making the
+    /// package impossible to install globally at all.
+    #[test]
+    fn build_level_compat_bounds_are_satisfiable() {
+        let manifest = manifest_with_compat(Some(">=20.5.445, <22"));
+        assert!(check_compatible(&manifest, hv("20.5.500")).is_ok());
+        assert!(check_compatible(&manifest, hv("20.5")).is_ok());
+        assert!(check_compatible(&manifest, hv("20.5.400")).is_err());
+        assert!(check_compatible(&manifest, hv("22.0")).is_err());
+    }
+
+    /// The ledger is user-editable, and `Path::join` with an absolute or
+    /// `..`-bearing component escapes the base directory. `remove` must not
+    /// be steerable into deleting a file outside Houdini's packages dir.
+    #[test]
+    fn only_hpm_owned_bare_filenames_are_deletable() {
+        assert_eq!(
+            safe_manifest_file_name("hpm-acme.tools.json"),
+            Some("hpm-acme.tools.json")
+        );
+
+        for hostile in [
+            "../../../etc/passwd",
+            "../hpm-acme.tools.json",
+            "sub/hpm-acme.tools.json",
+            "/etc/hpm-evil.json",
+            "SideFX_Labs.json",     // not hpm-owned
+            "hpm-acme.tools.txt",   // not a manifest
+            "hpm-acme.tools.json/", // trailing separator
+            "",
+            ".",
+            "..",
+        ] {
+            assert_eq!(
+                safe_manifest_file_name(hostile),
+                None,
+                "{hostile:?} must be rejected"
+            );
+        }
+    }
+
+    /// The name hpm writes must itself pass the guard that gates deletion,
+    /// or a package could be installed and then never removed.
+    #[test]
+    fn generated_manifest_names_pass_the_deletion_guard() {
+        for name in ["acme/tools", "creator-a/b-c", "x/y0-9"] {
+            let file = manifest_file_name(&PackagePath::new(name).unwrap());
+            assert_eq!(
+                safe_manifest_file_name(&file),
+                Some(file.as_str()),
+                "hpm wrote {file:?} but would refuse to delete it"
+            );
+        }
     }
 }
