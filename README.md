@@ -44,6 +44,13 @@ hpm list --tree
 Then point Houdini at the generated manifests by adding
 `<project>/.hpm/packages` to `HOUDINI_PACKAGE_PATH`.
 
+For a tool you want in every Houdini session rather than in one project,
+skip the project entirely:
+
+```sh
+hpm global add some-creator/utility-nodes --houdini 21.0
+```
+
 ## Package manifest
 
 Packages are defined in `hpm.toml`:
@@ -99,7 +106,7 @@ See the [user guide](docs/user-guide.md) for the full manifest reference.
 | Command | Description |
 |---------|-------------|
 | `hpm init [name]` | Create a new package (`--bare` for manifest only) |
-| `hpm add <pkg>...` | Add dependencies (`name@version`, `--path`, `--path --link`, `--optional`) |
+| `hpm add <pkg>...` | Add dependencies (`name@version`, `--path`, `--path --link`, `--optional`, `--registry <name>` to pin) |
 | `hpm remove <pkg>` | Remove a dependency |
 | `hpm install` | Install all dependencies (`--frozen-lockfile` for CI) |
 | `hpm update [pkg...]` | Update dependencies (`--dry-run` to preview) |
@@ -111,6 +118,7 @@ See the [user guide](docs/user-guide.md) for the full manifest reference.
 | `hpm clean` | Remove orphaned packages and venvs (`--dry-run`, `--python-only`, `--comprehensive`) |
 | `hpm audit` | Security checks on the current project |
 | `hpm registry <sub>` | Manage registries (`add`, `list`, `remove`, `update`) |
+| `hpm global <sub>` | Install into Houdini's user preferences, outside any project (`add`, `list`, `remove`; `--houdini <X.Y>` required) |
 | `hpm completions <shell>` | Generate shell completions |
 
 Every command accepts `-v` for verbose output, `-q` for quiet,
@@ -142,7 +150,7 @@ ABI bug in 0.7.0). See the [Python guide](docs/python-guide.md).
 - **Resolution** — naive per-package version selection: highest non-yanked version matching the spec's `VersionReq`. Transitive constraint solving is intentionally not implemented yet.
 - **Lock file** — `hpm.lock` pins exact versions, sources, and SHA-256 checksums.
 - **Storage** — `~/.hpm/packages/` for packages, `~/.hpm/venvs/` for Python environments (same layout on Linux, macOS, Windows).
-- **Houdini integration** — `hpm install` writes one `{name}.json` per dependency into `<project>/.hpm/packages/`. Point Houdini's `HOUDINI_PACKAGE_PATH` at that directory.
+- **Houdini integration** — `hpm install` writes one `{creator}.{slug}.json` per dependency into `<project>/.hpm/packages/`. Point Houdini's `HOUDINI_PACKAGE_PATH` at that directory, or use `hpm global` to install into Houdini's user preferences so a package loads in every session without a project.
 
 ## Project structure
 

@@ -870,7 +870,7 @@ fn sweep_removes_legacy_bare_slug_manifests() {
     );
 }
 
-/// An empty dependency set must still sweep prior `<slug>.json` files.
+/// An empty dependency set must still sweep prior manifests.
 /// This is the dev-override-removed-and-package-disappeared case: the
 /// project resolves zero deps, so nothing iterates the json-write loop,
 /// and only the sweep can clear the stale manifest.

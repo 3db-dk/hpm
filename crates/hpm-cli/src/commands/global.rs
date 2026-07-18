@@ -17,7 +17,7 @@ use crate::console::Console;
 use anyhow::{Context, Result};
 use console::style;
 use hpm_config::Config;
-use hpm_core::global::{self, GlobalInstall};
+use hpm_core::global;
 use hpm_core::houdini_prefs::HoudiniVersion;
 use hpm_core::registry::RegistrySet;
 use hpm_core::{ArchiveFetcher, StorageManager};
@@ -172,23 +172,6 @@ pub async fn remove_package(
         style("package files remain in the store; run `hpm clean` to reclaim space").dim()
     ));
     Ok(())
-}
-
-/// Rendered rows for `--output json`.
-pub fn to_json_rows(installs: &[GlobalInstall]) -> Vec<serde_json::Value> {
-    installs
-        .iter()
-        .map(|i| {
-            serde_json::json!({
-                "package": i.package,
-                "version": i.version,
-                "registry": i.registry,
-                "manifest_path": i.manifest_path,
-                "install_path": i.install_path,
-                "manifest_present": i.manifest_present,
-            })
-        })
-        .collect()
 }
 
 #[cfg(test)]

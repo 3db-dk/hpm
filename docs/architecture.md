@@ -295,7 +295,7 @@ clients run the same flow.
  │  6. Resolve with bundled uv, hash the resolved set, pick or          │
  │     rebuild ~/.hpm/venvs/<hash>/                                     │
  │  7. uv pip install --python <venv>/bin/python                        │
- │  8. Write <project>/.hpm/packages/{name}.json per dep                │
+ │  8. Write <project>/.hpm/packages/{creator}.{slug}.json per dep      │
  │  9. Sweep stale <project>/.hpm/packages/ entries                     │
  │ 10. CLI step: build new lockfile from sync's InstallOutcomes         │
  │     (backfilled from the prior lockfile for short-circuited entries) │
@@ -662,8 +662,10 @@ the mapping gap at install time. Houdini 19.x (Python 3.7) and 20.0–20.4
 
 `method: "prepend"` delegates path-separator handling to Houdini so the same
 manifest works on Windows (`;`) and Unix (`:`) without embedding an
-OS-specific joiner. Generator lives in
-`hpm-cli::commands::install::build_houdini_package_for_install`.
+OS-specific joiner. The generator is
+`hpm_core::project::houdini_emit::build_houdini_package`, a free function
+shared by the project installer and `hpm global` so both emit identical
+manifests.
 
 ## Security and performance
 

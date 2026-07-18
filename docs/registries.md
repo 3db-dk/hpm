@@ -107,11 +107,26 @@ use the detailed dependency form:
 "studio/internal-tool" = { version = "1.0.0", registry = "studio" }
 ```
 
+Or from the command line, which records the pin in `hpm.toml` for you:
+
+```sh
+hpm add studio/internal-tool@1.0.0 --registry studio
+```
+
+The pin is **authoritative**. Resolution, install, and `hpm update` consult
+only the named registry — there is no fallback to the rest of the set, since
+falling back is exactly what a pin exists to prevent. Naming a registry that
+is not configured is an error rather than a silent search elsewhere.
+
 This is useful when:
 
 - A package exists under the same name in multiple registries and you want to be unambiguous.
 - A private registry should always win over a public one for specific packages.
-- You want the lockfile to record which registry resolved the dependency, so audits can answer "where did this come from".
+- You want a dependency's source to survive someone else adding a registry that happens to carry the same name.
+
+Note the lock file does not record which registry a dependency came from —
+it pins the version, checksum, and resolved URL. The `registry` key in
+`hpm.toml` is what makes the source reproducible.
 
 ## Refreshing and removing
 

@@ -22,7 +22,7 @@ cargo fmt --check    # check formatting
 | Crate | Purpose |
 |-------|---------|
 | `hpm-cli` | CLI frontend (clap) |
-| `hpm-core` | Core orchestration logic, including the `python` submodule (bundled uv, venv management, Houdini→Python ABI mapping) |
+| `hpm-core` | Core orchestration logic, including the `python` submodule (bundled uv, venv management, Houdini→Python ABI mapping), `global` (installs into Houdini's user prefs, with the ledger that also serves as a `hpm clean` GC root), and `houdini_prefs` (per-platform Houdini preferences-directory resolution) |
 | `hpm-config` | Configuration loading/saving |
 | `hpm-package` | Package format and metadata |
 | `hpm-assets` | Operator asset-index model emitted by `hpm pack` |

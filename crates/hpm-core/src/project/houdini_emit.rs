@@ -1,4 +1,4 @@
-//! Houdini `packages/` manifest emission: per-package `<slug>.json` files,
+//! Houdini `packages/` manifest emission: per-package `<creator>.<slug>.json` files,
 //! the project `[runtime]` overrides manifest, and the stale-manifest sweep.
 
 use crate::storage::InstalledPackage;
@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 use super::{ProjectError, ProjectManager};
 
 /// File name of the project-level `[runtime]` overrides manifest, written
-/// into the project packages dir alongside the per-package `<slug>.json`
+/// into the project packages dir alongside the per-package `<creator>.<slug>.json`
 /// files.
 ///
 /// Houdini applies env entries from the package files in a directory in

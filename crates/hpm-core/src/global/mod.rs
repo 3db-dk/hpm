@@ -121,14 +121,6 @@ fn safe_manifest_file_name(candidate: &str) -> Option<&str> {
     }
 }
 
-/// Where the manifest for `package` goes, for one Houdini version.
-pub fn manifest_path(
-    version: HoudiniVersion,
-    package: &PackagePath,
-) -> Result<PathBuf, GlobalError> {
-    Ok(user_packages_dir(version)?.join(manifest_file_name(package)))
-}
-
 /// A globally installed package, as reported by [`list`].
 #[derive(Debug, Clone)]
 pub struct GlobalInstall {

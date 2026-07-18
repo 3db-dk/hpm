@@ -6,7 +6,7 @@
 //! - [`error`] — [`ProjectError`]
 //! - [`types`] — [`ProjectDependency`], [`InstallOutcome`]
 //! - `houdini_emit` — Houdini `packages/` manifest emission
-//!   ([`PROJECT_OVERRIDES_FILE`] and the `<slug>.json` generators)
+//!   ([`PROJECT_OVERRIDES_FILE`] and the `<creator>.<slug>.json` generators)
 
 use crate::archive_fetcher::ArchiveFetcher;
 use crate::lock::{LockFile, LockedSource};
@@ -367,7 +367,7 @@ impl ProjectManager {
         self.write_project_overrides_manifest(&project_env_overrides)?;
 
         // Sweep stale per-package manifests left over from previous syncs.
-        // Houdini reads every <slug>.json file in `packages_dir` on launch, so a
+        // Houdini reads every .json file in `packages_dir` on launch, so a
         // manifest whose slug has dropped out of the dependency set (dev override
         // removed, registry yank, manual edit) keeps loading the package even
         // though hpm.toml no longer asks for it.

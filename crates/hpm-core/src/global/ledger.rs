@@ -93,10 +93,11 @@ impl Ledger {
         Ok(())
     }
 
-    pub fn get(&self, package: &PackagePath) -> Option<&GlobalEntry> {
-        self.packages.get(package.as_str())
-    }
-
+    /// Record an install, replacing any previous entry for `package`.
+    ///
+    /// One entry per package per Houdini version: installing a second version
+    /// globally replaces the first rather than accumulating, matching the
+    /// single manifest file on disk.
     pub fn insert(&mut self, package: &PackagePath, entry: GlobalEntry) -> Option<GlobalEntry> {
         self.packages.insert(package.as_str().to_string(), entry)
     }
@@ -105,10 +106,7 @@ impl Ledger {
         self.packages.remove(package.as_str())
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.packages.is_empty()
-    }
-
+    /// Entries as `(scoped creator/slug, entry)` pairs.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &GlobalEntry)> {
         self.packages.iter()
     }
@@ -194,7 +192,7 @@ mod tests {
     fn missing_ledger_loads_as_empty() {
         let tmp = TempDir::new().unwrap();
         let ledger = Ledger::load(&tmp.path().join("nope.json")).unwrap();
-        assert!(ledger.is_empty());
+        assert_eq!(ledger.iter().count(), 0);
     }
 
     #[test]
@@ -207,7 +205,9 @@ mod tests {
         ledger.save(&path).unwrap();
 
         let loaded = Ledger::load(&path).unwrap();
-        assert_eq!(loaded.get(&pkg("acme/tools")).unwrap().version, "1.2.3");
+        let (name, entry) = loaded.iter().next().unwrap();
+        assert_eq!(name, "acme/tools");
+        assert_eq!(entry.version, "1.2.3");
     }
 
     /// A corrupt ledger must not read as "nothing is installed" — that would
