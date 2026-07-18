@@ -183,6 +183,33 @@ existing = "1.2.3" # keep me
         assert!(content.contains(r#""acme/tools" = "2.0.0""#));
     }
 
+    /// A `--registry` pin has to survive the write, otherwise the dependency
+    /// silently reverts to resolving across every configured registry on the
+    /// next install.
+    #[test]
+    fn upsert_persists_a_registry_pin() {
+        let dir = TempDir::new().unwrap();
+        let path = write_manifest(&dir);
+
+        upsert_dependency(
+            &path,
+            "acme/tools",
+            &DependencySpec::registry("2.0.0", Some("houdinihub".to_string())),
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains(r#"registry = "houdinihub""#),
+            "pin missing from manifest:\n{content}"
+        );
+
+        // And it must parse back out as a pin, not just be inert text.
+        let reloaded = hpm_package::PackageManifest::from_path(&path).unwrap();
+        let spec = reloaded.dependencies.get("acme/tools").unwrap();
+        assert_eq!(spec.registry_name(), Some("houdinihub"));
+    }
+
     #[test]
     fn upsert_replaces_existing_entry() {
         let dir = TempDir::new().unwrap();

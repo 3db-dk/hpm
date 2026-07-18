@@ -153,9 +153,15 @@ async fn collect_candidates(
         if !filter.is_empty() && !filter.contains(name.as_str()) {
             continue;
         }
-        // URL and Path deps don't update through a registry.
-        let ver_req_str = match spec {
-            DependencySpec::Registry { version: v, .. } => v,
+        // URL and Path deps don't update through a registry. A pinned
+        // `registry` narrows the candidate search to that registry, so an
+        // update can't silently migrate the dependency to another source.
+        let (ver_req_str, pinned_registry) = match spec {
+            DependencySpec::Registry {
+                version: v,
+                registry: r,
+                ..
+            } => (v, r.as_deref()),
             DependencySpec::Url { .. } | DependencySpec::Path { .. } => continue,
         };
 
@@ -171,7 +177,7 @@ async fn collect_candidates(
         };
 
         let entries = registry_set
-            .get_versions(name)
+            .get_versions_in(name, pinned_registry)
             .await
             .with_context(|| format!("Failed to query registry for {name}"))?;
 

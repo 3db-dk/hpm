@@ -239,6 +239,7 @@ proptest! {
             link: false,
             manifest: manifest_path.clone(),
             optional,
+            registry: None,
         };
 
         match add_cmd {
@@ -308,6 +309,7 @@ proptest! {
             link: false,
             manifest: None,
             optional: false,
+            registry: None,
         };
 
         // Command construction should succeed (validation happens later)

@@ -122,6 +122,12 @@ pub enum Commands {
         /// Mark dependencies as optional
         #[arg(long)]
         optional: bool,
+
+        /// Resolve from this configured registry only, and record the pin in
+        /// hpm.toml so later installs and updates keep using it. Incompatible
+        /// with --path.
+        #[arg(long, conflicts_with = "path")]
+        registry: Option<String>,
     },
     /// Remove a package dependency
     Remove {
@@ -410,12 +416,22 @@ async fn run_command(
             link,
             manifest,
             optional,
+            registry,
         } => {
             require_human("add", output)?;
             let config = load_cli_config()?;
-            commands::add::add_packages(&config, packages, path, link, manifest, optional, console)
-                .await
-                .cli_package("add")?;
+            commands::add::add_packages(
+                &config,
+                packages,
+                path,
+                link,
+                manifest,
+                optional,
+                registry.as_deref(),
+                console,
+            )
+            .await
+            .cli_package("add")?;
         }
         Commands::Remove { package, manifest } => {
             require_human("remove", output)?;

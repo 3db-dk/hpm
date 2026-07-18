@@ -201,6 +201,7 @@ or `name@version`. `name` uses the `creator/slug` form.
 | `--link` | For path dependencies, install as a symlink (Unix) or NTFS junction (Windows) instead of copying. Working-tree edits become visible to a live Houdini session without re-running `hpm install`. Requires `--path`. Packages that declare native `[compat].platforms` (a DSO/HDK build, not `universal`) are installed as a copy even with `--link`: a linked native binary can't be rebuilt in place while a Houdini session has it loaded (Windows `LNK1104`), and a mapped DSO needs a relaunch to reload anyway. |
 | `-m, --manifest <path>` | Path to the manifest to modify (`hpm.toml` or containing dir). Defaults to cwd. |
 | `--optional` | Mark all added dependencies as optional. |
+| `--registry <name>` | Resolve from this configured registry only, and record `registry = "<name>"` in `hpm.toml` so later installs and updates keep using it. Errors if the name is not configured. Not valid with `--path`. |
 
 **Examples**
 
@@ -211,6 +212,7 @@ hpm add local-tools --path ../local-tools
 hpm add local-tools --path ../local-tools --link  # live edits → Houdini
 hpm add studio/visualize@1.0.0 --optional
 hpm add studio/lib@1.0.0 -m /path/to/project
+hpm add studio/internal@1.0.0 --registry studio   # pin to one registry
 ```
 
 ### `hpm remove`
@@ -697,6 +699,13 @@ local-tools = { path = "../local-tools", optional = true }
 #    isolation, no effect on registry installs at the same coordinate.
 local-tools = { path = "../local-tools", link = true }
 ```
+
+A `registry = "<name>"` key pins the dependency to one configured registry.
+The pin is authoritative: resolution, install, and `hpm update` all consult
+only that registry, and pinning a registry that is not configured is an error
+rather than a silent fallback to the rest of the set. Without the key, a
+dependency resolves across every configured registry in order, first match
+wins. Add a pin from the command line with `hpm add <package> --registry <name>`.
 
 The lock file (`hpm.lock`) records the resolved version and SHA-256 checksum
 for each dependency, so subsequent installs are reproducible and tamper-evident.

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A dependency's `registry = "<name>"` pin is now honoured.** The field
+  parsed and round-tripped through `hpm.toml`, but nothing ever read it:
+  every registry dependency resolved first-match-wins across the whole
+  configured set. A manifest that pinned one registry could therefore be
+  served the package from a different one, silently, with no diagnostic.
+  Resolution, install, and `hpm update` now consult only the named
+  registry, and pinning an unconfigured name is a hard error instead of a
+  fallback to the rest of the set.
+
+### Added
+
+- **`hpm add --registry <name>`.** Resolves from a single configured
+  registry and records the pin in `hpm.toml`. Previously `hpm add` always
+  wrote `registry = None`, so a pin could only be created by editing the
+  manifest by hand. Not valid alongside `--path`. An unpinned `hpm add` is
+  unchanged: it still resolves across the whole set and stays unpinned,
+  since recording whichever registry answered first would silently narrow
+  future resolution.
+
 ## [0.28.1] - 2026-07-15
 
 ### Fixed

@@ -56,6 +56,13 @@ pub enum RegistryError {
         expected: String,
         actual: String,
     },
+
+    #[error(
+        "Dependency pins registry '{name}', which is not configured. \
+         Add it with `hpm registry add <url> --name {name}`, or drop the \
+         `registry` key to resolve across all configured registries."
+    )]
+    UnknownRegistry { name: String },
 }
 
 /// Trait for package registries.
@@ -196,9 +203,43 @@ impl RegistrySet {
         })
     }
 
+    /// The registries a lookup should consider.
+    ///
+    /// `None` means the whole set, searched in configured order. `Some(name)`
+    /// restricts to the single registry with that name — the dependency pinned
+    /// it, so falling back to the rest of the set would resolve the package
+    /// from a source the manifest explicitly did not ask for.
+    fn selected(&self, registry: Option<&str>) -> Result<Vec<&dyn Registry>, RegistryError> {
+        let Some(want) = registry else {
+            return Ok(self.registries.iter().map(|r| r.as_ref()).collect());
+        };
+        let found: Vec<&dyn Registry> = self
+            .registries
+            .iter()
+            .map(|r| r.as_ref())
+            .filter(|r| r.name() == want)
+            .collect();
+        if found.is_empty() {
+            return Err(RegistryError::UnknownRegistry {
+                name: want.to_string(),
+            });
+        }
+        Ok(found)
+    }
+
     /// Resolve a package name across all registries (first match wins).
     pub async fn get_versions(&self, name: &str) -> Result<Vec<RegistryEntry>, RegistryError> {
-        for registry in &self.registries {
+        self.get_versions_in(name, None).await
+    }
+
+    /// Like [`Self::get_versions`], but restricted to a pinned registry when
+    /// `registry` is `Some`.
+    pub async fn get_versions_in(
+        &self,
+        name: &str,
+        registry: Option<&str>,
+    ) -> Result<Vec<RegistryEntry>, RegistryError> {
+        for registry in self.selected(registry)? {
             match registry.get_versions(name).await {
                 Ok(versions) if !versions.is_empty() => return Ok(versions),
                 Ok(_) => continue,
@@ -217,7 +258,18 @@ impl RegistrySet {
         name: &str,
         version: &str,
     ) -> Result<RegistryEntry, RegistryError> {
-        for registry in &self.registries {
+        self.get_version_in(name, version, None).await
+    }
+
+    /// Like [`Self::get_version`], but restricted to a pinned registry when
+    /// `registry` is `Some`.
+    pub async fn get_version_in(
+        &self,
+        name: &str,
+        version: &str,
+        registry: Option<&str>,
+    ) -> Result<RegistryEntry, RegistryError> {
+        for registry in self.selected(registry)? {
             match registry.get_version(name, version).await {
                 Ok(entry) => return Ok(entry),
                 Err(RegistryError::PackageNotFound { .. })
@@ -242,13 +294,24 @@ impl RegistrySet {
     /// `">=2, <3"`, `"*"`) resolves to the highest non-yanked version
     /// matching the requirement.
     pub async fn resolve(&self, name: &str, req: &str) -> Result<RegistryEntry, RegistryError> {
+        self.resolve_in(name, req, None).await
+    }
+
+    /// Like [`Self::resolve`], but restricted to a pinned registry when
+    /// `registry` is `Some`.
+    pub async fn resolve_in(
+        &self,
+        name: &str,
+        req: &str,
+        registry: Option<&str>,
+    ) -> Result<RegistryEntry, RegistryError> {
         if semver::Version::parse(req).is_ok() {
-            return self.get_version(name, req).await;
+            return self.get_version_in(name, req, registry).await;
         }
         let parsed = semver::VersionReq::parse(req).map_err(|e| {
             RegistryError::ParseError(format!("Invalid version requirement '{}': {}", req, e))
         })?;
-        let versions = self.get_versions(name).await?;
+        let versions = self.get_versions_in(name, registry).await?;
         highest_matching(&versions, &parsed)
             .cloned()
             .ok_or_else(|| RegistryError::VersionNotFound {
@@ -318,5 +381,184 @@ pub fn highest_matching<'a>(
 impl Default for RegistrySet {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod set_tests {
+    use super::*;
+
+    /// A registry holding a fixed set of entries, used to observe which
+    /// registry a lookup actually reached.
+    struct FakeRegistry {
+        name: String,
+        entries: Vec<RegistryEntry>,
+    }
+
+    impl FakeRegistry {
+        fn new(name: &str, packages: &[(&str, &str)]) -> Self {
+            Self {
+                name: name.to_string(),
+                entries: packages
+                    .iter()
+                    .map(|(pkg, version)| RegistryEntry {
+                        name: (*pkg).to_string(),
+                        version: (*version).to_string(),
+                        cksum: None,
+                        dl: format!("https://{}/{}-{}.tar.gz", name, pkg, version),
+                        sig: None,
+                        kid: None,
+                        houdini_compat: None,
+                        platform: None,
+                        yanked: false,
+                        description: None,
+                        author: None,
+                        created_at: None,
+                    })
+                    .collect(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Registry for FakeRegistry {
+        async fn search(&self, _query: &str) -> Result<SearchResults, RegistryError> {
+            Ok(SearchResults {
+                packages: self.entries.clone(),
+                total: self.entries.len(),
+            })
+        }
+
+        async fn get_versions(&self, name: &str) -> Result<Vec<RegistryEntry>, RegistryError> {
+            let found: Vec<_> = self
+                .entries
+                .iter()
+                .filter(|e| e.name == name)
+                .cloned()
+                .collect();
+            if found.is_empty() {
+                return Err(RegistryError::PackageNotFound {
+                    name: name.to_string(),
+                });
+            }
+            Ok(found)
+        }
+
+        async fn get_version(
+            &self,
+            name: &str,
+            version: &str,
+        ) -> Result<RegistryEntry, RegistryError> {
+            self.entries
+                .iter()
+                .find(|e| e.name == name && e.version == version)
+                .cloned()
+                .ok_or_else(|| RegistryError::VersionNotFound {
+                    name: name.to_string(),
+                    version: version.to_string(),
+                })
+        }
+
+        async fn refresh(&self) -> Result<(), RegistryError> {
+            Ok(())
+        }
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+    }
+
+    /// Two registries both carrying the same package at the same version;
+    /// only the download URL reveals which one answered.
+    fn ambiguous_set() -> RegistrySet {
+        let mut set = RegistrySet::new();
+        set.add(Box::new(FakeRegistry::new(
+            "first",
+            &[("acme/tools", "1.0.0")],
+        )));
+        set.add(Box::new(FakeRegistry::new(
+            "second",
+            &[("acme/tools", "1.0.0")],
+        )));
+        set
+    }
+
+    #[tokio::test]
+    async fn unpinned_lookup_takes_the_first_registry() {
+        let entry = ambiguous_set()
+            .get_version_in("acme/tools", "1.0.0", None)
+            .await
+            .unwrap();
+        assert!(entry.dl.contains("//first/"), "got {}", entry.dl);
+    }
+
+    /// The regression this guards: a pinned registry must win over
+    /// configured order, otherwise the manifest asks for one source and
+    /// silently gets another.
+    #[tokio::test]
+    async fn pinned_lookup_uses_the_named_registry_not_the_first() {
+        let entry = ambiguous_set()
+            .get_version_in("acme/tools", "1.0.0", Some("second"))
+            .await
+            .unwrap();
+        assert!(entry.dl.contains("//second/"), "got {}", entry.dl);
+    }
+
+    /// A pin must not silently fall back to the rest of the set.
+    #[tokio::test]
+    async fn pinned_lookup_does_not_fall_back_to_other_registries() {
+        let mut set = RegistrySet::new();
+        set.add(Box::new(FakeRegistry::new(
+            "first",
+            &[("acme/tools", "1.0.0")],
+        )));
+        set.add(Box::new(FakeRegistry::new(
+            "second",
+            &[("other/pkg", "1.0.0")],
+        )));
+
+        let err = set
+            .get_version_in("acme/tools", "1.0.0", Some("second"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RegistryError::VersionNotFound { .. }),
+            "expected VersionNotFound, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pinning_an_unconfigured_registry_is_an_error() {
+        let err = ambiguous_set()
+            .get_version_in("acme/tools", "1.0.0", Some("typo"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, RegistryError::UnknownRegistry { name } if name == "typo"),
+            "expected UnknownRegistry, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_in_honours_the_pin_for_ranges() {
+        let mut set = RegistrySet::new();
+        set.add(Box::new(FakeRegistry::new(
+            "first",
+            &[("acme/tools", "1.0.0")],
+        )));
+        set.add(Box::new(FakeRegistry::new(
+            "second",
+            &[("acme/tools", "1.5.0")],
+        )));
+
+        // Unpinned: first-match-wins stops at "first" and never sees 1.5.0.
+        let unpinned = set.resolve_in("acme/tools", "^1", None).await.unwrap();
+        assert_eq!(unpinned.version, "1.0.0");
+
+        let pinned = set
+            .resolve_in("acme/tools", "^1", Some("second"))
+            .await
+            .unwrap();
+        assert_eq!(pinned.version, "1.5.0");
     }
 }

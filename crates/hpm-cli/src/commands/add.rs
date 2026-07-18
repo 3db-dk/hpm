@@ -64,6 +64,7 @@ fn parse_name_version(input: &str) -> (String, Option<String>) {
 /// * `link` - For path dependencies, install as symlink/junction instead of copy
 /// * `manifest_path` - Path to the manifest file or directory
 /// * `optional` - Whether the dependencies are optional
+/// * `registry` - Resolve from this registry only, and record the pin
 /// * `console` - Console for user-facing output
 pub async fn add_packages(
     config: &Config,
@@ -72,6 +73,7 @@ pub async fn add_packages(
     link: bool,
     manifest_path: Option<PathBuf>,
     optional: bool,
+    registry: Option<&str>,
     console: &mut Console,
 ) -> Result<()> {
     // Validate at least one package specified
@@ -139,15 +141,19 @@ pub async fn add_packages(
             // non-yanked semver.
             let req = requested_version.as_deref().unwrap_or("*");
             let entry = registry_set
-                .resolve(&pkg_name, req)
+                .resolve_in(&pkg_name, req, registry)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to resolve {}@{}: {}", pkg_name, req, e))?;
 
             info!("Resolved {} -> {}", pkg_name, entry.version);
 
+            // Only an explicit --registry becomes a pin. An unpinned add
+            // resolved across the whole set stays unpinned, so recording the
+            // registry that happened to answer first would silently narrow
+            // future resolution to it.
             DependencySpec::Registry {
                 version: entry.version.clone(),
-                registry: None,
+                registry: registry.map(str::to_string),
                 optional,
             }
         };

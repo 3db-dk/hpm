@@ -698,7 +698,9 @@ async fn install_one_dep(
 ) -> Result<InstallOutcome, ProjectError> {
     use hpm_package::DependencySpec;
     match spec {
-        DependencySpec::Registry { version, .. } => {
+        DependencySpec::Registry {
+            version, registry, ..
+        } => {
             if let Some(pkg) = all_installed
                 .iter()
                 .find(|p| ProjectManager::matches_spec_name(p, name) && p.version == *version)
@@ -722,13 +724,14 @@ async fn install_one_dep(
                     version_req: version.clone(),
                 });
             }
-            let entry = rs.get_version(name, version).await.map_err(|source| {
-                ProjectError::RegistryResolution {
+            let entry = rs
+                .get_version_in(name, version, registry.as_deref())
+                .await
+                .map_err(|source| ProjectError::RegistryResolution {
                     name: name.to_string(),
                     version_req: version.clone(),
                     source: Box::new(source),
-                }
-            })?;
+                })?;
             let url = entry.dl.clone();
             let source = PackageSource::url(url.clone(), version)?
                 .with_registry_checksum(entry.cksum.as_deref())?;
