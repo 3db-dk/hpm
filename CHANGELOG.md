@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-07-18
+
+No functional change over 0.29.0. The `v0.29.0` tag failed CI and
+published no binaries, so 0.29.1 is the first release carrying that
+work — see the 0.29.0 entry below for what it contains.
+
+### Fixed
+
+- **The Houdini conformance test no longer pins its fixtures to Houdini
+  21.x, which had been blocking every release since 0.28.0.** The test
+  builds fixture packages with `PackageManifest::new`, which defaults
+  `[compat].houdini` to `^21`; that lowers to an `enable` clause excluding
+  Houdini 22, so Houdini skipped the fixture manifests entirely and only
+  the never-gated project overrides manifest contributed. The env-merge
+  assertions then failed with a diff that looked like broken merge
+  semantics but meant "the fixtures never loaded".
+
+  The build workers carry both Houdini 21 and 22 and the test targets the
+  newest, so this failed in CI while passing on a developer machine with
+  only Houdini 21 installed. Because all three `build-*` workflows declare
+  `depends_on: check`, the failure skipped every platform build — v0.28.0,
+  v0.28.1 and v0.29.0 were all tagged without producing binaries.
+
+  Houdini's env merging is identical across 21 and 22; this was never an
+  hpm emission bug. Verified by running the same emitted manifests through
+  `hconfig` on 21.0.729 and 22.0.368. The fixtures now declare `>=20`, and
+  a guard reports "package manifests did not load" instead of a misleading
+  value diff if this regresses.
+
 ## [0.29.0] - 2026-07-18
 
 ### Changed (breaking)
