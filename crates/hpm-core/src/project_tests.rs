@@ -747,11 +747,11 @@ fn sweep_stale_houdini_manifests_removes_orphaned_json() {
     std::fs::create_dir_all(&project_root).unwrap();
     let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
-    // Simulate the prior sync's output: foo.json (current dep) and
-    // stale.json (dep that left the set).
+    // Simulate the prior sync's output: creator.foo.json (current dep) and
+    // creator.stale.json (dep that left the set).
     let pkg_dir = &project_manager.project_paths.packages_dir;
-    let foo_json = pkg_dir.join("foo.json");
-    let stale_json = pkg_dir.join("stale.json");
+    let foo_json = pkg_dir.join("creator.foo.json");
+    let stale_json = pkg_dir.join("creator.stale.json");
     let unrelated = pkg_dir.join("README.md");
     std::fs::write(&foo_json, b"{}").unwrap();
     std::fs::write(&stale_json, b"{}").unwrap();
@@ -779,6 +779,95 @@ fn sweep_stale_houdini_manifests_removes_orphaned_json() {
     assert!(foo_json.exists(), "current dep manifest must be kept");
     assert!(!stale_json.exists(), "stale dep manifest must be swept");
     assert!(unrelated.exists(), "non-json files must be left alone");
+}
+
+/// Two creators publishing the same slug must each get their own manifest.
+/// Before the filename carried the creator, the second package installed
+/// silently overwrote the first, and Houdini loaded only one of them.
+#[test]
+fn manifests_for_colliding_slugs_do_not_overwrite_each_other() {
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+
+    let make = |creator: &str| {
+        let manifest = hpm_package::PackageManifest::new(
+            PackagePath::new(format!("{creator}/tools")).unwrap(),
+            "Tools".to_string(),
+            "1.0.0".to_string(),
+            None,
+            Vec::new(),
+            None,
+        );
+        InstalledPackage {
+            version: "1.0.0".to_string(),
+            manifest,
+            install_path: temp_dir.path().join(format!("{creator}-tools@1.0.0")),
+            is_dev: false,
+        }
+    };
+    let a = make("creator-a");
+    let b = make("creator-b");
+
+    for pkg in [&a, &b] {
+        project_manager
+            .generate_houdini_manifest_with_python(pkg, None, &IndexMap::new())
+            .unwrap();
+    }
+
+    let pkg_dir = &project_manager.project_paths.packages_dir;
+    assert!(pkg_dir.join("creator-a.tools.json").exists());
+    assert!(pkg_dir.join("creator-b.tools.json").exists());
+
+    // And both survive a sweep that knows about both.
+    project_manager
+        .sweep_stale_houdini_manifests(&[a, b])
+        .unwrap();
+    assert!(pkg_dir.join("creator-a.tools.json").exists());
+    assert!(pkg_dir.join("creator-b.tools.json").exists());
+}
+
+/// Migration: manifests written by an older hpm used the bare slug. They
+/// are not in the current naming scheme, so the sweep clears them and the
+/// emitter rewrites them under the creator-scoped name — otherwise Houdini
+/// would load the package twice, once per filename.
+#[test]
+fn sweep_removes_legacy_bare_slug_manifests() {
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+
+    let pkg_dir = &project_manager.project_paths.packages_dir;
+    let legacy = pkg_dir.join("foo.json");
+    std::fs::write(&legacy, b"{}").unwrap();
+
+    let manifest = hpm_package::PackageManifest::new(
+        PackagePath::new("creator/foo").unwrap(),
+        "Foo".to_string(),
+        "1.0.0".to_string(),
+        None,
+        Vec::new(),
+        None,
+    );
+    let installed = InstalledPackage {
+        version: "1.0.0".to_string(),
+        manifest,
+        install_path: temp_dir.path().join("foo@1.0.0"),
+        is_dev: false,
+    };
+
+    project_manager
+        .sweep_stale_houdini_manifests(std::slice::from_ref(&installed))
+        .unwrap();
+
+    assert!(
+        !legacy.exists(),
+        "legacy bare-slug manifest must be swept so the package loads once"
+    );
 }
 
 /// An empty dependency set must still sweep prior `<slug>.json` files.

@@ -88,6 +88,27 @@ impl PackagePath {
     pub fn slug(&self) -> &str {
         &self.full[self.sep + 1..]
     }
+
+    /// Filename stem identifying this package on disk, e.g.
+    /// `"tumblehead.fire-fx"`.
+    ///
+    /// `/` cannot appear in a filename, and joining the segments with `-`
+    /// would be ambiguous — segments may themselves contain `-`, so
+    /// `a-b/c` and `a/b-c` would both render as `a-b-c`. `.` is not a legal
+    /// segment character (see [`is_valid_segment`]), so it separates the two
+    /// segments unambiguously and [`from_file_stem`] can invert this exactly.
+    ///
+    /// [`from_file_stem`]: Self::from_file_stem
+    pub fn file_stem(&self) -> String {
+        format!("{}.{}", self.creator(), self.slug())
+    }
+
+    /// Inverse of [`file_stem`](Self::file_stem). Returns `None` when the
+    /// stem is not exactly two `.`-separated valid segments.
+    pub fn from_file_stem(stem: &str) -> Option<Self> {
+        let (creator, slug) = stem.split_once('.')?;
+        Self::new(format!("{}/{}", creator, slug)).ok()
+    }
 }
 
 fn is_valid_segment(s: &str) -> bool {
@@ -173,6 +194,39 @@ mod tests {
     #[test]
     fn empty_rejected() {
         assert!(matches!(PackagePath::new(""), Err(PackagePathError::Empty)));
+    }
+
+    #[test]
+    fn file_stem_round_trips() {
+        let p = PackagePath::new("tumblehead/fire-fx").unwrap();
+        assert_eq!(p.file_stem(), "tumblehead.fire-fx");
+        assert_eq!(PackagePath::from_file_stem(&p.file_stem()), Some(p));
+    }
+
+    /// Segments may contain `-`, so a `-` join would map `a-b/c` and
+    /// `a/b-c` onto the same filename. The `.` separator must not.
+    #[test]
+    fn file_stem_is_unambiguous_across_hyphenated_segments() {
+        let a = PackagePath::new("creator-a/tools").unwrap();
+        let b = PackagePath::new("creator/a-tools").unwrap();
+        assert_ne!(a.file_stem(), b.file_stem());
+        assert_eq!(
+            PackagePath::from_file_stem(&a.file_stem()).as_ref(),
+            Some(&a)
+        );
+        assert_eq!(
+            PackagePath::from_file_stem(&b.file_stem()).as_ref(),
+            Some(&b)
+        );
+    }
+
+    #[test]
+    fn from_file_stem_rejects_non_package_names() {
+        // Houdini manifests written by hand or by other tools sit in the
+        // same directory; they must not parse as hpm-owned files.
+        assert_eq!(PackagePath::from_file_stem("my-tools"), None);
+        assert_eq!(PackagePath::from_file_stem("~hpm-project-overrides"), None);
+        assert_eq!(PackagePath::from_file_stem("a.b.c"), None);
     }
 
     #[test]

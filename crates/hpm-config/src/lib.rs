@@ -368,13 +368,26 @@ ignore_patterns = ["backup", ".cache", "temp"]
     fn project_paths_package_manifest_path() {
         let project_root = PathBuf::from("/test/project");
         let project_paths = Config::project_paths(&project_root);
-        let manifest_path = project_paths.package_manifest_path("test-package");
+        let path = hpm_package::PackagePath::new("acme/test-package").unwrap();
+        let manifest_path = project_paths.package_manifest_path(&path);
         // Normalize path separators for cross-platform testing
         let manifest_path_str = manifest_path.to_string_lossy().replace('\\', "/");
         assert!(
-            manifest_path_str.ends_with(".hpm/packages/test-package.json"),
-            "Expected path to end with '.hpm/packages/test-package.json', got: {}",
+            manifest_path_str.ends_with(".hpm/packages/acme.test-package.json"),
+            "Expected path to end with '.hpm/packages/acme.test-package.json', got: {}",
             manifest_path_str
+        );
+    }
+
+    /// Two creators publishing the same slug must not collide on disk.
+    #[test]
+    fn project_paths_manifest_names_are_creator_scoped() {
+        let project_paths = Config::project_paths(&PathBuf::from("/test/project"));
+        let a = hpm_package::PackagePath::new("creator-a/tools").unwrap();
+        let b = hpm_package::PackagePath::new("creator-b/tools").unwrap();
+        assert_ne!(
+            project_paths.package_manifest_path(&a),
+            project_paths.package_manifest_path(&b)
         );
     }
 

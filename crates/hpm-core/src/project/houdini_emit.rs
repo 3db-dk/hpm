@@ -37,9 +37,9 @@ impl ProjectManager {
             return Ok(());
         }
 
-        let valid_slugs: std::collections::HashSet<&str> = installed_packages
+        let valid_stems: std::collections::HashSet<String> = installed_packages
             .iter()
-            .map(|pkg| pkg.manifest.package.slug())
+            .map(|pkg| pkg.manifest.package.path.file_stem())
             .collect();
 
         let entries = std::fs::read_dir(packages_dir)
@@ -59,11 +59,11 @@ impl ProjectManager {
             if file_name == PROJECT_OVERRIDES_FILE {
                 continue;
             }
-            let slug = match file_name.strip_suffix(".json") {
-                Some(slug) => slug,
+            let stem = match file_name.strip_suffix(".json") {
+                Some(stem) => stem,
                 None => continue,
             };
-            if valid_slugs.contains(slug) {
+            if valid_stems.contains(stem) {
                 continue;
             }
 
@@ -98,7 +98,7 @@ impl ProjectManager {
         )?;
         let manifest_path = self
             .project_paths
-            .package_manifest_path(installed_package.manifest.package.slug());
+            .package_manifest_path(&installed_package.manifest.package.path);
 
         let content = serde_json::to_vec_pretty(&houdini_package).map_err(|source| {
             ProjectError::HoudiniManifestSerialize {

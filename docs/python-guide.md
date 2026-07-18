@@ -143,7 +143,7 @@ new hash and therefore a new venv.
 ### Why this matters
 
 - **Disk usage** drops dramatically for studios with many packages that all want, say, `numpy` and `qtpy`.
-- **Install speed** — a matching hash means no resolution and no install, just a pointer from `.hpm/packages/{name}.json` to the existing venv.
+- **Install speed** — a matching hash means no resolution and no install, just a pointer from `.hpm/packages/{creator}.{slug}.json` to the existing venv.
 - **Consistency** — every package sharing a venv sees the same transitive dependency versions.
 
 The per-venv `metadata.json` records which HPM packages are using the venv,
@@ -174,7 +174,7 @@ describes for Houdini, reused for an out-of-Houdini process. See
 ## Houdini integration
 
 Once `hpm install` has produced the venv, it writes a Houdini manifest per
-dependency into `<project>/.hpm/packages/{name}.json`:
+dependency into `<project>/.hpm/packages/{creator}.{slug}.json`:
 
 ```json
 {
@@ -267,7 +267,7 @@ Options:
 Check, in order:
 
 1. `HOUDINI_PACKAGE_PATH` includes `<project>/.hpm/packages`. Print it in a shelf tool to confirm.
-2. `.hpm/packages/{name}.json` exists for the offending package and has a `PYTHONPATH` entry.
+2. `.hpm/packages/{creator}.{slug}.json` exists for the offending package and has a `PYTHONPATH` entry.
 3. The venv the `PYTHONPATH` points at exists and its `site-packages/` contains a `dist-info/` for the offending package. If it doesn't, upgrade past **0.7.2** — earlier versions had a `uv pip install --target` bug that left `site-packages` empty despite a successful install. 0.7.2 self-heals these legacy venvs on the next `hpm install`.
 
 ### uv fails to create a venv
@@ -353,7 +353,7 @@ on the same 12-character prefix.
 5. If that directory exists and its `site-packages/` has a `dist-info/` for each resolved package, reuse it. Otherwise, delete and rebuild.
 6. Run `uv pip install --python <venv>/bin/python` to populate `site-packages/`.
 7. Write `metadata.json` with the resolved set and the list of HPM packages using the venv.
-8. For each installed HPM package, write a `<project>/.hpm/packages/{name}.json` Houdini manifest that prepends the venv's `site-packages` onto `PYTHONPATH`.
+8. For each installed HPM package, write a `<project>/.hpm/packages/{creator}.{slug}.json` Houdini manifest that prepends the venv's `site-packages` onto `PYTHONPATH`.
 
 ### Resources
 

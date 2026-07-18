@@ -251,12 +251,16 @@ impl ProjectManager {
         // 1. Remove from project manifest (hpm.toml)
         self.remove_from_project_manifest(name)?;
 
-        // 2. Remove Houdini package manifest from project
-        let manifest_path = self.project_paths.package_manifest_path(name);
-        if manifest_path.exists() {
-            std::fs::remove_file(&manifest_path)
-                .map_err(|e| IoOp::wrap("remove Houdini manifest at", &manifest_path, e))?;
-            debug!("Removed Houdini manifest: {:?}", manifest_path);
+        // 2. Remove Houdini package manifest from project. `name` is the
+        //    dependency key, i.e. a scoped `creator/slug`; a key that isn't a
+        //    well-formed package path never had a manifest emitted for it.
+        if let Ok(path) = hpm_package::PackagePath::new(name) {
+            let manifest_path = self.project_paths.package_manifest_path(&path);
+            if manifest_path.exists() {
+                std::fs::remove_file(&manifest_path)
+                    .map_err(|e| IoOp::wrap("remove Houdini manifest at", &manifest_path, e))?;
+                debug!("Removed Houdini manifest: {:?}", manifest_path);
+            }
         }
 
         info!("Successfully removed dependency: {}", name);

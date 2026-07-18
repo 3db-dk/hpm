@@ -242,7 +242,7 @@ Install does the following:
 2. If `hpm.lock` exists, verifies cached packages against stored checksums and warns if the lock is older than 90 days.
 3. Resolves HPM dependencies through configured registries and downloads anything missing to `~/.hpm/packages/`.
 4. Collects Python dependencies from the root manifest and every installed dependency's manifest, downloads a managed CPython matching the lower bound of the root manifest's `[compat].houdini` to `~/.hpm/uv-python/` (no-op if already present), resolves them with the bundled `uv`, and installs them into a content-addressable venv in `~/.hpm/venvs/<hash>/`.
-5. Writes one Houdini manifest per installed dependency to `<project>/.hpm/packages/{name}.json`.
+5. Writes one Houdini manifest per installed dependency to `<project>/.hpm/packages/{creator}.{slug}.json`.
 6. Writes or updates `hpm.lock`.
 
 **Options**
@@ -1356,7 +1356,7 @@ Per-project layout:
 ## Houdini integration
 
 `hpm install` writes one Houdini `package.json` per dependency into
-`<project>/.hpm/packages/{name}.json`. Each file points `hpath` at the
+`<project>/.hpm/packages/{creator}.{slug}.json`. Each file points `hpath` at the
 absolute location of the extracted package in `~/.hpm/packages/` and, for
 packages that declare `[python_dependencies]`, prepends the shared venv's
 `site-packages` onto `PYTHONPATH`:
@@ -1497,7 +1497,7 @@ has drifted — review the diff from `hpm update --dry-run`.
 Check that:
 
 1. `HOUDINI_PACKAGE_PATH` includes `<project>/.hpm/packages`.
-2. The generated `.hpm/packages/{name}.json` has a `PYTHONPATH` entry for the offending package.
+2. The generated `.hpm/packages/{creator}.{slug}.json` has a `PYTHONPATH` entry for the offending package.
 3. The venv directory it points to exists and contains `site-packages/`. If it doesn't, upgrade past 0.7.2 — earlier versions had a bug where the venv's `site-packages` was empty despite a successful install.
 
 Restart Houdini after any change to `HOUDINI_PACKAGE_PATH`.

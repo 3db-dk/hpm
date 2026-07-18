@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Houdini manifests are now named `<creator>.<slug>.json` instead of
+  `<slug>.json`.** The slug alone is not a unique package identifier, so
+  two dependencies from different creators sharing a slug (`creator-a/tools`
+  and `creator-b/tools`) wrote the same file and the second install silently
+  overwrote the first — Houdini loaded only one of the two packages, with no
+  error. `.` separates the segments because both may contain `-`, which
+  would make a `-` join ambiguous (`a-b/c` vs `a/b-c`).
+
+  Migration is automatic: manifests written by an older hpm under the bare
+  slug name are cleared by the existing stale sweep on the next `hpm install`
+  and rewritten under the new name. No action required, but note the sweep
+  only runs on install, so run `hpm install` once per project to clear the
+  old files rather than leaving both names present.
+
+- **`hpm remove` now actually deletes the dependency's Houdini manifest.**
+  It built the path from the scoped dependency key, producing
+  `.hpm/packages/<creator>/<slug>.json` — a nested path that never exists —
+  so the removal was a silent no-op. It only appeared to work because the
+  command re-syncs afterwards and the stale sweep caught the file.
+
 - **A dependency's `registry = "<name>"` pin is now honoured.** The field
   parsed and round-tripped through `hpm.toml`, but nothing ever read it:
   every registry dependency resolved first-match-wins across the whole

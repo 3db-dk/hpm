@@ -426,12 +426,24 @@ across a studio's worth of projects. The Houdini JSON manifests carry
 absolute CAS paths, so the project tree contains no symlinks pointing into
 the global storage.
 
+Each per-package manifest is named `<creator>.<slug>.json`. The creator
+segment is part of the filename because the slug alone is not unique: two
+creators may publish the same slug, and keying the file on the slug let the
+second install silently overwrite the first, so Houdini loaded only one of
+them. `.` is the separator rather than `-` because both segments may
+themselves contain `-` (`a-b/c` and `a/b-c` would collide), while `.` is not
+a legal segment character.
+
 `sync_dependencies` sweeps stale per-package manifests at the end of every
-install run: any `<slug>.json` in `<project>/.hpm/packages/` whose slug is no
+install run: any `.json` in `<project>/.hpm/packages/` whose stem is no
 longer in the resolved dependency set is removed. Without this, a manifest
 written by a previous run (e.g. for a path dependency that has since been removed)
 would keep loading the package on Houdini launch even though `hpm.toml` no
-longer asks for it.
+longer asks for it. Manifests written by an older hpm under the bare
+`<slug>.json` name are not in the current scheme, so the same sweep clears
+them on the next install — otherwise the package would load twice, once per
+filename. Note this makes `<project>/.hpm/packages/` an hpm-owned directory:
+unrecognized `.json` files placed there by hand do not survive a sync.
 
 Path dependencies install into `~/.hpm/packages/_dev/<slug>@<version>/`
 rather than the registry CAS at `~/.hpm/packages/<slug>@<version>/`.
@@ -553,7 +565,7 @@ The Python layer runs on four ideas, in descending order of importance:
 1. **Content-addressable venvs.** Hash the resolved dependency set, use it as the venv directory name. Same hash → same venv → shared across packages.
 2. **Bundled uv.** A copy of `uv` ships with HPM and lives at `~/.hpm/tools/uv`. Its cache (`~/.hpm/uv-cache/`), config (`~/.hpm/uv-config/`), and managed CPython installs (`~/.hpm/uv-python/`, pinned via `UV_PYTHON_INSTALL_DIR`) are isolated from any system `uv` so HPM never perturbs your other Python work.
 3. **Self-bootstrapping Python.** `uv pip compile` and `uv venv` need an interpreter. Before invoking either, HPM runs `uv python install <ver>` to ensure a managed CPython matching the project's Houdini ABI exists. This is what makes a clean Windows install (no system Python anywhere) Just Work — without it `pip compile` errors with `No interpreter found in virtual environments, managed installations, search path, or registry`. The ensure step is process-cached, so it costs one fast filesystem probe per resolution.
-4. **Houdini manifest generation.** For each HPM package that declares Python dependencies, HPM writes `<project>/.hpm/packages/{name}.json` with `PYTHONPATH` prepended at the shared venv's `site-packages`.
+4. **Houdini manifest generation.** For each HPM package that declares Python dependencies, HPM writes `<project>/.hpm/packages/{creator}.{slug}.json` with `PYTHONPATH` prepended at the shared venv's `site-packages`.
 
 ### Hash function
 

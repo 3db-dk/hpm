@@ -210,7 +210,7 @@ Per-project:
 |------|----------|
 | `<project>/hpm.toml` | Manifest. |
 | `<project>/hpm.lock` | Pinned versions + checksums. Commit this. |
-| `<project>/.hpm/packages/{name}.json` | Per-dependency Houdini manifest. Auto-generated. |
+| `<project>/.hpm/packages/{creator}.{slug}.json` | Per-dependency Houdini manifest. Auto-generated. |
 | `<project>/.hpm/config.toml` | Optional project-level configuration override. |
 
 The defaults live under `$HOME` on every platform. To relocate them (e.g., a
