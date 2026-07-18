@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-07-18
+
+### Changed (breaking)
+
+Behavioral, for everyone:
+
+- **A dependency's `registry = "<name>"` pin now constrains resolution.** A
+  manifest that pins a registry previously resolved across all of them, so a
+  package could have been coming from a different registry than the pin
+  names. After upgrading, such a dependency resolves only from the pinned
+  registry and fails if it is not there — which is the point, but it can turn
+  a previously "working" install into an error that was always misconfigured.
+  Pinning a registry that is not configured is likewise now an error.
+
+- **Houdini manifests are named `<creator>.<slug>.json`.** Migration is
+  automatic (see Fixed), but it happens on the next `hpm install` per
+  project, not at upgrade time.
+
+Library API, for embedders (the desktop client):
+
+- `ProjectPaths::package_manifest_path` takes `&PackagePath` instead of
+  `&str`, so a caller cannot pass something that is not a package
+  identifier. Call sites pass `&pkg.manifest.package.path`.
+- `StorageError` gains a `GlobalLedger` variant; exhaustive matches need a
+  new arm.
+- `HoudiniRange::matches_version` takes a third `build: Option<u32>`
+  argument (new in this release, but noted since it is public).
+
 ### Fixed
 
 - **`hpm clean --python-only` no longer proposes deleting every venv on the
