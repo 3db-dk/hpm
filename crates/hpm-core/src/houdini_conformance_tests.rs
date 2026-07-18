@@ -255,6 +255,19 @@ fn houdini_resolves_generated_packages_per_method() {
             Vec::new(),
             None,
         );
+        // `PackageManifest::new` defaults `[compat].houdini` to `^21`, which
+        // lowers to `enable: houdini_version >= '21' and < '22'`. This test
+        // runs against whatever Houdini is installed, so that default makes
+        // the fixtures load on 21.x and be skipped everywhere else — the
+        // package files contribute nothing, only the (never-gated) overrides
+        // file does, and the env-merge assertions below fail for a reason
+        // that has nothing to do with merging. Widen it so the fixtures load
+        // on any Houdini this test can encounter, while still emitting a real
+        // `enable` clause. Verified on 21.0.729 and 22.0.368.
+        manifest.compat.houdini = Some(
+            hpm_package::HoudiniRange::parse(">=20")
+                .expect("conformance fixture range is well-formed"),
+        );
         let mut runtime = IndexMap::new();
         for (var, method, value) in entries {
             runtime.insert(var.to_string(), runtime_entry(method, value));
@@ -327,6 +340,19 @@ fn houdini_resolves_generated_packages_per_method() {
             .unwrap_or_else(|| panic!("{name} missing from resolved variables:\n{log}"))
             .clone()
     };
+
+    // Before comparing merge order, confirm the package files were loaded at
+    // all. If their `enable` clause excludes the Houdini under test, Houdini
+    // skips them silently and only the never-gated overrides manifest
+    // contributes — every assertion below then fails with a diff that looks
+    // like broken merge semantics. `HPMT_CONF_SOLO` is declared by a package
+    // and by no override, so it is present exactly when the packages loaded.
+    assert!(
+        vars.contains_key("HPMT_CONF_SOLO"),
+        "package manifests did not load under this Houdini — their `enable` \
+         clause probably excludes it. Check `[compat].houdini` on the \
+         fixtures against the Houdini being tested.\n{log}"
+    );
 
     // append override: package values in file order, override once, last.
     assert_eq!(
