@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`hpm clean --python-only` no longer proposes deleting every venv on the
+  machine, including in-use ones.** `VenvMetadata.used_by_packages` was
+  never written by any production code path — `add_package_reference` had no
+  callers outside a proptest — so the "is this venv still used?" check
+  compared the active package list against a permanently empty vec, matched
+  nothing, and classified every venv as orphaned. Venv creation now records
+  the packages that contributed Python dependencies, and a venv with no
+  recorded owners is kept rather than collected, since empty means
+  "provenance unknown" (a per-script venv, or one created by an earlier hpm)
+  rather than "unused".
+
+  Consequence for existing installs: venvs created before this release carry
+  no owners and so are never collected automatically. They gain owners the
+  next time an install resolves to the same dependency set. To reclaim the
+  space now, delete `~/.hpm/venvs/` — it is a cache and is rebuilt on demand.
+
+  Owner references are scoped (`creator/slug@version`). The previous
+  comparison used the bare slug, which would have let an unrelated package
+  sharing a slug keep another creator's venv alive once the list was
+  populated.
+
 - **Houdini manifests are now named `<creator>.<slug>.json` instead of
   `<slug>.json`.** The slug alone is not a unique package identifier, so
   two dependencies from different creators sharing a slug (`creator-a/tools`

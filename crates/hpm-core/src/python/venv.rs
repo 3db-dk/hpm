@@ -103,6 +103,25 @@ impl VenvManager {
         &self,
         resolved_deps: &ResolvedDependencySet,
     ) -> Result<PathBuf, PythonError> {
+        self.ensure_virtual_environment_for(resolved_deps, &[])
+            .await
+    }
+
+    /// Like [`ensure_virtual_environment`], but records which packages this
+    /// venv was built for.
+    ///
+    /// `used_by` entries are `creator/slug@version` identifiers. They are the
+    /// only durable record of what a venv belongs to: the venv is keyed by a
+    /// hash of the *resolved* dependency set, which cannot be recomputed
+    /// during cleanup without re-running the resolver. Cleanup uses them to
+    /// tell a live venv from one whose packages are all gone.
+    ///
+    /// [`ensure_virtual_environment`]: Self::ensure_virtual_environment
+    pub async fn ensure_virtual_environment_for(
+        &self,
+        resolved_deps: &ResolvedDependencySet,
+        used_by: &[String],
+    ) -> Result<PathBuf, PythonError> {
         let hash = resolved_deps.hash();
         let venv_path = self.venvs_dir.join(&hash);
 
@@ -132,7 +151,8 @@ impl VenvManager {
             debug!("Using existing virtual environment: {}", hash);
         }
 
-        self.update_venv_metadata(&venv_path, resolved_deps).await?;
+        self.update_venv_metadata(&venv_path, resolved_deps, used_by)
+            .await?;
 
         Ok(venv_path)
     }
@@ -284,6 +304,7 @@ impl VenvManager {
         &self,
         venv_path: &Path,
         resolved_deps: &ResolvedDependencySet,
+        used_by: &[String],
     ) -> Result<(), PythonError> {
         let hash = resolved_deps.hash();
         let metadata_path = venv_path.join("metadata.json");
@@ -295,6 +316,13 @@ impl VenvManager {
             // Create new metadata
             VenvMetadata::new(hash, resolved_deps.clone(), venv_path.to_path_buf())
         };
+
+        // Accumulate rather than replace: one venv is shared by every project
+        // resolving to the same dependency set, and this call only knows about
+        // the packages of the project currently syncing.
+        for package in used_by {
+            metadata.add_package_reference(package.clone());
+        }
 
         metadata.last_used = Some(std::time::SystemTime::now());
 
@@ -349,7 +377,17 @@ impl VenvManager {
         Ok(metadata)
     }
 
-    /// Find orphaned virtual environments
+    /// Find virtual environments whose owning packages are all uninstalled.
+    ///
+    /// `active_packages` holds `creator/slug@version` identifiers of the
+    /// currently installed packages.
+    ///
+    /// A venv with no recorded owners is **kept**, not collected. Empty means
+    /// "provenance unknown", not "unused": it is what venvs created before
+    /// owners were recorded look like, and it is also what a `[scripts]`
+    /// venv looks like, since those belong to a script rather than to an
+    /// installed package. Treating empty as unused is what made this collect
+    /// every venv on the system, including in-use ones.
     pub async fn find_orphaned_venvs(
         &self,
         active_packages: &[String],
@@ -358,6 +396,14 @@ impl VenvManager {
         let mut orphaned = Vec::new();
 
         for venv_meta in all_venvs {
+            if venv_meta.used_by_packages.is_empty() {
+                debug!(
+                    "Keeping venv {}: no recorded owners, provenance unknown",
+                    venv_meta.hash
+                );
+                continue;
+            }
+
             let is_used = venv_meta
                 .used_by_packages
                 .iter()

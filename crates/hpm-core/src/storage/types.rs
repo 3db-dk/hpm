@@ -20,6 +20,18 @@ pub struct InstalledPackage {
     pub is_dev: bool,
 }
 
+impl InstalledPackage {
+    /// Identity used to record venv ownership: `creator/slug@version`.
+    ///
+    /// Scoped rather than bare-slug — two creators may publish the same slug,
+    /// and a bare-slug reference would let one package's venv look live
+    /// because an unrelated package happens to share its slug. Venv creation
+    /// and venv cleanup must both go through this so the two cannot drift.
+    pub fn venv_ref(&self) -> String {
+        format!("{}@{}", self.manifest.package.identifier(), self.version)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PackageSpec {
     pub name: String,

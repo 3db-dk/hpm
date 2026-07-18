@@ -450,11 +450,19 @@ impl ProjectManager {
             resolved.hash()
         );
 
-        // Ensure venv exists (content-addressable, shared across identical dep sets)
+        // Ensure venv exists (content-addressable, shared across identical dep
+        // sets). Record the packages that contributed Python dependencies —
+        // the venv hash is over the *resolved* set, which cleanup cannot
+        // recompute, so this is its only handle on what the venv belongs to.
         let venv_manager =
             VenvManager::new().map_err(|e| ProjectError::PythonResolution(e.into()))?;
+        let used_by: Vec<String> = installed_packages
+            .iter()
+            .filter(|p| !p.manifest.python_dependencies.is_empty())
+            .map(InstalledPackage::venv_ref)
+            .collect();
         let venv_path = venv_manager
-            .ensure_virtual_environment(&resolved)
+            .ensure_virtual_environment_for(&resolved, &used_by)
             .await
             .map_err(|e| ProjectError::PythonResolution(e.into()))?;
 

@@ -147,7 +147,20 @@ new hash and therefore a new venv.
 - **Consistency** — every package sharing a venv sees the same transitive dependency versions.
 
 The per-venv `metadata.json` records which HPM packages are using the venv,
-which `hpm clean --python-only` uses to detect orphans.
+as `creator/slug@version` entries, and `hpm clean --python-only` uses them to
+detect orphans. The list accumulates: one venv is shared by every project
+that resolves to the same dependency set, and each install only knows about
+its own project's packages.
+
+A venv is treated as orphaned only when it records at least one owner and
+none of those owners is still installed. A venv with **no** recorded owners
+is kept, because empty means "provenance unknown" rather than "unused" —
+that is what a per-script venv looks like, and what venvs created by hpm
+0.28.1 and earlier look like, since no version before this recorded owners.
+Those older venvs are therefore never collected automatically; they pick up
+owners the next time an install resolves to the same dependency set. To
+reclaim their space immediately, delete `~/.hpm/venvs/` — it is a cache and
+is rebuilt on demand.
 
 ### Per-script venvs
 

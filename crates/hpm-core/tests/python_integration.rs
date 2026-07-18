@@ -420,3 +420,109 @@ fn test_python_dependency_types_comprehensive() {
     assert_eq!(hash1, hash2);
     assert_eq!(hash1.len(), 16);
 }
+
+/// Regression: `hpm clean --python-only` used to propose deleting every
+/// venv on the machine.
+///
+/// `used_by_packages` was never populated by any production code path, so
+/// the "is this venv still used?" check compared the active package list
+/// against an always-empty vec, matched nothing, and classified every venv
+/// as orphaned — including the one the user's current project depends on.
+mod venv_orphan_detection {
+    use hpm_core::python::{PythonVersion, ResolvedDependencySet, VenvMetadata, cleanup, venv};
+
+    /// Write a venv directory carrying `owners` as its recorded owners.
+    fn seed_venv(venvs_dir: &std::path::Path, hash: &str, owners: &[&str]) {
+        let venv_path = venvs_dir.join(hash);
+        std::fs::create_dir_all(&venv_path).unwrap();
+        let mut meta = VenvMetadata::new(
+            hash.to_string(),
+            ResolvedDependencySet::new(PythonVersion::new(3, 11, None)),
+            venv_path.clone(),
+        );
+        for owner in owners {
+            meta.add_package_reference(*owner);
+        }
+        std::fs::write(
+            venv_path.join("metadata.json"),
+            serde_json::to_string_pretty(&meta).unwrap(),
+        )
+        .unwrap();
+    }
+
+    async fn orphans_of(venvs_dir: &std::path::Path, active: &[String]) -> Vec<String> {
+        let analyzer = cleanup::PythonCleanupAnalyzer::with_venv_manager(
+            venv::VenvManager::with_venvs_dir(venvs_dir.to_path_buf()),
+        );
+        let mut hashes: Vec<String> = analyzer
+            .analyze_orphaned_venvs(active)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|v| v.hash)
+            .collect();
+        hashes.sort();
+        hashes
+    }
+
+    #[tokio::test]
+    async fn venv_of_an_installed_package_is_not_orphaned() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        seed_venv(tmp.path(), "live", &["acme/tools@1.0.0"]);
+
+        let orphans = orphans_of(tmp.path(), &["acme/tools@1.0.0".to_string()]).await;
+        assert!(
+            orphans.is_empty(),
+            "venv of an installed package must be kept, got {orphans:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn venv_whose_packages_are_all_gone_is_orphaned() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        seed_venv(tmp.path(), "stale", &["acme/removed@1.0.0"]);
+
+        let orphans = orphans_of(tmp.path(), &["acme/other@2.0.0".to_string()]).await;
+        assert_eq!(orphans, vec!["stale".to_string()]);
+    }
+
+    /// A venv with no recorded owners has unknown provenance — it predates
+    /// owner recording, or belongs to a `[scripts]` venv rather than to an
+    /// installed package. Collecting it is what caused the original bug.
+    #[tokio::test]
+    async fn venv_without_recorded_owners_is_kept() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        seed_venv(tmp.path(), "unknown", &[]);
+
+        let orphans = orphans_of(tmp.path(), &[]).await;
+        assert!(
+            orphans.is_empty(),
+            "venv with unknown provenance must be kept, got {orphans:?}"
+        );
+    }
+
+    /// A shared venv stays alive while *any* of its owners is installed.
+    #[tokio::test]
+    async fn shared_venv_survives_while_one_owner_remains() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        seed_venv(tmp.path(), "shared", &["acme/a@1.0.0", "acme/b@1.0.0"]);
+
+        let orphans = orphans_of(tmp.path(), &["acme/b@1.0.0".to_string()]).await;
+        assert!(orphans.is_empty(), "got {orphans:?}");
+    }
+
+    /// Owner references are scoped, so two creators sharing a slug cannot
+    /// keep each other's venvs alive.
+    #[tokio::test]
+    async fn owners_are_creator_scoped() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        seed_venv(tmp.path(), "scoped", &["creator-a/tools@1.0.0"]);
+
+        let orphans = orphans_of(tmp.path(), &["creator-b/tools@1.0.0".to_string()]).await;
+        assert_eq!(
+            orphans,
+            vec!["scoped".to_string()],
+            "a different creator's same-slug package must not count as an owner"
+        );
+    }
+}

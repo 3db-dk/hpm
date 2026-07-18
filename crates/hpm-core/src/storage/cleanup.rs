@@ -5,6 +5,7 @@
 use crate::discovery::ProjectDiscovery;
 use crate::graph::{DependencyResolver, PackageId};
 use crate::python::cleanup::{CleanupResult, PythonCleanupAnalyzer};
+use crate::storage::InstalledPackage;
 use hpm_config::ProjectsConfig;
 use hpm_package::PackageManifest;
 use std::collections::{HashMap, HashSet};
@@ -457,8 +458,8 @@ impl StorageManager {
         // Get list of all active packages
         let active_packages = self.list_installed()?;
         let active_package_names: Vec<String> = active_packages
-            .into_iter()
-            .map(|p| format!("{}@{}", p.manifest.package.slug(), p.version))
+            .iter()
+            .map(InstalledPackage::venv_ref)
             .collect();
 
         // Find orphaned virtual environments
