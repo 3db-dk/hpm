@@ -85,6 +85,7 @@ crates/
                  Python venv management (`python` submodule, bundled uv)
   hpm-config/    Configuration management
   hpm-package/   Package manifest parsing, Houdini integration
+  hpm-assets/    Operator asset-index model emitted by `hpm pack`
 ```
 
 ## Development Guidelines
@@ -185,20 +186,40 @@ cargo set-version --bump patch
 
 ### Pre-Release Checklist
 ```bash
-PROPTEST_CASES=2000 cargo test --workspace --all-features  # Comprehensive testing
-cargo audit                                                  # Security audit
-cargo machete                                                # Unused dependencies
-cargo doc --workspace --all-features --no-deps               # Documentation
+PROPTEST_CASES=2000 cargo test --workspace   # Comprehensive testing
+cargo audit                                  # Security audit
+cargo machete                                # Unused dependencies
+cargo doc --workspace --no-deps              # Documentation
 ```
 
-### Release Build
+No crate in the workspace declares a `[features]` table, so `--all-features`
+is a no-op here.
+
+### Cutting a release
+
+Releases are built by Woodpecker CI, not locally. The process is:
+
+1. Bump the workspace version and update `CHANGELOG.md`.
+2. Push a `vX.Y.Z` tag.
+
+Every pipeline in `.woodpecker/` is gated on `event: tag` /
+`ref: refs/tags/v*`, so pushing the tag is what triggers the build:
+
+- `check.yml` runs `cargo fmt --check`, clippy, and `cargo test --workspace`
+  with `HPM_REQUIRE_HOUDINI=1` on a worker that has Houdini installed.
+- `build-linux.yml`, `build-macos.yml`, and `build-windows.yml` each
+  `depends_on: check`, so a failing check skips every platform build — the
+  tag lands but publishes no binaries.
+
+Artifacts are uploaded to GitHub Releases on `3db-dk/hpm` as
+`hpm-v<version>-linux-x86_64`, `hpm-v<version>-darwin-universal` (a lipo of
+`x86_64` and `aarch64`), and `hpm-v<version>-windows-x86_64.exe`. The builds
+run natively on per-platform workers; `cross` is not used.
+
+For a local release binary:
+
 ```bash
 cargo build --release --workspace
-
-# Cross-platform builds
-cross build --target x86_64-unknown-linux-gnu --release
-cross build --target x86_64-pc-windows-gnu --release
-cross build --target x86_64-apple-darwin --release
 ```
 
 ## License

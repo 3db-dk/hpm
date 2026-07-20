@@ -23,7 +23,7 @@ check:
 
 # Run all tests
 test:
-    cargo test --workspace --package hpm-cli -- --test-threads=1
+    cargo test --package hpm-cli -- --test-threads=1
     cargo test --workspace --exclude hpm-cli
     cargo test --workspace --doc
 
@@ -111,6 +111,14 @@ doc:
 # Check documentation builds
 doc-check:
     cargo doc --workspace --no-deps
+
+# Build the mdBook (docs/) into book/
+book:
+    mdbook build
+
+# Serve the mdBook with live reload
+book-serve:
+    mdbook serve
 
 # === RELEASE PREPARATION ===
 
