@@ -87,7 +87,7 @@ pub enum Commands {
         license: String,
 
         /// `[compat].houdini` Cargo-style range, e.g. `">=20.5"`, `"^21"`,
-        /// or `">=20.5, <22"`. Defaults to the template's `>=20.5`.
+        /// or `">=20.5, <22"`. Defaults to the template's `^21`.
         #[arg(long = "houdini")]
         houdini: Option<String>,
 
@@ -110,7 +110,7 @@ pub enum Commands {
         path: Option<std::path::PathBuf>,
 
         /// Install path dependency as a symlink/junction so working-tree edits
-        /// reach a live Houdini session without re-running `hpm sync`.
+        /// reach a live Houdini session without re-running `hpm install`.
         /// Requires --path.
         #[arg(long, requires = "path")]
         link: bool,

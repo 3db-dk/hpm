@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 /// my-package = "1.0.0"
 ///
 /// # Registry-resolved with options
-/// my-package = { version = "1.0.0", registry = "houdinihub", optional = true }
+/// my-package = { version = "1.0.0", registry = "tumbletrove", optional = true }
 ///
 /// # Direct URL download (legacy/explicit)
 /// my-package = { url = "https://pkg.example.com/packages/my-package/1.0.0/my-package-1.0.0.zip", version = "1.0.0" }
@@ -68,7 +68,7 @@ pub enum DependencySpec {
         optional: bool,
         /// Install the package as a symlink/junction into the dev subtree
         /// instead of copying the contents. Lets working-tree edits reach a
-        /// live Houdini session without re-running `hpm sync`. Opt-in: the
+        /// live Houdini session without re-running `hpm install`. Opt-in: the
         /// default keeps snapshot-copy semantics.
         link: bool,
     },
@@ -433,7 +433,7 @@ test = "1.0.0"
     fn dependency_spec_registry_with_options_serializes_table() {
         let spec = DependencySpec::Registry {
             version: "1.0.0".to_string(),
-            registry: Some("houdinihub".to_string()),
+            registry: Some("tumbletrove".to_string()),
             optional: false,
         };
         let json = serde_json::to_string(&spec).unwrap();
@@ -454,16 +454,16 @@ test = "1.0.0"
     fn dependency_spec_registry_toml_roundtrip() {
         let toml_str = r#"
 [deps]
-test = { version = "2.0.0", registry = "houdinihub", optional = true }
+test = { version = "2.0.0", registry = "tumbletrove", optional = true }
 "#;
         let parsed: Wrapper = toml::from_str(toml_str).unwrap();
         let spec = &parsed.deps["test"];
         assert!(
-            matches!(spec, DependencySpec::Registry { version, registry: Some(r), optional: true } if version == "2.0.0" && r == "houdinihub")
+            matches!(spec, DependencySpec::Registry { version, registry: Some(r), optional: true } if version == "2.0.0" && r == "tumbletrove")
         );
         assert!(spec.is_registry());
         assert!(spec.is_optional());
-        assert_eq!(spec.registry_name(), Some("houdinihub"));
+        assert_eq!(spec.registry_name(), Some("tumbletrove"));
 
         // Options present: the table form survives re-serialization.
         let rendered = toml::to_string(&parsed).unwrap();
@@ -556,7 +556,7 @@ test = { version = "1.0.0" }
         let invalid_start = DependencySpec::registry(".1.0.0", None);
         assert!(invalid_start.validate().is_err());
 
-        let registry = DependencySpec::registry("2.0.0", Some("houdinihub".to_string()));
+        let registry = DependencySpec::registry("2.0.0", Some("tumbletrove".to_string()));
         assert!(registry.validate().is_ok());
     }
 
@@ -588,7 +588,7 @@ test = { version = "1.0.0" }
 
         let registry_dep = DependencySpec::Registry {
             version: "2.0.0".to_string(),
-            registry: Some("houdinihub".to_string()),
+            registry: Some("tumbletrove".to_string()),
             optional: true,
         };
         assert!(!registry_dep.is_url());
@@ -596,6 +596,6 @@ test = { version = "1.0.0" }
         assert!(registry_dep.is_registry());
         assert!(registry_dep.is_optional());
         assert_eq!(registry_dep.version(), Some("2.0.0"));
-        assert_eq!(registry_dep.registry_name(), Some("houdinihub"));
+        assert_eq!(registry_dep.registry_name(), Some("tumbletrove"));
     }
 }

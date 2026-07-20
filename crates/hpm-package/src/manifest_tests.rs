@@ -459,8 +459,8 @@ name = "My Context"
 version = "0.1.0"
 
 [[registries]]
-name = "houdinihub"
-url = "https://api.3db.dk/v1/registry"
+name = "tumbletrove"
+url = "https://api.tumbletrove.com/v1/registry"
 type = "api"
 
 [[registries]]
@@ -474,7 +474,7 @@ type = "git"
     let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
     let registries = manifest.registries;
     assert_eq!(registries.len(), 2);
-    assert_eq!(registries[0].name, "houdinihub");
+    assert_eq!(registries[0].name, "tumbletrove");
     assert_eq!(registries[0].registry_type, RegistryType::Api);
     assert_eq!(registries[1].name, "studio-internal");
     assert_eq!(registries[1].registry_type, RegistryType::Git);

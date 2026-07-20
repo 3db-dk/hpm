@@ -194,20 +194,20 @@ existing = "1.2.3" # keep me
         upsert_dependency(
             &path,
             "acme/tools",
-            &DependencySpec::registry("2.0.0", Some("houdinihub".to_string())),
+            &DependencySpec::registry("2.0.0", Some("tumbletrove".to_string())),
         )
         .unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(
-            content.contains(r#"registry = "houdinihub""#),
+            content.contains(r#"registry = "tumbletrove""#),
             "pin missing from manifest:\n{content}"
         );
 
         // And it must parse back out as a pin, not just be inert text.
         let reloaded = hpm_package::PackageManifest::from_path(&path).unwrap();
         let spec = reloaded.dependencies.get("acme/tools").unwrap();
-        assert_eq!(spec.registry_name(), Some("houdinihub"));
+        assert_eq!(spec.registry_name(), Some("tumbletrove"));
     }
 
     #[test]

@@ -289,7 +289,7 @@ parallel_downloads = 8
 
 [[registries]]
 name = "3db"
-url = "https://api.3db.dk/v1/registry"
+url = "https://api.tumbletrove.com/v1/registry"
 type = "api"
 "#;
         let overlay = ConfigOverlay::parse(content, Path::new("test.toml")).unwrap();

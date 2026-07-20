@@ -3,10 +3,10 @@
 //! Commands for adding, listing, removing, and updating package registries.
 //!
 //! ```bash
-//! hpm registry add https://api.3db.dk/v1/registry --name 3db
-//! hpm registry add https://github.com/houdinihub/registry.git --name community --type git
+//! hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove
+//! hpm registry add https://github.com/your-studio/hpm-registry.git --name community --type git
 //! hpm registry list
-//! hpm registry remove 3db
+//! hpm registry remove tumbletrove
 //! hpm registry update
 //! ```
 

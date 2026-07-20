@@ -234,7 +234,7 @@ impl StorageManager {
     /// `DependencySpec::Path` resolves the source manifest to extract
     /// `(slug, version)` and the source path. Source reads that fail (missing
     /// path, malformed manifest) log a warning and skip the dep — a broken
-    /// project doesn't bypass cleanup, since re-running `hpm sync` re-creates
+    /// project doesn't bypass cleanup, since re-running `hpm install` re-creates
     /// whatever it needs.
     ///
     /// Returns `None` when no HPM-managed projects are discovered at all: with

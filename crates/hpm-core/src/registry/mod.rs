@@ -1,7 +1,7 @@
 //! Package registry support for HPM.
 //!
 //! This module provides a trait-based registry abstraction with two implementations:
-//! - [`ApiRegistry`]: HTTP-based registry (e.g., `https://api.3db.dk/v1/registry`)
+//! - [`ApiRegistry`]: HTTP-based registry (e.g., `https://api.tumbletrove.com/v1/registry`)
 //! - [`GitRegistry`]: Git-hosted index (Cargo-style, one JSON-lines file per package)
 //!
 //! Registries allow HPM to resolve package names to download URLs, checksums,

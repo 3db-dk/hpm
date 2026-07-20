@@ -15,7 +15,7 @@ pub struct InitOptions {
     pub version: String,
     pub license: String,
     /// `[compat].houdini` Cargo-style range (e.g. `">=20.5"`, `"^21"`,
-    /// `">=20.5, <22"`). When `None`, the template default (`">=20.5"`) is kept.
+    /// `">=20.5, <22"`). When `None`, the template default (`"^21"`) is kept.
     pub houdini: Option<String>,
     pub bare: bool,
     pub vcs: String,

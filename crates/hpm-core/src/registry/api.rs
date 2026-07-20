@@ -1,7 +1,7 @@
 //! HTTP API-based registry client.
 //!
 //! Connects to registries that serve package metadata over HTTP,
-//! such as `https://api.3db.dk/v1/registry`.
+//! such as `https://api.tumbletrove.com/v1/registry`.
 
 use super::types::{RegistryEntry, SearchResults};
 use super::{Registry, RegistryError, select_build_for_host};
@@ -21,7 +21,7 @@ use tracing::{debug, info};
 pub struct ApiRegistry {
     /// Display name for this registry
     display_name: String,
-    /// Base URL (e.g., `https://api.3db.dk/v1/registry`).
+    /// Base URL (e.g., `https://api.tumbletrove.com/v1/registry`).
     base_url: String,
     /// HTTP client
     client: reqwest::Client,

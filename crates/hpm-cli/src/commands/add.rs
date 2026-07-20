@@ -408,7 +408,7 @@ mod tests {
         fn prop_dependency_spec_creation_robustness(
             url in prop_oneof![
                 Just("https://example.com/packages/test/1.0.0/test-1.0.0.zip".to_string()),
-                Just("https://api.3db.dk/v1/registry/packages/test/1.0.0/download".to_string()),
+                Just("https://api.tumbletrove.com/v1/registry/packages/test/1.0.0/download".to_string()),
                 r"https://[a-z]+\.[a-z]+/[a-z]+/[a-z]+",
             ],
             version in prop_oneof![
