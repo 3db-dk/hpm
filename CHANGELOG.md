@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Documentation audit: the registry examples pointed at a domain that no
+  longer resolves.** Every doc and doc-comment example used
+  `https://api.3db.dk/v1/registry` with the alias `houdinihub`. `api.3db.dk`
+  does not resolve at all, so the examples were not merely off-brand — they
+  were broken. Replaced throughout with `https://api.tumbletrove.com/v1/registry`
+  and the alias `tumbletrove` (the default that TumbleTrove Desktop registers).
+- **`--help` referenced `hpm sync`, which was removed in favour of
+  `hpm install`.** Fixed in `add --link`'s help text and two internal doc
+  comments.
+- **`hpm init --houdini`'s help claimed the template default was `>=20.5`;
+  it is `^21`.**
+- **`docs/security.md` overstated hpm's guarantees.** It listed "unknown
+  signer" as a *mitigated* threat and implied installs fail on a bad
+  signature. hpm signs but never verifies: no install path reads the
+  registry's `sig`/`kid` fields, and SHA-256 is the only integrity check on
+  download. The threat is now documented under "Not addressed", with an
+  explicit note that verification is the consumer's responsibility.
+- **`docs/security.md`'s lockfile example did not match the schema.** It
+  showed a `type = "registry"` source; `LockedSource` has only `Url` and
+  `Path` variants.
+- Corrected `registries.md` (API registries are uncached and searched
+  sequentially, not cached and parallel; yank filtering applies to range
+  requirements but not exact pins), `python-guide.md` and `architecture.md`
+  (the venv content hash is truncated to 16 hex chars, not 12, and hashes
+  only names and versions — both files also carried a fabricated hash
+  function that never existed), `api-overview.md` (`GlobalDependencyGraph`,
+  `ResolvedDependencies`, `ResolvedPackage` and `DEFAULT_SCRIPT_PYTHON` do
+  not exist; `CliError` has four variants, not six; exit code 2 is never
+  emitted), `testing.md` (the documented CI matrix and proptest regression
+  paths were fictional), and `user-guide.md` (`hpm run --project` is not a
+  flag, `--bare` emits only `hpm.toml`, `[install].path` and
+  `parallel_downloads` are inert, and `prepend` emits a JSON list).
+
+### Added
+
+- `docs/manifest.toml`, so the docs can be assembled into
+  [docs.tumbletrove.com/hpm/](https://docs.tumbletrove.com/hpm/) alongside
+  the existing mdBook build on Read the Docs. Contributor docs
+  (architecture, API overview, testing) are now listed in `SUMMARY.md` too,
+  so they render on both sites instead of being silently dropped.
+
 ## [0.29.1] - 2026-07-18
 
 No functional change over 0.29.0. The `v0.29.0` tag failed CI and
