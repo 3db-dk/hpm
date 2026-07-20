@@ -33,20 +33,4 @@ steps:
       GITHUB_TOKEN:
         from_secret: github_token
     commands:
-      - >-
-        VERSION=${CI_COMMIT_TAG#v} &&
-        ARTIFACT="hpm-v$VERSION-linux-x86_64" &&
-        mkdir -p artifacts &&
-        cp target/release/hpm artifacts/$ARTIFACT &&
-        RELEASE_JSON=$(sed -n "/^## \[${VERSION}\]/,/^## \[/{/^## \[/d;p;}" CHANGELOG.md |
-        python3 -c "import sys,json; body=sys.stdin.read().strip(); print(json.dumps({'tag_name':'${CI_COMMIT_TAG}','name':'${CI_COMMIT_TAG}','body':body}) if body else json.dumps({'tag_name':'${CI_COMMIT_TAG}','name':'${CI_COMMIT_TAG}','generate_release_notes':True}))") &&
-        curl -sf -X POST "https://api.github.com/repos/3db-dk/hpm/releases"
-        -H "Authorization: token $GITHUB_TOKEN"
-        -H "Content-Type: application/json"
-        -d "$RELEASE_JSON" || true &&
-        RELEASE_ID=$(curl -sf "https://api.github.com/repos/3db-dk/hpm/releases/tags/${CI_COMMIT_TAG}"
-        -H "Authorization: token $GITHUB_TOKEN" | grep -m1 '"id"' | sed 's/[^0-9]//g') &&
-        curl -sf -X POST "https://uploads.github.com/repos/3db-dk/hpm/releases/$RELEASE_ID/assets?name=$ARTIFACT"
-        -H "Authorization: token $GITHUB_TOKEN"
-        -H "Content-Type: application/octet-stream"
-        --data-binary @artifacts/$ARTIFACT || true
+      - bash ci/release-upload.sh target/release/hpm linux-x86_64

@@ -35,26 +35,13 @@ steps:
       GITHUB_TOKEN:
         from_secret: github_token
     commands:
+      # -ExecutionPolicy Bypass because an unsigned .ps1 is otherwise blocked
+      # under a Restricted policy; the inline commands this replaced were never
+      # subject to that.
       - >-
-        $VERSION = $env:CI_COMMIT_TAG -replace '^v','';
-        $ARTIFACT = "hpm-v$VERSION-windows-x86_64.exe";
-        New-Item -ItemType Directory -Force -Path artifacts;
-        Copy-Item target\release\hpm.exe "artifacts\$ARTIFACT";
-        $changelog = Get-Content CHANGELOG.md -Raw;
-        $pattern = "(?ms)^## \[$([regex]::Escape($VERSION))\].*?`n(.*?)(?=^## \[|\z)";
-        $match = [regex]::Match($changelog, $pattern);
-        $body = if ($match.Success) { $match.Groups[1].Value.Trim() } else { '' };
-        $releaseData = @{ tag_name = $env:CI_COMMIT_TAG; name = $env:CI_COMMIT_TAG };
-        if ($body) { $releaseData.body = $body } else { $releaseData.generate_release_notes = $true };
-        $RELEASE_JSON = $releaseData | ConvertTo-Json -Compress;
-        $headers = @{ Authorization = "token $($env:GITHUB_TOKEN)" };
-        try { Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/3db-dk/hpm/releases"
-        -Headers ($headers + @{ "Content-Type" = "application/json" })
-        -Body $RELEASE_JSON } catch {};
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/3db-dk/hpm/releases/tags/$($env:CI_COMMIT_TAG)"
-        -Headers $headers;
-        $uploadUrl = "https://uploads.github.com/repos/3db-dk/hpm/releases/$($release.id)/assets?name=$ARTIFACT";
-        try { curl.exe -sf -X POST $uploadUrl
-        -H "Authorization: token $($env:GITHUB_TOKEN)"
-        -H "Content-Type: application/octet-stream"
-        --data-binary "@artifacts\$ARTIFACT" } catch {}
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass
+        -File .\ci\release-upload.ps1
+        -Source target\release\hpm.exe -Suffix windows-x86_64.exe
+      # curl.exe and powershell.exe report failure through $LASTEXITCODE, which
+      # try/catch does not observe -- that was the original bug. Check it.
+      - if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
