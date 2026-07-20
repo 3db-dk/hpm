@@ -16,6 +16,7 @@ hpm-cli         binary; clap dispatch, output formatting, exit codes
   │     ├── hpm-package
   │     └── hpm-assets
   ├── hpm-config       layered config loading and merging
+  │     └── hpm-package
   ├── hpm-package      manifest parsing, Houdini integration, deps  (leaf)
   └── hpm-assets       operator asset-index model for `hpm pack`     (leaf)
 ```
@@ -25,9 +26,10 @@ mapping) lives in the `hpm_core::python` submodule. It was a separate
 crate through 0.16 but collapsed into `hpm-core` since it had no
 external consumers.
 
-Leaves are `hpm-config`, `hpm-package`, and `hpm-assets` — none depend on
-anything in the workspace, so they can be embedded by external tools without
-dragging in the rest of HPM.
+Leaves are `hpm-package` and `hpm-assets` — neither depends on anything in
+the workspace, so they can be embedded by external tools without dragging in
+the rest of HPM. `hpm-config` is not a leaf: it depends on `hpm-package` for
+the shared registry and dependency types.
 
 Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
 `ConfigError`). `hpm-cli` converts these into a single `CliError` with exit
@@ -41,7 +43,7 @@ codes and help hints.
 |------|---------|
 | `StorageManager` | Global package install/remove/list. Backed by `~/.hpm/packages/`. |
 | `ProjectDiscovery` | Scans `[projects]` paths to enumerate active HPM projects. |
-| `GlobalDependencyGraph` | Reachability-based orphan detection for `hpm clean`. |
+| `DependencyGraph` | Dependency graph over `PackageId`s; `mark_reachable_from_roots` powers orphan detection for `hpm clean` (the set difference itself lives in `StorageManager::find_orphaned_packages`). |
 | `LockFile`, `LockedDependency`, `LockedPythonDependency`, `LockMetadata` | `hpm.lock` types. |
 | `LockedSource` | Origin recorded in the lockfile for each dep — `Url { url, version }` or `Path { path }`. |
 | `LockError` | `Read`/`Parse`/`Write`/`Serialize` plus `ChecksumMismatch` and `PackageMissing { package, expected_dir }`. |
@@ -96,13 +98,15 @@ codes and help hints.
 |------|---------|
 | `VenvManager` | Creates and reuses content-addressable venvs. |
 | `PythonVersion` | Houdini-to-Python version value. |
-| `ResolvedDependencies`, `ResolvedDependencySet`, `ResolvedPackage` | UV-resolved dependency sets with content hash. |
+| `ResolvedDependencySet` | UV-resolved dependency set (`BTreeMap<name, version>` plus the Python version) with a `hash()` content hash. |
+| `PythonDependencies`, `PythonDependency`, `VersionSpec` | Declared (pre-resolution) Python dependency types. |
+| `VenvMetadata`, `OrphanedVenv` | Per-venv `metadata.json` model and the orphan-analysis result type. |
 | `PythonCleanupAnalyzer` | Detects orphan venvs for `hpm clean --python-only`. A venv that records owners is orphaned when none is still installed; one with no recorded owners (a `[scripts]` venv, or one predating owner recording) is collected only after 30 days idle. Owners are recorded by `VenvManager::ensure_virtual_environment_for`. |
 | `prepare_script_env(entry)` | Per-script-venv building block: bootstraps bundled uv, materializes the venv if needed, and returns a `ScriptEnvHandle` carrying the env-var mutations to apply before spawning. Plain string entries return a default (no-op) handle. Covers only the `python`/`requirements` venv path — not `package-env`, `HPM_PACKAGE_ROOT`, or the command line. Most embedders should reach for `hpm_core::script_run` (above), which wires this plus the rest of the contract; use `prepare_script_env` directly only when you specifically need just the venv handle. |
 | `ScriptEnvHandle` | Spawn-strategy-agnostic env-var bundle (`path_prepend`, `env`). `apply_to(&mut HashMap<String,String>)` folds it into a caller-staged env map ready for `Command::envs` or any other spawn primitive. |
 | `ensure_script_venv(python, requirements)` | Lower-level free function: resolves raw PEP-508 requirement strings via `uv pip compile` and defers to `VenvManager`, returning the venv root. Prefer `prepare_script_env` for the full flow. |
 | `venv_bin_dir(path)` | Returns the executable directory inside a uv-created venv (`bin/` on Unix, `Scripts/` on Windows). `prepare_script_env` already prepends this to `PATH`; use directly only when bypassing the handle. |
-| `DEFAULT_SCRIPT_PYTHON` | `"3.11"`. The Python version `ensure_script_venv` uses when a script omits `python`. |
+| `DEFAULT_PYTHON_VERSION` | `"3.11"`. The Python version `ensure_script_venv` uses when a script omits `python`. |
 
 ### hpm-config
 
@@ -120,7 +124,7 @@ codes and help hints.
 
 | Type | Purpose |
 |------|---------|
-| `CliError` | CLI-facing error enum with categorised variants (`Config`, `Package`, `Network`, `Io`, `Internal`, `External`). Carries optional help text. |
+| `CliError` | CLI-facing error enum with categorised variants (`Config`, `Package`, `Network`, `Io`). Carries optional help text. |
 | `ExitStatus` | Process-exit code abstraction; converts `&CliError -> ExitStatus -> ExitCode`. |
 
 Exit codes used by `hpm-cli`:
@@ -128,9 +132,8 @@ Exit codes used by `hpm-cli`:
 | Code | Meaning |
 |------|---------|
 | 0 | Success. |
-| 1 | User error — bad configuration, bad input, missing manifest, etc. |
-| 2 | Internal error — unexpected condition or bug. |
-| _N_ | Pass-through exit code from an invoked external tool. |
+| 1 | Any hpm-originated failure — bad configuration, bad input, missing manifest, network or I/O error. |
+| _N_ | Pass-through exit code from an invoked external tool (`ExitStatus::External`). |
 
 ## Design principles
 

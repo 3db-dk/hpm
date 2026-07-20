@@ -59,8 +59,10 @@ Houdini→Python ABI mapping, and per-script venv resolution — lives in
 but folded into `hpm-core` since it had no consumers other than
 `hpm-core` and `hpm-cli`.
 
-`hpm-package`, `hpm-assets`, and `hpm-config` are workspace leaves — none
-depends on another HPM crate.
+`hpm-package` and `hpm-assets` are the workspace leaves — neither depends on
+another HPM crate. `hpm-config` depends on `hpm-package` (it reuses the
+manifest's registry and dependency types), so it is not a leaf despite
+sitting alongside them in the diagram above.
 
 Each crate defines its own error type (e.g. `StorageError`, `ConfigError`)
 via `thiserror`. Errors surface to the user through `CliError` in `hpm-cli`,
@@ -105,6 +107,7 @@ pub struct PackageManifest {
     pub python_dependencies: IndexMap<String, PythonDependencySpec>,
     pub runtime: IndexMap<String, ManifestEnvEntry>,
     pub scripts: PackageScripts,
+    pub operators: Vec<OperatorDecl>,
 }
 // All collections and section structs use `#[serde(default,
 // skip_serializing_if = ...)]` so an absent TOML section round-trips to
@@ -116,7 +119,8 @@ pub struct PackageScripts {
 }
 
 // Untagged: serialises as either a bare string ("cargo build") or a table
-// form { cmd, python?, requirements? }. The table form opts the script into
+// form { cmd, python?, requirements?, label?, description?, package-env? }.
+// The table form opts the script into
 // a uv-managed venv resolved on demand by `hpm run`, and supports
 // conditional cmd values via the same `when` grammar `[runtime]` uses.
 pub enum ScriptEntry {
@@ -128,6 +132,9 @@ pub struct ScriptEnv {
     pub cmd: EnvValue,             // flat string or [{ when = { os }, set }, ...]
     pub python: Option<String>,        // e.g. "3.11"
     pub requirements: Vec<String>,     // e.g. ["PySide6>=6.6"]
+    pub label: Option<String>,         // display name for UIs; hpm never acts on it
+    pub description: Option<String>,   // one-line description for tooltips/help
+    pub package_env: bool,             // run inside the package's full resolved env
 }
 
 pub struct PackageInfo {
@@ -331,32 +338,31 @@ identity of "active projects" comes from the `[projects]` config section.
 Implementation outline:
 
 ```rust
-pub struct GlobalDependencyGraph {
-    packages: HashMap<PackageId, PackageNode>,
-    edges: HashMap<PackageId, HashSet<PackageId>>,
-    roots: HashSet<PackageId>,
-}
-
-impl GlobalDependencyGraph {
-    pub fn reachable(&self) -> HashSet<PackageId> {
-        let mut seen = HashSet::new();
-        let mut stack: Vec<_> = self.roots.iter().cloned().collect();
-        while let Some(id) = stack.pop() {
-            if seen.insert(id.clone()) {
-                if let Some(deps) = self.edges.get(&id) {
-                    stack.extend(deps.iter().cloned());
-                }
+// crates/hpm-core/src/graph.rs
+impl DependencyGraph {
+    /// BFS from each root, returning every `PackageId` reachable along
+    /// dependency edges. The roots themselves are included.
+    pub fn mark_reachable_from_roots(&self, roots: &[PackageId]) -> HashSet<PackageId> {
+        let mut reachable = HashSet::new();
+        for root in roots {
+            let Some(&start) = self.index_of.get(root) else {
+                continue;
+            };
+            let mut bfs = Bfs::new(&self.graph, start);
+            while let Some(idx) = bfs.next(&self.graph) {
+                reachable.insert(self.graph[idx].id.clone());
             }
         }
-        seen
-    }
-
-    pub fn orphans(&self, installed: &HashSet<PackageId>) -> Vec<PackageId> {
-        let reachable = self.reachable();
-        installed.difference(&reachable).cloned().collect()
+        reachable
     }
 }
 ```
+
+`DependencyGraph` wraps a `petgraph` graph; its fields are private and it
+exposes no `orphans()` of its own. Taking the set difference against what is
+actually installed on disk is `StorageManager::find_orphaned_packages`
+(`crates/hpm-core/src/storage/cleanup.rs`), which calls
+`mark_reachable_from_roots` and subtracts the result from the installed set.
 
 Project discovery scans `explicit_paths` plus recursive walks of
 `search_roots`, respecting `max_search_depth` and skipping directory names
@@ -398,7 +404,7 @@ layout is content-addressable where it helps:
 ├── uv-cache/                       # isolated uv cache
 ├── uv-config/
 ├── uv-python/                      # managed CPython installs (UV_PYTHON_INSTALL_DIR)
-└── logs/
+└── fetch/                          # staging for downloaded archives
 ```
 
 `hpm install` routes URL/registry deps through a two-step flow:
@@ -605,22 +611,27 @@ The Python layer runs on four ideas, in descending order of importance:
 ### Hash function
 
 ```rust
-// simplified
-pub fn content_hash(resolved: &ResolvedDependencies) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(format!("python:{}", resolved.python_version));
-    let mut packages: Vec<_> = resolved.packages.iter().collect();
-    packages.sort_by_key(|(name, _)| name.as_str());
-    for (name, spec) in packages {
-        hasher.update(name.as_bytes());
-        hasher.update(spec.version.as_bytes());
-        for extra in spec.extras.iter().flatten() {
-            hasher.update(extra.as_bytes());
+// crates/hpm-core/src/python/types.rs
+impl ResolvedDependencySet {
+    pub fn hash(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(format!("python:{}", self.python_version));
+        for (name, version) in &self.packages {
+            hasher.update(format!("{}:{}", name, version));
         }
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>()[..16]
+            .to_string()
     }
-    hex::encode(hasher.finalize())[..12].to_string()
 }
 ```
+
+`packages` is a `BTreeMap<String, String>`, so it iterates in sorted order
+without an explicit sort. Only names and versions are hashed — extras are
+not part of the resolved set.
 
 ### Houdini→Python mapping
 
@@ -696,8 +707,8 @@ use hpm_config::{Config, RegistrySourceConfig, RegistryType};
 
 let mut config = Config::default();
 config.add_registry(RegistrySourceConfig {
-    name: "houdinihub".into(),
-    url: "https://api.3db.dk/v1/registry".into(),
+    name: "tumbletrove".into(),
+    url: "https://api.tumbletrove.com/v1/registry".into(),
     registry_type: RegistryType::Api,
 });
 config.install.path = "packages/hpm".into();

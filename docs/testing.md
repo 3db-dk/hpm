@@ -126,15 +126,28 @@ PROPTEST_CASES=1000 cargo test prop_ --workspace
 | `PROPTEST_TIMEOUT` | — | Per-case timeout (ms). |
 | `PROPTEST_VERBOSE` | 0 | Dump generated inputs as they run. |
 
-### CI matrix
+### CI
 
-HPM's CI runs:
+There is no proptest-specific CI matrix — CI runs the suite at proptest's
+default case count and never sets `PROPTEST_CASES`.
 
-- `PROPTEST_CASES=256` on every push/PR (standard).
-- `PROPTEST_CASES=2000` nightly and as a pre-release check (thorough).
+The only test pipeline is `.woodpecker/check.yml`, which is **tag-gated**
+(`event: tag`, `ref: refs/tags/v*`) and so does not run on push or pull
+request. It runs:
 
 ```sh
-PROPTEST_CASES=2000 cargo test --workspace --all-features
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+with `HPM_REQUIRE_HOUDINI=1`, since the build workers have Houdini installed
+and the `hconfig` conformance test must run rather than silently skip.
+
+Raising the case count is therefore a local operation:
+
+```sh
+PROPTEST_CASES=2000 cargo test --workspace
 ```
 
 ## Writing property tests
@@ -217,9 +230,13 @@ Proptest persists failing cases to `crates/<crate>/proptest-regressions/`.
 These are source-of-truth regression tests — commit them alongside the fix.
 
 ```
-crates/hpm-package/proptest-regressions/
-└── manifest.txt             # Each line is a minimized failing input.
+crates/hpm-core/proptest-regressions/
+├── houdini_emission_model_tests.txt   # Each line is a minimized failing input.
+├── project.txt
+└── storage/types.txt
 ```
+
+`hpm-core` is currently the only crate with recorded regressions.
 
 Never delete these by hand unless you're *certain* the bug class is gone and
 the input is no longer meaningful.
@@ -244,7 +261,7 @@ PROPTEST_CASES=10 cargo test failing_prop_test -- --nocapture
 ### Inspect the regression file
 
 ```sh
-cat crates/hpm-package/proptest-regressions/manifest.txt
+cat crates/hpm-core/proptest-regressions/project.txt
 ```
 
 Each line is a serialized form of the seed that reproduced the bug. Proptest
