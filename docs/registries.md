@@ -29,7 +29,7 @@ Examples:
 
 ```sh
 # API registry
-hpm registry add https://api.3db.dk/v1/registry --name houdinihub
+hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove
 
 # Git-index registry (explicit)
 hpm registry add https://github.com/studio/hpm-packages.git --name studio --type git
@@ -40,7 +40,7 @@ hpm registry add https://api.studio.com/registry
 
 # Idempotent add: succeed silently if a registry with this name already
 # exists, instead of erroring. Useful in provisioning scripts.
-hpm registry add https://api.3db.dk/v1/registry --name houdinihub --if-not-exists
+hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove --if-not-exists
 ```
 
 By default, adding a registry whose name already exists is an error. Pass
@@ -51,8 +51,8 @@ This writes to `~/.hpm/config.toml`:
 
 ```toml
 [[registries]]
-name = "houdinihub"
-url = "https://api.3db.dk/v1/registry"
+name = "tumbletrove"
+url = "https://api.tumbletrove.com/v1/registry"
 type = "api"
 
 [[registries]]
@@ -80,8 +80,8 @@ the registries it resolves against:
 ```toml
 # hpm.toml
 [[registries]]
-name = "houdinihub"
-url = "https://api.3db.dk/v1/registry"
+name = "tumbletrove"
+url = "https://api.tumbletrove.com/v1/registry"
 type = "api"
 
 [[registries]]
@@ -137,11 +137,13 @@ hpm registry remove studio    # drop a registry from the config
 
 `hpm registry update` does the right thing for each type:
 
-- **API** registries: invalidate the metadata cache under `~/.hpm/registry/<name>/`.
+- **API** registries: nothing to do — API registries are always queried live,
+  so there is no cache to invalidate. HPM reports `OK (live)`.
 - **Git** registries: `git pull` the index repository to pick up new packages and versions.
 
-Run `hpm registry update` when a new version has been published and you want
-to pick it up without waiting for cache expiry.
+Run `hpm registry update` after a new version is published to a **Git**
+registry. For API registries a newly published version is visible
+immediately, with no refresh step.
 
 ## Auto-detection of registry type
 
@@ -162,8 +164,10 @@ Override with `--type api` or `--type git` when the heuristic gets it wrong.
 hpm search <query>
 ```
 
-`hpm search` queries every configured registry in parallel. If no registries
-are configured, HPM prints a hint to run `hpm registry add` and exits cleanly.
+`hpm search` queries each configured registry in turn, in the order they
+appear in the config. If no registries are configured, HPM prints a hint to
+run `hpm registry add` and exits cleanly (emitting `[]` under
+`--output json`).
 
 With `--output json`, results are emitted as a JSON array suitable for
 piping into other tooling:
@@ -174,16 +178,24 @@ hpm search geometry --output json | jq '.[].name'
 
 Each entry includes the package name, version, optional description, and
 optional Houdini compatibility string. A `yanked: true` entry signals that
-the maintainer pulled that version; HPM still shows it in search results
-but `hpm install` will refuse to use it.
+the maintainer pulled that version; HPM still shows it in search results.
+
+How a yank affects resolution depends on how you asked for the version:
+
+- A **range** requirement (`^1`, `*`, `>=2, <3`) skips yanked versions when
+  picking the highest match.
+- An **exact** pin (`1.2.0`) still resolves, yanked or not. This is
+  deliberate, so that a lockfile pinning a version that was later yanked
+  keeps installing rather than breaking.
 
 ## Caching
 
-HPM caches registry metadata under `~/.hpm/registry/<name>/`. The cache is
-per-registry, not per-project, so multiple projects share the same cache.
+HPM caches **Git** registry indexes under `~/.hpm/registry/<name>/`. The cache
+is per-registry, not per-project, so multiple projects share the same clone.
 
-- **API cache**: response bodies for the endpoints HPM hits during resolution. Cleared by `hpm registry update` or by deleting the directory.
 - **Git cache**: a local clone of the index repository. Updated by `hpm registry update`.
+- **API registries are not cached.** Every resolution and search hits the
+  API live, so there is nothing under `~/.hpm/registry/` for them.
 
 The cache is advisory — if it's corrupted or deleted, HPM re-fetches on the
 next operation. Never edit it by hand.

@@ -105,7 +105,8 @@ C-extension wheels would crash on import inside Houdini 22.
 
 These ship Python 3.7 and 3.9 respectively, both past upstream end-of-life.
 HPM refuses to create venvs against them rather than installing a dead ABI.
-If you need to run one of those Houdini versions, stay on HPM 0.7.x.
+If you need to run one of those Houdini versions, stay on hpm 0.7.x — the
+last line that supported them.
 
 ### No silent fallback
 
@@ -127,18 +128,20 @@ and open a PR.
 ## Virtual environment sharing
 
 When multiple packages resolve to the same set of `(python_version, packages,
-versions, extras)`, HPM installs them once and shares the venv:
+versions)`, HPM installs them once and shares the venv:
 
 ```
-Package A: numpy==1.24.0, requests==2.28.0     → hash a1b2c3d4
-Package B: numpy==1.24.0, requests==2.28.0     → hash a1b2c3d4   (shared with A)
-Package C: numpy==1.25.0, requests==2.28.0     → hash f6e5d4c3   (different)
+Package A: numpy==1.24.0, requests==2.28.0     → hash a1b2c3d4e5f60718
+Package B: numpy==1.24.0, requests==2.28.0     → hash a1b2c3d4e5f60718  (shared with A)
+Package C: numpy==1.25.0, requests==2.28.0     → hash f6e5d4c3b2a19008  (different)
 ```
 
 The hash is a SHA-256 over the sorted resolved set plus the Python version,
-truncated to 12 hex characters. Any change to the resolved set — a newer
-lockfile, a different extras list, a different Python version — produces a
-new hash and therefore a new venv.
+truncated to 16 hex characters. Any change to the resolved set — a newer
+lockfile, an added or upgraded package, a different Python version —
+produces a new hash and therefore a new venv. Extras affect the hash only
+through the packages and versions they pull into the resolved set; they are
+not hashed themselves.
 
 ### Why this matters
 
@@ -197,7 +200,7 @@ dependency into `<project>/.hpm/packages/{creator}.{slug}.json`:
     {
       "PYTHONPATH": {
         "method": "prepend",
-        "value": "/Users/me/.hpm/venvs/a1b2c3d4e5f6/lib/python3.11/site-packages"
+        "value": "/Users/me/.hpm/venvs/a1b2c3d4e5f60718/lib/python3.11/site-packages"
       }
     }
   ],
@@ -282,7 +285,7 @@ Check, in order:
 
 1. `HOUDINI_PACKAGE_PATH` includes `<project>/.hpm/packages`. Print it in a shelf tool to confirm.
 2. `.hpm/packages/{creator}.{slug}.json` exists for the offending package and has a `PYTHONPATH` entry.
-3. The venv the `PYTHONPATH` points at exists and its `site-packages/` contains a `dist-info/` for the offending package. If it doesn't, upgrade past **0.7.2** — earlier versions had a `uv pip install --target` bug that left `site-packages` empty despite a successful install. 0.7.2 self-heals these legacy venvs on the next `hpm install`.
+3. The venv the `PYTHONPATH` points at exists and its `site-packages/` contains a `dist-info/` for the offending package. If it doesn't, delete the venv directory and re-run `hpm install` — venvs are a content-addressed cache and are always safe to rebuild.
 
 ### uv fails to create a venv
 
@@ -321,7 +324,7 @@ du -sh ~/.hpm/venvs/* | sort -h  # find the largest
 │   └── creator/
 │       └── slug@1.0.0/
 ├── venvs/
-│   └── <hash>/                       # 12-char SHA-256 truncation
+│   └── <hash>/                       # 16-char SHA-256 truncation
 │       ├── pyvenv.cfg
 │       ├── bin/python                # Unix; Scripts\python.exe on Windows
 │       ├── lib/python3.11/site-packages/   # Lib\site-packages on Windows
@@ -337,26 +340,33 @@ du -sh ~/.hpm/venvs/* | sort -h  # find the largest
 ### Content hash
 
 ```rust
-// crates/hpm-core/src/python/types.rs (simplified)
-pub fn calculate_content_hash(resolved: &ResolvedDependencySet) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(format!("python:{}", resolved.python_version));
-    let mut packages: Vec<_> = resolved.packages.iter().collect();
-    packages.sort_by_key(|(name, _)| name.as_str());
-    for (name, spec) in packages {
-        hasher.update(name.as_bytes());
-        hasher.update(spec.version.as_bytes());
-        for extra in spec.extras.iter().flatten() {
-            hasher.update(extra.as_bytes());
+// crates/hpm-core/src/python/types.rs
+impl ResolvedDependencySet {
+    /// Generate a unique hash for this dependency set
+    pub fn hash(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(format!("python:{}", self.python_version));
+        for (name, version) in &self.packages {
+            hasher.update(format!("{}:{}", name, version));
         }
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>()[..16]
+            .to_string()
     }
-    hex::encode(hasher.finalize())[..12].to_string()
 }
 ```
 
+`packages` is a `BTreeMap<String, String>` — name to resolved version — so
+iteration is already in sorted order and no explicit sort is needed. Note
+that only the name and version feed the hash; extras are not part of the
+resolved set and do not affect it.
+
 The hash is stable across machines: give `uv` the same constraints and the
 same index, and HPM's manifest generator and venv deduplication will agree
-on the same 12-character prefix.
+on the same 16-character prefix.
 
 ### Install flow
 
