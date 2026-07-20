@@ -28,7 +28,7 @@ cargo build --release
 hpm init my-tools
 
 # Add a registry (one-time, per user)
-hpm registry add https://api.3db.dk/v1/registry --name houdinihub
+hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove
 
 # Add dependencies
 hpm add some-creator/geometry-tools@1.0.0
@@ -113,6 +113,7 @@ See the [user guide](docs/user-guide.md) for the full manifest reference.
 | `hpm list` | Show dependencies (`--tree` for tree view) |
 | `hpm check` | Validate manifest and package structure |
 | `hpm build` | Materialise the install image into `[stage].output_dir` (`-o <dir>` for a custom path, e.g. per-Houdini-session staging; `--profile <name>` to select a `[stage.profile.*]` build variant) |
+| `hpm run <script> [args...]` | Run a script from `[scripts]` (args after the name are forwarded to it) |
 | `hpm search <query>` | Search configured registries |
 | `hpm pack` | Build a distributable archive (`--key` to sign, `--platform` for native) |
 | `hpm clean` | Remove orphaned packages and venvs (`--dry-run`, `--python-only`, `--comprehensive`) |

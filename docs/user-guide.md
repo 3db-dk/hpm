@@ -79,6 +79,8 @@ The standard template creates this layout:
 my-first-package/
 ├── hpm.toml           # HPM manifest
 ├── README.md
+├── .gitignore
+├── package.json       # Houdini-native package file
 ├── otls/              # HDAs / .otl files
 ├── python/            # Python modules (python/__init__.py is pre-created)
 ├── scripts/           # Shelf tools and script hooks
@@ -87,8 +89,8 @@ my-first-package/
 └── tests/             # Test files
 ```
 
-Pass `--bare` for just `hpm.toml` and `README.md` — use this when you have a
-custom layout or are wrapping an existing codebase.
+Pass `--bare` for just `hpm.toml` — use this when you have a custom layout
+or are wrapping an existing codebase.
 
 ### A typical workflow
 
@@ -112,7 +114,7 @@ have nowhere to look.
 
 ```sh
 # API registry (auto-detected by URL)
-hpm registry add https://api.3db.dk/v1/registry --name houdinihub
+hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove
 
 # Git-index registry (auto-detected by .git suffix or host)
 hpm registry add https://github.com/studio/hpm-packages.git --name studio --type git
@@ -167,7 +169,7 @@ hpm init [OPTIONS] [NAME]
 | `--version <v>` | `0.1.0` | Initial version. |
 | `--license <id>` | `MIT` | License identifier. |
 | `--houdini <range>` | `^21` | `[compat].houdini` Cargo-style range (e.g. `"^21"`, `">=20.5, <22"`, `">=21"`). Default is bounded to a single Houdini major — see [`[compat]`](#compat) for why. |
-| `--bare` | off | Skip standard directories; create only `hpm.toml` and `README.md`. |
+| `--bare` | off | Skip standard directories and generated files; create only `hpm.toml`. |
 | `--vcs <vcs>` | `git` | `git` or `none`. |
 
 **Examples**
@@ -338,7 +340,7 @@ requirements = ["PySide6>=6.6"]
 ```
 
 ```sh
-hpm run tt_setup --project /path/to/project
+hpm run tt_setup
 ```
 
 ### `hpm search`
@@ -622,9 +624,9 @@ HPM identifies active projects via `[projects]` in `~/.hpm/config.toml`
 (`explicit_paths` plus recursive `search_roots`). Three classes of artifact
 are considered:
 
-- **Registry/URL packages** in `~/.hpm/packages/<slug>@<version>/`:
+- **Registry/URL packages** in `~/.hpm/packages/<creator>/<slug>@<version>/`:
   preserved if reachable from any active project's dependency graph.
-- **Dev installs** in `~/.hpm/packages/_dev/<slug>@<version>/` (created by
+- **Dev installs** in `~/.hpm/packages/_dev/<creator>/<slug>@<version>/` (created by
   `{ path = "..." }` deps, copy or link mode): preserved if any active
   project's path-dep source manifest reports that `(slug, version)`.
   Entries are listed as `_dev/<slug>@<version>` so the source of each is
@@ -682,7 +684,7 @@ All sections, in the order they appear in practice:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `path` | yes | Scoped identifier, `creator/slug`. Both segments must be kebab-case (lowercase letters, digits, hyphens). Example: `tumblehead/tumble-rig`. |
+| `path` | yes | Scoped identifier, `creator/slug`. Both segments must be kebab-case (lowercase letters, digits, hyphens). Example: `tumblehead/tumble-rig`. `hpm init` defaults the creator to `local`, producing `local/<name>` — change it before publishing. |
 | `name` | yes | Freeform display name. |
 | `version` | yes | Semantic version per [semver.org](https://semver.org/). `major.minor.patch` is required; pre-release identifiers (`1.0.0-alpha.1`, `1.0.0-rc.2`) and build metadata (`1.0.0+build.5`) are accepted. |
 | `description` | no | Short description. |
@@ -1079,8 +1081,8 @@ Per-project registries. Same shape as the global version in `~/.hpm/config.toml`
 
 ```toml
 [[registries]]
-name = "houdinihub"
-url = "https://api.3db.dk/v1/registry"
+name = "tumbletrove"
+url = "https://api.tumbletrove.com/v1/registry"
 type = "api"
 
 [[registries]]
@@ -1351,8 +1353,8 @@ max_search_depth = 3
 ignore_patterns = [".git", ".hg", ".svn", "node_modules", "backup", "archive", ".cache", "temp", "tmp"]
 
 [[registries]]
-name = "houdinihub"
-url = "https://api.3db.dk/v1/registry"
+name = "tumbletrove"
+url = "https://api.tumbletrove.com/v1/registry"
 type = "api"
 
 [signing]
@@ -1362,8 +1364,11 @@ key_path = "/Users/me/.hpm/signing.pem"    # fallback for `hpm pack`
 ### What each section controls
 
 **`[install]`**
-- `path` — the directory inside a project where `hpm install` writes the per-dependency Houdini manifests. Under the hood this is also where `.hpm/packages` is resolved; the default `packages/hpm` rarely needs changing.
-- `parallel_downloads` — maximum concurrent downloads from registries (default `8`).
+- `path`, `parallel_downloads` — **accepted but currently inert.** Both
+  deserialize and validate, but no code outside `hpm-config` reads them.
+  The per-project package directory is hardcoded to `<project>/.hpm/packages`
+  (`Config::project_paths`), so overriding `path` has no effect. Left in the
+  schema for compatibility; do not rely on either.
 
 **`[storage]`**
 - `home_dir` — HPM's root on disk. Default `$HOME/.hpm` on every platform (Linux, macOS, Windows). All other storage paths derive from this by default.
@@ -1437,7 +1442,7 @@ packages that declare `[python_dependencies]`, prepends the shared venv's
     {
       "PYTHONPATH": {
         "method": "prepend",
-        "value": "/Users/me/.hpm/venvs/a1b2c3d4e5f6/lib/python3.11/site-packages"
+        "value": ["/Users/me/.hpm/venvs/a1b2c3d4e5f60718/lib/python3.11/site-packages"]
       }
     }
   ],
@@ -1491,7 +1496,8 @@ flag selects a machine-readable format instead:
 
 Structured output is supported by `list`, `check`, `update`, `search`, and
 `pack`. Commands whose output is inherently interactive (`init`, `add`,
-`remove`, `install`, `build`, `audit`, `run`, `clean`, `registry`, `global`)
+`remove`, `install`, `build`, `audit`, `run`, `clean`, `registry`, `global`,
+`completions`)
 reject a non-human `--output` with a clear error rather than silently
 ignoring it.
 
@@ -1545,7 +1551,8 @@ usage hint.
 ### Houdini version mapping failed
 
 ```
-Error: No Python version mapping for Houdini 22; supported majors are 19, 20, 21.
+Error: No Python version mapping for Houdini 23; supported versions are 20.5+, 21, 22.
+Houdini 19.x (Python 3.7) and 20.0-20.4 (Python 3.9) are past EOL.
 ```
 
 An unsupported `[compat].houdini` lower bound is a hard error rather
@@ -1584,7 +1591,7 @@ Check that:
 
 1. `HOUDINI_PACKAGE_PATH` includes `<project>/.hpm/packages`.
 2. The generated `.hpm/packages/{creator}.{slug}.json` has a `PYTHONPATH` entry for the offending package.
-3. The venv directory it points to exists and contains `site-packages/`. If it doesn't, upgrade past 0.7.2 — earlier versions had a bug where the venv's `site-packages` was empty despite a successful install.
+3. The venv directory it points to exists and contains `site-packages/`. If it doesn't, remove the venv directory and re-run `hpm install` to rebuild it — venvs are a content-addressed cache and are always safe to delete.
 
 Restart Houdini after any change to `HOUDINI_PACKAGE_PATH`.
 
