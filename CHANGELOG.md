@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Re-running a release pipeline could publish a stale binary.** The upload
+  step appended `|| true` (Linux, macOS) or wrapped `curl.exe` in
+  `try { ... } catch {}` (Windows) so that re-running a tag would survive the
+  HTTP 422 GitHub returns for an asset that already exists. That is not
+  idempotence: GitHub rejects the upload and keeps the **old** binary, so a
+  rerun after a code change republished the previous artifact while reporting
+  success. Uploads now delete an existing asset of the same name before
+  uploading, and verify afterwards that what landed on the release matches the
+  file that was built.
+- **The Windows upload step failed the pipeline on a re-run.** PowerShell
+  `try/catch` does not catch a native executable's exit code — `curl.exe` sets
+  `$LASTEXITCODE` rather than throwing — so the `catch {}` intended to swallow
+  the duplicate-asset 422 was dead code and the step exited 1. This is why
+  `v0.29.2`'s pipeline showed a Windows failure despite all three binaries
+  being present on the release.
+
 ## [0.29.2] - 2026-07-20
 
 ### Fixed

@@ -216,6 +216,22 @@ Artifacts are uploaded to GitHub Releases on `3db-dk/hpm` as
 `x86_64` and `aarch64`), and `hpm-v<version>-windows-x86_64.exe`. The builds
 run natively on per-platform workers; `cross` is not used.
 
+The upload itself lives in `ci/release-upload.sh` (linux, macOS) and
+`ci/release-upload.ps1` (Windows) rather than inline in the pipeline YAML.
+Each takes a source binary and an asset suffix, derives the version from
+`CI_COMMIT_TAG`, creates the release if it does not exist, and uploads the
+asset.
+
+Re-running a tag pipeline is safe: the upload **replaces** an existing asset
+of the same name rather than skipping it, so a rerun after amending the tag
+publishes the new binary. The scripts fail loudly on any unexpected HTTP
+status and verify after uploading that the asset is present, in state
+`uploaded`, and the expected size — a red upload step means the release is
+genuinely wrong, not merely re-run.
+
+All three platform workflows race to create the release; exactly one gets
+HTTP 201 and the others get 422, which is tolerated by design.
+
 For a local release binary:
 
 ```bash
