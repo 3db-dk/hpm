@@ -35,12 +35,13 @@ version = "1.2.0"
 checksum = "sha256:a3f2b8c9..."
 
 [dependencies."studio/utility-nodes".source]
-type = "registry"
-registry = "houdinihub"
+type = "url"
+url = "https://api.tumbletrove.com/v1/registry/packages/studio/utility-nodes/1.2.0/download"
+version = "1.2.0"
 
 [metadata]
 generated_at = "2026-03-14T10:30:00Z"
-hpm_version = "0.7.2"
+hpm_version = "0.29.1"
 platform = "linux-x86_64"
 ```
 
@@ -80,9 +81,17 @@ does not block the install.
 
 ## Package signing
 
-`hpm pack` can sign the archive it produces with an Ed25519 key. Consumers
-(registries, internal pipelines, end users) can verify that signature
-before trusting the package.
+`hpm pack` can sign the archive it produces with an Ed25519 key.
+
+> **hpm signs, but does not verify.** As of 0.29.1 signing is a
+> *produce-only* feature. `hpm` emits a signature and `keyId`, and the
+> registry entry carries `sig`/`kid` fields, but no hpm install path reads
+> or checks them — the only integrity check on download is the SHA-256
+> checksum. Verifying a signature is currently the responsibility of
+> whoever consumes the artifact (your registry, your CI, or a manual
+> `openssl` check). Everything in this section describes the wire format
+> such an external verifier needs; none of it describes a check hpm
+> performs on your behalf.
 
 ### Wire format
 
@@ -149,8 +158,9 @@ pipelines and registry upload tooling:
 
 - Store the private PEM in a secret manager (Vault, Infisical, GitHub Actions secrets) rather than on disk in CI runners.
 - Treat `keyId` as public — it leaks nothing about the private key, but anchors verification to a specific key version.
-- Rotate by generating a new key pair, publishing the new `keyId`, and re-signing future releases. Consumers should accept both the old and new `keyId` during the overlap window.
-- A `keyId` mismatch at verification time means either the wrong public key is configured, or the signer rotated without updating the registry.
+- Rotate by generating a new key pair, publishing the new `keyId`, and re-signing future releases. Your verifier should accept both the old and new `keyId` during the overlap window.
+- A `keyId` mismatch at verification time means either the wrong public key is configured, or the signer rotated without updating the registry. Note that this check happens in *your* verifier — hpm does not perform it (see the note under [Package signing](#package-signing)).
+- TumbleTrove publishes creator public keys at `https://api.tumbletrove.com/v1/signing/public-keys`, which is the key source an external verifier should resolve `keyId` against.
 
 ## `hpm audit`
 
@@ -301,14 +311,14 @@ Rotate at studio-appropriate cadence and publish the new `keyId`.
 | Dependency drift | Same project produces different installs over time. | Exact version + checksum pinning; `--frozen-lockfile`. |
 | Stale dependencies | Old versions with known CVEs. | 90-day staleness warnings; `hpm update` surfaces newer versions. |
 | Replay of a vulnerable version | Registry serves an older artifact than expected. | Version is pinned in the lockfile; the registry cannot "silently" downgrade. |
-| Unknown signer | Unknown party uploads an archive claiming to be from a creator. | `hpm pack --key` + Ed25519 signature + `keyId`. Consumers verify against the publisher's known `keyId`. |
 
 ### Not addressed
 
 HPM does not protect you against:
 
 - **Malicious code in a legitimate package.** If the author intends to do harm, HPM will faithfully distribute that harm.
-- **Compromised upstream sources.** If the registry or Git server itself is compromised, HPM trusts what it serves (until a signature check fails, if signatures are in use).
+- **Unknown signer.** An unknown party uploading an archive that claims to be from a creator is *not* something hpm detects. `hpm pack --key` produces an Ed25519 signature and `keyId`, but hpm never verifies them on install — mitigation depends entirely on a verifier your registry or CI runs. See [Package signing](#package-signing).
+- **Compromised upstream sources.** If the registry or Git server itself is compromised, HPM trusts what it serves. Checksums pin the bytes to what the lockfile recorded, but a first-time resolve takes the registry at its word, and there is no signature check to fall back on.
 - **Zero-day vulnerabilities** in dependencies. Use your organization's security scanning.
 - **Supply-chain attacks at the package author.** Sign your own releases, encourage consumers to verify, and rotate on suspicion.
 - **Local privilege escalation** on shared machines. `~/.hpm/` lives in your home directory; anyone with write access to that directory can tamper. Use per-user home directories.
@@ -325,7 +335,6 @@ Do **not** open a public issue for security problems. Instead:
 2. Include a reproducer, affected versions, and the impact you observed.
 3. Allow a reasonable window for a fix before public disclosure.
 
-See also: [Security changelog](#security-changelog).
 
 ## Security changelog
 
