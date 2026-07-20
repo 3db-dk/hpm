@@ -26,3 +26,25 @@ cargo fmt --check    # check formatting
 | `hpm-config` | Configuration loading/saving |
 | `hpm-package` | Package format and metadata |
 | `hpm-assets` | Operator asset-index model emitted by `hpm pack` |
+
+## Documentation
+
+`docs/` is the single source for **two** published sites:
+
+- [hpm.readthedocs.io](https://hpm.readthedocs.io/) — mdBook, driven by
+  `docs/SUMMARY.md` (`book.toml`, `.readthedocs.yaml`).
+- [docs.tumbletrove.com/hpm/](https://docs.tumbletrove.com/hpm/) — VitePress,
+  driven by `docs/manifest.toml`; the `tumbletrove-docs` repo clones this one
+  at its latest tag and copies `docs/` in.
+
+Adding or renaming a page means updating **both** `SUMMARY.md` and
+`manifest.toml`, or the page silently vanishes from one site.
+
+The canonical registry is `https://api.tumbletrove.com/v1/registry`, aliased
+`tumbletrove` in examples. The old `houdinihub` / `api.3db.dk` naming is dead
+— that domain no longer resolves, so stale examples are broken commands, not
+just off-brand ones.
+
+Docs are load-bearing prose *and* API reference: `architecture.md` and
+`api-overview.md` name concrete types and functions that nothing compiles or
+link-checks. When renaming a public type, grep `docs/` for the old name.

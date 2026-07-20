@@ -1,0 +1,40 @@
+name = "hpm"
+slug = "hpm"
+order = 30
+description = "The TumbleTrove package manager for Houdini — install, update, and pin Houdini plugin versions."
+
+[[pages]]
+text = "Overview"
+file = "README.md"
+
+[[pages]]
+text = "Getting Started"
+file = "user-guide.md"
+
+[[pages]]
+text = "Python Dependencies"
+file = "python-guide.md"
+
+[[pages]]
+text = "Registries"
+file = "registries.md"
+
+[[pages]]
+text = "Security"
+file = "security.md"
+
+[[pages]]
+text = "Architecture"
+file = "architecture.md"
+
+[[pages]]
+text = "API Overview"
+file = "api-overview.md"
+
+[[pages]]
+text = "Testing"
+file = "testing.md"
+
+[[pages]]
+text = "Changelog"
+file = "changelog.md"

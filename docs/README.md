@@ -7,8 +7,6 @@ generates the `package.json` files Houdini needs to load packages at launch.
 
 ## User documentation
 
-Published to [hpm.readthedocs.io](https://hpm.readthedocs.io/):
-
 - **[User guide](user-guide.md)** — install, commands, the `hpm.toml` manifest, global configuration, troubleshooting.
 - **[Python dependencies](python-guide.md)** — `[python_dependencies]`, Houdini-to-Python version mapping, venv sharing, cleanup.
 - **[Registries](registries.md)** — configuring API and Git registries, per-user vs per-project, search and caching.
@@ -16,9 +14,19 @@ Published to [hpm.readthedocs.io](https://hpm.readthedocs.io/):
 
 ## Contributor documentation
 
-In-repo, not published:
-
 - **[Architecture](architecture.md)** — system design, dependency resolution, cleanup, Python integration.
 - **[API overview](api-overview.md)** — crate structure and key public types. Full rustdoc via `cargo doc`.
 - **[Testing guide](testing.md)** — property-based testing strategy.
-- **[CONTRIBUTING.md](../CONTRIBUTING.md)** — development setup, workflow, pull request guidelines.
+- **[CONTRIBUTING.md](https://github.com/3db-dk/hpm/blob/main/CONTRIBUTING.md)** — development setup, workflow, pull request guidelines.
+
+## Where these docs are published
+
+This directory is the single source for two sites:
+
+- [hpm.readthedocs.io](https://hpm.readthedocs.io/) builds it with mdBook
+  (`book.toml`, `.readthedocs.yaml`), driven by `SUMMARY.md`.
+- [docs.tumbletrove.com/hpm/](https://docs.tumbletrove.com/hpm/) pulls it in
+  via the `tumbletrove-docs` assembler, driven by `manifest.toml`.
+
+Adding or renaming a page means updating **both** `SUMMARY.md` and
+`manifest.toml`, or it will go missing from one of the two sites.
