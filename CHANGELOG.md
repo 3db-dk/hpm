@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows release upload reported a false failure when verifying the
+  uploaded asset.** Under Windows PowerShell 5.1 an inline
+  `ConvertFrom-Json | Where-Object` does not enumerate the parsed array, so the
+  post-upload size check read the whole asset list instead of the matching
+  asset and failed even though the upload had succeeded (this is why
+  `v0.29.3`'s Windows leg went red despite all three binaries being present on
+  the release). The asset lookup now assigns the parsed JSON to a variable and
+  selects a single match, which enumerates correctly on both PowerShell 5.1 and
+  7.
+
 ## [0.29.3] - 2026-07-21
 
 ### Fixed

@@ -60,6 +60,18 @@ function Get-Body {
     return ''
 }
 
+# Parse the asset-list response in $bodyFile and return the single asset whose
+# name matches, or $null. Assigns ConvertFrom-Json to a variable and wraps it
+# in @() before filtering: under Windows PowerShell 5.1 an inline
+# `ConvertFrom-Json | Where-Object` does NOT enumerate the array -- the whole
+# array arrives as one $_, so the filter sees an object with no `.name` and
+# passes the entire array through. Piping a variable enumerates correctly.
+function Find-Asset {
+    param([string]$Name)
+    $assets = @(Get-Body | ConvertFrom-Json)
+    return ($assets | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
+}
+
 function Get-FailureMessage {
     param([string]$Message)
     return ($Message + "`n--- response body ---`n" + (Get-Body))
@@ -122,11 +134,11 @@ try {
     $assetsUrl = "https://api.github.com/repos/$repo/releases/$releaseId/assets?per_page=100"
     $code = Invoke-Api -Method 'GET' -Url $assetsUrl
     if ($code -ne '200') { throw (Get-FailureMessage "failed to list release assets (HTTP $code)") }
-    $existing = @(Get-Body | ConvertFrom-Json | Where-Object { $_.name -eq $artifact })
+    $existing = Find-Asset -Name $artifact
 
-    if ($existing.Count -gt 0) {
+    if ($existing) {
         $code = Invoke-Api -Method 'DELETE' `
-            -Url "https://api.github.com/repos/$repo/releases/assets/$($existing[0].id)"
+            -Url "https://api.github.com/repos/$repo/releases/assets/$($existing.id)"
         if ($code -eq '204' -or $code -eq '404') {
             Write-Host "removed previous $artifact"
         }
@@ -147,18 +159,18 @@ try {
     $expected = (Get-Item $staged).Length
     $code = Invoke-Api -Method 'GET' -Url $assetsUrl
     if ($code -ne '200') { throw (Get-FailureMessage "failed to verify release assets (HTTP $code)") }
-    $asset = @(Get-Body | ConvertFrom-Json | Where-Object { $_.name -eq $artifact })
+    $asset = Find-Asset -Name $artifact
 
-    if ($asset.Count -eq 0) {
+    if (-not $asset) {
         throw "$artifact is missing from the release after a successful upload"
     }
-    if ($asset[0].state -ne 'uploaded') {
-        throw "$artifact is in state '$($asset[0].state)', expected uploaded"
+    if ($asset.state -ne 'uploaded') {
+        throw "$artifact is in state '$($asset.state)', expected uploaded"
     }
-    if ($asset[0].size -ne $expected) {
-        throw "$artifact is $($asset[0].size) bytes on the release, expected $expected"
+    if ([long]$asset.size -ne [long]$expected) {
+        throw "$artifact is $($asset.size) bytes on the release, expected $expected"
     }
-    Write-Host "verified $artifact ($($asset[0].size) bytes)"
+    Write-Host "verified $artifact ($($asset.size) bytes)"
 }
 catch {
     Write-Host "release upload failed: $_" -ForegroundColor Red
