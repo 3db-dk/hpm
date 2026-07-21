@@ -9,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.29.3"
+version = "0.29.4"
 authors = ["HPM Contributors"]
 edition = "2024"
 license = "MIT"

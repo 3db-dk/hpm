@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.4] - 2026-07-21
+
 ### Fixed
 
 - **Windows release upload reported a false failure when verifying the
