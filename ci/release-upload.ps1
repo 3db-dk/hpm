@@ -61,15 +61,23 @@ function Get-Body {
 }
 
 # Parse the asset-list response in $bodyFile and return the single asset whose
-# name matches, or $null. Assigns ConvertFrom-Json to a variable and wraps it
-# in @() before filtering: under Windows PowerShell 5.1 an inline
-# `ConvertFrom-Json | Where-Object` does NOT enumerate the array -- the whole
-# array arrives as one $_, so the filter sees an object with no `.name` and
-# passes the entire array through. Piping a variable enumerates correctly.
+# name matches, or $null.
+#
+# Iterated with foreach rather than a `| Where-Object | Select-Object` pipeline
+# on purpose. Under Windows PowerShell 5.1, ConvertFrom-Json emits a JSON array
+# as a single, non-enumerated pipeline object, so both
+#   @(Get-Body | ConvertFrom-Json)          # -> 1-element array wrapping the array
+#   Get-Body | ConvertFrom-Json | Where-...  # -> $_ is the whole array
+# leak the entire array through the filter, and $asset.size then blows up as an
+# Object[]. foreach over the assigned variable enumerates the array's elements
+# identically on 5.1 and 7, and returns a single object.
 function Find-Asset {
     param([string]$Name)
-    $assets = @(Get-Body | ConvertFrom-Json)
-    return ($assets | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
+    $parsed = Get-Body | ConvertFrom-Json
+    foreach ($asset in $parsed) {
+        if ($asset.name -eq $Name) { return $asset }
+    }
+    return $null
 }
 
 function Get-FailureMessage {

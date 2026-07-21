@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows release-upload verification still failed after the 0.29.4 fix.**
+  The 0.29.4 change (assign the parsed JSON to a variable, then
+  `@(...) | Where-Object | Select-Object`) did not actually cure the Windows
+  PowerShell 5.1 array handling: `ConvertFrom-Json` emits a JSON array as a
+  single non-enumerated object, so wrapping it in `@()` produced a one-element
+  array *containing* the asset array, and the name filter leaked the whole
+  array through — `$asset.size` was then an `Object[]` and the size check threw
+  `Cannot convert ... Object[] ... to Int64`. As on 0.29.3, the upload itself
+  succeeded and all three binaries were present on the release; only the
+  verification read-back failed. The asset lookup now iterates the parsed
+  result with `foreach`, which enumerates a `ConvertFrom-Json` array's elements
+  identically on PowerShell 5.1 and 7 and returns a single object.
+
 ## [0.29.4] - 2026-07-21
 
 ### Fixed
