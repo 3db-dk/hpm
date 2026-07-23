@@ -44,7 +44,25 @@ pub enum PackError {
     GlobPattern(String),
 }
 
+/// Archive layout inputs: root-level injected files and the hpackage
+/// content-folder prefix.
+///
+/// With `content_prefix` set (the package slug), the archive uses Houdini's
+/// "hpackage" layout — staged content under `{slug}/`, `inject_files` (the
+/// generated `{slug}.json`) at the root — so extracting the archive straight
+/// into a Houdini packages directory resolves the json's
+/// `$HOUDINI_PACKAGE_PATH/{slug}/...` paths. `None` packs flat.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ArchiveLayout<'a> {
+    /// Files written verbatim at the archive root.
+    pub inject_files: &'a [(String, Vec<u8>)],
+    /// Folder wrapping all staged content (the package slug).
+    pub content_prefix: Option<&'a str>,
+}
+
 /// Pack a package directory into a signed, checksummed archive.
+///
+/// See [`ArchiveLayout`] for the hpackage layout `layout` selects.
 pub fn pack(
     package_dir: &Path,
     name: &str,
@@ -53,7 +71,7 @@ pub fn pack(
     signing_key: Option<&SigningKey>,
     platform: Option<&Platform>,
     stage_config: &StageConfig,
-    inject_files: &[(String, Vec<u8>)],
+    layout: ArchiveLayout<'_>,
 ) -> Result<PackResult, PackError> {
     let ignore = build_ignore_rules(package_dir)?;
 
@@ -67,7 +85,7 @@ pub fn pack(
         &ignore,
         platform,
         Some(&stage_filter),
-        inject_files,
+        layout,
     )?;
     let checksum = compute_archive_checksum(&archive_path)?;
 

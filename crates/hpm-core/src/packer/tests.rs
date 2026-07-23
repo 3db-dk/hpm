@@ -88,7 +88,7 @@ fn archive_contains_expected_files() {
         &ignore,
         None,
         None,
-        &[],
+        ArchiveLayout::default(),
     )
     .unwrap();
 
@@ -126,7 +126,7 @@ fn checksum_is_deterministic() {
         &ignore,
         None,
         None,
-        &[],
+        ArchiveLayout::default(),
     )
     .unwrap();
     let path2 = create_archive(
@@ -137,7 +137,7 @@ fn checksum_is_deterministic() {
         &ignore,
         None,
         None,
-        &[],
+        ArchiveLayout::default(),
     )
     .unwrap();
 
@@ -163,7 +163,7 @@ fn sign_and_verify_roundtrip() {
         &ignore,
         None,
         None,
-        &[],
+        ArchiveLayout::default(),
     )
     .unwrap();
 
@@ -253,7 +253,7 @@ fn pack_without_signing() {
         None,
         None,
         &StageConfig::default(),
-        &[],
+        ArchiveLayout::default(),
     )
     .unwrap();
 
@@ -280,7 +280,7 @@ fn pack_with_signing() {
         Some(&signing_key),
         None,
         &StageConfig::default(),
-        &[],
+        ArchiveLayout::default(),
     )
     .unwrap();
 
@@ -337,7 +337,7 @@ fn platform_archive_name_includes_platform() {
         None,
         Some(&platform),
         &stage_config,
-        &[],
+        ArchiveLayout::default(),
     )
     .unwrap();
 
@@ -365,7 +365,7 @@ fn platform_archive_excludes_other_platforms() {
         None,
         Some(&platform),
         &stage_config,
-        &[],
+        ArchiveLayout::default(),
     )
     .unwrap();
 
@@ -434,7 +434,7 @@ fn shared_glob_across_platforms_rides_through_each_archive() {
             None,
             Some(&platform),
             &stage_config,
-            &[],
+            ArchiveLayout::default(),
         )
         .unwrap();
 
@@ -505,7 +505,7 @@ fn target_glob_overrides_other_platform_match() {
         None,
         Some(&hpm_package::platform::Platform::LinuxX86_64),
         &stage_config,
-        &[],
+        ArchiveLayout::default(),
     )
     .unwrap();
 
@@ -532,7 +532,7 @@ fn pack_without_platform_has_no_platform_tag() {
         None,
         None,
         &StageConfig::default(),
-        &[],
+        ArchiveLayout::default(),
     )
     .unwrap();
 
@@ -562,7 +562,10 @@ fn inject_files_added_to_archive() {
         None,
         None,
         &StageConfig::default(),
-        &inject,
+        ArchiveLayout {
+            inject_files: &inject,
+            content_prefix: None,
+        },
     )
     .unwrap();
 
@@ -580,4 +583,99 @@ fn inject_files_added_to_archive() {
     let mut content = String::new();
     std::io::Read::read_to_string(&mut injected, &mut content).unwrap();
     assert_eq!(content, "{\"name\": \"test-pkg\"}");
+}
+
+#[test]
+fn content_prefix_produces_hpackage_layout() {
+    // With a content prefix (the package slug), staged content lands under
+    // `{slug}/` while injected files (the generated `{slug}.json`) stay at
+    // the archive root — the layout Houdini's package system expects when
+    // the archive is extracted straight into a packages directory.
+    let dir = TempDir::new().unwrap();
+    create_test_package(dir.path());
+
+    let output_dir = TempDir::new().unwrap();
+    let inject = vec![(
+        "test-pkg.json".to_string(),
+        b"{\"hpath\": \"$HOUDINI_PACKAGE_PATH/test-pkg\"}".to_vec(),
+    )];
+
+    let result = pack(
+        dir.path(),
+        "test-pkg",
+        "1.0.0",
+        output_dir.path(),
+        None,
+        None,
+        &StageConfig::default(),
+        ArchiveLayout {
+            inject_files: &inject,
+            content_prefix: Some("test-pkg"),
+        },
+    )
+    .unwrap();
+
+    let file = fs::File::open(&result.archive_path).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    let names: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .collect();
+
+    // Injected json at the root; all content under the slug folder.
+    assert!(names.contains(&"test-pkg.json".to_string()));
+    assert!(names.contains(&"test-pkg/hpm.toml".to_string()));
+    assert!(names.contains(&"test-pkg/otls/tool.hda".to_string()));
+    // Nothing else at the root.
+    for name in &names {
+        assert!(
+            name == "test-pkg.json" || name.starts_with("test-pkg/"),
+            "unexpected root-level entry: {name}"
+        );
+    }
+}
+
+#[test]
+fn hand_written_json_ships_once_at_root_under_prefix() {
+    // A hand-written {slug}.json in the package dir is injected (by content)
+    // at the archive root; the staged copy is skipped so it isn't shipped
+    // twice (once at the root, once under the content prefix).
+    let dir = TempDir::new().unwrap();
+    create_test_package(dir.path());
+    fs::write(dir.path().join("test-pkg.json"), b"{\"hand\": true}").unwrap();
+
+    let output_dir = TempDir::new().unwrap();
+    let inject = vec![("test-pkg.json".to_string(), b"{\"hand\": true}".to_vec())];
+
+    let result = pack(
+        dir.path(),
+        "test-pkg",
+        "1.0.0",
+        output_dir.path(),
+        None,
+        None,
+        &StageConfig::default(),
+        ArchiveLayout {
+            inject_files: &inject,
+            content_prefix: Some("test-pkg"),
+        },
+    )
+    .unwrap();
+
+    let file = fs::File::open(&result.archive_path).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    let names: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .collect();
+
+    assert_eq!(
+        names.iter().filter(|n| n.contains("test-pkg.json")).count(),
+        1,
+        "json shipped more than once: {names:?}"
+    );
+    assert!(names.contains(&"test-pkg.json".to_string()));
+
+    let mut injected = zip.by_name("test-pkg.json").unwrap();
+    let mut content = String::new();
+    std::io::Read::read_to_string(&mut injected, &mut content).unwrap();
+    assert_eq!(content, "{\"hand\": true}");
 }

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Packed archives were not actually "usable by Houdini even without HPM" —
+  the promise the generated `{slug}.json` exists for.** `hpm pack` zipped
+  content flat (`bin/`, `otls/`, … next to `{slug}.json`) while the generated
+  json points at `$HOUDINI_PACKAGE_PATH/{slug}/...` — one level down. A user
+  extracting the archive into a Houdini packages directory got a package that
+  *registers* (env vars set) but loads nothing: every `hpath`/`HOUDINI_PATH`/
+  `HOUDINI_DSO_PATH` entry dangled, so OTLs, DSOs, and toolbars were silently
+  absent (reported by SideFX for TumbleRig 1.7.9; reproduced headless — flat
+  layout registers 0 of the package's 96 SOP operator types, wrapped layout
+  registers all 96). Archives now use the Houdini "hpackage" layout the json
+  expects: `{slug}.json` at the root next to a `{slug}/` content folder. A
+  hand-written `{slug}.json` ships once, at the root. `hpm install` detects
+  the new layout, strips the `{slug}/` wrapper (installed trees stay flat,
+  `hpm.toml` at the root as before), and skips the root json (HPM generates
+  its own package jsons); legacy flat archives and Git-style single-root
+  archives extract exactly as before. The pack-time `[[operators]]` asset
+  verification resolves declared sources at their prefixed archive paths.
+
 ## [0.29.5] - 2026-07-21
 
 ### Fixed
