@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A manually extracted package with dependencies loaded nothing at all.**
+  The `{slug}.json` bundled in a packed archive exists so a user can download
+  one archive, unzip it into a Houdini packages directory, and have it work
+  without HPM. It listed the package's `[dependencies]` under Houdini's
+  `requires`, which is a *hard* gate: for any absent entry Houdini logs
+  `Package <dep> is required by <slug> but is either missing, disabled or
+  invalid` and then `Package <slug> will be disabled` — so the package
+  contributed nothing, no HDAs, no environment, no toolbar. Nothing in that
+  path could ever satisfy the entry: there is no resolver, and each
+  dependency is a separate download the user has no automated way to obtain,
+  so *every* package with a dependency was affected. Dependencies are now
+  emitted as `recommends`, which keeps the diagnostic — Houdini warns, naming
+  the missing package — while letting what the archive does ship load
+  normally. HPM-managed installs are unchanged: they emit neither field,
+  because HPM guarantees the dependency is installed before Houdini starts.
+  Verified against Houdini 21.0.729, and pinned by a conformance test that
+  drives the real generator output through `hconfig`.
+
 - **A successful package download could fail with a bogus checksum mismatch.**
   Installing or syncing occasionally aborted with `Checksum mismatch: expected
   <...>, got e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`

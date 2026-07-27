@@ -489,3 +489,104 @@ fn houdini_set_overwrites_path_registered_ocio_seed() {
         );
     }
 }
+
+/// Regression: a package extracted **by hand** into a Houdini packages
+/// directory must load even when its hpm dependencies are not installed.
+///
+/// The `{slug}.json` bundled in a packed archive exists for the no-HPM path
+/// — download one archive, unzip it into a packages directory, done. Houdini
+/// treats `requires` as a hard gate: a listed package that is not present
+/// makes it log `Package <dep> is required by <slug> but is either missing,
+/// disabled or invalid` followed by `Package <slug> will be disabled`, and
+/// the package contributes nothing. Nothing in that path can satisfy the
+/// entry — there is no resolver, and each dependency is a separate download.
+/// Dependencies are therefore emitted as `recommends`, which warns by name
+/// and still loads.
+///
+/// This drives the real generator output through a real Houdini, in the
+/// hpackage layout a manual extraction produces (`{slug}.json` at the top of
+/// the packages directory, content in a `{slug}/` folder beside it).
+#[test]
+fn houdini_loads_manually_extracted_package_with_missing_dependency() {
+    let Some(hfs) = find_hfs() else {
+        assert!(
+            std::env::var("HPM_REQUIRE_HOUDINI").is_err(),
+            "HPM_REQUIRE_HOUDINI is set but no Houdini installation was found"
+        );
+        eprintln!(
+            "SKIPPED houdini manual-install conformance test: no Houdini \
+             installation found (set HFS to enable it)"
+        );
+        return;
+    };
+
+    let temp_dir = TempDir::new().unwrap();
+    let packages_dir = temp_dir.path().join("packages");
+    std::fs::create_dir_all(&packages_dir).unwrap();
+
+    let mut manifest = PackageManifest::new(
+        PackagePath::new("studio/manual-tool").unwrap(),
+        "manual-tool".to_string(),
+        "1.0.0".to_string(),
+        None,
+        Vec::new(),
+        None,
+    );
+    manifest.compat.houdini =
+        Some(hpm_package::HoudiniRange::parse(">=20").expect("conformance range is well-formed"));
+    // The dependency deliberately has no counterpart on disk — this is the
+    // whole point of the test.
+    manifest.dependencies.insert(
+        "studio/absent-dep".to_string(),
+        hpm_package::DependencySpec::registry("1.0.0", None),
+    );
+    let mut runtime = IndexMap::new();
+    runtime.insert(
+        "HPMT_MANUAL_MARKER".to_string(),
+        runtime_entry(EnvMethod::Append, "loaded"),
+    );
+    manifest.runtime = runtime;
+
+    // Exactly what `hpm pack` bundles, laid out the way unzipping into a
+    // packages directory lays it out.
+    let (filename, native) = manifest.generate_houdini_native_package().unwrap();
+    std::fs::create_dir_all(packages_dir.join("manual-tool")).unwrap();
+    std::fs::write(
+        packages_dir.join(&filename),
+        serde_json::to_vec_pretty(&native).unwrap(),
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(hconfig_path(&hfs))
+        .env("HFS", &hfs)
+        .env("HOUDINI_PACKAGE_DIR", &packages_dir)
+        .env("HOUDINI_PACKAGE_VERBOSE", "1")
+        .output()
+        .expect("failed to spawn hconfig");
+    let log = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        log.contains("Resolved variables:"),
+        "hconfig produced no package log; output:\n{log}"
+    );
+
+    assert!(
+        !log.contains("will be disabled"),
+        "Houdini disabled a manually-extracted package because a dependency \
+         was absent — dependencies must not be emitted as hard `requires`:\n{log}"
+    );
+
+    let vars = parse_resolved_vars(&log);
+    assert!(
+        vars.contains_key("HPMT_MANUAL_MARKER"),
+        "the manually-extracted package contributed nothing:\n{log}"
+    );
+    assert_eq!(
+        vars.get("PKG_MANUAL_TOOL").map(Vec::as_slice),
+        Some([packages_dir.join("manual-tool").display().to_string()].as_slice()),
+        "the package root did not resolve to the extracted content folder:\n{log}"
+    );
+}

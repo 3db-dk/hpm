@@ -967,8 +967,49 @@ MY_VAR = { method = "prepend", value = "$HPM_PACKAGE_ROOT/scripts" }
         _ => panic!("Expected Detailed variant"),
     }
 
-    // Requires uses slug only
-    assert_eq!(pkg.requires, Some(vec!["some-dep".to_string()]));
+    // Dependencies are advertised as `recommends` (slug only), never
+    // `requires`: Houdini disables a package outright when a `requires`
+    // entry is absent, and nothing in the no-HPM path can satisfy one.
+    assert_eq!(pkg.recommends, Some(vec!["some-dep".to_string()]));
+    assert!(
+        pkg.requires.is_none(),
+        "a hard `requires` would disable the package on manual extraction"
+    );
+}
+
+/// A manually-extracted package must load even though its dependency is not
+/// present — the archive is a single package and the no-HPM path has no
+/// resolver to fetch the rest.
+#[test]
+fn generate_houdini_native_package_never_hard_requires() {
+    let toml_str = r#"
+[package]
+path = "creator/my-tool"
+name = "My Cool Tool"
+version = "1.2.3"
+
+[dependencies]
+"studio/some-dep" = "1.0.0"
+"other/second-dep" = "2.0.0"
+"#;
+    let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+    let (_, pkg) = manifest.generate_houdini_native_package().unwrap();
+
+    assert!(pkg.requires.is_none());
+    // Entries follow the parsed `[dependencies]` order (by full `creator/slug`
+    // key, so `other/...` precedes `studio/...`), reduced to the slug.
+    assert_eq!(
+        pkg.recommends,
+        Some(vec!["second-dep".to_string(), "some-dep".to_string()])
+    );
+
+    // And it must not reappear through serialization.
+    let json = serde_json::to_string(&pkg).unwrap();
+    assert!(
+        !json.contains("\"requires\""),
+        "serialized native package still carries `requires`: {json}"
+    );
+    assert!(json.contains("\"recommends\""));
 }
 
 #[test]
@@ -985,6 +1026,7 @@ version = "0.1.0"
     assert_eq!(filename, "bare-pkg.json");
     assert!(pkg.enable.is_none());
     assert!(pkg.requires.is_none());
+    assert!(pkg.recommends.is_none());
     // Only the PKG_ env entry
     assert_eq!(pkg.env.len(), 1);
     assert!(pkg.env[0].contains_key("PKG_BARE_PKG"));
