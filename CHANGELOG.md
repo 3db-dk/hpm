@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`hpm pack --output <dir>` failed when the directory did not exist yet.**
+  It aborted with `Package error: failed to create archive
+  <dir>/<name>-<version>.zip: No such file or directory (os error 2)` — the
+  path in the message being the *archive*, not the missing directory, so the
+  error read as "the archive couldn't be written" and gave no hint that a
+  `mkdir -p` was all it wanted. This bites release scripts that pack into a
+  `dist/` directory on a clean checkout. The output directory is now created
+  if absent, and a genuine failure to create it reports that path.
+
 - **A successful package download could fail with a bogus checksum mismatch.**
   Installing or syncing occasionally aborted with `Checksum mismatch: expected
   <...>, got e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`

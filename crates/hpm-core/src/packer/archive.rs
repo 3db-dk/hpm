@@ -55,6 +55,16 @@ pub fn create_archive(
     // Collect (source path, archive path) pairs, sorted for determinism.
     let entries = collect_stage_entries(package_dir, ignore, stage_filter, None)?;
 
+    // Create the output directory if it doesn't exist. `File::create` only
+    // creates the file, so a missing parent surfaced as a bare
+    // `No such file or directory (os error 2)` naming the *archive* — which
+    // reads as "the archive couldn't be written" rather than "the directory
+    // you asked me to write it into isn't there". An output directory is
+    // ours to produce, and a release script that writes into `dist/` on a
+    // clean checkout shouldn't have to mkdir it first.
+    fs::create_dir_all(output_dir)
+        .map_err(|e| IoOp::wrap("create archive output directory", output_dir, e))?;
+
     // Create zip
     let file = fs::File::create(&archive_path)
         .map_err(|e| IoOp::wrap("create archive", &archive_path, e))?;
