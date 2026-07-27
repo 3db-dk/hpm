@@ -679,3 +679,33 @@ fn hand_written_json_ships_once_at_root_under_prefix() {
     std::io::Read::read_to_string(&mut injected, &mut content).unwrap();
     assert_eq!(content, "{\"hand\": true}");
 }
+
+/// A `--output` directory that doesn't exist yet is created rather than
+/// failing with a bare `No such file or directory` naming the archive.
+/// Release scripts write into `dist/` on a clean checkout.
+#[test]
+fn missing_output_directory_is_created() {
+    let dir = TempDir::new().unwrap();
+    create_test_package(dir.path());
+
+    let output_root = TempDir::new().unwrap();
+    // Two levels deep, neither of which exists.
+    let output_dir = output_root.path().join("dist").join("archives");
+    assert!(!output_dir.exists());
+
+    let ignore = build_ignore_rules(dir.path()).unwrap();
+    let archive_path = create_archive(
+        dir.path(),
+        "test-pkg",
+        "1.0.0",
+        &output_dir,
+        &ignore,
+        None,
+        None,
+        super::ArchiveLayout::default(),
+    )
+    .unwrap();
+
+    assert!(archive_path.exists());
+    assert_eq!(archive_path.parent().unwrap(), output_dir);
+}
