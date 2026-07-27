@@ -62,9 +62,9 @@ pub mod tree_hash;
 // Stable library API
 // ==========================================================================
 //
-// Re-exports below are organised by how downstream consumers (CLI, the
-// TumbleTrove desktop client) tend to reach for them. Everything here is
-// also accessible via the submodule path (`hpm_core::project::ProjectManager`
+// Re-exports below are organised by how downstream consumers (the CLI and
+// embedding GUI clients) tend to reach for them. Everything here is also
+// accessible via the submodule path (`hpm_core::project::ProjectManager`
 // etc.); the top-level aliases just spare callers a deeper import.
 
 // Project orchestration — the entry point most library consumers use.

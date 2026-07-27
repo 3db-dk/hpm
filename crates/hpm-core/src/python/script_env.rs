@@ -69,8 +69,8 @@ pub async fn ensure_script_venv(
 /// spawning. Produced by [`prepare_script_env`].
 ///
 /// Designed to be spawn-strategy agnostic: `hpm run` shells out via
-/// `cmd /C` / `sh -c`, the tumbletrove-desktop hook runner direct-spawns
-/// via `CreateProcessW` / `execvp`, and both consume this handle the same
+/// `cmd /C` / `sh -c`, while an embedder may direct-spawn via
+/// `CreateProcessW` / `execvp`, and both consume this handle the same
 /// way. Embedders pass it through their own env-var pipeline rather than
 /// surrendering the spawn to this crate.
 ///
@@ -93,8 +93,8 @@ impl ScriptEnvHandle {
     /// in the map yet), joined by the platform's path separator.
     ///
     /// Callers then hand `env_vars` to their spawn primitive — `tokio::
-    /// process::Command::envs`, the desktop's `run_capturing_shell` /
-    /// `spawn_detached_shell`, etc.
+    /// process::Command::envs`, or an embedder's own capturing / detached
+    /// shell helpers.
     ///
     /// On Windows the `PATH` env var is case-insensitive, but `HashMap` keys
     /// are not — always stage your own `PATH` under the uppercase key so the
@@ -141,9 +141,9 @@ fn compose_path(prefix: &Path, existing: &str) -> String {
 /// — and table-form entries with neither field — return an empty handle.
 ///
 /// This is the canonical "what env does this script need?" function shared
-/// by every HPM embedder. `hpm run` and the tumbletrove-desktop's tt_*
-/// hook runner both route through here, so a manifest change picked up by
-/// one is picked up by the other without per-embedder drift.
+/// by every HPM embedder. `hpm run` and out-of-process hook runners both
+/// route through here, so a manifest change picked up by one is picked up
+/// by the other without per-embedder drift.
 ///
 /// # Errors
 ///

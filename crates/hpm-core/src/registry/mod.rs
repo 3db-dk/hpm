@@ -122,7 +122,7 @@ impl RegistrySet {
     /// straight `Config`-driven case, prefer [`Self::from_config`].
     ///
     /// All API registries are built without authentication. For caller-driven
-    /// auth (e.g. a desktop client passing a bearer token for visibility-gated
+    /// auth (e.g. an embedder passing a bearer token for visibility-gated
     /// registries), use [`Self::from_configs_with_auth`].
     ///
     /// # Arguments

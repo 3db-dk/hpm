@@ -69,7 +69,8 @@ pub struct ScriptEnv {
     /// `requirements` here are layered on top of the package environment.
     ///
     /// Honoured only by callers with a project context (`hpm run`); embedders
-    /// that resolve scripts in isolation (the desktop hook runner) ignore it.
+    /// that resolve scripts in isolation (e.g. a standalone hook runner)
+    /// ignore it.
     #[serde(
         default,
         rename = "package-env",

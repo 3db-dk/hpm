@@ -310,10 +310,11 @@ mod tests {
 
     // --- Archive format detection + tar.gz extraction ---
     //
-    // Regression coverage for the `tumblehead/nodepilot` incident: the desktop
-    // hardcoded ZIP extraction and silently failed with "Could not find EOCD"
-    // on tar.gz uploads. These tests pin both formats end-to-end so the same
-    // class of regression can't ship undetected.
+    // Regression coverage: an extractor that hardcodes ZIP fails with
+    // "Could not find EOCD" on a tar.gz upload, and registry URLs routinely
+    // disagree with their payload's actual format. These tests pin both
+    // formats end-to-end so the same class of regression can't ship
+    // undetected.
 
     use flate2::Compression;
     use flate2::write::GzEncoder;
