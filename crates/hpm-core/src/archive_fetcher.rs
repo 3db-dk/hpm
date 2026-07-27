@@ -274,6 +274,15 @@ impl ArchiveFetcher {
     ///
     /// The cache file has no extension — format is sniffed from magic bytes
     /// at extraction time, so the on-disk name is purely an identifier.
+    ///
+    /// Bytes land in a sibling `<cache_key>.part` first and are renamed into
+    /// place only once they're flushed and fsync'd. Two reasons the direct
+    /// write was wrong: `tokio::fs::File::write_all` only queues the bytes
+    /// for the blocking pool, so the very next reader (the checksum verify in
+    /// `fetch_direct_url`) could open a still-empty file and compute the
+    /// SHA-256 of zero bytes; and a download interrupted partway left a
+    /// truncated file that the `try_exists` probe above would happily serve
+    /// as a complete cache hit forever after.
     async fn download_archive(&self, url: &str, cache_key: &str) -> Result<PathBuf, FetchError> {
         let archive_path = self.cache_dir.join(cache_key);
 
@@ -298,12 +307,32 @@ impl ArchiveFetcher {
         // Stream the response to a file
         let bytes = response.bytes().await?;
 
-        let mut file = tokio::fs::File::create(&archive_path)
+        let partial_path = self.cache_dir.join(format!("{}.part", cache_key));
+        let mut file = tokio::fs::File::create(&partial_path)
             .await
             .map_err(FetchError::WriteError)?;
         file.write_all(&bytes)
             .await
             .map_err(FetchError::WriteError)?;
+        // `write_all` alone doesn't get the bytes to disk — flush drains
+        // tokio's buffer into the OS and `sync_all` makes the file durable
+        // before anyone can observe it under its final name.
+        file.flush().await.map_err(FetchError::WriteError)?;
+        file.sync_all().await.map_err(FetchError::WriteError)?;
+        drop(file);
+
+        if let Err(e) = tokio::fs::rename(&partial_path, &archive_path).await {
+            // A concurrent fetch of the same package may have won the race.
+            // Windows' rename refuses to clobber an existing file, so treat
+            // "destination is now there" as success and drop our copy.
+            if tokio::fs::try_exists(&archive_path).await.unwrap_or(false) {
+                debug!("Archive appeared concurrently at {:?}", archive_path);
+                let _ = tokio::fs::remove_file(&partial_path).await;
+                return Ok(archive_path);
+            }
+            let _ = tokio::fs::remove_file(&partial_path).await;
+            return Err(FetchError::WriteError(e));
+        }
 
         info!("Downloaded {} bytes to {:?}", bytes.len(), archive_path);
 
@@ -395,6 +424,81 @@ mod tests {
             !fetcher_install_dir(&packages_dir, "pkg", "1.0.0").exists(),
             "nothing may be extracted from an unverified archive"
         );
+    }
+
+    /// Serve `body` once over HTTP on an ephemeral loopback port and return
+    /// the URL. Hand-rolled rather than pulling in a mock-server dependency —
+    /// the download path only needs a status line, a length, and the bytes.
+    async fn serve_once(body: Vec<u8>) -> String {
+        use tokio::io::AsyncWriteExt as _;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            // Drain the request line/headers so the client isn't writing into
+            // a closed pipe while we reply.
+            let mut discard = [0u8; 1024];
+            let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut discard).await;
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(header.as_bytes()).await.unwrap();
+            socket.write_all(&body).await.unwrap();
+            socket.shutdown().await.unwrap();
+        });
+        format!("http://{}/pkg.zip", addr)
+    }
+
+    /// The bytes must be on disk by the time `download_archive` returns.
+    ///
+    /// Regression: `write_all` on a `tokio::fs::File` only queues the write,
+    /// so the checksum verify that runs immediately afterwards could open a
+    /// still-empty file and hash zero bytes — surfacing as a bogus "Checksum
+    /// mismatch: ... got e3b0c442..." (the SHA-256 of the empty input) on a
+    /// download that had actually succeeded.
+    #[tokio::test]
+    async fn test_downloaded_archive_is_readable_immediately() {
+        let temp = TempDir::new().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let packages_dir = temp.path().join("packages");
+        let fetcher = ArchiveFetcher::new(cache_dir.clone(), packages_dir).unwrap();
+
+        let bytes = make_test_zip();
+        let url = serve_once(bytes.clone()).await;
+
+        let path = fetcher.download_archive(&url, "pkg-1.0.0").await.unwrap();
+
+        assert_eq!(
+            compute_file_sha256_sync(&path).unwrap(),
+            sha256_hex(&bytes),
+            "archive contents must be durable before download_archive returns"
+        );
+        assert!(
+            !cache_dir.join("pkg-1.0.0.part").exists(),
+            "the staging file must be renamed away, not left behind"
+        );
+    }
+
+    /// A verified download extracts end-to-end, exercising the same
+    /// download → flush → checksum → extract sequence the failure hit.
+    #[tokio::test]
+    async fn test_fetch_downloads_and_verifies_end_to_end() {
+        let temp = TempDir::new().unwrap();
+        let fetcher =
+            ArchiveFetcher::new(temp.path().join("cache"), temp.path().join("packages")).unwrap();
+
+        let bytes = make_test_zip();
+        let digest = sha256_hex(&bytes);
+        let url = serve_once(bytes).await;
+
+        let result = fetcher
+            .fetch_direct_url(&url, "1.0.0", "pkg", Some(&digest))
+            .await
+            .expect("a freshly downloaded archive must verify against its checksum");
+        assert!(result.package_path.join("hpm.toml").exists());
+        assert!(!result.from_cache);
     }
 
     /// A matching checksum extracts normally.

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A successful package download could fail with a bogus checksum mismatch.**
+  Installing or syncing occasionally aborted with `Checksum mismatch: expected
+  <...>, got e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+  — the second value being the SHA-256 of *no bytes at all*. The archive had
+  in fact downloaded correctly; the write to the download cache was only
+  queued, not yet on disk, so the verification step that runs immediately
+  afterwards read an empty file. The download is now flushed and made durable
+  under a temporary name and renamed into place only once complete. This also
+  fixes a second, longer-standing problem: a download interrupted partway
+  (network drop, process killed) left a truncated file in `~/.hpm/cache/` that
+  every later run treated as a complete cache hit, so the package stayed
+  broken until the cache was cleared by hand. Partial downloads are no longer
+  visible under the final name and can't be mistaken for finished ones.
+
 ## [0.29.5] - 2026-07-21
 
 ### Fixed
