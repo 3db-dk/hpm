@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.1] - 2026-07-27
+
+No functional change over 0.30.0; the hpm binaries are identical. The
+v0.30.0 tag's Windows leg went red, so that release published only its
+Linux and macOS assets — 0.30.1 is the first 0.30.x carrying all three.
+
+### Fixed
+
+- **The new manual-install conformance test compared paths with the native
+  separator and so failed on Windows only.** Houdini reports resolved
+  variables with forward slashes on every platform
+  (`C:/Users/.../packages/manual-tool`), while `Path::display` uses `\` on
+  Windows, so the assertion that the package root resolves to the extracted
+  content folder compared `C:/Users/...` against `C:\Users\...`. The
+  behaviour under test was correct — the same run shows Houdini 22.0.368
+  loading the package, warning about the absent recommended dependency, and
+  reporting `Disabled Packages (0)` — only the assertion was wrong. It now
+  normalises separators on both sides.
+
 ## [0.30.0] - 2026-07-27
 
 ### Fixed

@@ -701,9 +701,17 @@ fn houdini_loads_manually_extracted_package_with_missing_dependency() {
         vars.contains_key("HPMT_MANUAL_MARKER"),
         "the manually-extracted package contributed nothing:\n{log}"
     );
+    // Compare with separators normalised: Houdini reports paths with forward
+    // slashes on every platform (`C:/Users/.../packages/manual-tool`), while
+    // `Path::display` uses the native separator, so a raw comparison fails on
+    // Windows only.
+    let slash = |s: &str| s.replace('\\', "/");
     assert_eq!(
-        vars.get("PKG_MANUAL_TOOL").map(Vec::as_slice),
-        Some([packages_dir.join("manual-tool").display().to_string()].as_slice()),
+        vars.get("PKG_MANUAL_TOOL")
+            .map(|v| v.iter().map(|e| slash(e)).collect::<Vec<_>>()),
+        Some(vec![slash(
+            &packages_dir.join("manual-tool").display().to_string()
+        )]),
         "the package root did not resolve to the extracted content folder:\n{log}"
     );
 }
