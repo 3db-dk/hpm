@@ -444,7 +444,7 @@ hpm pack [OPTIONS]
 
 Pack runs `hpm check` first, then:
 
-1. Auto-generates a Houdini-native `{slug}.json` inside the archive unless the user has provided one. This file follows Houdini's own package format, so the archive is usable by Houdini even without HPM.
+1. Auto-generates a Houdini-native `{slug}.json` for the archive unless the user has provided one (a hand-written file ships verbatim). This file follows Houdini's own package format, so the archive is usable by Houdini even without HPM: the archive uses the **hpackage layout** — `{slug}.json` at the root next to a `{slug}/` folder holding all package content — so extracting it straight into a Houdini packages directory yields `packages/{slug}.json` + `packages/{slug}/...`, exactly where the json's `$HOUDINI_PACKAGE_PATH/{slug}/...` paths point. (`hpm install` strips the `{slug}/` wrapper again; installed trees stay flat with `hpm.toml` at the root.)
 2. Filters files by `[stage]` (per-platform `place` rules and `include`/`exclude` globs) when the manifest declares `[compat].platforms`.
 3. Produces a `.zip` archive plus a SHA-256 checksum.
 4. If a signing key is supplied, produces an Ed25519 signature over the archive bytes and emits a `keyId`.

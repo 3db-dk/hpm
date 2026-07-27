@@ -57,8 +57,9 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| FetchError::ExtractionError(e.to_string()))?;
 
-    // Find common prefix (Git archives typically have a single root directory)
-    let common_prefix = find_archive_prefix_sync(&archive)?;
+    // Resolve the layout: hpackage (strip `{slug}/`, skip root `{slug}.json`),
+    // Git-style single root dir (strip it), or flat (extract as-is).
+    let layout = archive_layout_sync(&archive)?;
 
     // Create target directory
     std::fs::create_dir_all(target_dir)?;
@@ -67,6 +68,12 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
         let mut file = archive
             .by_index(i)
             .map_err(|e| FetchError::ExtractionError(e.to_string()))?;
+
+        if let Some(ref skip) = layout.skip_entry
+            && file.name() == skip
+        {
+            continue;
+        }
 
         let raw_path = match file.enclosed_name() {
             Some(p) => p.to_path_buf(),
@@ -77,7 +84,7 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
         };
 
         // Strip the common prefix
-        let relative_path = if let Some(ref prefix) = common_prefix {
+        let relative_path = if let Some(ref prefix) = layout.strip_prefix {
             match raw_path.strip_prefix(prefix) {
                 Ok(p) => p.to_path_buf(),
                 Err(_) => raw_path,
@@ -121,12 +128,12 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
     Ok(())
 }
 
-/// Find the common prefix in a zip archive (blocking operation).
-fn find_archive_prefix_sync(
+/// Resolve the extraction layout of a zip archive (blocking operation).
+fn archive_layout_sync(
     archive: &zip::ZipArchive<std::fs::File>,
-) -> Result<Option<PathBuf>, FetchError> {
+) -> Result<ExtractPlan, FetchError> {
     if archive.is_empty() {
-        return Ok(None);
+        return Ok(ExtractPlan::default());
     }
 
     let mut names = Vec::with_capacity(archive.len());
@@ -136,7 +143,71 @@ fn find_archive_prefix_sync(
             .ok_or_else(|| FetchError::ExtractionError("Invalid archive entry".to_string()))?;
         names.push(name.to_string());
     }
-    Ok(find_common_root_prefix(&names))
+    Ok(resolve_archive_layout(&names))
+}
+
+/// Resolved extraction layout: a root prefix to strip from every entry, and
+/// an optional exact entry name to skip entirely.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ExtractPlan {
+    strip_prefix: Option<PathBuf>,
+    skip_entry: Option<String>,
+}
+
+/// Decide how to extract based on the entry names.
+///
+/// Tries the hpackage layout first (`hpm pack` output: `{slug}.json` at the
+/// root next to a `{slug}/` content folder), then the Git/SideFX
+/// single-root-directory convention, then falls back to as-is extraction
+/// (legacy flat hpm archives).
+fn resolve_archive_layout(names: &[String]) -> ExtractPlan {
+    if let Some((prefix, root_json)) = find_hpackage_layout(names) {
+        return ExtractPlan {
+            strip_prefix: Some(prefix),
+            skip_entry: Some(root_json),
+        };
+    }
+    ExtractPlan {
+        strip_prefix: find_common_root_prefix(names),
+        skip_entry: None,
+    }
+}
+
+/// Detect the Houdini "hpackage" layout `hpm pack` produces: exactly one
+/// root-level `{slug}.json` plus every other entry under `{slug}/`.
+///
+/// Returns `(content_prefix, root_json_name)`. The json is skipped on
+/// install: it exists so a *manual* extraction into a Houdini packages
+/// directory works without HPM; HPM-managed installs generate their own
+/// package jsons, and the content is installed flat (prefix stripped) like
+/// every other layout.
+///
+/// Legacy flat hpm archives (content at the root next to `{slug}.json`) do
+/// not match — any root entry besides the json breaks the "everything under
+/// `{slug}/`" requirement — and keep their as-is extraction.
+fn find_hpackage_layout(names: &[String]) -> Option<(PathBuf, String)> {
+    let mut json_stem: Option<&str> = None;
+    for name in names {
+        if !name.contains('/') {
+            let stem = name.strip_suffix(".json")?; // non-json root entry: not hpackage
+            if json_stem.is_some() {
+                return None; // two root jsons: ambiguous, leave as-is
+            }
+            json_stem = Some(stem);
+        }
+    }
+    let stem = json_stem?;
+    let dir_prefix = format!("{}/", stem);
+    let json_name = format!("{}.json", stem);
+    for name in names {
+        if name == &json_name {
+            continue;
+        }
+        if !name.starts_with(&dir_prefix) {
+            return None;
+        }
+    }
+    Some((PathBuf::from(stem), json_name))
 }
 
 /// Find a common single-component root directory across a set of archive entry names.
@@ -182,7 +253,7 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
         }
         names
     };
-    let common_prefix = find_common_root_prefix(&names);
+    let layout = resolve_archive_layout(&names);
 
     std::fs::create_dir_all(target_dir)?;
 
@@ -203,7 +274,13 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
             .map_err(|e| FetchError::ExtractionError(e.to_string()))?
             .into_owned();
 
-        let relative_path = if let Some(ref prefix) = common_prefix {
+        if let Some(ref skip) = layout.skip_entry
+            && raw_path.to_string_lossy() == skip.as_str()
+        {
+            continue;
+        }
+
+        let relative_path = if let Some(ref prefix) = layout.strip_prefix {
             match raw_path.strip_prefix(prefix) {
                 Ok(p) => p.to_path_buf(),
                 Err(_) => raw_path,
@@ -459,5 +536,111 @@ mod tests {
             find_common_root_prefix(&names),
             Some(PathBuf::from("pkg-1.0"))
         );
+    }
+
+    /// Build an in-memory zip with the given (name, contents) entries.
+    fn build_test_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, contents) in entries {
+                zip.start_file(*name, opts).unwrap();
+                zip.write_all(contents).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    #[test]
+    fn test_extract_zip_hpackage_layout_strips_wrapper_and_skips_root_json() {
+        // The layout `hpm pack` produces: {slug}.json at the root, all
+        // content under {slug}/. Install must strip the wrapper (flat
+        // install tree, hpm.toml at the root) and skip the root json
+        // (HPM generates its own package jsons; the shipped one exists for
+        // manual no-HPM extraction into a Houdini packages directory).
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("pkg.zip");
+        let extract_dir = temp.path().join("out");
+
+        let bytes = build_test_zip(&[
+            (
+                "tumblerig.json",
+                b"{\"hpath\": \"$HOUDINI_PACKAGE_PATH/tumblerig\"}",
+            ),
+            ("tumblerig/hpm.toml", b"[package]\nname = \"TumbleRig\"\n"),
+            ("tumblerig/otls/tool.hda", b"hda"),
+        ]);
+        std::fs::write(&archive_path, &bytes).unwrap();
+
+        extract_archive_sync(&archive_path, &extract_dir).unwrap();
+
+        assert!(extract_dir.join("hpm.toml").exists());
+        assert!(extract_dir.join("otls/tool.hda").exists());
+        assert!(!extract_dir.join("tumblerig").exists());
+        assert!(!extract_dir.join("tumblerig.json").exists());
+    }
+
+    #[test]
+    fn test_extract_zip_legacy_flat_layout_unchanged() {
+        // Pre-hpackage hpm archives: content at the root next to the json.
+        // No wrapper to strip; everything (json included) extracts as-is.
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("pkg.zip");
+        let extract_dir = temp.path().join("out");
+
+        let bytes = build_test_zip(&[
+            ("tumblerig.json", b"{}"),
+            ("hpm.toml", b"[package]\nname = \"TumbleRig\"\n"),
+            ("otls/tool.hda", b"hda"),
+        ]);
+        std::fs::write(&archive_path, &bytes).unwrap();
+
+        extract_archive_sync(&archive_path, &extract_dir).unwrap();
+
+        assert!(extract_dir.join("hpm.toml").exists());
+        assert!(extract_dir.join("otls/tool.hda").exists());
+        assert!(extract_dir.join("tumblerig.json").exists());
+    }
+
+    #[test]
+    fn test_find_hpackage_layout_detection() {
+        // Positive: one root json + everything under the matching folder.
+        let names = vec![
+            "tumblerig.json".to_string(),
+            "tumblerig/hpm.toml".to_string(),
+            "tumblerig/otls/a.hda".to_string(),
+        ];
+        assert_eq!(
+            find_hpackage_layout(&names),
+            Some((PathBuf::from("tumblerig"), "tumblerig.json".to_string()))
+        );
+
+        // Root entry that isn't the json: legacy flat archive, no match.
+        let flat = vec![
+            "tumblerig.json".to_string(),
+            "hpm.toml".to_string(),
+            "otls/a.hda".to_string(),
+        ];
+        assert_eq!(find_hpackage_layout(&flat), None);
+
+        // Json whose stem doesn't match the content folder: no match.
+        let mismatched = vec!["other.json".to_string(), "tumblerig/hpm.toml".to_string()];
+        assert_eq!(find_hpackage_layout(&mismatched), None);
+
+        // Two root jsons: ambiguous, no match.
+        let two = vec![
+            "a.json".to_string(),
+            "b.json".to_string(),
+            "a/f".to_string(),
+        ];
+        assert_eq!(find_hpackage_layout(&two), None);
+
+        // Git-style single root dir (no root json): handled by the
+        // common-root-prefix path instead.
+        let git = vec!["pkg-1.0/hpm.toml".to_string()];
+        assert_eq!(find_hpackage_layout(&git), None);
     }
 }

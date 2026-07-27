@@ -38,7 +38,7 @@ fn pack_then_index_reports_present_and_missing_sources() {
         None,
         None,
         &StageConfig::default(),
-        &[],
+        packer::ArchiveLayout::default(),
     )
     .unwrap();
 
@@ -59,7 +59,7 @@ fn pack_then_index_reports_present_and_missing_sources() {
         ),
     ];
 
-    let index = collect_assets(&result.archive_path, &operators, None).unwrap();
+    let index = collect_assets(&result.archive_path, &operators, None, None).unwrap();
 
     assert_eq!(index.assets.len(), 2);
     assert_eq!(index.assets[0].kind, AssetKind::HdaOperator);

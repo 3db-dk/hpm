@@ -93,21 +93,35 @@ pub async fn execute(
 
     let output_dir = output.unwrap_or_else(|| package_dir.clone());
 
-    // Generate Houdini-native package.json if not already present. A
-    // generation failure fails the pack: shipping an archive without the
-    // package.json Houdini needs would produce a broken install.
+    // Generate Houdini-native package.json (or take the user's hand-written
+    // one). A generation failure fails the pack: shipping an archive without
+    // the package.json Houdini needs would produce a broken install.
+    //
+    // The json is always injected so it lands at the ARCHIVE ROOT, next to
+    // the `{slug}/` content folder (Houdini's hpackage layout): the json's
+    // paths are `$HOUDINI_PACKAGE_PATH/{slug}/...`, so extracting the archive
+    // straight into a packages directory must yield `packages/{slug}.json` +
+    // `packages/{slug}/...` for them to resolve. A hand-written file is
+    // injected by content (create_archive skips the staged copy).
     let (native_filename, native_pkg) = manifest
         .generate_houdini_native_package()
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to generate the Houdini package.json for the archive")?;
-    let inject_files: Vec<(String, Vec<u8>)> = if package_dir.join(&native_filename).exists() {
-        // User has a hand-written file; don't overwrite
-        vec![]
+    let hand_written = package_dir.join(&native_filename);
+    let json_bytes = if hand_written.exists() {
+        // User has a hand-written file; ship it verbatim, don't overwrite
+        std::fs::read(&hand_written).with_context(|| {
+            format!(
+                "Failed to read hand-written Houdini package json {}",
+                hand_written.display()
+            )
+        })?
     } else {
-        let json_bytes = serde_json::to_vec_pretty(&native_pkg)
-            .context("Failed to serialize Houdini native package JSON")?;
-        vec![(native_filename, json_bytes)]
+        serde_json::to_vec_pretty(&native_pkg)
+            .context("Failed to serialize Houdini native package JSON")?
     };
+    let inject_files: Vec<(String, Vec<u8>)> = vec![(native_filename, json_bytes)];
+    let content_prefix = manifest.package.slug().to_string();
 
     // Run pack on blocking thread (zip I/O)
     let stage_config = manifest.stage.clone();
@@ -116,6 +130,7 @@ pub async fn execute(
         let name = name.clone();
         let version = version.clone();
         let output_dir = output_dir.clone();
+        let content_prefix = content_prefix.clone();
         move || {
             packer::pack(
                 &package_dir,
@@ -125,7 +140,10 @@ pub async fn execute(
                 signing_key.as_ref(),
                 platform.as_ref(),
                 &stage_config,
-                &inject_files,
+                packer::ArchiveLayout {
+                    inject_files: &inject_files,
+                    content_prefix: Some(&content_prefix),
+                },
             )
         }
     })
@@ -137,13 +155,17 @@ pub async fn execute(
     // and checking it against the produced archive. An indexing failure
     // fails the pack — emitting an archive whose advertised index silently
     // dropped is a packaging bug, not a shippable artifact.
-    let asset_index =
-        hpm_core::collect_assets(&result.archive_path, &manifest.operators, platform.as_ref())
-            .inspect_err(|_| {
-                // Don't leave a half-vetted archive behind for CI to publish.
-                let _ = std::fs::remove_file(&result.archive_path);
-            })
-            .context("Failed to build the asset index for the packed archive")?;
+    let asset_index = hpm_core::collect_assets(
+        &result.archive_path,
+        &manifest.operators,
+        platform.as_ref(),
+        Some(&content_prefix),
+    )
+    .inspect_err(|_| {
+        // Don't leave a half-vetted archive behind for CI to publish.
+        let _ = std::fs::remove_file(&result.archive_path);
+    })
+    .context("Failed to build the asset index for the packed archive")?;
 
     // A declared operator source that isn't in the produced archive means the
     // index would advertise a file the package doesn't ship. With

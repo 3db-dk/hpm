@@ -34,6 +34,16 @@ pub struct PackResult {
 /// filter is supplied, each file's archive path is rewritten via the
 /// matching `place` rule; unmatched files ship at their workspace-relative
 /// path.
+///
+/// With `layout.content_prefix` set (the package slug), every staged entry is
+/// placed under `{content_prefix}/` while `layout.inject_files` stay at the
+/// archive root. This produces the Houdini "hpackage" layout — `{slug}.json`
+/// at the root next to a `{slug}/` content folder — so extracting the archive
+/// straight into a Houdini packages directory resolves the generated json's
+/// `$HOUDINI_PACKAGE_PATH/{slug}/...` paths. A staged file whose archive path
+/// collides with an injected name is skipped (the injected bytes win), which
+/// keeps a hand-written `{slug}.json` at the root instead of shipping it
+/// twice.
 pub fn create_archive(
     package_dir: &Path,
     name: &str,
@@ -42,7 +52,7 @@ pub fn create_archive(
     ignore: &ignore::gitignore::Gitignore,
     platform: Option<&Platform>,
     stage_filter: Option<&StageFilter>,
-    inject_files: &[(String, Vec<u8>)],
+    layout: super::ArchiveLayout<'_>,
 ) -> Result<PathBuf, PackError> {
     // Replace `/` with `-` in package name for flat archive filenames
     let safe_name = name.replace('/', "-");
@@ -70,7 +80,17 @@ pub fn create_archive(
         .last_modified_time(DateTime::default());
 
     for (source, archive_name) in &entries {
-        zip.start_file(archive_name.as_str(), options)?;
+        // The injected bytes win over a staged file at the same archive path
+        // (e.g. a hand-written {slug}.json ships at the root, not under the
+        // content prefix, and never twice).
+        if layout.inject_files.iter().any(|(n, _)| n == archive_name) {
+            continue;
+        }
+        let entry_name = match layout.content_prefix {
+            Some(prefix) => format!("{}/{}", prefix, archive_name),
+            None => archive_name.clone(),
+        };
+        zip.start_file(entry_name.as_str(), options)?;
         let mut f =
             fs::File::open(source).map_err(|e| IoOp::wrap("open source file", source, e))?;
         let mut buf = Vec::new();
@@ -80,8 +100,8 @@ pub fn create_archive(
             .map_err(|e| IoOp::wrap("write zip entry to", &archive_path, e))?;
     }
 
-    // Write injected files
-    for (name, content) in inject_files {
+    // Write injected files (always at the archive root)
+    for (name, content) in layout.inject_files {
         zip.start_file(name.as_str(), options)?;
         zip.write_all(content)
             .map_err(|e| IoOp::wrap("write injected zip entry to", &archive_path, e))?;

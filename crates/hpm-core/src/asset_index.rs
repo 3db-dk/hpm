@@ -66,10 +66,15 @@ fn to_asset(op: &OperatorDecl, source_file: Option<String>) -> Asset {
 /// the caller to warn on or treat as fatal.
 ///
 /// Short-circuits the archive read when no operator resolves to a source path.
+///
+/// `content_prefix` is the archive's content folder (the package slug) when
+/// the archive uses the hpackage layout — declared `source` paths are
+/// package-relative, so membership is checked against `{prefix}/{source}`.
 pub fn collect_assets(
     archive_path: &Path,
     operators: &[OperatorDecl],
     platform: Option<&Platform>,
+    content_prefix: Option<&str>,
 ) -> Result<AssetIndex, AssetIndexError> {
     let mut assets = Vec::new();
     let mut to_verify: Vec<String> = Vec::new();
@@ -94,7 +99,13 @@ pub fn collect_assets(
         let present = archive_entry_names(archive_path)?;
         to_verify
             .into_iter()
-            .filter(|src| !present.contains(src))
+            .filter(|src| {
+                let entry = match content_prefix {
+                    Some(prefix) => format!("{}/{}", prefix, src),
+                    None => src.clone(),
+                };
+                !present.contains(&entry)
+            })
             .collect()
     };
 
@@ -208,7 +219,7 @@ mod tests {
             ),
         ];
 
-        let index = collect_assets(&archive, &ops, None).unwrap();
+        let index = collect_assets(&archive, &ops, None, None).unwrap();
         assert_eq!(index.assets.len(), 2);
         assert!(index.missing_sources.is_empty());
 
@@ -236,7 +247,7 @@ mod tests {
             Some("dso/ghost.so"),
         )];
 
-        let index = collect_assets(&archive, &ops, None).unwrap();
+        let index = collect_assets(&archive, &ops, None, None).unwrap();
         assert_eq!(index.assets.len(), 1);
         assert_eq!(index.missing_sources, vec!["dso/ghost.so".to_string()]);
     }
@@ -245,7 +256,7 @@ mod tests {
     fn no_operators_skips_archive_read() {
         // A nonexistent archive path must not error when there's nothing to
         // index — the archive is only opened to check declared sources.
-        let index = collect_assets(Path::new("/no/such/archive.zip"), &[], None).unwrap();
+        let index = collect_assets(Path::new("/no/such/archive.zip"), &[], None, None).unwrap();
         assert!(index.assets.is_empty());
         assert!(index.missing_sources.is_empty());
     }
@@ -253,7 +264,7 @@ mod tests {
     #[test]
     fn no_declared_sources_skips_archive_read() {
         let ops = vec![op(OperatorKind::Dso, "studio::x", "Sop", None)];
-        let index = collect_assets(Path::new("/no/such/archive.zip"), &ops, None).unwrap();
+        let index = collect_assets(Path::new("/no/such/archive.zip"), &ops, None, None).unwrap();
         assert_eq!(index.assets.len(), 1);
         assert!(index.missing_sources.is_empty());
     }
@@ -272,7 +283,7 @@ mod tests {
             ],
         )];
 
-        let index = collect_assets(&archive, &ops, Some(&Platform::LinuxX86_64)).unwrap();
+        let index = collect_assets(&archive, &ops, Some(&Platform::LinuxX86_64), None).unwrap();
         assert_eq!(index.assets.len(), 1);
         assert_eq!(
             index.assets[0].source_file.as_deref(),
@@ -292,7 +303,7 @@ mod tests {
             &[("linux-x86_64", "dso/linux-x86_64/scatter.so")],
         )];
 
-        let index = collect_assets(&archive, &ops, Some(&Platform::MacosAarch64)).unwrap();
+        let index = collect_assets(&archive, &ops, Some(&Platform::MacosAarch64), None).unwrap();
         assert!(index.assets.is_empty());
         assert!(index.missing_sources.is_empty());
     }
@@ -308,11 +319,43 @@ mod tests {
             &[("linux-x86_64", "dso/linux-x86_64/scatter.so")],
         )];
 
-        let index = collect_assets(&archive, &ops, Some(&Platform::LinuxX86_64)).unwrap();
+        let index = collect_assets(&archive, &ops, Some(&Platform::LinuxX86_64), None).unwrap();
         assert_eq!(index.assets.len(), 1);
         assert_eq!(
             index.missing_sources,
             vec!["dso/linux-x86_64/scatter.so".to_string()]
         );
+    }
+
+    #[test]
+    fn verifies_sources_under_content_prefix() {
+        // hpackage-layout archives carry content under {slug}/; declared
+        // sources are package-relative, so membership must be checked at
+        // the prefixed path.
+        let dir = TempDir::new().unwrap();
+        let archive = write_zip(
+            dir.path(),
+            &[
+                ("tumblerig.json", b"{}" as &[u8]),
+                ("tumblerig/otls/rbd.hda", b"x"),
+            ],
+        );
+
+        let ops = vec![
+            op(
+                OperatorKind::Hda,
+                "th::rbd::1.0",
+                "Sop",
+                Some("otls/rbd.hda"),
+            ),
+            op(
+                OperatorKind::Hda,
+                "th::gone::1.0",
+                "Sop",
+                Some("otls/gone.hda"),
+            ),
+        ];
+        let index = collect_assets(&archive, &ops, None, Some("tumblerig")).unwrap();
+        assert_eq!(index.missing_sources, vec!["otls/gone.hda".to_string()]);
     }
 }
