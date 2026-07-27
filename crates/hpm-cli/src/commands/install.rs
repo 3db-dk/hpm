@@ -4,8 +4,8 @@
 //! [`hpm_core::ProjectManager::sync_dependencies`]: build a manager, call
 //! sync, build the lockfile from the returned outcomes, write it. All the
 //! mechanics (parallel fetch + install, Python venv, Houdini manifest
-//! emission, stale sweep) live in `hpm-core` so the desktop client gets
-//! exactly the same behaviour.
+//! emission, stale sweep) live in `hpm-core` so every embedder gets exactly
+//! the same behaviour.
 
 use super::manifest_utils::{determine_manifest_path, load_manifest};
 use crate::console::Console;

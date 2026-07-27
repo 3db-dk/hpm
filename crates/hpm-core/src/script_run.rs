@@ -7,16 +7,16 @@
 //! [`ScriptSink`] for spawning.
 //!
 //! This is the single place the script-env contract lives. `hpm run`, `hpm
-//! build`'s prepack loop, and out-of-process embedders (the tumbletrove
-//! desktop hook/build runners) all route through here, so a manifest feature
-//! picked up by one is picked up by all of them — no per-embedder drift.
+//! build`'s prepack loop, and out-of-process embedders (GUI hook/build
+//! runners) all route through here, so a manifest feature picked up by one is
+//! picked up by all of them — no per-embedder drift.
 //!
 //! The split of responsibilities is deliberate: this crate owns *what env a
 //! script needs* and *what command line to run* (including per-arg quoting of
 //! forwarded args), while the [`ScriptSink`] owns *how to spawn* — `hpm run`
-//! shells out via `sh -c` / `cmd /S /C` and streams to the terminal, the
-//! desktop direct-spawns and streams to xterm events plus a build log. Each
-//! embedder wraps [`PreparedScript::command_line`] in its own shell.
+//! shells out via `sh -c` / `cmd /S /C` and streams to the terminal, while an
+//! embedder may direct-spawn and stream to its own terminal widget and log.
+//! Each embedder wraps [`PreparedScript::command_line`] in its own shell.
 
 use crate::project::{PackageRunEnv, ProjectError};
 use crate::python::PythonError;
@@ -119,14 +119,13 @@ pub struct PreparedScript {
 /// [`prepare_script`] emits progress through [`info`](Self::info); the runner
 /// helpers ([`run_script`], [`run_prepack`]) emit status and spawn through
 /// [`run`](Self::run). The CLI implements this over its `Console` and a
-/// `sh -c` / `cmd /S /C` spawn; the desktop implements it over xterm events
-/// and its own process spawn.
+/// `sh -c` / `cmd /S /C` spawn; a GUI embedder may implement it over terminal
+/// events and its own process spawn.
 // `Send` so `run_prepack`/`run_script`'s `&mut dyn ScriptSink` futures stay
 // `Send` — embedders that drive the runner from a multi-threaded executor
-// (the tumbletrove desktop awaits it inside `tauri::async_runtime::spawn` and
-// async Tauri commands, which require `Send + 'static`) can't use the trait
-// object otherwise. The CLI's `block_on` doesn't need it, but the bound is
-// harmless there: its `Console` sink is already `Send`.
+// (awaiting it inside a spawned task that requires `Send + 'static`) can't use
+// the trait object otherwise. The CLI's `block_on` doesn't need it, but the
+// bound is harmless there: its `Console` sink is already `Send`.
 #[async_trait]
 pub trait ScriptSink: Send {
     /// Emit an informational status line (e.g. `prepack: build-sops`).

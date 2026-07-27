@@ -64,13 +64,13 @@ impl ProjectManager {
     /// Construct a `ProjectManager` for `project_root`, sharing the supplied
     /// `Config` and `StorageManager`.
     ///
-    /// Callers load `Config` once at their top level and thread it down — the
-    /// embedded callers (the desktop client) used to trigger 3+ `Config::load`
-    /// disk reads per user operation, all of which now collapse into the
-    /// shared `Arc<Config>` here and on `StorageManager`.
+    /// Callers load `Config` once at their top level and thread it down —
+    /// embedding callers used to trigger 3+ `Config::load` disk reads per user
+    /// operation, all of which now collapse into the shared `Arc<Config>` here
+    /// and on `StorageManager`.
     ///
     /// All internally-built `RegistrySet`s are anonymous. For caller-driven
-    /// auth (e.g. a desktop client passing a bearer token for visibility-gated
+    /// auth (e.g. an embedder passing a bearer token for visibility-gated
     /// registries), use [`Self::new_with_auth`].
     pub fn new(
         project_root: PathBuf,

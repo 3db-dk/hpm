@@ -271,8 +271,8 @@ HPM manifest values accept the usual semver constraint operators:
 
 The install command itself is a thin shell — it loads the manifest +
 lockfile, builds a `ProjectManager`, and calls `sync_dependencies()`.
-The desktop client uses the same `ProjectManager` entry point, so both
-clients run the same flow.
+Embedding clients use the same `ProjectManager` entry point, so every
+client runs the same flow.
 
 ```text
  ┌──────────────────────────────────────────────────────────────────────┐
