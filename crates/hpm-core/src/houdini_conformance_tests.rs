@@ -489,3 +489,120 @@ fn houdini_set_overwrites_path_registered_ocio_seed() {
         );
     }
 }
+
+/// Regression: the emitted `enable` clause must actually be *evaluated* by
+/// Houdini — both bounds — not silently ignored.
+///
+/// `[compat].houdini` lowers to a flat `enable` string
+/// (`houdini_version >= '21' and houdini_version < '22'`). Houdini also
+/// accepts an *object* form, but with conditional-map semantics rather than
+/// conjunction: every key whose expression matches contributes its boolean,
+/// and when no key matches Houdini logs `Unsupported value for enable` and
+/// leaves the package **enabled**. Re-encoding a range as
+/// `{">= '21.0'": true, "< '22.0'": true}` therefore keeps the lower bound
+/// but silently drops the upper one — a package would load on every Houdini
+/// above its declared maximum. Verified on 21.0.729.
+///
+/// This test is version-agnostic: it pins that an in-range package loads, an
+/// out-of-range-below package does not (lower bound honored), and an
+/// out-of-range-above package does not (upper bound honored). If the emitted
+/// form ever stops being one Houdini evaluates, `enable` is ignored, the
+/// excluded fixtures load, and the assertions fail.
+#[test]
+fn houdini_evaluates_both_bounds_of_the_emitted_enable() {
+    let Some(hfs) = find_hfs() else {
+        assert!(
+            std::env::var("HPM_REQUIRE_HOUDINI").is_err(),
+            "HPM_REQUIRE_HOUDINI is set but no Houdini installation was found"
+        );
+        eprintln!(
+            "SKIPPED houdini enable conformance test: no Houdini installation \
+             found (set HFS to enable it)"
+        );
+        return;
+    };
+
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let pm = ProjectManager::new(project_root, storage_manager, config).unwrap();
+    std::fs::create_dir_all(&pm.project_paths.packages_dir).unwrap();
+
+    // (slug, range, var, must_load). The ranges are chosen so the verdict is
+    // the same on every Houdini this test can encounter: no release is below
+    // 20, none is in [1, 2), and none is at or above 99.
+    let fixtures = [
+        ("gate-wide", ">=20", "HPMT_GATE_WIDE", true),
+        ("gate-future", ">=99", "HPMT_GATE_FUTURE", false),
+        // Multi-clause: pins that the *upper* bound is honored — the bound an
+        // object-form re-encoding would drop.
+        ("gate-past", ">=1, <2", "HPMT_GATE_PAST", false),
+    ];
+
+    for (slug, range, var, _) in fixtures {
+        let mut manifest = PackageManifest::new(
+            PackagePath::new(format!("studio/{slug}")).unwrap(),
+            slug.to_string(),
+            "1.0.0".to_string(),
+            None,
+            Vec::new(),
+            None,
+        );
+        manifest.compat.houdini = Some(
+            hpm_package::HoudiniRange::parse(range).expect("conformance range is well-formed"),
+        );
+        let mut runtime = IndexMap::new();
+        runtime.insert(var.to_string(), runtime_entry(EnvMethod::Append, "loaded"));
+        manifest.runtime = runtime;
+
+        let install_path = temp_dir.path().join(format!("{slug}@1.0.0"));
+        std::fs::create_dir_all(&install_path).unwrap();
+        let installed = InstalledPackage {
+            version: "1.0.0".to_string(),
+            manifest,
+            install_path,
+            is_dev: false,
+        };
+        pm.generate_houdini_manifest_with_python(&installed, None, &IndexMap::new())
+            .unwrap();
+    }
+    pm.write_project_overrides_manifest(&IndexMap::new())
+        .unwrap();
+
+    let output = std::process::Command::new(hconfig_path(&hfs))
+        .env("HFS", &hfs)
+        .env("HOUDINI_PACKAGE_DIR", &pm.project_paths.packages_dir)
+        .env("HOUDINI_PACKAGE_VERBOSE", "1")
+        .output()
+        .expect("failed to spawn hconfig");
+    let log = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        log.contains("Resolved variables:"),
+        "hconfig produced no package log; output:\n{log}"
+    );
+
+    // Houdini logs this when it cannot make sense of an `enable` value — and
+    // then leaves the package enabled. Emitting a form that draws it would
+    // turn every version gate into a no-op.
+    assert!(
+        !log.contains("Unsupported value for enable"),
+        "Houdini could not evaluate an emitted `enable` value, so the gate \
+         defaulted to enabled:\n{log}"
+    );
+
+    let vars = parse_resolved_vars(&log);
+    for (slug, range, var, must_load) in fixtures {
+        assert_eq!(
+            vars.contains_key(var),
+            must_load,
+            "package {slug} (`[compat].houdini = \"{range}\"`) was {} by this \
+             Houdini; its `enable` clause was not evaluated as expected:\n{log}",
+            if must_load { "excluded" } else { "loaded" }
+        );
+    }
+}
