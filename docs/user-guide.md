@@ -450,6 +450,27 @@ Pack runs `hpm check` first, then:
 4. If a signing key is supplied, produces an Ed25519 signature over the archive bytes and emits a `keyId`.
 5. Builds a searchable **asset index** from the manifest's [`[[operators]]`](#operators) declarations and includes it in `--json` output (and warns if a declared `source` file is missing from the archive).
 
+**Dependencies in a hand-installed archive**
+
+An archive contains one package, not its dependency tree. The generated
+`{slug}.json` lists the manifest's `[dependencies]` under Houdini's
+`recommends`, never `requires`: `requires` is a hard gate, so a dependency
+that isn't present would make Houdini disable the package outright and it
+would load nothing at all — no HDAs, no environment, no toolbar. With
+`recommends`, Houdini instead logs
+
+```
+WARNING: The recommended package <dep> for <slug> is either missing,
+disabled or invalid.
+```
+
+and loads what the archive does ship. If the package genuinely needs that
+dependency at runtime, install it too — either with `hpm install`, which
+resolves the whole tree, or by unpacking each dependency's archive into the
+same packages directory. Packages installed by HPM are unaffected: their
+manifests declare neither field, because HPM has already installed every
+dependency before Houdini starts.
+
 **Options**
 
 | Flag | Description |

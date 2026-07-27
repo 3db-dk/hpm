@@ -170,9 +170,17 @@ pub struct HoudiniNativePackage {
     pub enable: Option<String>,
     /// Environment variable definitions
     pub env: Vec<HashMap<String, HoudiniEnvValue>>,
-    /// Required packages
+    /// Hard requirements. Houdini **disables** this package outright when a
+    /// listed package is missing, so the generator leaves this `None` and
+    /// emits dependencies as [`recommends`](Self::recommends) instead — see
+    /// [`generate_houdini_native_package`][crate::PackageManifest::generate_houdini_native_package].
+    /// Retained so a hand-written `{slug}.json` using it round-trips.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requires: Option<Vec<String>>,
+    /// Soft requirements. Houdini warns (naming the missing package) but
+    /// still loads this one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommends: Option<Vec<String>>,
     /// Package metadata
     pub hpackage: HpackageMetadata,
 }
@@ -268,7 +276,8 @@ mod tests {
                 );
                 m
             }],
-            requires: Some(vec!["some-dep".to_string()]),
+            requires: None,
+            recommends: Some(vec!["some-dep".to_string()]),
             hpackage: HpackageMetadata {
                 version: "1.2.3".to_string(),
             },
@@ -293,6 +302,7 @@ mod tests {
             enable: None,
             env: vec![],
             requires: None,
+            recommends: None,
             hpackage: HpackageMetadata {
                 version: "1.0.0".to_string(),
             },
@@ -301,5 +311,6 @@ mod tests {
         let json = serde_json::to_string_pretty(&pkg).unwrap();
         assert!(!json.contains("enable"));
         assert!(!json.contains("requires"));
+        assert!(!json.contains("recommends"));
     }
 }

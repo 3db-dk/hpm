@@ -504,8 +504,25 @@ impl PackageManifest {
             .as_ref()
             .map(HoudiniRange::to_enable_expression);
 
-        // Build requires from dependency keys (slug portion only)
-        let requires = if self.dependencies.is_empty() {
+        // Dependencies are advertised as `recommends`, never `requires`.
+        //
+        // This file exists for the no-HPM path: a user downloads one archive
+        // and extracts it into a Houdini packages directory. Houdini treats
+        // `requires` as a hard gate — a listed package that isn't present
+        // makes it log `Package <dep> is required by <slug> but is either
+        // missing, disabled or invalid` and then `Package <slug> will be
+        // disabled`. Nothing in that path can satisfy the entry: there is no
+        // resolver, and the dependency is a separate download the user has no
+        // automated way to obtain. Emitting `requires` therefore guaranteed
+        // that every package with a dependency loaded nothing at all.
+        //
+        // `recommends` keeps the information and the diagnostic — Houdini
+        // warns, naming the missing package — while letting whatever the
+        // package does ship actually load. HPM-managed installs are unaffected
+        // either way: `generate_houdini_package` emits neither field, because
+        // HPM guarantees the dependency is installed before Houdini starts.
+        // Verified against Houdini 21.0.729 with hconfig.
+        let recommends = if self.dependencies.is_empty() {
             None
         } else {
             Some(
@@ -529,7 +546,8 @@ impl PackageManifest {
             show: true,
             enable,
             env,
-            requires,
+            requires: None,
+            recommends,
             hpackage: HpackageMetadata {
                 version: self.package.version.clone(),
             },
