@@ -444,13 +444,67 @@ hpm pack [OPTIONS]
 
 Pack runs `hpm check` first, then:
 
-1. Auto-generates a Houdini-native `{slug}.json` for the archive unless the user has provided one (a hand-written file ships verbatim). This file follows Houdini's own package format, so the archive is usable by Houdini even without HPM: the archive uses the **hpackage layout** — `{slug}.json` at the root next to a `{slug}/` folder holding all package content — so extracting it straight into a Houdini packages directory yields `packages/{slug}.json` + `packages/{slug}/...`, exactly where the json's `$HOUDINI_PACKAGE_PATH/{slug}/...` paths point. (`hpm install` strips the `{slug}/` wrapper again; installed trees stay flat with `hpm.toml` at the root.)
+1. Auto-generates a Houdini-native `{slug}.json` for the archive unless the user has provided one (a hand-written file ships verbatim). This file follows Houdini's own package format, so the archive is usable by Houdini even without HPM: the archive uses the **hpackage layout** — `{slug}.json` at the root next to a `{slug}/` folder holding all package content. See [Installing an archive without HPM](#installing-an-archive-without-hpm) for how to install one, and which Houdini install flow to avoid. (`hpm install` strips the `{slug}/` wrapper again; installed trees stay flat with `hpm.toml` at the root.)
 2. Filters files by `[stage]` (per-platform `place` rules and `include`/`exclude` globs) when the manifest declares `[compat].platforms`.
 3. Produces a `.zip` archive plus a SHA-256 checksum.
 4. If a signing key is supplied, produces an Ed25519 signature over the archive bytes and emits a `keyId`.
 5. Builds a searchable **asset index** from the manifest's [`[[operators]]`](#operators) declarations and includes it in `--json` output (and warns if a declared `source` file is missing from the archive).
 
-**Dependencies in a hand-installed archive**
+#### Installing an archive without HPM
+
+The archive unzips to `{slug}.json` beside a `{slug}/` content folder. **Keep
+those two together.** Every path in the json is written relative to the json's
+own location — `$HOUDINI_PACKAGE_PATH` means *the directory holding this
+package file* — so the pair is movable as a unit but not separable.
+
+Given that, there are three ways to register it, none of which require
+editing anything:
+
+1. **Move both into a Houdini packages directory** —
+   `$HOUDINI_USER_PREF_DIR/packages`, `$HSITE/houdini<ver>/packages`,
+   `$HOUDINI_PACKAGE_DIR`, or `$HFS/packages`. You get
+   `packages/{slug}.json` + `packages/{slug}/...`, exactly where the json's
+   paths point.
+
+2. **Keep both wherever you like and point Houdini at that folder.** Put a
+   one-line file in a packages directory:
+
+   ```json
+   { "package_path": "/path/to/where/you/unzipped" }
+   ```
+
+   Houdini processes every package file directly in that folder, and
+   `$HOUDINI_PACKAGE_PATH` inside `{slug}.json` resolves to it. Note that
+   `package_path` cannot use variables set by any `env` block — only
+   variables from the environment Houdini was launched with.
+
+3. **Register it from the Package Browser.** Drag the shipped `{slug}.json`
+   into the Package Browser pane — the `.json`, not the `.zip` and not the
+   content folder. Houdini writes a `{slug}_autoload.json` into your packages
+   directory that points back at the file, which behaves like option 2.
+
+Separating the two — json in a packages directory, content somewhere else —
+is the only arrangement that needs the file edited, because the paths are no
+longer relative to anything useful. Option 2 exists to avoid exactly that.
+
+> **The Package Browser's File > Install Package Archive does not use the
+> shipped json at all.** Houdini honours a bundled package file only when it
+> is named `<archive-stem>.json`; `hpm pack` names the archive
+> `{Name}-{version}-{platform}.zip`, so ours is not merely ignored — it is
+> never written to disk. Only the `{slug}/` folder is extracted. Houdini then
+> writes its own package file into a packages directory holding `enable` and
+> `hpath` only, with `hpath` pointing at the extracted folder.
+>
+> That still loads everything Houdini finds by convention under a
+> `HOUDINI_PATH` entry — `otls/`, `toolbar/`, `scripts/`, `python_panels/`,
+> `viewer_states/`, and `dso/`. What it cannot load is anything reachable only
+> through a `[runtime]` variable, since no `env` block survives. A package
+> whose native plugins sit in a version-keyed tree such as
+> `bin/$HOUDINI_MAJOR_RELEASE.$HOUDINI_MINOR_RELEASE/dso` loses them silently;
+> one that keeps them in a plain `dso/` folder is unaffected. Verified against
+> Houdini 21.0.729.
+
+#### Dependencies in a hand-installed archive
 
 An archive contains one package, not its dependency tree. The generated
 `{slug}.json` lists the manifest's `[dependencies]` under Houdini's
@@ -1031,6 +1085,29 @@ platforms you ship under `[compat].platforms`; each per-platform
 file's basename is appended. Otherwise `to` is the literal archive path
 (use when relocating a single file under a renamed name). Both `from`
 and `to` use forward slashes regardless of host OS.
+
+**Where to put native binaries.** Place them in Houdini's convention
+folders at the package root — `dso/` for HDK plugins, `apexdso/` for APEX
+callbacks — rather than in a version- or platform-keyed tree that a
+`[runtime]` variable has to point at. Houdini finds those folders beneath
+any `HOUDINI_PATH` entry, and the generated `{slug}.json` puts the package
+root there via `hpath`, so the operators register with no environment at
+all. This is what SideFX's own packages do: `$HFS/packages/apex.json`
+contains nothing but `{"hpath": "$HFS/packages/apex"}`.
+
+The reason is reach. A `[runtime]` variable only arrives if something
+actually reads the manifest — an hpm-managed install, or the generated
+`{slug}.json` sitting beside the content. Houdini's Package Browser
+discards it (see [Installing an archive without HPM](#installing-an-archive-without-hpm)),
+so a package that needs one to locate its own binaries loads its HDAs and
+toolbars there but registers no operators, with no error. Convention
+folders work on every install route; `[runtime]` does not.
+
+`place` is what makes this cheap: let the build write wherever suits it and
+relocate at pack time, leaving the source tree alone. When a dev-override
+install still needs the build-tree path, gate that variable on
+`install_source = "dev"` (see [HDK plugin pattern](#hdk-plugin-pattern-dev-only-paths))
+so it never reaches a published archive.
 
 **Per-platform packing semantics.** When packing for `--platform <X>`:
 
@@ -1615,6 +1692,30 @@ Check that:
 3. The venv directory it points to exists and contains `site-packages/`. If it doesn't, remove the venv directory and re-run `hpm install` to rebuild it — venvs are a content-addressed cache and are always safe to delete.
 
 Restart Houdini after any change to `HOUDINI_PACKAGE_PATH`.
+
+### A hand-installed archive registers but nothing loads
+
+Symptom: Houdini's package log lists the package, reports `Disabled Packages
+(0)`, and logs no warning — but no HDAs, DSOs, or toolbars appear.
+
+Almost always the package file and the `{slug}/` content folder are not in
+the same directory. `$HOUDINI_PACKAGE_PATH` means *the directory holding the
+package file*, so `$HOUDINI_PACKAGE_PATH/{slug}/...` resolves relative to
+wherever the json ended up. If the content is elsewhere, every path dangles
+and Houdini says nothing about it.
+
+Confirm what Houdini actually resolved:
+
+```sh
+HOUDINI_PACKAGE_VERBOSE=1 $HFS/bin/hconfig
+```
+
+Then check that the printed directories exist. Moving the `{slug}/` folder in
+beside the json fixes it.
+
+A related but milder symptom — HDAs and toolbars appear while native plugins
+do not — means the package file Houdini is reading is not the one the archive
+shipped. See [Installing an archive without HPM](#installing-an-archive-without-hpm).
 
 ### Debug logging
 
