@@ -103,6 +103,25 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
 
         let target_path = target_dir.join(&relative_path);
 
+        // A zip stores a symlink as an entry whose *content* is the target
+        // path, flagged only in the Unix mode bits. Nothing here inspected
+        // those, so such an entry was written out as a regular file holding a
+        // path string — a silently corrupt install rather than a refused one.
+        // Skipping matches the tar path and keeps the extractor's long-
+        // standing "we do not materialise links" posture, which is what makes
+        // path-traversal validation sufficient: a link is the one entry type
+        // that can redirect a *later* entry's write outside the target
+        // directory, and validating its target at creation time would not stop
+        // that. `hpm pack` resolves symlinks to their contents, so its own
+        // archives never contain one.
+        if is_symlink_entry(&file) {
+            warn!(
+                "Skipping symlink entry in archive: {} (links are not extracted)",
+                relative_path.display()
+            );
+            continue;
+        }
+
         if file.is_dir() {
             std::fs::create_dir_all(&target_path)?;
         } else {
@@ -121,6 +140,21 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
     }
 
     Ok(())
+}
+
+/// Whether a zip entry describes a symbolic link.
+///
+/// Zip has no dedicated link record: the type lives in the high bits of the
+/// Unix mode an archive optionally carries (`S_IFMT` == `S_IFLNK`), and the
+/// entry's payload is the target path. Producers on non-Unix hosts record no
+/// mode at all, in which case there is nothing to detect and nothing to skip.
+/// Checked on every platform, not just Unix — a Windows install must make the
+/// same file set as a Linux one, or the same archive yields different trees.
+fn is_symlink_entry(file: &zip::read::ZipFile<'_, std::fs::File>) -> bool {
+    const S_IFMT: u32 = 0o170000;
+    const S_IFLNK: u32 = 0o120000;
+    file.unix_mode()
+        .is_some_and(|mode| mode & S_IFMT == S_IFLNK)
 }
 
 /// Resolve the extraction layout of a zip archive (blocking operation).
@@ -797,6 +831,78 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o755);
+    }
+
+    /// Regression: a zip symlink entry was written out as a regular file whose
+    /// contents were the target path — a silently corrupt install. It must be
+    /// skipped, matching the tar path, and must not leave a decoy file behind.
+    #[cfg(unix)]
+    #[test]
+    fn test_extract_zip_skips_symlink_entries() {
+        use std::io::Write;
+
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("pkg.zip");
+        let extract_dir = temp.path().join("out");
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let plain = zip::write::SimpleFileOptions::default().unix_permissions(0o644);
+            zip.start_file("pkg/lib/libfoo.so.1", plain).unwrap();
+            zip.write_all(ELF_STUB).unwrap();
+            // Written with the zip crate's own symlink API, so this is exactly
+            // the encoding a real Unix producer emits for
+            // `libfoo.so -> libfoo.so.1`. (`unix_permissions` cannot express
+            // it: the crate masks the mode to 0o777, dropping S_IFLNK.)
+            zip.add_symlink("pkg/lib/libfoo.so", "libfoo.so.1", plain)
+                .unwrap();
+            zip.finish().unwrap();
+        }
+        std::fs::write(&archive_path, buf.into_inner()).unwrap();
+
+        extract_archive_sync(&archive_path, &extract_dir).unwrap();
+
+        assert!(extract_dir.join("lib/libfoo.so.1").exists());
+        let decoy = extract_dir.join("lib/libfoo.so");
+        assert!(
+            !decoy.exists() && decoy.symlink_metadata().is_err(),
+            "the link must be skipped outright, not written as a file containing \
+             its target path"
+        );
+    }
+
+    /// A traversing symlink is the case that makes materialising links unsafe:
+    /// it can redirect a *later* entry's write outside the target directory,
+    /// which validating the link target at creation time would not prevent.
+    #[cfg(unix)]
+    #[test]
+    fn test_extract_zip_skips_traversing_symlink() {
+        use std::io::Write;
+
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("evil.zip");
+        let extract_dir = temp.path().join("out");
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let plain = zip::write::SimpleFileOptions::default().unix_permissions(0o644);
+            zip.start_file("pkg/hpm.toml", plain).unwrap();
+            zip.write_all(b"[package]").unwrap();
+            zip.add_symlink("pkg/escape", "/etc", plain).unwrap();
+            zip.finish().unwrap();
+        }
+        std::fs::write(&archive_path, buf.into_inner()).unwrap();
+
+        extract_archive_sync(&archive_path, &extract_dir).unwrap();
+
+        let escape = extract_dir.join("escape");
+        assert!(escape.symlink_metadata().is_err(), "no link may be created");
+        assert!(
+            extract_dir.join("hpm.toml").exists(),
+            "other entries still extract"
+        );
     }
 
     #[cfg(unix)]

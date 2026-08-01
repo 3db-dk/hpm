@@ -153,6 +153,57 @@ fn archive_preserves_executable_bit() {
     assert_eq!(mode_of(&mut zip, "otls/tool.hda"), 0o644);
 }
 
+/// Regression: `entry.file_type()` describes the link, not its target, so
+/// testing it alone dropped every symlink from the archive without a word. A
+/// package laying out `libfoo.so -> libfoo.so.1.2.3` — the normal Unix
+/// convention — shipped without `libfoo.so`. The link is now packed as an
+/// ordinary file holding the target's bytes.
+#[cfg(unix)]
+#[test]
+fn archive_packs_symlinked_files_as_their_contents() {
+    let dir = TempDir::new().unwrap();
+    create_test_package(dir.path());
+    fs::create_dir_all(dir.path().join("lib")).unwrap();
+    fs::write(dir.path().join("lib/libfoo.so.1"), b"real-bytes").unwrap();
+    std::os::unix::fs::symlink("libfoo.so.1", dir.path().join("lib/libfoo.so")).unwrap();
+    // A broken link must not fail the pack.
+    std::os::unix::fs::symlink("nowhere.so", dir.path().join("lib/libdead.so")).unwrap();
+
+    let output_dir = TempDir::new().unwrap();
+    let ignore = build_ignore_rules(dir.path()).unwrap();
+    let archive_path = create_archive(
+        dir.path(),
+        "test-pkg",
+        "1.0.0",
+        output_dir.path(),
+        &ignore,
+        None,
+        None,
+        ArchiveLayout::default(),
+    )
+    .unwrap();
+
+    let file = fs::File::open(&archive_path).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    let names: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .collect();
+
+    assert!(names.contains(&"lib/libfoo.so".to_string()), "{names:?}");
+    assert!(names.contains(&"lib/libfoo.so.1".to_string()), "{names:?}");
+    assert!(
+        !names.contains(&"lib/libdead.so".to_string()),
+        "a broken link has nothing to pack: {names:?}"
+    );
+
+    // The entry carries the target's bytes, not the target's *path*, so the
+    // archive stays symlink-free and extraction needs no link support.
+    let mut entry = zip.by_name("lib/libfoo.so").unwrap();
+    let mut got = Vec::new();
+    std::io::Read::read_to_end(&mut entry, &mut got).unwrap();
+    assert_eq!(got, b"real-bytes");
+}
+
 /// The mode is normalised to 0o755/0o644 rather than forwarded verbatim, so
 /// two machines with different umasks pack an identical tree to identical
 /// bytes. Without this the package checksum would depend on the packing user.

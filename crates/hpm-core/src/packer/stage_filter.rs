@@ -216,7 +216,43 @@ pub(super) fn collect_stage_entries(
             continue;
         }
 
-        if !entry.file_type().is_file() {
+        // `file_type()` reports the link itself, not its target, because the
+        // walk deliberately doesn't follow links. Testing it alone therefore
+        // dropped every symlink from the archive silently — a package laying
+        // out `libfoo.so -> libfoo.so.1.2.3`, the normal Unix convention,
+        // shipped without `libfoo.so` and nothing said so. Resolve the link
+        // instead: a symlink to a file is packed as an ordinary file holding
+        // the target's bytes, which is also what keeps archives symlink-free
+        // (extraction refuses to materialise links — see
+        // `archive_fetcher::extract`).
+        let packable = if entry.file_type().is_file() {
+            true
+        } else if entry.file_type().is_symlink() {
+            match std::fs::metadata(path) {
+                // Symlink to a directory: the walk won't descend into it
+                // without `follow_links`, so its contents would go missing
+                // just as quietly. Say so rather than half-packing.
+                Ok(md) if md.is_dir() => {
+                    tracing::warn!(
+                        "Skipping symlinked directory {} — its contents will not \
+                         be packed. Replace it with a real directory if the \
+                         package needs them.",
+                        relative.display()
+                    );
+                    false
+                }
+                Ok(_) => true,
+                // Broken link: nothing to read, and `File::open` would other-
+                // wise fail the whole pack later with a less obvious message.
+                Err(e) => {
+                    tracing::warn!("Skipping broken symlink {}: {}", relative.display(), e);
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        if !packable {
             continue;
         }
 
