@@ -59,6 +59,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host. Per-platform CI that builds each archive on its own worker already
   satisfies this.
 
+- **A symlink in a package's source tree no longer disappears from the
+  archive, and a symlink in someone else's archive no longer installs as a
+  corrupt file.** Two halves of one gap. Packing tested the link itself rather
+  than what it points at, so every symlink was dropped without a word — a
+  package laying out `libfoo.so -> libfoo.so.1.2.3`, the ordinary Unix
+  convention, simply shipped without `libfoo.so`. A link to a file is now
+  packed as a regular entry holding the target's bytes; a link to a directory
+  is skipped with a warning (its contents were never walked), and a broken link
+  is skipped instead of failing the pack later with an unhelpful message.
+  Extracting had the mirror-image fault: zip records a symlink as an entry
+  whose payload is the target *path*, flagged only in mode bits nothing
+  inspected, so it was written out as a regular file containing a path string.
+  Such entries are now skipped, matching what tar extraction already did.
+  Skipping rather than recreating the link is deliberate — a link is the one
+  entry type that can redirect a *later* entry's write outside the target
+  directory, which validating the link itself would not prevent. Since packing
+  now resolves links, hpm's own archives never contain one.
+
 - **Install now restores a lost executable bit rather than propagating it.**
   hpm installs from arbitrary hosts — GitHub Releases, SideFX hpack, a
   studio's own bucket — and a great many zip producers drop Unix modes

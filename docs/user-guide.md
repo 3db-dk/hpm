@@ -277,6 +277,15 @@ Note this happens at extraction. A package already installed at a given version
 is not re-extracted, so a tree installed before this behaviour existed keeps its
 modes until that package's version changes.
 
+**Symlink entries are skipped.** Neither the zip nor the tar.gz extractor
+creates a link, and a skipped entry is logged. A link is the one entry type
+that can redirect a *later* entry's write outside the target directory —
+validating the link's own target would not prevent that — so refusing them is
+what keeps path-traversal checking sufficient. Archives `hpm pack` produces
+never contain one (links are resolved at pack time, above); a third-party
+archive that does will install without them, so a package must not depend on a
+link existing after install.
+
 ### `hpm update`
 
 Update dependencies to their latest compatible versions.
@@ -482,6 +491,15 @@ Pack runs `hpm check` first, then:
    host** — per-platform CI that builds each archive on its own worker
    already does. (`hpm install` compensates where it can: see
    [file modes on install](#file-modes-on-install).)
+
+   **Symlinks are resolved, not stored.** A symlink to a file is packed as an
+   ordinary entry holding the target's bytes, so a source tree using the usual
+   `libfoo.so -> libfoo.so.1.2.3` layout ships both names and installs
+   correctly everywhere, including on Windows. A symlink to a *directory* is
+   skipped with a warning — the pack walk does not descend through links, so
+   its contents would go missing silently — and a broken link is skipped
+   rather than failing the pack. The result is that hpm archives never contain
+   a link entry, which is what lets extraction refuse them outright.
 4. If a signing key is supplied, produces an Ed25519 signature over the archive bytes and emits a `keyId`.
 5. Builds a searchable **asset index** from the manifest's [`[[operators]]`](#operators) declarations and includes it in `--json` output (and warns if a declared `source` file is missing from the archive).
 
@@ -859,6 +877,12 @@ glibc = "2.39"
 That is a statement about what the package supports, not a way to silence the
 check — the requirement becomes visible in the manifest, where a consumer can
 read it, instead of buried in the archive where nobody can.
+
+> **Writing `glibc` raises the hpm version your manifest requires.** `[compat]`
+> rejects unknown fields, so a manifest carrying `glibc` fails to parse on any
+> hpm predating the key — with `unknown field 'glibc'`, not a warning. Leave it
+> unset unless you need it, and if your CI pins an hpm version, roll that pin
+> before adding the key.
 
 The same pass warns (without failing) when a shipped `.so` carries no
 `RUNPATH`/`RPATH`. That is fine while every dependency is already loaded by the
