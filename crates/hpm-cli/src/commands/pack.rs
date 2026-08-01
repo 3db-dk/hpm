@@ -125,6 +125,7 @@ pub async fn execute(
 
     // Run pack on blocking thread (zip I/O)
     let stage_config = manifest.stage.clone();
+    let compat = manifest.compat.clone();
     let result = tokio::task::spawn_blocking({
         let package_dir = package_dir.clone();
         let name = name.clone();
@@ -139,7 +140,10 @@ pub async fn execute(
                 &output_dir,
                 signing_key.as_ref(),
                 platform.as_ref(),
-                &stage_config,
+                packer::PackManifestInputs {
+                    stage: &stage_config,
+                    compat: &compat,
+                },
                 packer::ArchiveLayout {
                     inject_files: &inject_files,
                     content_prefix: Some(&content_prefix),

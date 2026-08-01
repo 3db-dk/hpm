@@ -381,6 +381,7 @@ fn houdini_package_no_version_constraints() {
     );
 
     manifest.compat = CompatConfig {
+        glibc: None,
         houdini: None,
         platforms: Vec::new(),
     };
@@ -437,11 +438,13 @@ houdini = "not-a-version"
 #[test]
 fn compat_houdini_min_extracts_lower_bound() {
     let compat = CompatConfig {
+        glibc: None,
         houdini: Some(HoudiniRange::parse(">=20.5, <22").unwrap()),
         platforms: Vec::new(),
     };
     assert_eq!(compat.houdini_min(), Some("20.5".to_string()));
     let compat = CompatConfig {
+        glibc: None,
         houdini: Some(HoudiniRange::parse("^21").unwrap()),
         platforms: Vec::new(),
     };
@@ -813,6 +816,7 @@ fn stage_platform_not_in_compat_rejected() {
         None,
     );
     manifest.compat = CompatConfig {
+        glibc: None,
         houdini: None,
         platforms: vec![Platform::LinuxX86_64],
     };
@@ -845,6 +849,7 @@ fn stage_place_empty_from_rejected() {
         None,
     );
     manifest.compat = CompatConfig {
+        glibc: None,
         houdini: None,
         platforms: vec![Platform::LinuxX86_64],
     };

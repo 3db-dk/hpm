@@ -37,7 +37,10 @@ fn pack_then_index_reports_present_and_missing_sources() {
         out.path(),
         None,
         None,
-        &StageConfig::default(),
+        packer::PackManifestInputs {
+            stage: &StageConfig::default(),
+            compat: &Default::default(),
+        },
         packer::ArchiveLayout::default(),
     )
     .unwrap();

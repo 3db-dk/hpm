@@ -432,6 +432,7 @@ mod tests {
             None,
         );
         manifest.compat = CompatConfig {
+            glibc: None,
             houdini: range.map(|r| HoudiniRange::parse(r).unwrap()),
             platforms: Vec::new(),
         };

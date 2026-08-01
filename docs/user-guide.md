@@ -809,12 +809,13 @@ All sections, in the order they appear in practice:
 
 ### `[compat]`
 
-Target-environment compatibility for the package. Two axes:
+Target-environment compatibility for the package. Three axes:
 
 - `houdini` — a Cargo-style version requirement string.
 - `platforms` — the native platforms this package supports. Omit (or
   use `["universal"]`) for pure-data / pure-Python packages; list the
   platforms the package ships binaries for otherwise.
+- `glibc` — the oldest glibc the package's Linux binaries may require.
 
 ```toml
 [compat]
@@ -824,7 +825,54 @@ houdini = "^21"                                # default — Houdini 21.x only
 # houdini = "21"                                # bare = caret = ^21
 # houdini = ">=20.5"                            # unbounded above — only safe for pure-data
 platforms = ["linux-x86_64", "macos-aarch64"]   # omit for pure-data
+# glibc = "2.28"                                # default — the VFX platform baseline
 ```
+
+#### `glibc` — the Linux binary floor
+
+Unset, the floor is **2.28**: the [VFX Reference Platform](https://vfxplatform.com/)
+requirement for CY2025 and CY2026 — Houdini 21 and Houdini 22 — which in
+practice means an EL8-era host. (Even the CY2027 draft only moves to 2.34.)
+
+`hpm pack` reads every ELF file destined for a Linux archive and **fails the
+pack** if one requires a newer glibc than the floor. This is worth failing over
+because the alternative is invisible: a host with an older glibc cannot load
+the binary at all, the dynamic loader rejects it before any package code runs,
+and the error names a symbol version (`version 'GLIBC_2.39' not found`) rather
+than your package. A shared library fails even more quietly — it simply never
+loads. Meanwhile the Windows archive works, so the whole thing reads as a
+platform bug rather than a bad build.
+
+The requirement is usually accidental. A toolchain links the newest symbol
+versions its build host offers even when your code uses nothing new — building
+on Ubuntu 24.04 (glibc 2.39) is enough to make a binary that no EL8 or EL9
+workstation can run. The fix is normally to build on an older host, not to
+change the code.
+
+If dropping older hosts *is* intended, raise the floor:
+
+```toml
+[compat]
+glibc = "2.39"
+```
+
+That is a statement about what the package supports, not a way to silence the
+check — the requirement becomes visible in the manifest, where a consumer can
+read it, instead of buried in the archive where nobody can.
+
+The same pass warns (without failing) when a shipped `.so` carries no
+`RUNPATH`/`RPATH`. That is fine while every dependency is already loaded by the
+host process — the normal case for a Houdini plugin — and becomes a silent
+failure the day the package ships a library of its own. Setting
+`LD_LIBRARY_PATH` from `[runtime]` does **not** fix that case: glibc reads that
+variable once at process start, long before Houdini applies a package's
+environment, so it cannot affect a later `dlopen`. Link with
+`-Wl,-rpath,'$ORIGIN'` instead, which needs no environment at all. (Windows is
+the exception that makes this easy to get wrong: `LoadLibrary` re-reads `PATH`
+at call time, so the `PATH` entry in a manifest genuinely does work there.)
+
+Files that can't be parsed as 64-bit ELF are skipped rather than treated as
+suspect, so the check only ever fails a release on evidence.
 
 The supported operators are `=`, `>=`, `>`, `<=`, `<`, `^`, `~`, and the
 bare-version shorthand (aliases caret). Multiple comparators combine with

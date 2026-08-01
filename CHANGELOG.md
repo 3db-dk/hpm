@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`hpm pack` now reads a Linux archive's binaries before shipping them, and
+  refuses one that cannot load on the hosts the package claims to support.**
+  A per-platform archive is the part of a package CI builds and nobody looks
+  at, and the most damaging way to get it wrong is invisible: a toolchain links
+  newer glibc symbol versions purely because of the host it built on, even when
+  the code uses nothing new, and the resulting binary is rejected outright by
+  the dynamic loader on an older host. The error names a symbol version rather
+  than a package, the Windows archive works fine, and so it reads as a platform
+  bug. Packing a Linux archive now fails if its ELF payload requires a newer
+  glibc than the package's floor, naming each file and the version it needs.
+
+  The floor is the new optional **`[compat].glibc`** (`"2.28"`). Unset, it is
+  the [VFX Reference Platform](https://vfxplatform.com/) baseline of **2.28** —
+  the CY2025 and CY2026 requirement, i.e. Houdini 21 and 22, in practice an
+  EL8-era host. Declaring a higher one is the sanctioned way to ship binaries
+  that need it: the requirement then lives in the manifest where a consumer can
+  see it, rather than in the archive where nobody can.
+
+  The same pass warns when a shipped `.so` carries no `RUNPATH`/`RPATH`. That
+  is harmless while every dependency belongs to the host process, which is the
+  normal case for a Houdini plugin, and silently fatal the day the package
+  ships a library of its own — `LD_LIBRARY_PATH` cannot rescue it, because
+  glibc reads that variable once at process start and a package's environment
+  edits land long after. Link with `-Wl,-rpath,'$ORIGIN'` instead.
+
+  Nothing that can't be parsed is ever linted: an unreadable or non-ELF file is
+  skipped, so the check can fail a release only on evidence.
+
 ### Fixed
 
 - **A packaged program no longer arrives without its executable bit, so

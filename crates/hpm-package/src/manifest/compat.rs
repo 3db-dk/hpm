@@ -25,11 +25,88 @@ pub struct CompatConfig {
     pub houdini: Option<HoudiniRange>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub platforms: Vec<Platform>,
+    /// Oldest glibc the package's Linux binaries may require, as `"2.28"`.
+    ///
+    /// Absent means [`GlibcVersion::VFX_PLATFORM_BASELINE`]. `hpm pack`
+    /// refuses to build a Linux archive whose ELF payload needs a newer glibc
+    /// than this, because that failure is otherwise invisible until a user
+    /// runs it: the loader rejects the binary outright, and the same package
+    /// works on Windows, so it reads as a platform bug rather than a bad
+    /// build. Raising it is a deliberate statement that the package does not
+    /// support older hosts — not a way to silence the check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glibc: Option<GlibcVersion>,
+}
+
+/// A glibc `major.minor` version. Patch levels don't exist in glibc's symbol
+/// versioning (`GLIBC_2.39`), so two components is the whole grammar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GlibcVersion {
+    pub major: u32,
+    pub minor: u32,
+}
+
+impl GlibcVersion {
+    /// glibc 2.28 — the [VFX Reference Platform](https://vfxplatform.com/)
+    /// requirement for CY2025 and CY2026, i.e. the Houdini 21 and Houdini 22
+    /// series, and in practice an EL8-era host. Even the CY2027 draft only
+    /// moves to 2.34, so this is the safe default for a Houdini package.
+    pub const VFX_PLATFORM_BASELINE: GlibcVersion = GlibcVersion {
+        major: 2,
+        minor: 28,
+    };
+
+    pub const fn new(major: u32, minor: u32) -> Self {
+        Self { major, minor }
+    }
+}
+
+impl std::fmt::Display for GlibcVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.major, self.minor)
+    }
+}
+
+impl std::str::FromStr for GlibcVersion {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let invalid = || {
+            format!(
+                "invalid glibc version {:?} (expected \"major.minor\", e.g. \"2.28\")",
+                s
+            )
+        };
+        let (major, minor) = s.trim().split_once('.').ok_or_else(invalid)?;
+        Ok(Self {
+            major: major.parse().map_err(|_| invalid())?,
+            minor: minor.parse().map_err(|_| invalid())?,
+        })
+    }
+}
+
+impl Serialize for GlibcVersion {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for GlibcVersion {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(d)?;
+        raw.parse().map_err(serde::de::Error::custom)
+    }
 }
 
 impl CompatConfig {
     pub fn is_empty(&self) -> bool {
-        self.houdini.is_none() && self.platforms.is_empty()
+        self.houdini.is_none() && self.platforms.is_empty() && self.glibc.is_none()
+    }
+
+    /// The glibc floor to hold Linux binaries to, defaulting to the VFX
+    /// Reference Platform baseline when the manifest doesn't state one.
+    pub fn glibc_floor(&self) -> GlibcVersion {
+        self.glibc.unwrap_or(GlibcVersion::VFX_PLATFORM_BASELINE)
     }
 
     /// Lower bound of the Houdini range, used for Python ABI selection.

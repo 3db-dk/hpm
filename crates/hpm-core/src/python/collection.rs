@@ -214,6 +214,7 @@ mod tests {
                 categories: Vec::new(),
             },
             compat: CompatConfig {
+                glibc: None,
                 houdini: Some(hpm_package::HoudiniRange::parse(">=20.5").unwrap()),
                 platforms: Vec::new(),
             },
@@ -267,6 +268,7 @@ mod tests {
                 categories: Vec::new(),
             },
             compat: CompatConfig {
+                glibc: None,
                 houdini: Some(hpm_package::HoudiniRange::parse(">=20.5").unwrap()),
                 platforms: Vec::new(),
             },
@@ -315,6 +317,7 @@ mod tests {
                     categories: Vec::new(),
                 },
                 compat: CompatConfig {
+                    glibc: None,
                     houdini: Some(
                         hpm_package::HoudiniRange::parse(format!(">={}", min_houdini))
                             .expect("test fixture range is valid"),

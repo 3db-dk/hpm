@@ -44,6 +44,7 @@ async fn test_end_to_end_python_workflow() {
             categories: Vec::new(),
         },
         compat: CompatConfig {
+            glibc: None,
             houdini: Some(hpm_package::HoudiniRange::parse(">=20.5").unwrap()),
             platforms: Vec::new(),
         },
@@ -86,6 +87,7 @@ async fn test_end_to_end_python_workflow() {
             categories: Vec::new(),
         },
         compat: CompatConfig {
+            glibc: None,
             houdini: Some(hpm_package::HoudiniRange::parse(">=20.5").unwrap()), // Same as A
             platforms: Vec::new(),
         },
@@ -288,6 +290,7 @@ async fn test_houdini_python_version_mapping_edge_cases() {
                 categories: Vec::new(),
             },
             compat: CompatConfig {
+                glibc: None,
                 houdini: Some(
                     hpm_package::HoudiniRange::parse(format!(">={}", version))
                         .expect("test fixture range is valid"),

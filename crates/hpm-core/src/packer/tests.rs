@@ -382,7 +382,10 @@ fn pack_without_signing() {
         output_dir.path(),
         None,
         None,
-        &StageConfig::default(),
+        PackManifestInputs {
+            stage: &StageConfig::default(),
+            compat: &Default::default(),
+        },
         ArchiveLayout::default(),
     )
     .unwrap();
@@ -409,7 +412,10 @@ fn pack_with_signing() {
         output_dir.path(),
         Some(&signing_key),
         None,
-        &StageConfig::default(),
+        PackManifestInputs {
+            stage: &StageConfig::default(),
+            compat: &Default::default(),
+        },
         ArchiveLayout::default(),
     )
     .unwrap();
@@ -466,7 +472,10 @@ fn platform_archive_name_includes_platform() {
         output_dir.path(),
         None,
         Some(&platform),
-        &stage_config,
+        PackManifestInputs {
+            stage: &stage_config,
+            compat: &Default::default(),
+        },
         ArchiveLayout::default(),
     )
     .unwrap();
@@ -494,7 +503,10 @@ fn platform_archive_excludes_other_platforms() {
         output_dir.path(),
         None,
         Some(&platform),
-        &stage_config,
+        PackManifestInputs {
+            stage: &stage_config,
+            compat: &Default::default(),
+        },
         ArchiveLayout::default(),
     )
     .unwrap();
@@ -563,7 +575,10 @@ fn shared_glob_across_platforms_rides_through_each_archive() {
             output_dir.path(),
             None,
             Some(&platform),
-            &stage_config,
+            PackManifestInputs {
+                stage: &stage_config,
+                compat: &Default::default(),
+            },
             ArchiveLayout::default(),
         )
         .unwrap();
@@ -634,7 +649,10 @@ fn target_glob_overrides_other_platform_match() {
         output_dir.path(),
         None,
         Some(&hpm_package::platform::Platform::LinuxX86_64),
-        &stage_config,
+        PackManifestInputs {
+            stage: &stage_config,
+            compat: &Default::default(),
+        },
         ArchiveLayout::default(),
     )
     .unwrap();
@@ -661,7 +679,10 @@ fn pack_without_platform_has_no_platform_tag() {
         output_dir.path(),
         None,
         None,
-        &StageConfig::default(),
+        PackManifestInputs {
+            stage: &StageConfig::default(),
+            compat: &Default::default(),
+        },
         ArchiveLayout::default(),
     )
     .unwrap();
@@ -691,7 +712,10 @@ fn inject_files_added_to_archive() {
         output_dir.path(),
         None,
         None,
-        &StageConfig::default(),
+        PackManifestInputs {
+            stage: &StageConfig::default(),
+            compat: &Default::default(),
+        },
         ArchiveLayout {
             inject_files: &inject,
             content_prefix: None,
@@ -737,7 +761,10 @@ fn content_prefix_produces_hpackage_layout() {
         output_dir.path(),
         None,
         None,
-        &StageConfig::default(),
+        PackManifestInputs {
+            stage: &StageConfig::default(),
+            compat: &Default::default(),
+        },
         ArchiveLayout {
             inject_files: &inject,
             content_prefix: Some("test-pkg"),
@@ -783,7 +810,10 @@ fn hand_written_json_ships_once_at_root_under_prefix() {
         output_dir.path(),
         None,
         None,
-        &StageConfig::default(),
+        PackManifestInputs {
+            stage: &StageConfig::default(),
+            compat: &Default::default(),
+        },
         ArchiveLayout {
             inject_files: &inject,
             content_prefix: Some("test-pkg"),
