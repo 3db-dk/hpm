@@ -109,6 +109,85 @@ fn archive_contains_expected_files() {
     assert!(!names.iter().any(|n| n.starts_with(".hpm")));
 }
 
+/// Regression: every entry was written with `SimpleFileOptions::default()`,
+/// which records 0o644 unconditionally. A package shipping a `[scripts]`
+/// program (e.g. TumblePipe's `bin/macos-aarch64/tt_setup`) therefore
+/// installed non-executable on every Unix host and failed at spawn with
+/// `Permission denied (os error 13)`, while the Windows archive worked because
+/// executability there isn't a file mode.
+#[cfg(unix)]
+#[test]
+fn archive_preserves_executable_bit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().unwrap();
+    create_test_package(dir.path());
+    fs::create_dir_all(dir.path().join("bin")).unwrap();
+    let tool = dir.path().join("bin/tt_setup");
+    fs::write(&tool, b"binary").unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output_dir = TempDir::new().unwrap();
+    let ignore = build_ignore_rules(dir.path()).unwrap();
+    let archive_path = create_archive(
+        dir.path(),
+        "test-pkg",
+        "1.0.0",
+        output_dir.path(),
+        &ignore,
+        None,
+        None,
+        ArchiveLayout::default(),
+    )
+    .unwrap();
+
+    let file = fs::File::open(&archive_path).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    let mode_of = |zip: &mut zip::ZipArchive<fs::File>, name: &str| {
+        zip.by_name(name).unwrap().unix_mode().unwrap() & 0o777
+    };
+
+    assert_eq!(mode_of(&mut zip, "bin/tt_setup"), 0o755);
+    // Ordinary content stays non-executable.
+    assert_eq!(mode_of(&mut zip, "hpm.toml"), 0o644);
+    assert_eq!(mode_of(&mut zip, "otls/tool.hda"), 0o644);
+}
+
+/// The mode is normalised to 0o755/0o644 rather than forwarded verbatim, so
+/// two machines with different umasks pack an identical tree to identical
+/// bytes. Without this the package checksum would depend on the packing user.
+#[cfg(unix)]
+#[test]
+fn archive_mode_ignores_umask_dependent_bits() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let build = |group_writable: bool| {
+        let dir = TempDir::new().unwrap();
+        create_test_package(dir.path());
+        fs::set_permissions(
+            dir.path().join("hpm.toml"),
+            fs::Permissions::from_mode(if group_writable { 0o664 } else { 0o644 }),
+        )
+        .unwrap();
+        let output_dir = TempDir::new().unwrap();
+        let ignore = build_ignore_rules(dir.path()).unwrap();
+        let archive_path = create_archive(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            output_dir.path(),
+            &ignore,
+            None,
+            None,
+            ArchiveLayout::default(),
+        )
+        .unwrap();
+        fs::read(&archive_path).unwrap()
+    };
+
+    assert_eq!(build(false), build(true));
+}
+
 #[test]
 fn checksum_is_deterministic() {
     let dir = TempDir::new().unwrap();

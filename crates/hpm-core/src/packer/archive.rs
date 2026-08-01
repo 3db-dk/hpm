@@ -12,6 +12,51 @@ use zip::write::SimpleFileOptions;
 use super::PackError;
 use super::stage_filter::{StageFilter, collect_stage_entries};
 
+/// Archive mode for a non-executable file.
+const MODE_REGULAR: u32 = 0o644;
+/// Archive mode for an executable file.
+const MODE_EXECUTABLE: u32 = 0o755;
+
+/// The Unix mode to stamp on `source`'s archive entry.
+///
+/// `SimpleFileOptions::default()` carries no permissions, which makes the zip
+/// writer record 0o644 for *every* entry — silently stripping the executable
+/// bit off anything the package ships as a program. That is not a cosmetic
+/// loss: `[scripts]` entries name concrete files (`bin/macos-aarch64/tt_setup`,
+/// `./configure.sh`), and an install materialised from such an archive fails
+/// at spawn with `Permission denied (os error 13)` on every Unix host while
+/// working fine on Windows, where executability isn't a file mode. So the
+/// source file's own mode is what decides.
+///
+/// The mode is normalised to exactly 0o755 / 0o644 rather than forwarded
+/// verbatim, because the group/other bits of a checkout depend on the packing
+/// user's umask (0o644 under umask 022, 0o664 under umask 002). Forwarding
+/// them would make the archive bytes — and therefore the package checksum —
+/// differ between two machines packing an identical tree. Only the executable
+/// bit is semantically meaningful here, which is the same reduction Git makes.
+///
+/// On Windows there is no mode to read; every entry ships as `MODE_REGULAR`.
+/// A Windows-packed archive can therefore not carry an executable bit, which
+/// is fine for the per-platform archives CI produces (a Windows worker packs
+/// `.exe`s, whose executability is not a file mode) but means a Unix payload
+/// must not be packed from a Windows host. The extractor's content-sniffing
+/// fallback covers that case — see `archive_fetcher::extract::finalize_mode`.
+fn entry_mode(source: &Path) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match fs::metadata(source) {
+            Ok(md) if md.permissions().mode() & 0o111 != 0 => MODE_EXECUTABLE,
+            _ => MODE_REGULAR,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = source;
+        MODE_REGULAR
+    }
+}
+
 /// Result of a successful pack operation.
 #[derive(Debug)]
 pub struct PackResult {
@@ -87,7 +132,8 @@ pub fn create_archive(
     // byte-for-byte reproducible, which the package checksum relies on.
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
-        .last_modified_time(DateTime::default());
+        .last_modified_time(DateTime::default())
+        .unix_permissions(MODE_REGULAR);
 
     for (source, archive_name) in &entries {
         // The injected bytes win over a staged file at the same archive path
@@ -100,7 +146,10 @@ pub fn create_archive(
             Some(prefix) => format!("{}/{}", prefix, archive_name),
             None => archive_name.clone(),
         };
-        zip.start_file(entry_name.as_str(), options)?;
+        zip.start_file(
+            entry_name.as_str(),
+            options.unix_permissions(entry_mode(source)),
+        )?;
         let mut f =
             fs::File::open(source).map_err(|e| IoOp::wrap("open source file", source, e))?;
         let mut buf = Vec::new();
