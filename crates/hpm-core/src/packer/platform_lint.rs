@@ -1,25 +1,60 @@
 //! Pack-time inspection of a platform archive's native payload.
 //!
-//! A per-platform archive is the one part of a package that CI builds but
-//! nobody looks at. Three separate faults have shipped that way, all with the
-//! same shape: the Windows leg works, the Unix leg is malformed, and nothing
-//! notices until a user clicks a button. Losing the executable bit was one
-//! (now fixed in the packer); requiring a glibc newer than the host is the
-//! other, and it is worse, because the loader rejects the binary before any of
-//! the package's own code runs and the error names a symbol version rather
-//! than a package.
+//! A per-platform archive is the one part of a package CI builds and nobody
+//! looks at, and the most damaging way to get it wrong leaves no trace: a
+//! toolchain links newer glibc symbol versions purely because of the host it
+//! built on, even when the code uses nothing new, and the resulting binary is
+//! rejected outright by the dynamic loader anywhere older. The error names a
+//! symbol version rather than a package, a shared library simply never loads,
+//! and the Windows archive works fine — so it reads as a platform bug.
 //!
-//! So the archive gets read before it ships. The lint is deliberately timid
-//! about what it *cannot* determine — an unparseable file is simply not
-//! linted — and firm about what it can: a binary that demonstrably cannot load
-//! on the declared floor fails the pack.
+//! This module **reports**; it does not enforce. What a payload requires is a
+//! fact read off the binary. What a package is willing to support is a policy,
+//! and a package manager guessing at that policy — against a hardcoded
+//! industry baseline, no less — would fail builds over a number the author
+//! never wrote. So pack surfaces the requirement (a console warning plus a
+//! field in `--json`) and leaves the judgement to whoever owns the release; a
+//! CI job wanting a hard gate can assert on the JSON.
+//!
+//! That is also why there is no manifest key here. An earlier revision added
+//! `[compat].glibc` with a VFX-platform default and failed the pack against
+//! it. That was the wrong shape twice over: it put one platform's mechanism
+//! into a cross-platform schema, and since `[compat]` rejects unknown fields,
+//! declaring your way out of the check would itself have broken every older
+//! hpm. Recording the discovered requirement into the version record, so
+//! `hpm install` can say "this build needs glibc 2.39, you have 2.34" at the
+//! point it actually matters, is the natural next step — and needs no schema
+//! of its own either.
 
 use std::path::PathBuf;
 
-use hpm_package::manifest::compat::{CompatConfig, GlibcVersion};
-
-use super::PackError;
 use super::elf;
+// Re-exported: the requirement type is part of this module's public
+// surface (`PayloadRequirements::glibc`), while `elf` itself stays private.
+pub use super::elf::GlibcVersion;
+
+/// What a platform archive's payload turned out to require.
+///
+/// Everything here is derived, never declared. An absent field means "nothing
+/// detected", not "no requirement" — a payload hpm cannot parse contributes
+/// nothing rather than a guess.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PayloadRequirements {
+    /// Highest glibc version any shipped ELF references.
+    pub glibc: Option<GlibcVersion>,
+}
+
+impl PayloadRequirements {
+    /// Rendered for `pack --json` as `{"glibc": "2.39"}`. Empty when nothing
+    /// was detected, so a consumer can tell "none found" from "found zero".
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        if let Some(g) = self.glibc {
+            map.insert("glibc".into(), serde_json::Value::String(g.to_string()));
+        }
+        serde_json::Value::Object(map)
+    }
+}
 
 /// A non-fatal observation about the payload. Returned rather than logged so
 /// the caller decides how to present it.
@@ -29,43 +64,52 @@ pub struct PlatformWarning {
     pub message: String,
 }
 
+/// What one inspection pass produced.
+#[derive(Debug, Clone, Default)]
+pub struct PayloadReport {
+    pub requirements: PayloadRequirements,
+    pub warnings: Vec<PlatformWarning>,
+}
+
 /// Inspect every staged file destined for a Linux archive.
 ///
 /// `entries` is the `(source path, archive path)` list the archive will be
-/// built from, so the lint sees exactly what ships — not what happens to be in
-/// the working tree.
-///
-/// Errors when a binary requires a newer glibc than `compat`'s floor. Warnings
-/// cover the advisory case (a shared object with no search path of its own).
-/// Non-Linux archives are skipped: glibc is not a concept there, and the
-/// packer already carries the executable bit for every platform.
-pub fn lint_linux_payload(
-    entries: &[(PathBuf, String)],
-    compat: &CompatConfig,
-) -> Result<Vec<PlatformWarning>, PackError> {
-    let floor = compat.glibc_floor();
-    let mut warnings = Vec::new();
-    let mut too_new: Vec<(String, GlibcVersion)> = Vec::new();
+/// built from, so this sees exactly what ships — not whatever happens to be
+/// lying around the working tree. Never fails: a file that can't be read, or
+/// isn't an inspectable ELF, simply contributes nothing.
+pub fn inspect_linux_payload(entries: &[(PathBuf, String)]) -> PayloadReport {
+    let mut report = PayloadReport::default();
+    // Files carrying the current maximum, so the warning can name the ones
+    // actually responsible rather than every binary in the archive.
+    let mut carriers: Vec<String> = Vec::new();
 
     for (source, archive_path) in entries {
         let Some(info) = elf::inspect_path(source) else {
             continue;
         };
 
-        if let Some(required) = info.max_glibc
-            && required > floor
-        {
-            too_new.push((archive_path.clone(), required));
+        if let Some(required) = info.max_glibc {
+            match report.requirements.glibc {
+                Some(current) if required < current => {}
+                Some(current) if required == current => carriers.push(archive_path.clone()),
+                _ => {
+                    // A new high-water mark: previous carriers no longer
+                    // explain the requirement.
+                    carriers.clear();
+                    carriers.push(archive_path.clone());
+                    report.requirements.glibc = Some(required);
+                }
+            }
         }
 
         // A shared object with no RUNPATH/RPATH can only resolve dependencies
-        // that are already loaded or sit on the default search path. That is
-        // fine for a Houdini plugin whose every dependency is Houdini's own —
-        // and silently fatal the day it ships a sibling library, because the
-        // env var packages reach for (`LD_LIBRARY_PATH`) is read once at
-        // process start and cannot affect a later `dlopen`.
+        // already loaded or on the default search path. Fine for a Houdini
+        // plugin whose every dependency is Houdini's own — and silently fatal
+        // the day it ships a sibling library, because the env var packages
+        // reach for (`LD_LIBRARY_PATH`) is read once at process start and
+        // cannot affect a later `dlopen`.
         if info.is_shared_object && !info.has_runpath && archive_path.ends_with(".so") {
-            warnings.push(PlatformWarning {
+            report.warnings.push(PlatformWarning {
                 path: archive_path.clone(),
                 message: "shared object declares no RUNPATH/RPATH; it can only resolve libraries \
                      already loaded by the host process. If it ever ships alongside its own \
@@ -76,46 +120,33 @@ pub fn lint_linux_payload(
         }
     }
 
-    if too_new.is_empty() {
-        return Ok(warnings);
+    // Only worth remarking on when it exceeds what a Houdini host is likely to
+    // have. At or below the baseline there is nothing to say.
+    if let Some(required) = report.requirements.glibc
+        && required > GlibcVersion::VFX_PLATFORM_BASELINE
+    {
+        carriers.sort();
+        report.warnings.push(PlatformWarning {
+            path: carriers.join(", "),
+            message: format!(
+                "payload requires glibc {required}, above the VFX Reference Platform \
+                 baseline of {baseline} (the CY2025/CY2026 requirement — Houdini 21 and \
+                 22, in practice an EL8-era host). A host with an older glibc cannot load \
+                 these at all: the loader rejects them before any package code runs, so it \
+                 surfaces as \"version `GLIBC_{required}' not found\", or for a plugin as one \
+                 that silently never loads. This is usually accidental — a toolchain links \
+                 the newest symbol versions its build host offers even when the code uses \
+                 nothing new — so the fix is normally to build on an older host rather than \
+                 to change the code.",
+                baseline = GlibcVersion::VFX_PLATFORM_BASELINE
+            ),
+        });
     }
 
-    too_new.sort();
-    let highest = too_new.iter().map(|(_, v)| *v).max().unwrap_or(floor);
-    let listed = too_new
-        .iter()
-        .map(|(p, v)| format!("  {} requires glibc {}", p, v))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let floor_origin = floor_origin_hint(compat);
-
-    Err(PackError::PlatformPayload(format!(
-        "this archive's Linux binaries require a newer glibc than the package \
-         declares:\n{listed}\n\n\
-         The declared floor is glibc {floor}{floor_origin}. A host with an older \
-         glibc cannot load these at all — the dynamic loader rejects them before \
-         any package code runs, so the failure surfaces as \"version \
-         `GLIBC_{highest}' not found\", or for a plugin as one that silently \
-         never loads, rather than as anything naming this package.\n\n\
-         Either build on an older host so the binaries match the floor, or — if \
-         dropping those hosts is intended — say so: [compat] glibc = \"{highest}\".\n\n\
-         The requirement is often accidental: a toolchain links newer symbol \
-         versions purely because of the host it built on, even when the code \
-         uses nothing new."
-    )))
+    report
 }
 
-/// Where the floor came from, so the message doesn't imply the author wrote a
-/// number they never wrote.
-fn floor_origin_hint(compat: &CompatConfig) -> &'static str {
-    if compat.glibc.is_some() {
-        " (from [compat].glibc)"
-    } else {
-        " (the VFX Reference Platform baseline, used because [compat].glibc is unset)"
-    }
-}
-
-/// True when this archive's payload should be checked for glibc compatibility.
+/// True when this archive's payload is worth inspecting for glibc.
 pub fn targets_linux(platform: Option<&hpm_package::platform::Platform>) -> bool {
     platform.is_some_and(|p| p.to_string().starts_with("linux"))
 }
@@ -124,39 +155,6 @@ pub fn targets_linux(platform: Option<&hpm_package::platform::Platform>) -> bool
 mod tests {
     use super::*;
     use std::path::Path;
-
-    fn compat_with(glibc: Option<GlibcVersion>) -> CompatConfig {
-        CompatConfig {
-            glibc,
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn non_elf_entries_are_ignored() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = dir.path().join("hpm.toml");
-        std::fs::write(&f, b"[package]").unwrap();
-        let entries = vec![(f, "hpm.toml".to_string())];
-        assert!(
-            lint_linux_payload(&entries, &compat_with(None))
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn missing_file_is_ignored_rather_than_failing_the_pack() {
-        let entries = vec![(
-            Path::new("/nonexistent/definitely/not/here").to_path_buf(),
-            "bin/tool".to_string(),
-        )];
-        assert!(
-            lint_linux_payload(&entries, &compat_with(None))
-                .unwrap()
-                .is_empty()
-        );
-    }
 
     /// Build a minimal but structurally real ELF64-LE shared object whose
     /// dynamic section declares one version requirement, `GLIBC_<major.minor>`.
@@ -223,74 +221,142 @@ mod tests {
         b
     }
 
-    fn staged(dir: &Path, name: &str, bytes: &[u8]) -> Vec<(PathBuf, String)> {
+    fn staged(dir: &Path, name: &str, bytes: &[u8]) -> (PathBuf, String) {
         let p = dir.join(name.replace('/', "_"));
         std::fs::write(&p, bytes).unwrap();
-        vec![(p, name.to_string())]
+        (p, name.to_string())
     }
 
-    /// The case this lint exists for: TumblePipe shipped Linux binaries needing
-    /// GLIBC_2.39 against a VFX platform baseline of 2.28, and nothing noticed
-    /// until a user's loader refused them.
     #[test]
-    fn binary_above_the_floor_fails_the_pack() {
+    fn non_elf_and_missing_entries_contribute_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let entries = staged(dir.path(), "bin/tt_setup", &elf_requiring_glibc(2, 39));
-
-        let err = lint_linux_payload(&entries, &compat_with(None)).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("bin/tt_setup"), "{msg}");
-        assert!(msg.contains("2.39"), "{msg}");
-        assert!(
-            msg.contains("2.28"),
-            "should name the floor it violated: {msg}"
+        let toml = staged(dir.path(), "hpm.toml", b"[package]");
+        let gone = (
+            Path::new("/nonexistent/definitely/not/here").to_path_buf(),
+            "bin/tool".to_string(),
         );
+        let report = inspect_linux_payload(&[toml, gone]);
+        assert_eq!(report.requirements, PayloadRequirements::default());
+        assert!(report.warnings.is_empty());
+    }
+
+    /// The case this exists for: TumblePipe shipped Linux binaries needing
+    /// GLIBC_2.39 against a platform baseline of 2.28, and nothing noticed
+    /// until a user's loader refused them. Reported and warned, never enforced.
+    #[test]
+    fn requirement_above_the_baseline_is_reported_and_warned() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = inspect_linux_payload(&[staged(
+            dir.path(),
+            "bin/tt_setup",
+            &elf_requiring_glibc(2, 39),
+        )]);
+
+        assert_eq!(report.requirements.glibc, Some(GlibcVersion::new(2, 39)));
+        assert_eq!(
+            report.requirements.to_json(),
+            serde_json::json!({ "glibc": "2.39" })
+        );
+
+        let warning = report
+            .warnings
+            .iter()
+            .find(|w| w.message.contains("glibc 2.39"))
+            .expect("should warn");
+        assert!(warning.path.contains("bin/tt_setup"), "{warning:?}");
+        assert!(warning.message.contains("2.28"), "names the baseline");
+    }
+
+    /// Below the baseline there is nothing to remark on — but the requirement
+    /// is still recorded, because it is a fact about the archive either way.
+    #[test]
+    fn requirement_below_the_baseline_is_recorded_without_a_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let report =
+            inspect_linux_payload(&[staged(dir.path(), "bin/tool", &elf_requiring_glibc(2, 17))]);
+
+        assert_eq!(report.requirements.glibc, Some(GlibcVersion::new(2, 17)));
         assert!(
-            msg.contains("VFX Reference Platform"),
-            "an unset floor must say where the number came from: {msg}"
+            report
+                .warnings
+                .iter()
+                .all(|w| !w.message.contains("baseline")),
+            "{:?}",
+            report.warnings
         );
     }
 
-    /// Declaring the higher floor is the sanctioned escape hatch — it makes the
-    /// requirement visible in the manifest instead of silent in the archive.
+    /// The reported requirement is the highest across the payload, and the
+    /// warning names only the files that actually carry it.
     #[test]
-    fn declaring_the_higher_floor_permits_the_binary() {
+    fn highest_requirement_wins_and_names_its_carriers() {
         let dir = tempfile::tempdir().unwrap();
-        let entries = staged(dir.path(), "bin/tt_setup", &elf_requiring_glibc(2, 39));
+        let report = inspect_linux_payload(&[
+            staged(dir.path(), "bin/old", &elf_requiring_glibc(2, 17)),
+            staged(dir.path(), "bin/new", &elf_requiring_glibc(2, 39)),
+        ]);
 
-        lint_linux_payload(&entries, &compat_with(Some(GlibcVersion::new(2, 39))))
-            .expect("declared floor should admit its own binaries");
+        assert_eq!(report.requirements.glibc, Some(GlibcVersion::new(2, 39)));
+        let warning = report
+            .warnings
+            .iter()
+            .find(|w| w.message.contains("glibc 2.39"))
+            .unwrap();
+        assert!(warning.path.contains("bin/new"), "{warning:?}");
+        assert!(
+            !warning.path.contains("bin/old"),
+            "the 2.17 binary is not what forces 2.39: {warning:?}"
+        );
     }
 
+    /// Order must not change the outcome — a lower requirement seen after a
+    /// higher one must not displace it or its carrier list.
     #[test]
-    fn binary_at_or_below_the_floor_passes() {
+    fn carrier_tracking_is_order_independent() {
         let dir = tempfile::tempdir().unwrap();
-        let entries = staged(dir.path(), "bin/tool", &elf_requiring_glibc(2, 17));
-        assert!(
-            lint_linux_payload(&entries, &compat_with(None))
+        let high = staged(dir.path(), "bin/new", &elf_requiring_glibc(2, 39));
+        let low = staged(dir.path(), "bin/old", &elf_requiring_glibc(2, 17));
+
+        let forward = inspect_linux_payload(&[low.clone(), high.clone()]);
+        let reverse = inspect_linux_payload(&[high, low]);
+
+        assert_eq!(forward.requirements, reverse.requirements);
+        let carriers = |r: &PayloadReport| {
+            r.warnings
+                .iter()
+                .find(|w| w.message.contains("glibc 2.39"))
+                .map(|w| w.path.clone())
                 .unwrap()
-                .is_empty()
-        );
+        };
+        assert_eq!(carriers(&forward), carriers(&reverse));
+        assert_eq!(carriers(&forward), "bin/new");
     }
 
-    /// A shared object with no search path of its own is advisory, never fatal:
-    /// it works fine while every dependency is the host's, which is the normal
-    /// case for a Houdini plugin.
     #[test]
-    fn shared_object_without_runpath_only_warns() {
+    fn shared_object_without_runpath_warns() {
         let dir = tempfile::tempdir().unwrap();
-        let entries = staged(
+        let report = inspect_linux_payload(&[staged(
             dir.path(),
             "lib/tumbleResolver.so",
             &elf_requiring_glibc(2, 17),
-        );
+        )]);
 
-        let warnings = lint_linux_payload(&entries, &compat_with(None)).unwrap();
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].message.contains("RUNPATH"), "{warnings:?}");
+        let warning = report
+            .warnings
+            .iter()
+            .find(|w| w.message.contains("RUNPATH"))
+            .expect("should warn");
         assert!(
-            warnings[0].message.contains("LD_LIBRARY_PATH"),
-            "should explain why the env-var workaround cannot help: {warnings:?}"
+            warning.message.contains("LD_LIBRARY_PATH"),
+            "should explain why the env-var workaround cannot help: {warning:?}"
+        );
+    }
+
+    #[test]
+    fn empty_requirements_serialise_to_an_empty_object() {
+        assert_eq!(
+            PayloadRequirements::default().to_json(),
+            serde_json::json!({})
         );
     }
 
@@ -301,18 +367,5 @@ mod tests {
         assert!(!targets_linux(Some(&Platform::MacosAarch64)));
         assert!(!targets_linux(Some(&Platform::WindowsX86_64)));
         assert!(!targets_linux(None));
-    }
-
-    #[test]
-    fn floor_defaults_to_the_vfx_baseline_and_says_so() {
-        assert_eq!(
-            compat_with(None).glibc_floor(),
-            GlibcVersion::VFX_PLATFORM_BASELINE
-        );
-        assert!(floor_origin_hint(&compat_with(None)).contains("VFX"));
-        assert!(
-            floor_origin_hint(&compat_with(Some(GlibcVersion::new(2, 39))))
-                .contains("[compat].glibc")
-        );
     }
 }

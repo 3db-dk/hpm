@@ -155,11 +155,6 @@ impl PackageManifest {
                 // `">=20.5, <23"`) after testing.
                 houdini: Some(HoudiniRange::parse("^21").expect("default range is well-formed")),
                 platforms: Vec::new(),
-                // Unset: a scaffolded package inherits the VFX Reference
-                // Platform baseline rather than pinning a number the author
-                // never chose. Only worth writing once a package actually
-                // drops older hosts.
-                glibc: None,
             },
             stage: StageConfig::default(),
             registries: Vec::new(),

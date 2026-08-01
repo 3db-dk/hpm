@@ -12,7 +12,55 @@
 
 use std::path::Path;
 
-use hpm_package::manifest::compat::GlibcVersion;
+/// A glibc `major.minor` version. Patch levels don't exist in glibc's symbol
+/// versioning (`GLIBC_2.39`), so two components is the whole grammar.
+///
+/// Lives here rather than in the manifest because it is a fact *read off a
+/// binary*, never something an author writes. An earlier revision made it a
+/// `[compat].glibc` manifest key checked against a hardcoded baseline; that
+/// was the wrong shape twice over — it named one platform's mechanism in a
+/// cross-platform schema, and because `[compat]` rejects unknown fields, the
+/// escape hatch from the check would itself have broken older hpm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GlibcVersion {
+    pub major: u32,
+    pub minor: u32,
+}
+
+impl GlibcVersion {
+    /// glibc 2.28 — the [VFX Reference Platform](https://vfxplatform.com/)
+    /// requirement for CY2025 and CY2026, i.e. the Houdini 21 and Houdini 22
+    /// series, and in practice an EL8-era host. (Even the CY2027 draft only
+    /// moves to 2.34.) Used solely to phrase a warning; nothing is enforced
+    /// against it, so it carries no policy and can go stale harmlessly.
+    pub const VFX_PLATFORM_BASELINE: GlibcVersion = GlibcVersion {
+        major: 2,
+        minor: 28,
+    };
+
+    #[cfg(test)]
+    pub const fn new(major: u32, minor: u32) -> Self {
+        Self { major, minor }
+    }
+}
+
+impl std::fmt::Display for GlibcVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.major, self.minor)
+    }
+}
+
+impl std::str::FromStr for GlibcVersion {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (major, minor) = s.trim().split_once('.').ok_or(())?;
+        Ok(Self {
+            major: major.parse().map_err(|_| ())?,
+            minor: minor.parse().map_err(|_| ())?,
+        })
+    }
+}
 
 /// What the lint could learn about one ELF object.
 #[derive(Debug, Clone, PartialEq, Eq)]

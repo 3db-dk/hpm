@@ -503,6 +503,54 @@ Pack runs `hpm check` first, then:
 4. If a signing key is supplied, produces an Ed25519 signature over the archive bytes and emits a `keyId`.
 5. Builds a searchable **asset index** from the manifest's [`[[operators]]`](#operators) declarations and includes it in `--json` output (and warns if a declared `source` file is missing from the archive).
 
+#### What a Linux archive's binaries turn out to require
+
+Pack reads the ELF files it is about to ship and reports what they need of a
+host. This is **advisory** — it never fails the pack. What a binary requires is
+a fact hpm can read; what a package is willing to support is a policy hpm has
+no business inventing, so the judgement stays with whoever owns the release.
+
+The finding rides out in two places: a console warning, and a `requires` object
+in `--json`:
+
+```json
+{ "archive": "...", "sha256": "...", "platform": "linux-x86_64",
+  "requires": { "glibc": "2.39" } }
+```
+
+`requires` is `{}` when nothing was detected. A CI job that wants a hard gate
+can assert on it.
+
+The warning fires when the payload needs more than glibc **2.28** — the
+[VFX Reference Platform](https://vfxplatform.com/) requirement for CY2025 and
+CY2026 (Houdini 21 and 22), in practice an EL8-era host. Even the CY2027 draft
+only moves to 2.34. Exceeding it matters because the failure is otherwise
+invisible: a host with an older glibc cannot load the binary at all, the loader
+rejects it before any package code runs, and the error names a symbol version
+(`version 'GLIBC_2.39' not found`) rather than your package. A shared library
+fails even more quietly — it simply never loads. Meanwhile the Windows archive
+works, so the whole thing reads as a platform bug rather than a bad build.
+
+The requirement is usually accidental. A toolchain links the newest symbol
+versions its build host offers even when your code uses nothing new — building
+on Ubuntu 24.04 (glibc 2.39) is enough to produce a binary that no EL8, EL9,
+Ubuntu 22.04 or Debian 12 workstation can run. **The fix is normally to build
+on an older host, not to change the code.**
+
+The same pass warns when a shipped `.so` carries no `RUNPATH`/`RPATH`. That is
+fine while every dependency is already loaded by the host process — the normal
+case for a Houdini plugin — and becomes a silent failure the day the package
+ships a library of its own. Setting `LD_LIBRARY_PATH` from `[runtime]` does
+**not** fix that case: glibc reads that variable once at process start, long
+before Houdini applies a package's environment, so it cannot affect a later
+`dlopen`. Link with `-Wl,-rpath,'$ORIGIN'` instead, which needs no environment
+at all. (Windows is the exception that makes this easy to get wrong:
+`LoadLibrary` re-reads `PATH` at call time, so a manifest's `PATH` entry
+genuinely does work there.)
+
+Files that can't be parsed as 64-bit ELF contribute nothing rather than being
+treated as suspect, so the report only ever states what it actually read.
+
 #### Installing an archive without HPM
 
 The archive unzips to `{slug}.json` beside a `{slug}/` content folder. **Keep
@@ -827,13 +875,12 @@ All sections, in the order they appear in practice:
 
 ### `[compat]`
 
-Target-environment compatibility for the package. Three axes:
+Target-environment compatibility for the package. Two axes:
 
 - `houdini` — a Cargo-style version requirement string.
 - `platforms` — the native platforms this package supports. Omit (or
   use `["universal"]`) for pure-data / pure-Python packages; list the
   platforms the package ships binaries for otherwise.
-- `glibc` — the oldest glibc the package's Linux binaries may require.
 
 ```toml
 [compat]
@@ -843,60 +890,7 @@ houdini = "^21"                                # default — Houdini 21.x only
 # houdini = "21"                                # bare = caret = ^21
 # houdini = ">=20.5"                            # unbounded above — only safe for pure-data
 platforms = ["linux-x86_64", "macos-aarch64"]   # omit for pure-data
-# glibc = "2.28"                                # default — the VFX platform baseline
 ```
-
-#### `glibc` — the Linux binary floor
-
-Unset, the floor is **2.28**: the [VFX Reference Platform](https://vfxplatform.com/)
-requirement for CY2025 and CY2026 — Houdini 21 and Houdini 22 — which in
-practice means an EL8-era host. (Even the CY2027 draft only moves to 2.34.)
-
-`hpm pack` reads every ELF file destined for a Linux archive and **fails the
-pack** if one requires a newer glibc than the floor. This is worth failing over
-because the alternative is invisible: a host with an older glibc cannot load
-the binary at all, the dynamic loader rejects it before any package code runs,
-and the error names a symbol version (`version 'GLIBC_2.39' not found`) rather
-than your package. A shared library fails even more quietly — it simply never
-loads. Meanwhile the Windows archive works, so the whole thing reads as a
-platform bug rather than a bad build.
-
-The requirement is usually accidental. A toolchain links the newest symbol
-versions its build host offers even when your code uses nothing new — building
-on Ubuntu 24.04 (glibc 2.39) is enough to make a binary that no EL8 or EL9
-workstation can run. The fix is normally to build on an older host, not to
-change the code.
-
-If dropping older hosts *is* intended, raise the floor:
-
-```toml
-[compat]
-glibc = "2.39"
-```
-
-That is a statement about what the package supports, not a way to silence the
-check — the requirement becomes visible in the manifest, where a consumer can
-read it, instead of buried in the archive where nobody can.
-
-> **Writing `glibc` raises the hpm version your manifest requires.** `[compat]`
-> rejects unknown fields, so a manifest carrying `glibc` fails to parse on any
-> hpm predating the key — with `unknown field 'glibc'`, not a warning. Leave it
-> unset unless you need it, and if your CI pins an hpm version, roll that pin
-> before adding the key.
-
-The same pass warns (without failing) when a shipped `.so` carries no
-`RUNPATH`/`RPATH`. That is fine while every dependency is already loaded by the
-host process — the normal case for a Houdini plugin — and becomes a silent
-failure the day the package ships a library of its own. Setting
-`LD_LIBRARY_PATH` from `[runtime]` does **not** fix that case: glibc reads that
-variable once at process start, long before Houdini applies a package's
-environment, so it cannot affect a later `dlopen`. Link with
-`-Wl,-rpath,'$ORIGIN'` instead, which needs no environment at all. (Windows is
-the exception that makes this easy to get wrong: `LoadLibrary` re-reads `PATH`
-at call time, so the `PATH` entry in a manifest genuinely does work there.)
-
-Files that can't be parsed as 64-bit ELF are skipped rather than treated as
-suspect, so the check only ever fails a release on evidence.
 
 The supported operators are `=`, `>=`, `>`, `<=`, `<`, `^`, `~`, and the
 bare-version shorthand (aliases caret). Multiple comparators combine with

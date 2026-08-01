@@ -9,23 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`hpm pack` now reads a Linux archive's binaries before shipping them, and
-  refuses one that cannot load on the hosts the package claims to support.**
-  A per-platform archive is the part of a package CI builds and nobody looks
-  at, and the most damaging way to get it wrong is invisible: a toolchain links
-  newer glibc symbol versions purely because of the host it built on, even when
-  the code uses nothing new, and the resulting binary is rejected outright by
-  the dynamic loader on an older host. The error names a symbol version rather
-  than a package, the Windows archive works fine, and so it reads as a platform
-  bug. Packing a Linux archive now fails if its ELF payload requires a newer
-  glibc than the package's floor, naming each file and the version it needs.
+- **`hpm pack` now reports what a Linux archive's binaries actually require of
+  a host.** A per-platform archive is the part of a package CI builds and
+  nobody looks at, and the most damaging way to get it wrong is invisible: a
+  toolchain links newer glibc symbol versions purely because of the host it
+  built on, even when the code uses nothing new, and the resulting binary is
+  rejected outright by the dynamic loader on an older host. The error names a
+  symbol version rather than a package, a shared library simply never loads,
+  the Windows archive works fine — so it reads as a platform bug rather than a
+  bad build. Pack now reads the ELF payload and surfaces the highest glibc it
+  needs, as a console warning and as a `requires` object in `--json`:
 
-  The floor is the new optional **`[compat].glibc`** (`"2.28"`). Unset, it is
-  the [VFX Reference Platform](https://vfxplatform.com/) baseline of **2.28** —
-  the CY2025 and CY2026 requirement, i.e. Houdini 21 and 22, in practice an
-  EL8-era host. Declaring a higher one is the sanctioned way to ship binaries
-  that need it: the requirement then lives in the manifest where a consumer can
-  see it, rather than in the archive where nobody can.
+  ```json
+  { "archive": "…", "platform": "linux-x86_64", "requires": { "glibc": "2.39" } }
+  ```
+
+  This is **advisory**: it never fails the pack. What a binary requires is a
+  fact hpm can read; what a package is willing to support is a policy hpm has
+  no business inventing, so the judgement stays with whoever owns the release.
+  A CI job wanting a hard gate can assert on `requires`. The warning fires only
+  above glibc **2.28** — the [VFX Reference Platform](https://vfxplatform.com/)
+  requirement for CY2025/CY2026 (Houdini 21 and 22), in practice an EL8-era
+  host — and says so, since the fix is normally to build on an older host
+  rather than to change any code.
 
   The same pass warns when a shipped `.so` carries no `RUNPATH`/`RPATH`. That
   is harmless while every dependency belongs to the host process, which is the
@@ -34,8 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   glibc reads that variable once at process start and a package's environment
   edits land long after. Link with `-Wl,-rpath,'$ORIGIN'` instead.
 
-  Nothing that can't be parsed is ever linted: an unreadable or non-ELF file is
-  skipped, so the check can fail a release only on evidence.
+  Nothing that can't be parsed contributes anything: an unreadable or non-ELF
+  file is skipped, so the report only ever states what it actually read.
 
 ### Fixed
 

@@ -68,16 +68,6 @@ pub struct ArchiveLayout<'a> {
     pub content_prefix: Option<&'a str>,
 }
 
-/// The manifest-derived inputs to a pack: which files to stage, and what the
-/// resulting payload has to be compatible with. Grouped because they always
-/// travel together — both are read straight off the manifest, and a caller
-/// that has one always has the other.
-#[derive(Clone, Copy)]
-pub struct PackManifestInputs<'a> {
-    pub stage: &'a StageConfig,
-    pub compat: &'a hpm_package::manifest::compat::CompatConfig,
-}
-
 /// Pack a package directory into a signed, checksummed archive.
 ///
 /// See [`ArchiveLayout`] for the hpackage layout `layout` selects.
@@ -88,25 +78,24 @@ pub fn pack(
     output_dir: &Path,
     signing_key: Option<&SigningKey>,
     platform: Option<&Platform>,
-    manifest: PackManifestInputs<'_>,
+    stage_config: &StageConfig,
     layout: ArchiveLayout<'_>,
 ) -> Result<PackResult, PackError> {
     let ignore = build_ignore_rules(package_dir)?;
 
-    let stage_filter = StageFilter::new(manifest.stage, platform)?;
+    let stage_filter = StageFilter::new(stage_config, platform)?;
 
-    // Read the payload before it ships. A per-platform archive is the part of
-    // a package CI builds and nobody looks at, and a Linux binary that can't
-    // load on the declared floor fails at the user's machine with an error
-    // naming a symbol version rather than this package. Runs before the
-    // archive is written so a bad build produces no artifact to publish.
-    if platform_lint::targets_linux(platform) {
+    // Read the payload that is about to ship. This only ever *reports* — what
+    // a binary requires is a fact, what a package supports is a policy, and
+    // pack has no business inventing the latter. The findings ride out on
+    // `PackResult` for the caller to surface or gate on.
+    let payload = if platform_lint::targets_linux(platform) {
         let entries =
             stage_filter::collect_stage_entries(package_dir, &ignore, Some(&stage_filter), None)?;
-        for warning in platform_lint::lint_linux_payload(&entries, manifest.compat)? {
-            tracing::warn!("{}: {}", warning.path, warning.message);
-        }
-    }
+        platform_lint::inspect_linux_payload(&entries)
+    } else {
+        platform_lint::PayloadReport::default()
+    };
 
     let archive_path = create_archive(
         package_dir,
@@ -134,6 +123,8 @@ pub fn pack(
         signature,
         key_id,
         platform: platform.map(|p| p.to_string()),
+        requirements: payload.requirements,
+        warnings: payload.warnings,
     })
 }
 
