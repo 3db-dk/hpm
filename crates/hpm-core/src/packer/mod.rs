@@ -42,12 +42,6 @@ pub enum PackError {
 
     #[error("Invalid glob pattern: {0}")]
     GlobPattern(String),
-
-    /// The archive's native payload cannot work on the hosts the package says
-    /// it supports. Distinct from the I/O and pattern errors above because
-    /// nothing is wrong with the *pack* — the inputs are the problem.
-    #[error("Platform payload check failed: {0}")]
-    PlatformPayload(String),
 }
 
 /// Archive layout inputs: root-level injected files and the hpackage
