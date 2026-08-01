@@ -15,8 +15,6 @@ use hpm_package::platform::Platform;
 use std::path::Path;
 
 mod archive;
-mod elf;
-pub mod platform_lint;
 mod signing;
 mod stage_filter;
 
@@ -85,18 +83,6 @@ pub fn pack(
 
     let stage_filter = StageFilter::new(stage_config, platform)?;
 
-    // Read the payload that is about to ship. This only ever *reports* — what
-    // a binary requires is a fact, what a package supports is a policy, and
-    // pack has no business inventing the latter. The findings ride out on
-    // `PackResult` for the caller to surface or gate on.
-    let payload = if platform_lint::targets_linux(platform) {
-        let entries =
-            stage_filter::collect_stage_entries(package_dir, &ignore, Some(&stage_filter), None)?;
-        platform_lint::inspect_linux_payload(&entries)
-    } else {
-        platform_lint::PayloadReport::default()
-    };
-
     let archive_path = create_archive(
         package_dir,
         name,
@@ -123,8 +109,6 @@ pub fn pack(
         signature,
         key_id,
         platform: platform.map(|p| p.to_string()),
-        requirements: payload.requirements,
-        warnings: payload.warnings,
     })
 }
 

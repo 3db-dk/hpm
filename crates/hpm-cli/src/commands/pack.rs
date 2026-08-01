@@ -150,19 +150,6 @@ pub async fn execute(
     .await
     .context("Pack task panicked")??;
 
-    // Payload findings. Advisory by design: what a binary requires is a fact
-    // hpm can read, but what a package is willing to support is a policy hpm
-    // has no business inventing — so these are surfaced (and carried in
-    // `--json` as `requires`) rather than failing the pack. A CI job wanting a
-    // hard gate can assert on that field.
-    for warning in &result.warnings {
-        if warning.path.is_empty() {
-            console.warn(warning.message.clone());
-        } else {
-            console.warn(format!("{}: {}", warning.path, warning.message));
-        }
-    }
-
     // Build the searchable asset index from the manifest's [[operators]]
     // declarations, resolving each operator's source for the target platform
     // and checking it against the produced archive. An indexing failure
@@ -212,10 +199,6 @@ pub async fn execute(
             "key_id": result.key_id,
             "platform": result.platform,
             "assets": asset_index.assets,
-            // What the shipped binaries turned out to need of a host, read
-            // off the payload. `{}` when nothing was detected — additive, so
-            // it doesn't disturb the established shape above.
-            "requires": result.requirements.to_json(),
         });
         console.stdout(serde_json::to_string(&json_output).unwrap());
     } else {

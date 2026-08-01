@@ -503,54 +503,6 @@ Pack runs `hpm check` first, then:
 4. If a signing key is supplied, produces an Ed25519 signature over the archive bytes and emits a `keyId`.
 5. Builds a searchable **asset index** from the manifest's [`[[operators]]`](#operators) declarations and includes it in `--json` output (and warns if a declared `source` file is missing from the archive).
 
-#### What a Linux archive's binaries turn out to require
-
-Pack reads the ELF files it is about to ship and reports what they need of a
-host. This is **advisory** — it never fails the pack. What a binary requires is
-a fact hpm can read; what a package is willing to support is a policy hpm has
-no business inventing, so the judgement stays with whoever owns the release.
-
-The finding rides out in two places: a console warning, and a `requires` object
-in `--json`:
-
-```json
-{ "archive": "...", "sha256": "...", "platform": "linux-x86_64",
-  "requires": { "glibc": "2.39" } }
-```
-
-`requires` is `{}` when nothing was detected. A CI job that wants a hard gate
-can assert on it.
-
-The warning fires when the payload needs more than glibc **2.28** — the
-[VFX Reference Platform](https://vfxplatform.com/) requirement for CY2025 and
-CY2026 (Houdini 21 and 22), in practice an EL8-era host. Even the CY2027 draft
-only moves to 2.34. Exceeding it matters because the failure is otherwise
-invisible: a host with an older glibc cannot load the binary at all, the loader
-rejects it before any package code runs, and the error names a symbol version
-(`version 'GLIBC_2.39' not found`) rather than your package. A shared library
-fails even more quietly — it simply never loads. Meanwhile the Windows archive
-works, so the whole thing reads as a platform bug rather than a bad build.
-
-The requirement is usually accidental. A toolchain links the newest symbol
-versions its build host offers even when your code uses nothing new — building
-on Ubuntu 24.04 (glibc 2.39) is enough to produce a binary that no EL8, EL9,
-Ubuntu 22.04 or Debian 12 workstation can run. **The fix is normally to build
-on an older host, not to change the code.**
-
-The same pass warns when a shipped `.so` carries no `RUNPATH`/`RPATH`. That is
-fine while every dependency is already loaded by the host process — the normal
-case for a Houdini plugin — and becomes a silent failure the day the package
-ships a library of its own. Setting `LD_LIBRARY_PATH` from `[runtime]` does
-**not** fix that case: glibc reads that variable once at process start, long
-before Houdini applies a package's environment, so it cannot affect a later
-`dlopen`. Link with `-Wl,-rpath,'$ORIGIN'` instead, which needs no environment
-at all. (Windows is the exception that makes this easy to get wrong:
-`LoadLibrary` re-reads `PATH` at call time, so a manifest's `PATH` entry
-genuinely does work there.)
-
-Files that can't be parsed as 64-bit ELF contribute nothing rather than being
-treated as suspect, so the report only ever states what it actually read.
-
 #### Installing an archive without HPM
 
 The archive unzips to `{slug}.json` beside a `{slug}/` content folder. **Keep

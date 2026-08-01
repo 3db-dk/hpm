@@ -70,13 +70,6 @@ pub struct PackResult {
     pub key_id: Option<String>,
     /// Platform tag if this is a platform-specific archive.
     pub platform: Option<String>,
-    /// What the shipped native payload turned out to require of a host,
-    /// derived by reading the binaries — never declared. Empty for archives
-    /// with nothing inspectable in them.
-    pub requirements: super::platform_lint::PayloadRequirements,
-    /// Advisory findings about the payload. Reported, never enforced: pack
-    /// surfaces them and the release owner decides what they mean.
-    pub warnings: Vec<super::platform_lint::PlatformWarning>,
 }
 
 /// Create a zip archive of the package directory, filtering via ignore
