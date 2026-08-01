@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A packaged program no longer arrives without its executable bit, so
+  packages that ship a binary work on macOS and Linux.** `hpm pack` wrote
+  every archive entry as `0644` regardless of the file it came from, which
+  quietly stripped the executable bit off anything a package ships as a
+  program — a `[scripts]` entry pointing at `bin/<platform>/<tool>`, a
+  bundled `configure.sh`. Installing such a package produced a tree whose
+  own declared programs could not be run: the script failed at spawn with
+  `Permission denied (os error 13)` on every Unix host, while the identical
+  package worked on Windows, where executability is not a file mode. Pack now
+  carries the source file's executable bit into the archive. It is normalised
+  to exactly `0755` / `0644` rather than copied verbatim, so the packing
+  user's umask cannot change the archive bytes — and therefore the package
+  checksum — for an otherwise identical tree.
+
+  Two consequences worth knowing. Existing published archives are unaffected
+  until they are re-packed with this version; and because Windows has no file
+  mode to read, an archive carrying a Unix program must be packed from a Unix
+  host. Per-platform CI that builds each archive on its own worker already
+  satisfies this.
+
+- **Install now restores a lost executable bit rather than propagating it.**
+  hpm installs from arbitrary hosts — GitHub Releases, SideFX hpack, a
+  studio's own bucket — and a great many zip producers drop Unix modes
+  entirely, so the problem above is not limited to archives hpm packed.
+  Extraction now restores the executable bit on a file whose leading bytes
+  identify it as a program (an ELF or Mach-O object, or a `#!` script) when
+  the archive declares no execute permission for it. The repair is additive
+  and content-driven: a mode the archive does declare is applied untouched, a
+  restrictive mode is not widened past its read bits (`0640` becomes `0750`),
+  and a file that is not a program is never made executable.
+
 ## [0.30.1] - 2026-07-27
 
 No functional change over 0.30.0; the hpm binaries are identical. The

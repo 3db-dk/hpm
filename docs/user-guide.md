@@ -254,6 +254,29 @@ Install does the following:
 | `-m, --manifest <path>` | Path to `hpm.toml` (or its containing directory). |
 | `--frozen-lockfile` | Fail if `hpm.lock` is missing or would need to change. Use in CI. |
 
+#### File modes on install
+
+An archive's declared Unix modes are applied as-is, with one repair. Packages
+are fetched from wherever their version record points — GitHub Releases, SideFX
+hpack, a studio's own bucket — and many zip producers drop Unix modes entirely,
+stamping every entry `0644`. Extracting such an archive faithfully would yield a
+package whose own declared programs cannot be run, failing at spawn with
+`Permission denied (os error 13)` on macOS and Linux while working on Windows,
+where executability is not a file mode.
+
+So when an archive grants a file no execute permission but the file's leading
+bytes identify it as a program — an ELF or Mach-O object, or a `#!` script —
+install restores the executable bit, mirroring the read bits (`0644` becomes
+`0755`, `0640` becomes `0750`). The repair is additive: a mode the archive does
+declare is applied untouched, and a file that is not a program is never made
+executable. Archives are checksum- and signature-verified before any of this,
+and hpm already runs `[scripts]` programs out of the installed tree, so this
+grants nothing a well-formed archive could not claim for itself.
+
+Note this happens at extraction. A package already installed at a given version
+is not re-extracted, so a tree installed before this behaviour existed keeps its
+modes until that package's version changes.
+
 ### `hpm update`
 
 Update dependencies to their latest compatible versions.
@@ -446,7 +469,19 @@ Pack runs `hpm check` first, then:
 
 1. Auto-generates a Houdini-native `{slug}.json` for the archive unless the user has provided one (a hand-written file ships verbatim). This file follows Houdini's own package format, so the archive is usable by Houdini even without HPM: the archive uses the **hpackage layout** — `{slug}.json` at the root next to a `{slug}/` folder holding all package content. See [Installing an archive without HPM](#installing-an-archive-without-hpm) for how to install one, and which Houdini install flow to avoid. (`hpm install` strips the `{slug}/` wrapper again; installed trees stay flat with `hpm.toml` at the root.)
 2. Filters files by `[stage]` (per-platform `place` rules and `include`/`exclude` globs) when the manifest declares `[compat].platforms`.
-3. Produces a `.zip` archive plus a SHA-256 checksum.
+3. Produces a `.zip` archive plus a SHA-256 checksum. Each entry carries the
+   executable bit of the file it came from, normalised to `0755` or `0644` —
+   so a package that ships a program (a `[scripts]` entry pointing at
+   `bin/<platform>/<tool>`, a bundled `configure.sh`) installs runnable on
+   macOS and Linux. Only the executable bit survives; the group and other
+   bits are normalised away so that two machines with different umasks pack
+   an identical tree to identical bytes, and therefore to the same checksum.
+
+   Windows has no file mode to read, so an archive packed there cannot carry
+   an executable bit. **Pack an archive containing a Unix program from a Unix
+   host** — per-platform CI that builds each archive on its own worker
+   already does. (`hpm install` compensates where it can: see
+   [file modes on install](#file-modes-on-install).)
 4. If a signing key is supplied, produces an Ed25519 signature over the archive bytes and emits a `keyId`.
 5. Builds a searchable **asset index** from the manifest's [`[[operators]]`](#operators) declarations and includes it in `--json` output (and warns if a declared `source` file is missing from the archive).
 
