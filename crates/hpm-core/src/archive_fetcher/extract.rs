@@ -113,15 +113,10 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
 
             let mut outfile = std::fs::File::create(&target_path)?;
             std::io::copy(&mut file, &mut outfile)?;
+            drop(outfile);
 
-            // Set permissions on Unix
             #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Some(mode) = file.unix_mode() {
-                    std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(mode))?;
-                }
-            }
+            finalize_mode(&target_path, file.unix_mode())?;
         }
     }
 
@@ -306,14 +301,10 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
             }
             let mut outfile = std::fs::File::create(&target_path)?;
             std::io::copy(&mut entry, &mut outfile)?;
+            drop(outfile);
 
             #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Ok(mode) = entry.header().mode() {
-                    std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(mode))?;
-                }
-            }
+            finalize_mode(&target_path, entry.header().mode().ok())?;
         } else {
             // Symlinks, hardlinks, devices, etc. — skipped intentionally to
             // keep the same security posture as the ZIP path (which doesn't
@@ -327,6 +318,95 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
     }
 
     Ok(())
+}
+
+/// Apply an extracted file's Unix mode, restoring the executable bit when the
+/// archive lost it.
+///
+/// `declared` is the mode the archive carries for the entry (`None` for a zip
+/// written by a non-Unix producer, which records no mode at all). Normally it
+/// is applied verbatim. The exception is the case this function exists for:
+/// archives reach us from arbitrary hosts — GitHub Releases, SideFX hpack,
+/// a studio's own S3 bucket, a contributor's `zip` on Windows — and a great
+/// many zip producers drop Unix modes, stamping every entry 0o644. Extracting
+/// such an archive faithfully yields a package whose shipped programs cannot
+/// be spawned: `Permission denied (os error 13)` on Unix, while the identical
+/// package works on Windows, where executability is not a file mode.
+///
+/// So when the resulting mode has no executable bit but the file's leading
+/// bytes identify it as a program (ELF, Mach-O, or a `#!` script), the bit is
+/// restored, mirroring the read bits so the mode stays consistent with the
+/// declared access (0o644 -> 0o755, 0o640 -> 0o750). Only ever additive: a
+/// mode that already declares execute is untouched, and a file that isn't a
+/// program is never made executable.
+///
+/// This grants no privilege a well-formed archive couldn't claim for itself by
+/// declaring 0o755 — and hpm already runs `[scripts]` programs out of the
+/// installed tree. Archives are checksum- and signature-verified before they
+/// get here.
+#[cfg(unix)]
+fn finalize_mode(target_path: &Path, declared: Option<u32>) -> Result<(), FetchError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = declared.unwrap_or(0o644) & 0o7777;
+    let repaired = if mode & 0o111 == 0 && looks_executable(target_path) {
+        debug!(
+            "Restoring executable bit on {} (archive declared {:04o})",
+            target_path.display(),
+            mode
+        );
+        mode | ((mode & 0o444) >> 2)
+    } else {
+        mode
+    };
+
+    // With no declared mode and nothing to repair there is nothing to say
+    // about this file — leave whatever `File::create` produced under the
+    // caller's umask, as before.
+    if declared.is_some() || repaired != mode {
+        std::fs::set_permissions(target_path, std::fs::Permissions::from_mode(repaired))?;
+    }
+    Ok(())
+}
+
+/// True if `path`'s leading bytes identify an executable program: an ELF
+/// object (Linux), a Mach-O object in either endianness or a universal binary
+/// (macOS), or a `#!` interpreter script.
+///
+/// Shared libraries (`.so` / `.dylib`) share the ELF/Mach-O magics and are
+/// matched too. That is intentional and harmless — they are conventionally
+/// 0o755, and marking one executable does not make it a program anyone runs.
+#[cfg(unix)]
+fn looks_executable(path: &Path) -> bool {
+    let mut head = [0u8; 4];
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut filled = 0;
+    // A short read is not EOF, so loop until the buffer is full or the file is.
+    while filled < head.len() {
+        match f.read(&mut head[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(_) => return false,
+        }
+    }
+    if filled >= 2 && &head[..2] == b"#!" {
+        return true;
+    }
+    if filled < 4 {
+        return false;
+    }
+    if &head == b"\x7fELF" {
+        return true;
+    }
+    matches!(
+        u32::from_be_bytes(head),
+        // Mach-O thin, 32/64-bit, big- and little-endian.
+        0xFEED_FACE | 0xFEED_FACF | 0xCEFA_EDFE | 0xCFFA_EDFE
+        // Mach-O universal ("fat") binary, both byte orders.
+        | 0xCAFE_BABE | 0xBEBA_FECA
+    )
 }
 
 /// Validate that a path doesn't contain traversal attempts.
@@ -604,6 +684,140 @@ mod tests {
         assert!(extract_dir.join("hpm.toml").exists());
         assert!(extract_dir.join("otls/tool.hda").exists());
         assert!(extract_dir.join("tumblerig.json").exists());
+    }
+
+    /// A 4-byte ELF header is enough for the magic probe; the payload never
+    /// gets executed, only sniffed.
+    const ELF_STUB: &[u8] = b"\x7fELFrest-of-a-binary";
+
+    /// Regression: `hpm pack` shipped every zip entry as 0o644, so the
+    /// executable a package declares in `[scripts]` extracted non-executable
+    /// and every Unix spawn failed with `Permission denied (os error 13)`.
+    /// The archive is repaired on the way out when its content says it is a
+    /// program.
+    #[cfg(unix)]
+    #[test]
+    fn test_extract_zip_restores_lost_executable_bit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("pkg.zip");
+        let extract_dir = temp.path().join("out");
+
+        // build_test_zip uses SimpleFileOptions::default() — i.e. exactly the
+        // 0o644-for-everything archive the old packer produced.
+        let bytes = build_test_zip(&[
+            ("pkg/hpm.toml", b"[package]"),
+            ("pkg/bin/tt_setup", ELF_STUB),
+            ("pkg/scripts/setup.sh", b"#!/bin/sh\necho hi\n"),
+            ("pkg/otls/tool.hda", b"not a program"),
+        ]);
+        std::fs::write(&archive_path, &bytes).unwrap();
+
+        extract_archive_sync(&archive_path, &extract_dir).unwrap();
+
+        let mode = |p: &str| {
+            std::fs::metadata(extract_dir.join(p))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(mode("bin/tt_setup"), 0o755, "ELF binary must be runnable");
+        assert_eq!(
+            mode("scripts/setup.sh"),
+            0o755,
+            "#! script must be runnable"
+        );
+        // Plain data is never granted execute.
+        assert_eq!(mode("otls/tool.hda"), 0o644);
+    }
+
+    /// The repair is additive only: an archive that already declares a mode
+    /// keeps it, and a restrictive mode isn't widened beyond its read bits.
+    #[cfg(unix)]
+    #[test]
+    fn test_extract_zip_preserves_declared_modes() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("pkg.zip");
+        let extract_dir = temp.path().join("out");
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let owner_only = zip::write::SimpleFileOptions::default().unix_permissions(0o640);
+            zip.start_file("pkg/bin/private_tool", owner_only).unwrap();
+            zip.write_all(ELF_STUB).unwrap();
+            let already_exec = zip::write::SimpleFileOptions::default().unix_permissions(0o755);
+            zip.start_file("pkg/bin/tool", already_exec).unwrap();
+            zip.write_all(ELF_STUB).unwrap();
+            zip.finish().unwrap();
+        }
+        std::fs::write(&archive_path, buf.into_inner()).unwrap();
+
+        extract_archive_sync(&archive_path, &extract_dir).unwrap();
+
+        let mode = |p: &str| {
+            std::fs::metadata(extract_dir.join(p))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        // 0o640 gains execute only where read was granted — group/other stay shut.
+        assert_eq!(mode("bin/private_tool"), 0o750);
+        assert_eq!(mode("bin/tool"), 0o755);
+    }
+
+    /// Same repair on the tar.gz path, which third-party hosts also serve.
+    #[cfg(unix)]
+    #[test]
+    fn test_extract_tar_gz_restores_lost_executable_bit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("pkg.tar.gz");
+        let extract_dir = temp.path().join("out");
+
+        // build_test_tar_gz stamps every entry 0o644.
+        let bytes = build_test_tar_gz(
+            "pkg-1.0",
+            &[("hpm.toml", b"[package]"), ("bin/tool", ELF_STUB)],
+        );
+        std::fs::write(&archive_path, &bytes).unwrap();
+
+        extract_archive_sync(&archive_path, &extract_dir).unwrap();
+
+        let mode = std::fs::metadata(extract_dir.join("bin/tool"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_looks_executable_magics() {
+        let temp = TempDir::new().unwrap();
+        let probe = |bytes: &[u8]| {
+            let p = temp.path().join("probe");
+            std::fs::write(&p, bytes).unwrap();
+            looks_executable(&p)
+        };
+
+        assert!(probe(b"\x7fELF\x02\x01"));
+        assert!(probe(b"#!/usr/bin/env python3\n"));
+        assert!(probe(&0xCFFA_EDFEu32.to_be_bytes())); // Mach-O 64-bit LE
+        assert!(probe(&0xCAFE_BABEu32.to_be_bytes())); // Mach-O universal
+
+        assert!(!probe(b"[package]\nname = \"x\"\n"));
+        assert!(!probe(b""));
+        // Too short to be any magic, and not a shebang.
+        assert!(!probe(b"#"));
     }
 
     #[test]
