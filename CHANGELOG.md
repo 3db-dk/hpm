@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.2] - 2026-08-02
+
 ### Fixed
 
 - **A packaged program no longer arrives without its executable bit, so
@@ -57,6 +59,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and content-driven: a mode the archive does declare is applied untouched, a
   restrictive mode is not widened past its read bits (`0640` becomes `0750`),
   and a file that is not a program is never made executable.
+
+### Security
+
+- Updated two transitive dependencies flagged by `cargo audit`:
+  `quinn-proto` to 0.11.16 for
+  [RUSTSEC-2026-0185](https://rustsec.org/advisories/RUSTSEC-2026-0185)
+  (remote memory exhaustion from unbounded out-of-order QUIC stream
+  reassembly, severity 7.5) and `crossbeam-epoch` to 0.9.20 for
+  [RUSTSEC-2026-0204](https://rustsec.org/advisories/RUSTSEC-2026-0204)
+  (invalid pointer dereference when formatting an invalid pointer).
+  Lockfile only — no API change.
 
 ## [0.30.1] - 2026-07-27
 
