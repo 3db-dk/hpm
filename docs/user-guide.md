@@ -285,8 +285,16 @@ checksum is computed over its contents, so a marker inside would change it.
 Two limits worth knowing. The sweep is content-driven, exactly like the
 extraction repair, so it fixes any program in the tree — including a helper
 binary a script shells out to — but it only ever adds execute where read is
-already granted. And a tree is swept once: if you deliberately strip a bit
-afterwards, hpm will not put it back.
+already granted, and it will not guess at a file whose bytes don't identify it
+(a shell script with no `#!` line is the case to watch for; embedders that
+spawn declared scripts can repair those at the spawn itself, where the manifest
+supplies the missing proof). And a tree is swept once: if you deliberately
+strip a bit afterwards, hpm will not put it back.
+
+`StorageManager::repair_exec_modes()` runs the same sweep across every
+installed package in one call, for an embedder that wants the store made
+consistent as part of its own startup rather than the next time something
+happens to touch a given package.
 
 **Symlink entries are skipped.** Neither the zip nor the tar.gz extractor
 creates a link, and a skipped entry is logged. A link is the one entry type

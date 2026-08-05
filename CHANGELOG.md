@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<name>@<version>.exec-modes` file next to the package directory — outside
   the tree, since a package's checksum is computed over its contents.
 
+### Added
+
+- `StorageManager::repair_exec_modes()` sweeps every installed package in one
+  call and reports `(swept, repaired)`. For an embedder that wants a user's
+  store repaired as part of its own update, rather than whenever something
+  next happens to touch a given package. Cheap to call unconditionally — a
+  tree already swept costs one small read.
+- `exec_mode::mirror_read_bits(mode)` exposes just the widening the repair
+  applies (`0o644` → `0o755`, `0o640` → `0o750`). For an embedder about to
+  spawn a path its manifest declares as a program: the manifest is proof the
+  content sniff can't produce, and the widening must match the sweep's.
+
 ## [0.30.2] - 2026-08-02
 
 ### Fixed
