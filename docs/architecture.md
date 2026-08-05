@@ -294,7 +294,9 @@ client runs the same flow.
  │                         (real dir for copy, symlink/junction for     │
  │                         link mode — both honor _dev/ CAS isolation)  │
  │     Already-in-CAS deps short-circuit (avoids the install_into_cas   │
- │     remove-and-recopy that breaks on Windows when Houdini is open).  │
+ │     remove-and-recopy that breaks on Windows when Houdini is open),  │
+ │     but still get one exec_mode::ensure_repaired sweep — nothing     │
+ │     else ever revisits a tree installed by an older hpm.             │
  │  4. Merge [python_dependencies] from root + every dep manifest       │
  │     Python ABI = root manifest's [compat].houdini lower bound        │
  │  5. Ensure managed CPython installed under ~/.hpm/uv-python/         │
@@ -385,6 +387,9 @@ layout is content-addressable where it helps:
 │   │   ├── hpm.toml
 │   │   ├── (package sources)
 │   │   └── … (Houdini convention subdirs)
+│   ├── slug@1.0.0.exec-modes       # executable-bit sweep stamp; sits
+│   │                               # beside the tree, not in it, since
+│   │                               # the package checksum covers contents
 │   └── _dev/                       # path-installed (dev) packages
 │       └── slug@1.0.0/             # never substituted for a registry hit
 │           └── …                   # at the same (slug, version)
