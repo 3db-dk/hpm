@@ -58,6 +58,45 @@ impl StorageManager {
         self.config.package_dir(name, version)
     }
 
+    /// Sweep every installed package for programs that lost their executable
+    /// bit, returning `(trees_swept, files_repaired)`.
+    ///
+    /// The per-package sweep already runs wherever hpm reuses a tree, but that
+    /// only reaches packages a caller happens to touch. An embedder that wants
+    /// the store made consistent as part of *its* update — rather than the
+    /// next time the user opens the right screen — calls this once at startup.
+    /// Stamps make it cheap to repeat: a tree already swept costs one small
+    /// read, so only a store carrying pre-repair installs does real work.
+    ///
+    /// A store that cannot be listed is not an error worth failing a startup
+    /// over; it is logged and reported as nothing swept.
+    pub fn repair_exec_modes(&self) -> (usize, usize) {
+        let installed = match self.list_installed() {
+            Ok(installed) => installed,
+            Err(e) => {
+                warn!("Could not list packages for the executable-mode sweep: {e}");
+                return (0, 0);
+            }
+        };
+
+        let mut swept = 0;
+        let mut repaired = 0;
+        for pkg in &installed {
+            let fixed = crate::exec_mode::ensure_repaired(&pkg.install_path);
+            if fixed > 0 {
+                info!(
+                    "Restored the executable bit on {} file(s) in {}@{}",
+                    fixed,
+                    pkg.slug(),
+                    pkg.version
+                );
+                repaired += fixed;
+            }
+            swept += 1;
+        }
+        (swept, repaired)
+    }
+
     pub fn list_installed(&self) -> Result<Vec<InstalledPackage>, StorageError> {
         let mut packages = Vec::new();
 

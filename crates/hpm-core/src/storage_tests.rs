@@ -82,6 +82,62 @@ houdini = ">=20.5"
     assert_eq!(packages[0].version, "1.0.0");
 }
 
+/// The store-wide sweep an embedder runs at startup: every installed package
+/// is repaired without anyone having to touch it first, and a second run costs
+/// nothing because each tree is stamped.
+#[cfg(unix)]
+#[test]
+fn repair_exec_modes_sweeps_every_installed_package() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = TempDir::new().unwrap();
+    let storage_config = StorageConfig {
+        home_dir: temp_dir.path().to_path_buf(),
+        cache_dir: temp_dir.path().join("cache"),
+        packages_dir: temp_dir.path().join("packages"),
+        registry_cache_dir: temp_dir.path().join("registry"),
+    };
+    let storage_manager = StorageManager::new(storage_config).unwrap();
+
+    // Two packages installed the way an older hpm left them, plus a data file
+    // that must stay untouched.
+    let mut tools = Vec::new();
+    for (slug, version) in [("tumblepipe", "1.39.2"), ("otherpkg", "0.2.0")] {
+        let dir = temp_dir
+            .path()
+            .join("packages")
+            .join(format!("{slug}@{version}"));
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::write(
+            dir.join("hpm.toml"),
+            format!(
+                "[package]\npath = \"studio/{slug}\"\nname = \"{slug}\"\nversion = \"{version}\"\n"
+            ),
+        )
+        .unwrap();
+        let tool = dir.join("bin/tt_setup");
+        // Mach-O 64-bit little-endian magic.
+        std::fs::write(&tool, [0xCFu8, 0xFA, 0xED, 0xFE]).unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::write(dir.join("data.hda"), b"INDX").unwrap();
+        tools.push((tool, dir.join("data.hda")));
+    }
+
+    let (swept, repaired) = storage_manager.repair_exec_modes();
+    assert_eq!(swept, 2);
+    assert_eq!(repaired, 2);
+    for (tool, data) in &tools {
+        let mode =
+            |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode(tool), 0o755);
+        assert_eq!(mode(data), 0o644, "a data file is never made executable");
+    }
+
+    // Stamped: a repeat sweep visits both trees and repairs nothing.
+    let (swept, repaired) = storage_manager.repair_exec_modes();
+    assert_eq!((swept, repaired), (2, 0));
+}
+
 /// Regression: a single corrupt cached manifest must not abort the whole CAS
 /// walk. One package with an unknown platform (or any unparseable manifest)
 /// previously made `list_installed` return `Err`, which wedged reconcile,
