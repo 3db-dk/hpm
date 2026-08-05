@@ -248,6 +248,7 @@ pub fn looks_executable(path: &Path) -> bool {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
@@ -442,7 +443,7 @@ mod tests {
         }
     }
 
-    proptest::proptest! {
+    proptest! {
         /// Whatever the content, `repaired_mode` may only ever add execute —
         /// and only when the file is a program that has none. The content
         /// generator deliberately mixes real magics with arbitrary bytes so
@@ -458,17 +459,17 @@ mod tests {
             let out = repaired_mode(mode, &path);
             let is_program = looks_executable(&path);
 
-            proptest::prop_assert_eq!(out & mode, mode, "a bit was cleared");
-            proptest::prop_assert_eq!(out & !0o111, mode & !0o111, "a non-execute bit changed");
+            prop_assert_eq!(out & mode, mode, "a bit was cleared");
+            prop_assert_eq!(out & !0o111, mode & !0o111, "a non-execute bit changed");
             if !is_program || mode & 0o111 != 0 {
-                proptest::prop_assert_eq!(
+                prop_assert_eq!(
                     out, mode,
                     "only a program with no execute bit may be changed"
                 );
             } else {
-                proptest::prop_assert_eq!(out, mirror_read_bits(mode));
+                prop_assert_eq!(out, mirror_read_bits(mode));
             }
-            proptest::prop_assert_eq!(repaired_mode(out, &path), out, "not idempotent");
+            prop_assert_eq!(repaired_mode(out, &path), out, "not idempotent");
         }
 
         /// The stamp must land beside the tree it describes and never within
@@ -487,9 +488,9 @@ mod tests {
             let pkg = root.join(&name);
             let stamp = stamp_path(&pkg).expect("a named directory always has a stamp path");
 
-            proptest::prop_assert_eq!(stamp.parent(), pkg.parent());
-            proptest::prop_assert!(!stamp.starts_with(&pkg), "stamp must not sit inside the tree");
-            proptest::prop_assert_ne!(&stamp, &pkg, "stamp must not be the tree itself");
+            prop_assert_eq!(stamp.parent(), pkg.parent());
+            prop_assert!(!stamp.starts_with(&pkg), "stamp must not sit inside the tree");
+            prop_assert_ne!(&stamp, &pkg, "stamp must not be the tree itself");
         }
 
         /// Classification reads the leading bytes and nothing else. Without
@@ -503,7 +504,7 @@ mod tests {
             let dir = TempDir::new().unwrap();
             let short = write(dir.path(), "short", &head, 0o644);
             let long = write(dir.path(), "long", &[head.clone(), tail].concat(), 0o644);
-            proptest::prop_assert_eq!(looks_executable(&short), looks_executable(&long));
+            prop_assert_eq!(looks_executable(&short), looks_executable(&long));
         }
 
         /// The sweep over a whole tree: file *contents* are never touched, no
@@ -539,11 +540,11 @@ mod tests {
 
             for ((path, _, mode, is_program), now) in before.iter().zip(&after_first) {
                 let now = *now;
-                proptest::prop_assert_eq!(now & mode, *mode, "a permission was removed");
+                prop_assert_eq!(now & mode, *mode, "a permission was removed");
                 if !is_program || mode & 0o111 != 0 {
-                    proptest::prop_assert_eq!(now, *mode, "untouched files must stay untouched");
+                    prop_assert_eq!(now, *mode, "untouched files must stay untouched");
                 } else {
-                    proptest::prop_assert_eq!(now, mirror_read_bits(*mode));
+                    prop_assert_eq!(now, mirror_read_bits(*mode));
                 }
                 let _ = path;
             }
@@ -553,7 +554,7 @@ mod tests {
             forget_repair(&pkg);
             ensure_repaired(&pkg);
             for ((path, ..), expected) in before.iter().zip(&after_first) {
-                proptest::prop_assert_eq!(mode_of(path), *expected, "sweep is not idempotent");
+                prop_assert_eq!(mode_of(path), *expected, "sweep is not idempotent");
             }
 
             // Contents last: a file generated `0o000` cannot be read back
@@ -561,7 +562,7 @@ mod tests {
             // would overwrite the modes under assertion.
             for (path, content, ..) in &before {
                 std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-                proptest::prop_assert_eq!(
+                prop_assert_eq!(
                     &std::fs::read(path).unwrap(), content,
                     "the repair must never rewrite a file's bytes"
                 );

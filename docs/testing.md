@@ -78,7 +78,7 @@ current number (the manifest strategies live in
 | Crate | Focus |
 |-------|-------|
 | `hpm-cli` | Argument parsing, output format round-trips (in `tests/cli_validation.rs`). |
-| `hpm-core` | Storage types, package specs, lockfile round-trips, env merge contracts, and the Houdini env emission model (`houdini_emission_model_tests.rs`). The `python` submodule covers Python versions, dependency resolution, content hashing. |
+| `hpm-core` | Storage types, package specs, lockfile round-trips, env merge contracts, the Houdini env emission model (`houdini_emission_model_tests.rs`), and the executable-bit repair (`exec_mode.rs` — the one place hpm changes permissions on a user's installed files, so its invariants are pinned rather than sampled by example). The `python` submodule covers Python versions, dependency resolution, content hashing. |
 | `hpm-package` | Manifest validation, TOML round-trips, native configs (in `tests/properties.rs`). |
 
 ## Running tests
@@ -216,6 +216,38 @@ proptest! {
     }
 }
 ```
+
+**Additive change** — an operation that repairs or upgrades a value should
+only ever add, never remove. `exec_mode`'s executable-bit repair is the
+example: for every mode and every file content, the repaired mode is a
+superset of the original, nothing outside the execute bits moves, and a file
+that is not a program is returned untouched. When the code under test widens
+a permission on a user's files, this is the shape to reach for — a handful of
+examples cannot express "and nothing else changed".
+
+### When exhaustive beats sampled
+
+If the input space is small enough to enumerate, enumerate it: a loop over
+every value is *complete*, where proptest only samples. A Unix mode is 4096
+values, so `mirror_read_bits`'s invariants are checked with a plain `#[test]`
+over `0..=0o7777` rather than a strategy, and the desktop's spawn-time repair
+crosses all 512 permission modes with each error kind it can see. Reserve
+proptest for the dimension that genuinely can't be enumerated — in the same
+module, that's file *content*, which decides whether a file is a program.
+
+Mixing the two in one module is normal and worth doing deliberately: state in
+the test's doc comment which dimension is exhaustive and which is sampled, so
+the next reader doesn't "upgrade" a complete check into a weaker one.
+
+### Filesystem properties
+
+A property test that writes real files hits cases examples never generate,
+including ones that break the *test*: a generated mode of `0o000` makes the
+file unreadable and unwritable by its own owner, so a test that rewrites a
+fixture per iteration, or reads content back before asserting on modes, will
+fail on its own harness rather than on the code. Create the fixture once and
+`chmod` per case, and do content assertions last, after granting yourself
+access back.
 
 ### Real bug caught by property tests
 
