@@ -471,6 +471,27 @@ mod tests {
             proptest::prop_assert_eq!(repaired_mode(out, &path), out, "not idempotent");
         }
 
+        /// The stamp must land beside the tree it describes and never within
+        /// it, for any package directory name. This is the invariant with the
+        /// worst failure mode in the module: `tree_hash` digests every file in
+        /// a package except `.hpm-checksum`, so a stamp that ever landed
+        /// inside would change the package's recorded checksum and fail
+        /// `LockFile::verify_checksums` — for hpm versions that predate the
+        /// stamp too, i.e. unfixably, on machines we'd never hear from.
+        #[test]
+        fn prop_the_stamp_is_always_a_sibling_never_a_child(
+            scope in "[a-zA-Z0-9_.-]{1,20}",
+            name in "[a-zA-Z0-9_.@+-]{1,30}",
+        ) {
+            let root = Path::new("/packages").join(&scope);
+            let pkg = root.join(&name);
+            let stamp = stamp_path(&pkg).expect("a named directory always has a stamp path");
+
+            proptest::prop_assert_eq!(stamp.parent(), pkg.parent());
+            proptest::prop_assert!(!stamp.starts_with(&pkg), "stamp must not sit inside the tree");
+            proptest::prop_assert_ne!(&stamp, &pkg, "stamp must not be the tree itself");
+        }
+
         /// Classification reads the leading bytes and nothing else. Without
         /// this, a future "search the file for a magic" would mark every HDA
         /// that happens to embed a compiled payload as a program.
