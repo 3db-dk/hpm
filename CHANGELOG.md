@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.1] - 2026-08-05
+
+No functional change over 0.31.0 — the library and CLI behave identically.
+0.31.0's macOS binary was never published: a property test generated a path
+terminating in `..`, which has no file name, and asserted one anyway, so the
+macOS release worker failed on the test rather than on anything it was
+testing. The generator now produces the `<scope>/<slug>@<version>` shape an
+install actually creates, and the no-file-name case is pinned as its own test.
+Use this release rather than 0.31.0 if you are on macOS.
+
 ## [0.31.0] - 2026-08-05
 
 ### Fixed
