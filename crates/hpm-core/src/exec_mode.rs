@@ -387,4 +387,164 @@ mod tests {
         forget_repair(&pkg);
         assert!(!stamp.exists());
     }
+
+    // ---- Invariants ---------------------------------------------------
+    //
+    // The examples above pin the cases we know about. These pin the
+    // properties, which is what a later change to the walk or the rule is
+    // liable to break without breaking any single example: this code widens
+    // permissions on files inside a package a user installed, so "only ever
+    // adds execute, only to programs, and never touches anything else" has to
+    // hold for every input, not for the four we thought of.
+
+    /// The mode space is 4096 values, so this is exhaustive rather than
+    /// sampled — a property test here would be strictly weaker.
+    #[test]
+    fn mirror_read_bits_only_ever_adds_execute_where_read_is_granted() {
+        for mode in 0..=0o7777u32 {
+            let out = mirror_read_bits(mode);
+
+            assert_eq!(out & mode, mode, "{mode:04o}: a bit was cleared");
+            assert_eq!(
+                out & !0o111,
+                mode & !0o111,
+                "{mode:04o}: something other than an execute bit changed"
+            );
+            assert_eq!(
+                out & 0o111,
+                (mode & 0o111) | ((mode & 0o444) >> 2),
+                "{mode:04o}: execute must mirror read, per class"
+            );
+            assert_eq!(
+                out & 0o7000,
+                mode & 0o7000,
+                "{mode:04o}: setuid/setgid/sticky must survive untouched"
+            );
+            assert_eq!(mirror_read_bits(out), out, "{mode:04o}: not idempotent");
+        }
+    }
+
+    /// A mode with no read bit for a class must not gain execute for it —
+    /// stated separately because it is the one that keeps a deliberately
+    /// private file private (`0o600` stays owner-only at `0o700`).
+    #[test]
+    fn mirror_read_bits_never_grants_execute_to_a_class_that_cannot_read() {
+        for mode in 0..=0o7777u32 {
+            let out = mirror_read_bits(mode);
+            for shift in [6, 3, 0] {
+                let can_read = mode & (0o4 << shift) != 0;
+                let gained_exec = (out & !mode) & (0o1 << shift) != 0;
+                assert!(
+                    can_read || !gained_exec,
+                    "{mode:04o}: gained execute for a class with no read"
+                );
+            }
+        }
+    }
+
+    proptest::proptest! {
+        /// Whatever the content, `repaired_mode` may only ever add execute —
+        /// and only when the file is a program that has none. The content
+        /// generator deliberately mixes real magics with arbitrary bytes so
+        /// the "is a program" branch is exercised from both sides.
+        #[test]
+        fn prop_repaired_mode_is_additive_and_only_for_programs(
+            content in proptest::collection::vec(proptest::num::u8::ANY, 0..64),
+            mode in 0u32..=0o777,
+        ) {
+            let dir = TempDir::new().unwrap();
+            let path = write(dir.path(), "probe", &content, mode);
+
+            let out = repaired_mode(mode, &path);
+            let is_program = looks_executable(&path);
+
+            proptest::prop_assert_eq!(out & mode, mode, "a bit was cleared");
+            proptest::prop_assert_eq!(out & !0o111, mode & !0o111, "a non-execute bit changed");
+            if !is_program || mode & 0o111 != 0 {
+                proptest::prop_assert_eq!(
+                    out, mode,
+                    "only a program with no execute bit may be changed"
+                );
+            } else {
+                proptest::prop_assert_eq!(out, mirror_read_bits(mode));
+            }
+            proptest::prop_assert_eq!(repaired_mode(out, &path), out, "not idempotent");
+        }
+
+        /// Classification reads the leading bytes and nothing else. Without
+        /// this, a future "search the file for a magic" would mark every HDA
+        /// that happens to embed a compiled payload as a program.
+        #[test]
+        fn prop_looks_executable_ignores_everything_past_the_head(
+            head in proptest::collection::vec(proptest::num::u8::ANY, 4..8),
+            tail in proptest::collection::vec(proptest::num::u8::ANY, 0..128),
+        ) {
+            let dir = TempDir::new().unwrap();
+            let short = write(dir.path(), "short", &head, 0o644);
+            let long = write(dir.path(), "long", &[head.clone(), tail].concat(), 0o644);
+            proptest::prop_assert_eq!(looks_executable(&short), looks_executable(&long));
+        }
+
+        /// The sweep over a whole tree: file *contents* are never touched, no
+        /// permission is ever removed, and anything that isn't a program with
+        /// a missing bit comes back byte-for-byte and mode-for-mode identical.
+        /// Idempotence is asserted against a forced re-sweep, since the stamp
+        /// would otherwise make the second call trivially a no-op.
+        #[test]
+        fn prop_sweeping_a_tree_changes_only_programs_missing_their_bit(
+            files in proptest::collection::vec(
+                (
+                    proptest::collection::vec(proptest::num::u8::ANY, 0..32),
+                    0u32..=0o777,
+                ),
+                1..6,
+            ),
+        ) {
+            let dir = TempDir::new().unwrap();
+            let pkg = dir.path().join("pkg@1.0.0");
+
+            let before: Vec<_> = files
+                .iter()
+                .enumerate()
+                .map(|(i, (content, mode))| {
+                    let path = write(&pkg, &format!("sub/f{i}"), content, *mode);
+                    let is_program = looks_executable(&path);
+                    (path, content.clone(), *mode, is_program)
+                })
+                .collect();
+
+            ensure_repaired(&pkg);
+            let after_first: Vec<u32> = before.iter().map(|(p, ..)| mode_of(p)).collect();
+
+            for ((path, _, mode, is_program), now) in before.iter().zip(&after_first) {
+                let now = *now;
+                proptest::prop_assert_eq!(now & mode, *mode, "a permission was removed");
+                if !is_program || mode & 0o111 != 0 {
+                    proptest::prop_assert_eq!(now, *mode, "untouched files must stay untouched");
+                } else {
+                    proptest::prop_assert_eq!(now, mirror_read_bits(*mode));
+                }
+                let _ = path;
+            }
+
+            // Second pass with the stamp removed, so the walk really runs
+            // again rather than short-circuiting on the stamp.
+            forget_repair(&pkg);
+            ensure_repaired(&pkg);
+            for ((path, ..), expected) in before.iter().zip(&after_first) {
+                proptest::prop_assert_eq!(mode_of(path), *expected, "sweep is not idempotent");
+            }
+
+            // Contents last: a file generated `0o000` cannot be read back
+            // until the test grants itself permission, and doing that earlier
+            // would overwrite the modes under assertion.
+            for (path, content, ..) in &before {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+                proptest::prop_assert_eq!(
+                    &std::fs::read(path).unwrap(), content,
+                    "the repair must never rewrite a file's bytes"
+                );
+            }
+        }
+    }
 }
