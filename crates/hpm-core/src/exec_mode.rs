@@ -178,10 +178,23 @@ pub fn repair_tree(dir: &Path) -> usize {
 #[cfg(unix)]
 pub fn repaired_mode(mode: u32, path: &Path) -> u32 {
     if mode & 0o111 == 0 && looks_executable(path) {
-        mode | ((mode & 0o444) >> 2)
+        mirror_read_bits(mode)
     } else {
         mode
     }
+}
+
+/// `mode` with each execute bit set wherever the matching read bit already is
+/// (`0o644` -> `0o755`, `0o640` -> `0o750`).
+///
+/// Exposed separately for the one caller that has better evidence than the
+/// content sniff can produce: an embedder about to spawn a path a manifest
+/// declares as a program knows it is one, even when the bytes don't say so —
+/// a shell script shipped without a `#!` line is the case that reaches this.
+/// The widening rule must stay identical to the sweep's, hence one function.
+#[cfg(unix)]
+pub fn mirror_read_bits(mode: u32) -> u32 {
+    mode | ((mode & 0o444) >> 2)
 }
 
 /// True if `path`'s leading bytes identify an executable program: an ELF
