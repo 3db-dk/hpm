@@ -120,10 +120,11 @@ pub fn ensure_repaired(_package_dir: &Path) -> usize {
 }
 
 /// Walk `dir` and restore the executable bit on every regular file that looks
-/// like a program and carries none. Unconditional — [`ensure_repaired`] is the
-/// entry point that keeps it to one sweep per tree.
+/// like a program and carries none. Unconditional, and deliberately not public:
+/// [`ensure_repaired`] is the entry point, and it is the stamp that keeps this
+/// to one sweep per tree rather than one per caller.
 #[cfg(unix)]
-pub fn repair_tree(dir: &Path) -> usize {
+fn repair_tree(dir: &Path) -> usize {
     use std::os::unix::fs::PermissionsExt;
 
     let mut repaired = 0;
