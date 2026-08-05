@@ -698,6 +698,63 @@ async fn install_one_dep_short_circuits_on_scoped_name() {
     assert!(outcome.source.is_none());
 }
 
+/// Regression: reusing an already-installed tree must repair a program that
+/// lost its executable bit in the archive.
+///
+/// The short-circuit above is exactly why the extraction-time repair never
+/// reached an existing install — no re-extraction, so nothing ever looked at
+/// the tree again. A user on the affected install saw the package's own
+/// `tt_setup` die with `Permission denied (os error 13)` on every launch, and
+/// upgrading hpm changed nothing.
+#[cfg(unix)]
+#[tokio::test]
+async fn install_one_dep_repairs_a_lost_executable_bit_on_reuse() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = TempDir::new().unwrap();
+    let (_config, storage_manager) = test_setup(temp_dir.path());
+    let fetcher =
+        ArchiveFetcher::new(temp_dir.path().join("cache"), temp_dir.path().join("fetch")).unwrap();
+
+    // A tree as an older hpm extracted it: the Mach-O `tt_setup` the manifest
+    // declares as a script, stamped 0644 by the producing zip.
+    let install_path = temp_dir.path().join("tumblepipe@1.39.2");
+    let tool = install_path.join("bin/macos-aarch64/tt_setup");
+    std::fs::create_dir_all(tool.parent().unwrap()).unwrap();
+    std::fs::write(&tool, [0xCFu8, 0xFA, 0xED, 0xFE]).unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let manifest = hpm_package::PackageManifest::new(
+        PackagePath::new("tumblehead/tumblepipe").unwrap(),
+        "Tumblepipe".to_string(),
+        "1.39.2".to_string(),
+        None,
+        Vec::new(),
+        None,
+    );
+    let installed = InstalledPackage {
+        version: "1.39.2".to_string(),
+        manifest,
+        install_path,
+        is_dev: false,
+    };
+
+    let spec = hpm_package::DependencySpec::registry("1.39.2", None);
+    install_one_dep(
+        &storage_manager,
+        &fetcher,
+        None,
+        std::slice::from_ref(&installed),
+        "tumblehead/tumblepipe",
+        &spec,
+    )
+    .await
+    .expect("already-installed dep short-circuits");
+
+    let mode = std::fs::metadata(&tool).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode, 0o755, "the reused tree must come back runnable");
+}
+
 /// Regression: a registry-resolved dep that misses the installed-cache
 /// short-circuit, with no registries configured, must fail as
 /// `NoRegistriesConfigured` (pointing the user at `hpm registry add`) rather

@@ -160,6 +160,7 @@ impl ProjectManager {
                 "Package {} already installed with compatible version {}",
                 spec.name, pkg.version
             );
+            reuse_installed(pkg).await;
             pkg.clone()
         } else {
             self.resolve_and_install_from_registry(spec).await?
@@ -702,6 +703,29 @@ impl ProjectManager {
     }
 }
 
+/// Hand back a tree that is already in the CAS, sweeping its executable bits
+/// first.
+///
+/// This is the other half of the extraction-time repair in
+/// [`crate::exec_mode`]. Every reuse path below returns without re-extracting,
+/// which is exactly why an old install never healed itself: a package whose
+/// programs lost their executable bit in the archive stayed unrunnable through
+/// every later `install`, `sync`, and hpm upgrade, because the only code that
+/// could fix it ran at extraction and extraction never happened again.
+///
+/// Sweeping here rather than at spawn time keeps it content-driven — it covers
+/// the helper binary a `[scripts]` entry shells out to, not just the declared
+/// entry point — and [`ensure_repaired`] stamps the tree, so the walk costs one
+/// pass per installed version rather than one per sync.
+///
+/// [`ensure_repaired`]: crate::exec_mode::ensure_repaired
+async fn reuse_installed(pkg: &InstalledPackage) {
+    let dir = pkg.install_path.clone();
+    // A filesystem walk on the runtime's worker would stall the other installs
+    // sharing it; this is the same reason extraction runs on the blocking pool.
+    let _ = tokio::task::spawn_blocking(move || crate::exec_mode::ensure_repaired(&dir)).await;
+}
+
 /// Install a single dependency, short-circuiting if it's already in the
 /// global CAS. Spawnable from the JoinSet in `sync_dependencies` — takes
 /// shared state by `&` (cloned into the task by the caller).
@@ -736,6 +760,7 @@ async fn install_one_dep(
                 .find(|p| ProjectManager::matches_spec_name(p, name) && p.version == *version)
             {
                 info!("Package {}@{} already installed", name, version);
+                reuse_installed(pkg).await;
                 return Ok(InstallOutcome {
                     package: pkg.clone(),
                     checksum: None,
@@ -779,6 +804,7 @@ async fn install_one_dep(
                 .find(|p| ProjectManager::matches_spec_name(p, name) && p.version == *version)
             {
                 info!("Package {}@{} already installed", name, version);
+                reuse_installed(pkg).await;
                 return Ok(InstallOutcome {
                     package: pkg.clone(),
                     checksum: None,
