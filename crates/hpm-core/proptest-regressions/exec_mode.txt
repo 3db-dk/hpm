@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 4ff1293491bfddc82b8955f547c0065c877af1761a0fd5c5a4fcf10d903a7903 # shrinks to files = [([], 0)]
+cc ca41609c5360dff463f3f82b24bf3af19104480fb719d2047aa49e012acaf024 # was `scope = "A", name = ".."` under the old unconstrained name strategy

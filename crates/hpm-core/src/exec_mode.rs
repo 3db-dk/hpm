@@ -389,6 +389,35 @@ mod tests {
         assert!(!stamp.exists());
     }
 
+    /// A path that terminates in `..` has no file name, so it has no stamp
+    /// either — and that has to stay harmless rather than becoming a panic or
+    /// a stamp written somewhere unexpected. `ensure_repaired` simply sweeps
+    /// every time it is called for such a path, and `forget_repair` is a
+    /// no-op. No install produces one (`package_dir` builds
+    /// `<packages>/<scope>/<slug>@<version>`), which is exactly why it is
+    /// worth pinning: nothing else would notice if it started panicking.
+    #[test]
+    fn a_path_with_no_file_name_has_no_stamp_and_still_sweeps() {
+        let dir = TempDir::new().unwrap();
+        let pkg = dir.path().join("pkg@1.0.0");
+        let tool = write(&pkg, "bin/tool", &MACH_O_64, 0o644);
+
+        let nameless = pkg.join("..");
+        assert!(stamp_path(&nameless).is_none(), "`..` is not a name");
+        forget_repair(&nameless); // must not panic
+
+        // Swept through the nameless path: the repair still happens, it just
+        // isn't recorded, so a later call repairs again rather than skipping.
+        assert_eq!(ensure_repaired(&nameless), 1);
+        assert_eq!(mode_of(&tool), 0o755);
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            ensure_repaired(&nameless),
+            1,
+            "unstamped means never skipped"
+        );
+    }
+
     // ---- Invariants ---------------------------------------------------
     //
     // The examples above pin the cases we know about. These pin the
@@ -481,12 +510,16 @@ mod tests {
         /// stamp too, i.e. unfixably, on machines we'd never hear from.
         #[test]
         fn prop_the_stamp_is_always_a_sibling_never_a_child(
-            scope in "[a-zA-Z0-9_.-]{1,20}",
-            name in "[a-zA-Z0-9_.@+-]{1,30}",
+            scope in "[a-z][a-z0-9_-]{0,20}",
+            slug in "[a-z][a-z0-9_-]{0,20}",
+            version in "[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}(-[a-z0-9.]{1,8})?",
         ) {
-            let root = Path::new("/packages").join(&scope);
-            let pkg = root.join(&name);
-            let stamp = stamp_path(&pkg).expect("a named directory always has a stamp path");
+            // The shape `StorageConfig::package_dir` actually builds. An
+            // unconstrained name generator here would spend its cases on
+            // paths no install can produce — and on `.`/`..`, which are not
+            // names at all (see the example test below).
+            let pkg = Path::new("/packages").join(&scope).join(format!("{slug}@{version}"));
+            let stamp = stamp_path(&pkg).expect("a package directory has a name");
 
             prop_assert_eq!(stamp.parent(), pkg.parent());
             prop_assert!(!stamp.starts_with(&pkg), "stamp must not sit inside the tree");
