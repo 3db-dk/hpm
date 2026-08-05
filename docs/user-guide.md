@@ -273,9 +273,20 @@ executable. Archives are checksum- and signature-verified before any of this,
 and hpm already runs `[scripts]` programs out of the installed tree, so this
 grants nothing a well-formed archive could not claim for itself.
 
-Note this happens at extraction. A package already installed at a given version
-is not re-extracted, so a tree installed before this behaviour existed keeps its
-modes until that package's version changes.
+The same repair reaches trees that are already installed. A package at a version
+you already have is never re-extracted, so a tree installed by an older hpm
+would otherwise keep its broken modes forever — upgrading hpm would appear to
+change nothing. Instead, whenever hpm reuses an installed tree (`install`,
+`sync`, or `add` finding the version already present) it sweeps it once with the
+rule above and records that in a `<name>@<version>.exec-modes` file *beside* the
+package directory. The file lives outside the tree deliberately: a package's
+checksum is computed over its contents, so a marker inside would change it.
+
+Two limits worth knowing. The sweep is content-driven, exactly like the
+extraction repair, so it fixes any program in the tree — including a helper
+binary a script shells out to — but it only ever adds execute where read is
+already granted. And a tree is swept once: if you deliberately strip a bit
+afterwards, hpm will not put it back.
 
 **Symlink entries are skipped.** Neither the zip nor the tar.gz extractor
 creates a link, and a skipped entry is logged. A link is the one entry type

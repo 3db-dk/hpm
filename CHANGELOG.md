@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A package that was already installed when its executable bit went missing
+  is now repaired, instead of staying broken forever.** 0.30.2 restores a lost
+  executable bit as it *extracts* an archive, which only ever helps content hpm
+  is about to extract. A package at a version you already have is never
+  extracted again, so an affected install kept its programs at `0644` through
+  every later `install`, `sync`, and hpm upgrade — the package's own
+  `[scripts]` entry went on failing with `Permission denied (os error 13)` on
+  macOS and Linux, and the fix looked like it had done nothing.
+
+  Reusing an installed tree now sweeps it with the same content-driven,
+  additive rule (ELF / Mach-O / `#!` and no execute permission → mirror the
+  read bits). The sweep runs once per installed version, recorded in a
+  `<name>@<version>.exec-modes` file next to the package directory — outside
+  the tree, since a package's checksum is computed over its contents.
+
 ## [0.30.2] - 2026-08-02
 
 ### Fixed
