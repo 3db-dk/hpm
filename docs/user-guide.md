@@ -285,11 +285,11 @@ checksum is computed over its contents, so a marker inside would change it.
 Two limits worth knowing. The sweep is content-driven, exactly like the
 extraction repair, so it fixes any program in the tree — including a helper
 binary a script shells out to — but it only ever adds execute where read is
-already granted, and it will not guess at a file whose bytes don't identify it
-(a shell script with no `#!` line is the case to watch for; embedders that
-spawn declared scripts can repair those at the spawn itself, where the manifest
-supplies the missing proof). And a tree is swept once: if you deliberately
-strip a bit afterwards, hpm will not put it back.
+already granted, and it will not guess at a file whose bytes don't identify it.
+(A shell script with no `#!` line is not rescued by any of this and cannot be:
+the kernel refuses to execute it whatever its mode. Ship a shebang, or declare
+an interpreter in the script's `cmd`.) And a tree is swept once: if you
+deliberately strip a bit afterwards, hpm will not put it back.
 
 `StorageManager::repair_exec_modes()` runs the same sweep across every
 installed package in one call, for an embedder that wants the store made

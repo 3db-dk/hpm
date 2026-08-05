@@ -33,8 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tree already swept costs one small read.
 - `exec_mode::mirror_read_bits(mode)` exposes just the widening the repair
   applies (`0o644` → `0o755`, `0o640` → `0o750`). For an embedder about to
-  spawn a path its manifest declares as a program: the manifest is proof the
-  content sniff can't produce, and the widening must match the sweep's.
+  spawn a path its manifest declares as a program: the manifest is proof no
+  content sniff can produce, it covers what a sweep structurally cannot reach
+  (a dev copy, a file that appeared after the tree was swept), and the widening
+  must match the sweep's.
 
 ## [0.30.2] - 2026-08-02
 

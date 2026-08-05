@@ -187,11 +187,12 @@ pub fn repaired_mode(mode: u32, path: &Path) -> u32 {
 /// `mode` with each execute bit set wherever the matching read bit already is
 /// (`0o644` -> `0o755`, `0o640` -> `0o750`).
 ///
-/// Exposed separately for the one caller that has better evidence than the
-/// content sniff can produce: an embedder about to spawn a path a manifest
-/// declares as a program knows it is one, even when the bytes don't say so —
-/// a shell script shipped without a `#!` line is the case that reaches this.
-/// The widening rule must stay identical to the sweep's, hence one function.
+/// Exposed separately for the caller that has better evidence than the content
+/// sniff can produce: an embedder about to spawn a path a manifest declares as
+/// a program knows it is one without reading a byte of it. That covers what a
+/// sweep structurally cannot — a dev copy it does not walk, a file that
+/// appeared after the tree was stamped — and the widening must stay identical
+/// to the sweep's, hence one function rather than two.
 #[cfg(unix)]
 pub fn mirror_read_bits(mode: u32) -> u32 {
     mode | ((mode & 0o444) >> 2)
