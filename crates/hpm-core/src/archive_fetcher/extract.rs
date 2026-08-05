@@ -378,21 +378,23 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
 /// declaring 0o755 — and hpm already runs `[scripts]` programs out of the
 /// installed tree. Archives are checksum- and signature-verified before they
 /// get here.
+///
+/// The rule itself lives in [`crate::exec_mode`], which also applies it to
+/// trees installed before this extractor existed — those are never
+/// re-extracted, so extraction-time repair alone never reaches them.
 #[cfg(unix)]
 fn finalize_mode(target_path: &Path, declared: Option<u32>) -> Result<(), FetchError> {
     use std::os::unix::fs::PermissionsExt;
 
     let mode = declared.unwrap_or(0o644) & 0o7777;
-    let repaired = if mode & 0o111 == 0 && looks_executable(target_path) {
+    let repaired = crate::exec_mode::repaired_mode(mode, target_path);
+    if repaired != mode {
         debug!(
             "Restoring executable bit on {} (archive declared {:04o})",
             target_path.display(),
             mode
         );
-        mode | ((mode & 0o444) >> 2)
-    } else {
-        mode
-    };
+    }
 
     // With no declared mode and nothing to repair there is nothing to say
     // about this file — leave whatever `File::create` produced under the
@@ -401,46 +403,6 @@ fn finalize_mode(target_path: &Path, declared: Option<u32>) -> Result<(), FetchE
         std::fs::set_permissions(target_path, std::fs::Permissions::from_mode(repaired))?;
     }
     Ok(())
-}
-
-/// True if `path`'s leading bytes identify an executable program: an ELF
-/// object (Linux), a Mach-O object in either endianness or a universal binary
-/// (macOS), or a `#!` interpreter script.
-///
-/// Shared libraries (`.so` / `.dylib`) share the ELF/Mach-O magics and are
-/// matched too. That is intentional and harmless — they are conventionally
-/// 0o755, and marking one executable does not make it a program anyone runs.
-#[cfg(unix)]
-fn looks_executable(path: &Path) -> bool {
-    let mut head = [0u8; 4];
-    let Ok(mut f) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut filled = 0;
-    // A short read is not EOF, so loop until the buffer is full or the file is.
-    while filled < head.len() {
-        match f.read(&mut head[filled..]) {
-            Ok(0) => break,
-            Ok(n) => filled += n,
-            Err(_) => return false,
-        }
-    }
-    if filled >= 2 && &head[..2] == b"#!" {
-        return true;
-    }
-    if filled < 4 {
-        return false;
-    }
-    if &head == b"\x7fELF" {
-        return true;
-    }
-    matches!(
-        u32::from_be_bytes(head),
-        // Mach-O thin, 32/64-bit, big- and little-endian.
-        0xFEED_FACE | 0xFEED_FACF | 0xCEFA_EDFE | 0xCFFA_EDFE
-        // Mach-O universal ("fat") binary, both byte orders.
-        | 0xCAFE_BABE | 0xBEBA_FECA
-    )
 }
 
 /// Validate that a path doesn't contain traversal attempts.
@@ -903,27 +865,6 @@ mod tests {
             extract_dir.join("hpm.toml").exists(),
             "other entries still extract"
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_looks_executable_magics() {
-        let temp = TempDir::new().unwrap();
-        let probe = |bytes: &[u8]| {
-            let p = temp.path().join("probe");
-            std::fs::write(&p, bytes).unwrap();
-            looks_executable(&p)
-        };
-
-        assert!(probe(b"\x7fELF\x02\x01"));
-        assert!(probe(b"#!/usr/bin/env python3\n"));
-        assert!(probe(&0xCFFA_EDFEu32.to_be_bytes())); // Mach-O 64-bit LE
-        assert!(probe(&0xCAFE_BABEu32.to_be_bytes())); // Mach-O universal
-
-        assert!(!probe(b"[package]\nname = \"x\"\n"));
-        assert!(!probe(b""));
-        // Too short to be any magic, and not a shebang.
-        assert!(!probe(b"#"));
     }
 
     #[test]

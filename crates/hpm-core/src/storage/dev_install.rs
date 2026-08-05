@@ -155,6 +155,11 @@ pub(super) fn remove_install_entry(
     name: &str,
     version: &str,
 ) -> Result<(), StorageError> {
+    // The executable-mode sweep records itself in a sibling file, since an
+    // in-tree marker would perturb the package's tree hash. Drop it here so it
+    // doesn't outlive the tree it describes.
+    crate::exec_mode::forget_repair(target_dir);
+
     if is_link_entry(meta, target_dir)
         .map_err(|e| IoOp::wrap("inspect install entry at", target_dir, e))?
     {

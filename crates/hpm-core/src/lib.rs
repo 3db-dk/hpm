@@ -11,6 +11,8 @@
 //!   under `~/.hpm/packages/` (plus `_dev/` for path installs) and the
 //!   project-aware cleanup pipeline
 //! - [`archive_fetcher`] — download, verify, and extract package archives
+//! - [`exec_mode`] — the executable-bit rule shared by extraction and the
+//!   one-off sweep of an already-installed tree
 //! - [`packer`] — build, checksum, and sign release archives (`hpm pack`)
 //! - [`registry`] — registry resolution ([`RegistrySet`])
 //! - [`lock`] — `hpm.lock` reading/writing and checksum verification
@@ -42,6 +44,7 @@
 pub mod archive_fetcher;
 pub mod asset_index;
 pub mod discovery;
+pub mod exec_mode;
 pub mod fetch_manifest;
 pub mod global;
 pub mod graph;
