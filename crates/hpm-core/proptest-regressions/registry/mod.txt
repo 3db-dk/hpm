@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc f0aec754c0cb94d77d7c713921d462f85c81733c999ebfbee554c8e406393bba # shrinks to entries = [RegistryEntry { name: "tumblehead/tumblerig", version: "1.7.4", cksum: None, dl: "https://pkg.example/TumbleRig-1.7.4-any.zip", sig: None, kid: None, houdini_compat: None, platform: None, yanked: false, description: None, author: None, created_at: None }, RegistryEntry { name: "tumblehead/tumblerig", version: "1.7.4", cksum: None, dl: "https://pkg.example/TumbleRig-1.7.4-any.zip", sig: None, kid: None, houdini_compat: None, platform: None, yanked: false, description: None, author: None, created_at: None }]

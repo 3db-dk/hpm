@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A version released for more than one platform is no longer listed once per
+  platform.** A registry answers `/packages/<name>` with one row per *build*,
+  and `RegistrySet::get_versions` passed those rows straight through as if
+  they were versions, so a package shipping a Windows and a Linux archive had
+  every such version appear twice in any version listing — the TumbleTrove
+  desktop project editor showed TumbleRig's 1.7.9 and up duplicated in its
+  version select, and again in the selected-version label. `get_versions` and
+  `RegistrySet::search` now collapse a version's builds to one entry,
+  preferring the host's build.
+- **An unpinned range on a multi-platform package could resolve to another
+  platform's archive.** `resolve` for a requirement like `^1` went through
+  `highest_matching`, which compares version strings only: given several
+  equal-version build rows it kept whichever the registry served last,
+  with no host filtering at all. Collapsing builds before the comparison
+  means it now sees the host's build, matching what an exact-version
+  lookup has always done via `select_build_for_host`.
+
 ## [0.31.1] - 2026-08-05
 
 No functional change over 0.31.0 — the library and CLI behave identically.

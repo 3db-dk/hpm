@@ -84,11 +84,15 @@ impl std::fmt::Display for PlatformTag {
     }
 }
 
-/// A single version entry in the registry.
+/// A single *build* entry in the registry.
 ///
-/// Each published version of a package has one entry. For git-based registries,
-/// these are stored as one JSON object per line in the package index file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One entry per published archive, not per version: a version released for
+/// two platforms has two entries differing in `dl`, `cksum` and `platform`.
+/// Callers wanting one row per version go through
+/// [`RegistrySet::get_versions`](crate::registry::RegistrySet::get_versions),
+/// which collapses the builds. For git-based registries these are stored as
+/// one JSON object per line in the package index file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RegistryEntry {
     /// Scoped package path (e.g. `creator/slug`), used as the unique identifier.
     pub name: String,
