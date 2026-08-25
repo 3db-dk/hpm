@@ -154,6 +154,14 @@ pipelines and registry upload tooling:
 `signature` and `key_id` are present only when a signing key was supplied.
 `platform` is present only when the manifest declares `[compat].platforms`.
 
+The 0.6.0 wire format described above — PKCS#8 PEM keys, Ed25519 signatures,
+standard base64, `key_id` as the first 8 bytes of the public key in hex — is
+pinned by a known-answer test over a fixed key and message. Ed25519 is
+deterministic (RFC 8032), so a signature is reproducible byte for byte, and
+an upgrade of `ed25519-dalek`, `sha2` or `base64` that changed the encoding
+fails that test rather than silently invalidating every signature already
+published.
+
 ### Operational guidance
 
 - Store the private PEM in a secret manager (Vault, Infisical, GitHub Actions secrets) rather than on disk in CI runners.

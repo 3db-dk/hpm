@@ -17,6 +17,7 @@ them, and how to configure them per-user vs. per-project.
 - [Refreshing and removing](#refreshing-and-removing)
 - [Auto-detection of registry type](#auto-detection-of-registry-type)
 - [Searching](#searching)
+- [Multi-platform packages](#multi-platform-packages)
 - [Caching](#caching)
 
 ## Adding a registry
@@ -177,8 +178,11 @@ hpm search geometry --output json | jq '.[].name'
 ```
 
 Each entry includes the package name, version, optional description, and
-optional Houdini compatibility string. A `yanked: true` entry signals that
-the maintainer pulled that version; HPM still shows it in search results.
+optional Houdini compatibility string — one entry per version, even for a
+package published for several platforms (see
+[Multi-platform packages](#multi-platform-packages)). A `yanked: true` entry
+signals that the maintainer pulled that version; HPM still shows it in search
+results.
 
 How a yank affects resolution depends on how you asked for the version:
 
@@ -187,6 +191,22 @@ How a yank affects resolution depends on how you asked for the version:
 - An **exact** pin (`1.2.0`) still resolves, yanked or not. This is
   deliberate, so that a lockfile pinning a version that was later yanked
   keeps installing rather than breaking.
+
+## Multi-platform packages
+
+A package that declares `[compat].platforms` publishes one archive per
+platform, and the registry stores each as its own record. HPM shows you
+**versions**, not archives: a release built for Windows and Linux appears once
+in `hpm search` and in any version listing, not twice.
+
+Which archive you get is decided at install time, from the host: an exact
+platform match first, then a `universal` build, and otherwise
+`NoCompatibleBuild` rather than a silent fall back to some other platform's
+archive. A version that has no build for your platform still *lists* — you can
+see it exists, and see its Houdini compatibility — it just won't install here.
+
+Use `--platform` on `hpm pack` to build for a platform other than the host;
+see [the user guide](user-guide.md).
 
 ## Caching
 

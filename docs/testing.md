@@ -65,6 +65,26 @@ question about Houdini's package semantics comes up, extend the
 conformance test to settle it empirically, then encode the answer in the
 model.
 
+### Known-answer tests for wire formats
+
+A round-trip test cannot catch a changed format. `sign` → `verify` in the same
+build passes whatever the bytes are, so it holds even if a dependency upgrade
+silently re-encodes the output — and for a signature that would invalidate
+every artifact already published, with the failure surfacing on a user's
+machine at install time rather than in CI.
+
+Anything whose bytes leave the process and are read back by someone else — a
+signature, a checksum, an index line — gets a **known-answer test** instead:
+fixed input, expected output written out literally.
+`signing_matches_the_published_wire_format` pins the base64 signature and
+`key_id` for a fixed key and message; it is what makes an `ed25519-dalek`,
+`sha2` or `base64` bump a mechanical change rather than a leap of faith.
+
+This only works where the computation is deterministic. Ed25519 is (RFC 8032),
+so there is no nonce to make the vectors flaky: a changed value means the
+format changed. Where output legitimately varies, pin the invariant part
+rather than reaching for a round-trip.
+
 ### Property test distribution
 
 Property tests are concentrated in the crates with the most value-shaped

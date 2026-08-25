@@ -190,12 +190,29 @@ pub struct LockedDependency {
 #[async_trait]
 pub trait Registry: Send + Sync {
     async fn search(&self, query: &str) -> Result<SearchResults, RegistryError>;
+    // One entry per *build*, not per version — see below.
     async fn get_versions(&self, name: &str) -> Result<Vec<RegistryEntry>, RegistryError>;
     async fn get_version(&self, name: &str, version: &str) -> Result<RegistryEntry, RegistryError>;
     async fn refresh(&self) -> Result<(), RegistryError>;
     fn name(&self) -> &str;
 }
 ```
+
+A `RegistryEntry` is one published **archive**, so a version released for
+Windows and Linux is two entries differing in `dl`, `cksum` and `platform`.
+The trait deliberately exposes them all: `get_version` picks the host's with
+`select_build_for_host`, and it needs the full set to choose from.
+
+`RegistrySet::get_versions` and `RegistrySet::search` are the *version* views
+on top of that. They collapse each `(name, version)`'s builds to a single
+entry — the host's build, then a universal one, then the first row — so a
+version picker shows a two-platform release once rather than twice, and
+`highest_matching` (which compares version strings and nothing else) resolves
+an unpinned range to an archive this host can actually run. A version with no
+build for this host still lists, carrying its own metadata; deciding it is
+uninstallable stays `select_build_for_host`'s job at install time. `search`
+collapses per registry, so a package served by two registries still shows
+both.
 
 ### hpm-core::python
 
