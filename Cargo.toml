@@ -41,8 +41,8 @@ tempfile = "3.8"
 
 # Crypto and validation
 sha2 = "0.11"
-ed25519-dalek = { version = "2.1", features = ["rand_core", "pem"] }
-base64 = "0.22"
+ed25519-dalek = { version = "3.0", features = ["rand_core", "pem"] }
+base64 = "0.23"
 
 # Logging
 tracing = "0.1"
@@ -56,7 +56,7 @@ indicatif = "0.18"
 time = { version = "0.3", default-features = false, features = ["parsing", "formatting", "macros"] }
 
 # Graph algorithms
-petgraph = { version = "0.7", default-features = false, features = ["graphmap"] }
+petgraph = { version = "0.8", default-features = false }
 
 # Additional dependencies for Python support
 semver = "1.0"

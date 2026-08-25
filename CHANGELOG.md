@@ -26,6 +26,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   means it now sees the host's build, matching what an exact-version
   lookup has always done via `select_build_for_host`.
 
+### Security
+
+- **`anyhow` moved off 1.0.102, which carries RUSTSEC-2026-0190** (unsoundness
+  in `Error::downcast_mut()`, patched in 1.0.103). `cargo audit` is clean
+  again.
+
+### Changed
+
+- Dependencies refreshed. `ed25519-dalek` 2.x → 3.0, `base64` 0.22 → 0.23 and
+  `petgraph` 0.7 → 0.8 are the semver-major moves; the rest is a lockfile
+  refresh within existing ranges. Signatures are byte-identical across the
+  dalek bump, now pinned by a known-answer test over a fixed key and message
+  so no future crypto or encoding bump can change the wire format unnoticed —
+  every `sig`/`kid` already published stays verifiable. The tree lost 42
+  crates (350 → 308): dalek 3 drops the old `digest`/`generic-array` chain and
+  the second copy of `sha2` that came with it, and refreshing the lock pruned
+  duplicate `windows-sys` and `wit-bindgen` trees.
+- `petgraph`'s `graphmap` feature is no longer requested. The graph is a
+  `DiGraph` and never was a `GraphMap`, so the feature only ever pulled code
+  that went unused.
+- `hpm-cli` no longer declares `ignore`. It calls `hpm_core::packer`'s
+  `build_ignore_rules` and passes the result straight back, never naming the
+  crate itself.
+
 ## [0.31.1] - 2026-08-05
 
 No functional change over 0.31.0 — the library and CLI behave identically.

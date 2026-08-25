@@ -839,3 +839,29 @@ fn missing_output_directory_is_created() {
     assert!(archive_path.exists());
     assert_eq!(archive_path.parent().unwrap(), output_dir);
 }
+
+/// Known-answer test for the signing wire format.
+///
+/// `signature_roundtrip_verifies` signs and verifies with the same build, so
+/// it holds even if the bytes on the wire change — which is the one thing a
+/// signing dependency must never do. Every `sig`/`kid` already published to a
+/// registry was produced by this code path, and the registry verifies them
+/// against the same fixed vectors; a bump that silently altered the encoding
+/// would invalidate every signature in existence and only show up at install
+/// time on a user's machine.
+///
+/// The expected values below were produced under ed25519-dalek 2.x and must
+/// survive every upgrade of it, of `sha2`, and of `base64`. Ed25519 is
+/// deterministic (RFC 8032), so there is no nonce to make this flaky: a
+/// changed value means the format changed, not that the test is unstable.
+#[test]
+fn signing_matches_the_published_wire_format() {
+    let signing_key = SigningKey::from_bytes(&[42u8; 32]);
+    let (sig_b64, key_id) = sign_bytes(b"hpm known-answer test vector", &signing_key);
+
+    assert_eq!(
+        sig_b64,
+        "a0Mrt4BcAL0ehUR6cfwL2Q7lEKLdzfP1RPH3Gl7GW45OHmubmgwQb7vlHWE5+f0wzeXfpRIG8z6mJSJ/Lf7hCQ=="
+    );
+    assert_eq!(key_id, "197f6b23e16c8532");
+}
