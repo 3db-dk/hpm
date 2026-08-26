@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-08-26
+
 ### Fixed
 
 - **A version released for more than one platform is no longer listed once per
@@ -34,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (library consumers only): `hpm_core::packer::SigningKey` is now
+  `ed25519_dalek` 3.0's type.** It is a public re-export, so anything
+  constructing a `SigningKey` to hand to `pack` must move to dalek 3 with us.
+  The CLI is unaffected — key files are PKCS#8 PEM either way, and existing
+  keys keep working untouched. This is what makes the release a minor rather
+  than a patch.
 - Dependencies refreshed. `ed25519-dalek` 2.x → 3.0, `base64` 0.22 → 0.23 and
   `petgraph` 0.7 → 0.8 are the semver-major moves; the rest is a lockfile
   refresh within existing ranges. Signatures are byte-identical across the
