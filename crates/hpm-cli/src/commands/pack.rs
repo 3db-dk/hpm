@@ -6,6 +6,48 @@ use std::path::{Path, PathBuf};
 
 use crate::console::Console;
 
+/// How a directory's entries match a filename we need by exact spelling.
+enum NameMatch {
+    /// An entry is spelled exactly as asked.
+    Exact,
+    /// No exact entry, but one differs only by case. Carries its real name.
+    CaseDiffers(String),
+    /// Nothing resembling the name is there.
+    Missing,
+}
+
+/// Look `name` up among `dir`'s entries by exact spelling.
+///
+/// `Path::exists` asks the filesystem, and APFS and NTFS answer
+/// case-insensitively: a repo holding `FLOPs.json` reports `flops.json` as
+/// present, while the same tree on Linux reports it absent. Anything keyed
+/// off that answer produces a different archive depending on who built it.
+/// Houdini looks the descriptor up by exact name and the archive entry is
+/// written under the exact name, so a case-folded match is a different file.
+/// Comparing directory entries gives the same answer everywhere.
+fn find_exact_entry(dir: &Path, name: &str) -> NameMatch {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return NameMatch::Missing;
+    };
+    let mut case_differs = None;
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(found) = file_name.to_str() else {
+            continue;
+        };
+        if found == name {
+            return NameMatch::Exact;
+        }
+        if case_differs.is_none() && found.eq_ignore_ascii_case(name) {
+            case_differs = Some(found.to_string());
+        }
+    }
+    match case_differs {
+        Some(found) => NameMatch::CaseDiffers(found),
+        None => NameMatch::Missing,
+    }
+}
+
 pub async fn execute(
     config: &Config,
     directory: Option<PathBuf>,
@@ -108,17 +150,30 @@ pub async fn execute(
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to generate the Houdini package.json for the archive")?;
     let hand_written = package_dir.join(&native_filename);
-    let json_bytes = if hand_written.exists() {
+    let json_bytes = match find_exact_entry(&package_dir, &native_filename) {
         // User has a hand-written file; ship it verbatim, don't overwrite
-        std::fs::read(&hand_written).with_context(|| {
+        NameMatch::Exact => std::fs::read(&hand_written).with_context(|| {
             format!(
                 "Failed to read hand-written Houdini package json {}",
                 hand_written.display()
             )
-        })?
-    } else {
-        serde_json::to_vec_pretty(&native_pkg)
-            .context("Failed to serialize Houdini native package JSON")?
+        })?,
+        // A file whose name differs only by case is not the descriptor
+        // Houdini will look for, so it cannot be shipped as one — but the
+        // author plainly meant it to be used, and silently generating over
+        // it would drop whatever it declares without saying so.
+        NameMatch::CaseDiffers(found) => {
+            console.warn(format!(
+                "Ignoring {found}: the bundled Houdini descriptor must be named exactly \
+                 {native_filename} (after the package slug), so {found} is a different file. \
+                 Generating the descriptor from hpm.toml instead — rename it to {native_filename} \
+                 to ship it verbatim."
+            ));
+            serde_json::to_vec_pretty(&native_pkg)
+                .context("Failed to serialize Houdini native package JSON")?
+        }
+        NameMatch::Missing => serde_json::to_vec_pretty(&native_pkg)
+            .context("Failed to serialize Houdini native package JSON")?,
     };
     let inject_files: Vec<(String, Vec<u8>)> = vec![(native_filename, json_bytes)];
     let content_prefix = manifest.package.slug().to_string();
@@ -236,4 +291,50 @@ pub async fn execute(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: the bundled descriptor was chosen with `Path::exists`,
+    /// which APFS and NTFS answer case-insensitively. A repo holding
+    /// `FLOPs.json` shipped that file as the root `flops.json` — hardcoded
+    /// author paths and all — when packed on macOS or Windows, and shipped
+    /// the generated descriptor when packed on Linux. It also bypassed
+    /// `--sidefx`, since a hand-written file is shipped without
+    /// normalization, so the flag silently did nothing on exactly the
+    /// machines most authors publish from.
+    #[test]
+    fn exact_entry_lookup_does_not_fold_case() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("FLOPs.json"), "{}").unwrap();
+
+        // The filesystem under this test may well answer `exists` for the
+        // lowercase spelling; the lookup must not.
+        match find_exact_entry(dir.path(), "flops.json") {
+            NameMatch::CaseDiffers(found) => assert_eq!(found, "FLOPs.json"),
+            NameMatch::Exact => panic!("case-folded match reported as exact"),
+            NameMatch::Missing => panic!("the case-differing file should be reported"),
+        }
+
+        assert!(matches!(
+            find_exact_entry(dir.path(), "FLOPs.json"),
+            NameMatch::Exact
+        ));
+        assert!(matches!(
+            find_exact_entry(dir.path(), "README.md"),
+            NameMatch::Missing
+        ));
+    }
+
+    #[test]
+    fn exact_entry_lookup_handles_a_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let absent = dir.path().join("nope");
+        assert!(matches!(
+            find_exact_entry(&absent, "README.md"),
+            NameMatch::Missing
+        ));
+    }
 }

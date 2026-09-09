@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The bundled Houdini descriptor is matched by exact filename.** `hpm pack`
+  ships a hand-written `{slug}.json` verbatim instead of generating one, and
+  chose between them with `Path::exists` — which APFS and NTFS answer
+  case-insensitively. A package holding `FLOPs.json` for slug `flops`
+  therefore shipped the author's file as the root descriptor when packed on
+  macOS or Windows (in one real case carrying a hardcoded `G:/` drive letter)
+  and shipped the generated descriptor when packed on Linux, so the same
+  source tree produced a different archive depending on who built it. It also
+  shipped that file twice, since the staging skip compares against the
+  injected name byte-for-byte. Lookups now compare directory entries, and a
+  file differing only by case is reported and skipped rather than silently
+  used.
 - **`hpm check` recognises limited-commercial and non-commercial digital
   assets.** The `otls` scan accepted only `.hda` and `.otl`, so a package
   whose operators are all `.hdalc` was warned as containing no assets at all.
