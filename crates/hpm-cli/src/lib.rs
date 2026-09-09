@@ -250,6 +250,13 @@ pub enum Commands {
         /// produced archive (default: warn only).
         #[arg(long)]
         verify_assets: bool,
+        /// Emit the bundled `{slug}.json` in the form SideFX's hpackage
+        /// repository accepts, so the archive can be uploaded as packed
+        /// instead of being rewritten and re-zipped (which would invalidate
+        /// this archive's checksum and signature). Fails the pack if
+        /// `[compat].houdini` or the version cannot be expressed there.
+        #[arg(long)]
+        sidefx: bool,
     },
     /// Run security audit on dependencies
     Audit {
@@ -570,6 +577,7 @@ async fn run_command(
             json,
             platform,
             verify_assets,
+            sidefx,
         } => {
             let config = load_cli_config()?;
             // `--json` and the global `--output json*` are equivalent here:
@@ -577,12 +585,15 @@ async fn run_command(
             let json = json || output.is_json();
             commands::pack::execute(
                 &config,
-                directory,
-                key,
-                pack_output,
-                json,
-                platform,
-                verify_assets,
+                commands::pack::PackOptions {
+                    directory,
+                    key,
+                    output: pack_output,
+                    json,
+                    platform,
+                    verify_assets,
+                    sidefx,
+                },
                 console,
             )
             .await

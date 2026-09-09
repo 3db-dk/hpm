@@ -606,6 +606,81 @@ dependency before Houdini starts.
 | `--json` | Emit the result as JSON (useful in CI). |
 | `--platform <id>` | Override host-platform detection. Valid: `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, `windows-aarch64`, `universal`. Only legal when `[compat].platforms` is declared. |
 | `--verify-assets` | Fail the pack (and delete the archive) if any `[[operators]]` `source` is missing from the produced archive, instead of just warning. |
+| `--sidefx` | Shape the bundled `{slug}.json` for SideFX's hpackage repository, so the archive can be uploaded exactly as packed. Fails the pack if the manifest declares something hpackage cannot represent, or if `README.md` is missing. |
+
+**Packing for SideFX's hpackage repository**
+
+SideFX validates the root `{slug}.json` when an archive is uploaded to its
+hpackage repository, and it is stricter than Houdini itself. A publisher that
+rewrites the json to satisfy it has to re-zip, which invalidates the checksum
+and signature `hpm pack` just reported. `--sidefx` emits the accepted form
+directly, so the packed bytes are the uploaded bytes.
+
+It changes two things, both confined to that json:
+
+- `hpackage.version` drops trailing zero segments while more than two remain,
+  so `0.1.0` becomes `0.1`. That is also the version SideFX puts in the served
+  archive's URL.
+- Every `>=`/`<=` operand in the `enable` expression becomes `major.minor`.
+  A single segment is padded (`21` to `21.0`), and a build segment is kept only
+  when it is zero, since `21.0.0` means the same range as `21.0`.
+
+The pack fails rather than emit something whose meaning changed:
+
+- A bound with a real build number, such as `>=20.5.445`, has no hpackage
+  form. Truncating it to `>=20.5` would enable the package on builds
+  `[compat].houdini` excludes, and the same expression ships to hpm-managed
+  installs, so the widening would not stay on the SideFX side. Declare a
+  two-segment bound if that is what you mean.
+- A missing `[compat].houdini`, or a range compiling only to `<`, `>`, `==`
+  or `!=`, leaves SideFX no version to read — it looks only at `>=` and `<=`
+  clauses — and it refuses the upload without saying why. Express the lower
+  bound with `>=`.
+- A **bounded** range compiles to more than one clause, and hpackage matches
+  the whole `enable` value against a single one. `>=21, <23` is refused, and
+  so is the `^21` shorthand, which expands to a lower *and* an upper bound.
+
+**Why a bounded range cannot be published there**
+
+SideFX accepts one `enable` clause, so the natural repair is to split the
+range into one object key per clause — which is also what hpackage's own
+documentation suggests. Do not. Houdini reads an object `enable` as a
+*conditional map*, not a conjunction: every key whose expression matches
+contributes its boolean, and when no key matches Houdini logs `Unsupported
+value for enable` and leaves the package **enabled**.
+
+Measured with `hconfig` on 21.0.729 and 22.0.368. Against a range the running
+Houdini sits above, the object form loads the package and appends its `hpath`
+to `HOUDINI_PATH`; against one it sits below, it loads with the warning. A
+single-key object behaves the same way, so there is no safe subset. The
+equivalent string form was correctly disabled in every case.
+
+So the multi-clause string Houdini honours is exactly the one hpackage cannot
+read, and the form hpackage can read is not a gate. To publish to SideFX,
+declare a single lower bound such as `>=21.0`. To keep an upper bound, host
+the archive somewhere else — the range is unaffected there.
+
+`--sidefx` also requires a `README.md` in the package directory, spelled
+exactly that way. hpackage's uploader reads it and sends its text as the
+published description, and refuses when it is absent or still holds the
+placeholder its own scaffold writes. hpm's ordinary README check is looser —
+it accepts `README.txt` and a bare `README`, and only warns — so a package can
+pass `hpm check` and still be refused on upload.
+
+**The bundled descriptor is matched by exact name**
+
+If the package directory holds a file named exactly `{slug}.json`, `hpm pack`
+ships it verbatim instead of generating one. The match is on exact spelling,
+compared against the directory's entries rather than asked of the filesystem:
+macOS and Windows answer `exists` case-insensitively, so a repo holding
+`FLOPs.json` would otherwise ship that file as `flops.json` when packed there
+and the generated descriptor when packed on Linux — the same source tree
+producing different archives depending on who built it. A file differing only
+by case is reported and skipped, and the descriptor is generated.
+
+The flag does not affect an `hpm install`: the extractor skips this file and
+generates its own package json. It matters to a manual unzip into a Houdini
+packages directory, and to SideFX's uploader.
 
 **Asset index in `--json` output**
 

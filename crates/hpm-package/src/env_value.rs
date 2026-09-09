@@ -318,6 +318,42 @@ impl HoudiniRange {
         compile_houdini_req(&self.0).expect("HoudiniRange validated at parse time")
     }
 
+    /// The `enable` expression in the form SideFX's hpackage repository
+    /// accepts, or an error naming the bound that has no representation
+    /// there.
+    ///
+    /// Equivalent to [`to_enable_expression`](Self::to_enable_expression)
+    /// with every operand rewritten by
+    /// [`normalize_hpackage_houdini_req`], plus two checks. The range must
+    /// compile to exactly one clause, because hpackage matches the whole
+    /// `enable` value rather than searching it — so a bounded range is
+    /// refused here rather than at upload. And that clause must be `>=` or
+    /// `<=`, since a range compiling only to `<`, `>`, `==` or `!=` reads to
+    /// hpackage as a package declaring no Houdini version at all.
+    ///
+    /// Splitting a bounded range into one object key per clause is what the
+    /// shape of hpackage's validator invites, and it is a trap: Houdini
+    /// reads an object `enable` as a conditional map, not a conjunction, and
+    /// an object whose keys do not all match is not gated at all. That holds
+    /// for a single-key object too, so there is no safe subset.
+    pub fn to_enable_expression_hpackage(&self) -> Result<String, ExpressionError> {
+        let normalized = normalize_hpackage_houdini_req(&self.0)?;
+        let atoms = houdini_req_atoms(&normalized)?;
+        // hpackage matches the whole `enable` value against one clause, so a
+        // bounded range has no form it can read — and the object form that
+        // looks like the repair silently ungates the package in Houdini.
+        if atoms.len() > 1 {
+            return Err(ExpressionError::HpackageMultipleClauses {
+                req: self.0.clone(),
+                count: atoms.len(),
+            });
+        }
+        if !atoms.iter().any(|atom| matches!(atom.op, ">=" | "<=")) {
+            return Err(ExpressionError::HpackageNoBound(self.0.clone()));
+        }
+        compile_houdini_req(&normalized)
+    }
+
     /// Lower bound of the range, if any clause implies one. See
     /// [`houdini_req_lower_bound`] for the matrix.
     pub fn lower_bound(&self) -> Option<String> {
@@ -484,6 +520,67 @@ pub fn compile_houdini_req(req: &str) -> Result<String, ExpressionError> {
     }
 }
 
+/// Rewrite every version operand in a Houdini requirement to the
+/// `major.minor` shape SideFX's hpackage repository accepts.
+///
+/// hpackage extracts a package's Houdini version by regex-matching
+/// `houdini_version (<=|>=) '(.+?)'` in the `enable` expression and requires
+/// the operand to have exactly two parts after its own trailing-zero
+/// trimming. A one-segment bound is padded (`21` becomes `21.0`); a
+/// three-segment bound is accepted only when the build is zero, since
+/// `21.0.0` trims back to `21.0` and means the same thing.
+///
+/// A non-zero build segment is refused rather than truncated. `>=20.5.445`
+/// names a point *inside* the 20.5 line, so rewriting it to `>=20.5` would
+/// quietly enable the package on builds it excludes — and the same
+/// `enable` string ships to hpm-managed installs, so the widening would not
+/// stay on the SideFX side.
+///
+/// Operator structure is preserved: only the operands change, so the
+/// compiled expression is the one [`compile_houdini_req`] would produce for
+/// the rewritten range.
+pub fn normalize_hpackage_houdini_req(req: &str) -> Result<String, ExpressionError> {
+    let trimmed = req.trim();
+    if trimmed.is_empty() {
+        return Err(ExpressionError::InvalidHoudiniReq(req.to_string()));
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for raw_part in trimmed.split(',') {
+        let part = raw_part.trim();
+        if part.is_empty() {
+            return Err(ExpressionError::InvalidHoudiniReq(req.to_string()));
+        }
+        // The operator is the leading run of comparator characters; whatever
+        // follows is the version operand. `compile_houdini_req` validates the
+        // operator itself when the rewritten range is compiled.
+        let op_len = part
+            .find(|c: char| !matches!(c, '<' | '>' | '=' | '^' | '~'))
+            .unwrap_or(part.len());
+        let (op, version) = part.split_at(op_len);
+        let normalized = normalize_hpackage_operand(version.trim(), req)?;
+        parts.push(format!("{}{}", op, normalized));
+    }
+    Ok(parts.join(", "))
+}
+
+fn normalize_hpackage_operand(v: &str, req: &str) -> Result<String, ExpressionError> {
+    let parts = parse_simple_version(v)
+        .ok_or_else(|| ExpressionError::InvalidHoudiniReq(req.to_string()))?;
+    match parts.as_slice() {
+        [major] => Ok(format!("{}.0", major)),
+        [major, minor] => Ok(format!("{}.{}", major, minor)),
+        // `parse_simple_version` caps at three segments, so the tail is one
+        // number: keep the bound only when trimming it changes nothing.
+        [major, minor, tail @ ..] if tail.iter().all(|n| *n == 0) => {
+            Ok(format!("{}.{}", major, minor))
+        }
+        _ => Err(ExpressionError::HpackageOperand {
+            req: req.to_string(),
+            operand: v.to_string(),
+        }),
+    }
+}
+
 fn expand_comparator(part: &str) -> Option<String> {
     let atoms = comparator_atoms(part)?;
     Some(
@@ -619,6 +716,31 @@ pub enum ExpressionError {
     InvalidHoudiniReq(String),
     #[error("invalid python identifier: {0}")]
     InvalidPython(String),
+    #[error(
+        "houdini version requirement `{req}` cannot be published to SideFX's hpackage \
+         repository: the bound `{operand}` carries a non-zero build segment, and hpackage \
+         reads only `major.minor`. Dropping the build would silently widen the range, so \
+         write a two-segment bound in `[compat].houdini` if that is what you mean."
+    )]
+    HpackageOperand { req: String, operand: String },
+    #[error(
+        "houdini version requirement `{0}` leaves SideFX's hpackage repository no bound it \
+         can read: it takes a package's Houdini version from `>=` and `<=` clauses only, and \
+         this range compiles to neither. Express the lower bound with `>=`."
+    )]
+    HpackageNoBound(String),
+    #[error(
+        "houdini version requirement `{req}` compiles to {count} clauses, and SideFX's \
+         hpackage repository accepts an `enable` of exactly one — it matches the whole value \
+         against a single `houdini_version >= 'major.minor'` clause. There is no way to keep \
+         the upper bound: the multi-clause string Houdini honours is the one hpackage cannot \
+         read, and the per-clause object form hpackage's own docs suggest is not a narrower \
+         gate but no gate at all (Houdini treats it as a conditional map, loading the package \
+         when a key matches and warning `Unsupported value for enable` when none does — \
+         measured on 21.0.729 and 22.0.368). Declare a single lower bound such as `>=21.0` to \
+         publish there, or host the archive elsewhere and keep the bounded range."
+    )]
+    HpackageMultipleClauses { req: String, count: usize },
 }
 
 /// Lower a `Conditional` env value into Houdini's `[{ "<expr>": "<val>" }, …]`

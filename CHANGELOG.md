@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`hpm pack --sidefx` emits the bundled `{slug}.json` in the form SideFX's
+  hpackage repository accepts**, so an archive can be uploaded exactly as
+  packed. Publishing there previously meant rewriting that json and
+  re-zipping, which invalidated the SHA-256 and the Ed25519 signature `hpm
+  pack` had just reported. The flag trims `hpackage.version` the way SideFX's
+  `Version` does (`0.1.0` becomes `0.1`, which is also the version in the
+  served archive's URL) and rewrites the `enable` expression's version
+  operands to `major.minor`, padding a one-segment bound and keeping a
+  three-segment one only when its build is zero. It changes nothing about an
+  `hpm install`: the extractor skips this file and generates its own.
+- **`--sidefx` refuses rather than emit a descriptor whose meaning changed.**
+  A build-level bound such as `>=20.5.445` has no two-segment form, and
+  truncating it to `>=20.5` would enable the package on builds
+  `[compat].houdini` excludes — on hpm-managed installs too, since the same
+  expression ships to both. A *bounded* range is refused outright, `^21`
+  included: hpackage matches the whole `enable` value against one clause, and
+  the per-clause object form its own docstring suggests is not a narrower gate
+  but no gate at all. Houdini reads an object `enable` as a conditional map,
+  loading the package when any key matches and warning `Unsupported value for
+  enable` when none does, single-key objects included — measured with
+  `hconfig` on 21.0.729 and 22.0.368. A missing `[compat].houdini`, a range
+  compiling only to `<`, `>`, `==` or `!=`, and a missing or placeholder-only
+  `README.md` are refused for the same reason: hpackage rejects each on
+  upload with a message that does not name the cause.
+
 ### Fixed
 
 - **The bundled Houdini descriptor is matched by exact filename.** `hpm pack`
@@ -18,9 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and shipped the generated descriptor when packed on Linux, so the same
   source tree produced a different archive depending on who built it. It also
   shipped that file twice, since the staging skip compares against the
-  injected name byte-for-byte. Lookups now compare directory entries, and a
-  file differing only by case is reported and skipped rather than silently
-  used.
+  injected name byte-for-byte, and it bypassed `--sidefx` entirely, because a
+  hand-written file is shipped without normalization. Lookups now compare
+  directory entries, and a file differing only by case is reported and
+  skipped rather than silently used.
 - **`hpm check` recognises limited-commercial and non-commercial digital
   assets.** The `otls` scan accepted only `.hda` and `.otl`, so a package
   whose operators are all `.hdalc` was warned as containing no assets at all.

@@ -192,6 +192,55 @@ pub struct HpackageMetadata {
     pub version: String,
 }
 
+/// Which consumer the bundled `{slug}.json` is generated for.
+///
+/// The file is inert on an hpm install — the extractor skips it, and nothing
+/// reads it back — so the target only decides whether the emitted values are
+/// additionally shaped to survive a third party's validator.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativePackageTarget {
+    /// Houdini's own package system, reached by unzipping the archive into a
+    /// packages directory. Values are emitted as the manifest states them.
+    #[default]
+    Generic,
+    /// SideFX's hpackage repository, which validates the json on upload and
+    /// rejects what it cannot parse. Normalizes `hpackage.version` and the
+    /// `enable` expression's version operands, and fails rather than emit a
+    /// value whose meaning would change in the process.
+    SideFxHpackage,
+}
+
+/// Trim a package version the way SideFX's hpackage `Version` does: drop
+/// trailing zero segments while more than two remain.
+///
+/// `0.1.0` becomes `0.1`, which is also the version that appears in the
+/// served archive's URL. `1.2.3` is already minimal and passes through.
+///
+/// hpackage versions are dot-separated numbers, so a pre-release or
+/// build-metadata semver has no representation and is refused instead of
+/// being mangled into one.
+pub fn normalize_hpackage_version(version: &str) -> Result<String, String> {
+    let mut parts: Vec<u64> = Vec::new();
+    for segment in version.split('.') {
+        let number = segment.parse::<u64>().map_err(|_| {
+            format!(
+                "package version `{version}` cannot be published to SideFX's hpackage \
+                 repository: it accepts dot-separated numbers only, so a pre-release or \
+                 build-metadata version has no form there"
+            )
+        })?;
+        parts.push(number);
+    }
+    while parts.len() > 2 && parts.last() == Some(&0) {
+        parts.pop();
+    }
+    Ok(parts
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join("."))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

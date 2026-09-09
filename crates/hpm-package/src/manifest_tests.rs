@@ -1707,3 +1707,82 @@ fn env_pass_through_preserves_houdini_vars_in_flat_value() {
         _ => panic!("expected Detailed flat value"),
     }
 }
+
+/// `hpackage.version` follows the same `Version` trimming as the enable
+/// operands: trailing zeros go while more than two parts remain. `0.1.0`
+/// becoming `0.1` is also what makes the version match the served archive's
+/// URL, which SideFX builds from the trimmed form.
+#[test]
+fn generate_houdini_native_package_sidefx_trims_the_version() {
+    for (declared, expected) in [
+        ("0.1.0", "0.1"),
+        ("1.0.0", "1.0"),
+        ("1.2.3", "1.2.3"),
+        ("1.0", "1.0"),
+    ] {
+        assert_eq!(
+            normalize_hpackage_version(declared).unwrap(),
+            expected,
+            "version {declared}"
+        );
+    }
+
+    // A pre-release has no hpackage representation, so it fails rather than
+    // being silently reshaped into one.
+    assert!(normalize_hpackage_version("1.0.0-rc.1").is_err());
+}
+
+#[test]
+fn generate_houdini_native_package_sidefx_normalizes_the_json() {
+    let mut manifest = make_manifest();
+    manifest.package.version = "0.1.0".to_string();
+    manifest.compat.houdini = Some(HoudiniRange::parse(">=21").unwrap());
+
+    let (filename, generic) = manifest.generate_houdini_native_package().unwrap();
+    let (sidefx_filename, sidefx) = manifest
+        .generate_houdini_native_package_for(NativePackageTarget::SideFxHpackage)
+        .unwrap();
+
+    // The filename is the package slug either way: only values change.
+    assert_eq!(filename, sidefx_filename);
+
+    assert_eq!(generic.hpackage.version, "0.1.0");
+    assert_eq!(sidefx.hpackage.version, "0.1");
+    assert_eq!(generic.enable.unwrap(), "houdini_version >= '21'");
+    assert_eq!(sidefx.enable.unwrap(), "houdini_version >= '21.0'");
+}
+
+/// hpackage refuses an upload whose json declares no Houdini version, and
+/// its message does not say why. Failing the pack names the cause instead.
+#[test]
+fn generate_houdini_native_package_sidefx_requires_declared_houdini() {
+    let mut manifest = make_manifest();
+    manifest.compat.houdini = None;
+
+    // The generic json simply omits `enable`.
+    let (_, generic) = manifest.generate_houdini_native_package().unwrap();
+    assert!(generic.enable.is_none());
+
+    let err = manifest
+        .generate_houdini_native_package_for(NativePackageTarget::SideFxHpackage)
+        .unwrap_err();
+    assert!(
+        err.contains("[compat].houdini"),
+        "error should name the missing field, got: {err}"
+    );
+}
+
+#[test]
+fn generate_houdini_native_package_sidefx_rejects_a_build_level_bound() {
+    let mut manifest = make_manifest();
+    manifest.compat.houdini = Some(HoudiniRange::parse(">=20.5.445, <22").unwrap());
+
+    assert!(manifest.generate_houdini_native_package().is_ok());
+    let err = manifest
+        .generate_houdini_native_package_for(NativePackageTarget::SideFxHpackage)
+        .unwrap_err();
+    assert!(
+        err.contains("20.5.445"),
+        "error should name the bound it cannot express, got: {err}"
+    );
+}

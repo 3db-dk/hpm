@@ -85,6 +85,7 @@ codes and help hints.
 | `OperatorDecl`, `OperatorKind`, `OperatorSource`, `SourceResolution` | `[[operators]]` entries — the operators (node types) a package bundles, declared by the author so `hpm pack` can emit a searchable asset index. `kind` (`Hda`/`Dso`), `type_name`, and `category` are required; `label`, `tab_submenu`, `icon`, and `source` are optional. `OperatorSource` is either a single archive path or a per-platform table; `OperatorDecl::resolved_source(platform)` resolves it to a `SourceResolution` (`Path` / `Unspecified` / `NotForPlatform`). |
 | `PackageTemplate` | Scaffolding for `hpm init` (standard and `--bare`). |
 | `HoudiniPackage`, `HoudiniNativePackage`, `HoudiniEnvValue` | Houdini `package.json` output types. |
+| `NativePackageTarget`, `normalize_hpackage_version` | Which consumer the bundled `{slug}.json` is generated for. `generate_houdini_native_package_for(SideFxHpackage)` (behind `hpm pack --sidefx`) emits the form SideFX's hpackage repository accepts — the trimmed version and `major.minor` `enable` operands — and errors instead of emitting a bound whose meaning the rewrite would change. `Generic` is what `generate_houdini_native_package` emits. |
 
 ### hpm-assets
 

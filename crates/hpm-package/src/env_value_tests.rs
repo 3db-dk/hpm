@@ -454,3 +454,107 @@ fn matches_version_handles_plain_major_ranges() {
     assert!(!range.matches_version(22, 0, None));
     assert!(!range.matches_version(20, 5, None));
 }
+
+/// The four operand shapes SideFX's hpackage repository distinguishes.
+///
+/// `_extract_houdini_major_minor_from_enable_value` (hpackage 0.5.6
+/// `core.py`) builds a `Version` from the operand and requires exactly two
+/// parts, and `Version::__init__` trims trailing zeros only while more than
+/// two remain. So `21.0.0` is accepted and `20.5.445` is not — there is no
+/// truncation path upstream, and a clause it rejects is dropped with a
+/// warning rather than repaired.
+#[test]
+fn hpackage_operands_follow_the_upstream_version_rule() {
+    // One segment: padded, since hpackage rejects a one-part version.
+    assert_eq!(normalize_hpackage_houdini_req(">=21").unwrap(), ">=21.0");
+    // Two segments: already the accepted shape.
+    assert_eq!(normalize_hpackage_houdini_req(">=21.0").unwrap(), ">=21.0");
+    // Three segments with a zero build: trims back to the same range.
+    assert_eq!(
+        normalize_hpackage_houdini_req(">=21.0.0").unwrap(),
+        ">=21.0"
+    );
+    // Three segments with a real build: no representation, so no rewrite.
+    let err = normalize_hpackage_houdini_req(">=20.5.445").unwrap_err();
+    assert!(
+        matches!(&err, ExpressionError::HpackageOperand { operand, .. } if operand == "20.5.445"),
+        "expected the operand to be named, got {err}"
+    );
+}
+
+/// Truncating `>=20.5.445` to `>=20.5` would enable the package on 20.5
+/// builds the manifest excludes, and the same `enable` string reaches
+/// hpm-managed installs — so the widening would not stay on the SideFX side.
+#[test]
+fn hpackage_normalization_refuses_to_widen_a_build_level_bound() {
+    let range = HoudiniRange::parse(">=20.5.445, <22").unwrap();
+    assert!(range.to_enable_expression_hpackage().is_err());
+    // The unnormalized expression is unaffected: this is an upload
+    // constraint, not a change to what hpm emits by default.
+    assert_eq!(
+        range.to_enable_expression(),
+        "(houdini_version >= '20.5.445' and houdini_version < '22')"
+    );
+}
+
+/// hpackage matches the whole `enable` value against one clause, so a
+/// bounded range cannot be published there with its upper bound intact.
+///
+/// The tempting repair is one object key per clause, which is also what
+/// hpackage's own docs suggest. Houdini does not honour it: an object
+/// `enable` is a conditional map, so a key that matches loads the package
+/// regardless of the others, and an object where none match draws
+/// `Unsupported value for enable` and loads it anyway. Measured with
+/// hconfig on 22.0.368, single-key objects included — there is no safe
+/// subset. So the refusal here is the only honest answer.
+#[test]
+fn hpackage_refuses_a_bounded_range() {
+    for req in [">=21, <23", "^21", "~20.5", ">=20.5, <22"] {
+        let range = HoudiniRange::parse(req).unwrap();
+        let err = range.to_enable_expression_hpackage().unwrap_err();
+        assert!(
+            matches!(&err, ExpressionError::HpackageMultipleClauses { .. }),
+            "range {req} should be refused as multi-clause, got {err}"
+        );
+        // Unaffected by default: this is an upload constraint, not a change
+        // to what hpm emits for Houdini.
+        assert!(range.to_enable_expression().contains(" and "));
+    }
+}
+
+/// The one shape hpackage accepts: a single lower bound, two segments.
+#[test]
+fn hpackage_accepts_a_single_lower_bound() {
+    for (req, expected) in [
+        (">=21", "houdini_version >= '21.0'"),
+        (">=21.0", "houdini_version >= '21.0'"),
+        (">=21.0.0", "houdini_version >= '21.0'"),
+        (">=20.5", "houdini_version >= '20.5'"),
+    ] {
+        let range = HoudiniRange::parse(req).unwrap();
+        assert_eq!(
+            range.to_enable_expression_hpackage().unwrap(),
+            expected,
+            "range {req}"
+        );
+    }
+}
+
+/// hpackage reads a package's Houdini version out of `>=` and `<=` clauses
+/// only. A range compiling to neither leaves it with no version at all, and
+/// it refuses the upload with a message that does not name the cause — so
+/// the pack fails locally instead.
+#[test]
+fn hpackage_normalization_requires_a_readable_bound() {
+    let range = HoudiniRange::parse("==21.0").unwrap();
+    assert!(matches!(
+        range.to_enable_expression_hpackage(),
+        Err(ExpressionError::HpackageNoBound(_))
+    ));
+
+    let strictly_greater = HoudiniRange::parse(">21.0").unwrap();
+    assert!(matches!(
+        strictly_greater.to_enable_expression_hpackage(),
+        Err(ExpressionError::HpackageNoBound(_))
+    ));
+}

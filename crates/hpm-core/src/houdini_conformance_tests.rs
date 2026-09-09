@@ -498,10 +498,30 @@ fn houdini_set_overwrites_path_registered_ocio_seed() {
 /// accepts an *object* form, but with conditional-map semantics rather than
 /// conjunction: every key whose expression matches contributes its boolean,
 /// and when no key matches Houdini logs `Unsupported value for enable` and
-/// leaves the package **enabled**. Re-encoding a range as
-/// `{">= '21.0'": true, "< '22.0'": true}` therefore keeps the lower bound
-/// but silently drops the upper one — a package would load on every Houdini
-/// above its declared maximum. Verified on 21.0.729.
+/// leaves the package **enabled**. Re-encoding a range as one key per
+/// conjunct therefore does not gate at all. Re-verified directly on
+/// 22.0.368 with `hconfig`, against a two-key object using the full clause
+/// text (`{"houdini_version >= '21.0'": true, "houdini_version < '22.0'":
+/// true}`) — a stronger result than the 21.0.729 note it replaces, which
+/// recorded only the upper bound being dropped:
+///
+/// - Houdini *above* the range: the `>=` key matches, the package loads,
+///   and its `hpath` is appended to `HOUDINI_PATH`. Upper bound gone.
+/// - Houdini *below* the range: neither key matches, Houdini warns
+///   `Unsupported value for enable`, and the package loads anyway. Lower
+///   bound gone too.
+/// - A *single-key* object below its bound
+///   (`{"houdini_version >= '23.0'": true}`) behaves the same way: the same
+///   warning, and the package loads. So there is no safe subset of the
+///   object form — the rule is not "avoid multiple keys", it is "never emit
+///   an object".
+///
+/// The equivalent string form was disabled in every case in the same run,
+/// against an unconditional control package proving the directory was
+/// scanned. So the object form is not a narrower gate, it is no gate —
+/// which is why the emitted form stays a string even when a third-party
+/// validator would prefer one clause per key, and why `hpm pack --sidefx`
+/// refuses a bounded range outright rather than reshaping it.
 ///
 /// This test is version-agnostic: it pins that an in-range package loads, an
 /// out-of-range-below package does not (lower bound honored), and an

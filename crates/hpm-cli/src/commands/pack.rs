@@ -1,10 +1,33 @@
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
 use hpm_core::packer;
-use hpm_package::{PackageManifest, Platform};
+use hpm_package::{NativePackageTarget, PackageManifest, Platform};
 use std::path::{Path, PathBuf};
 
 use crate::console::Console;
+
+/// Inputs to one `hpm pack` run.
+pub struct PackOptions {
+    /// Package directory (the one holding `hpm.toml`). None = cwd.
+    pub directory: Option<PathBuf>,
+    /// Ed25519 signing key (PKCS#8 PEM), overriding config and
+    /// `HPM_SIGNING_KEY`. None falls back to those.
+    pub key: Option<PathBuf>,
+    /// Where to write the archive. None = the package directory.
+    pub output: Option<PathBuf>,
+    /// Emit the single-line JSON payload CI consumes instead of prose.
+    pub json: bool,
+    /// Target platform; defaults to host when `[compat].platforms` is declared.
+    pub platform: Option<String>,
+    /// Treat a declared `[[operators]]` `source` missing from the archive as
+    /// fatal rather than a warning.
+    pub verify_assets: bool,
+    /// Shape the bundled `{slug}.json` for SideFX's hpackage repository, so
+    /// the archive can be uploaded as packed rather than rewritten and
+    /// re-zipped. Fails the pack when the manifest declares something
+    /// hpackage cannot represent.
+    pub sidefx: bool,
+}
 
 /// How a directory's entries match a filename we need by exact spelling.
 enum NameMatch {
@@ -48,16 +71,17 @@ fn find_exact_entry(dir: &Path, name: &str) -> NameMatch {
     }
 }
 
-pub async fn execute(
-    config: &Config,
-    directory: Option<PathBuf>,
-    key: Option<PathBuf>,
-    output: Option<PathBuf>,
-    json: bool,
-    platform_arg: Option<String>,
-    verify_assets: bool,
-    console: &mut Console,
-) -> Result<()> {
+pub async fn execute(config: &Config, options: PackOptions, console: &mut Console) -> Result<()> {
+    let PackOptions {
+        directory,
+        key,
+        output,
+        json,
+        platform: platform_arg,
+        verify_assets,
+        sidefx,
+    } = options;
+
     let package_dir = match directory {
         Some(dir) => dir,
         None => std::env::current_dir().context("Failed to get current directory")?,
@@ -145,8 +169,50 @@ pub async fn execute(
     // straight into a packages directory must yield `packages/{slug}.json` +
     // `packages/{slug}/...` for them to resolve. A hand-written file is
     // injected by content (create_archive skips the staged copy).
+    //
+    // `--sidefx` additionally shapes the generated json to what SideFX's
+    // hpackage repository accepts on upload, so the publisher can ship the
+    // archive `pack` produced rather than rewriting the json and re-zipping —
+    // a repack invalidates both the checksum and the signature reported
+    // below. The normalization is confined to this file, which hpm's own
+    // installer skips, and refuses any rewrite that would change what the
+    // manifest declared.
+    let target = if sidefx {
+        // hpackage's uploader reads `{package_dir}/README.md` and sends its
+        // text as the package description; a missing file raises rather than
+        // warning, and the name is literal. hpm's own README check accepts
+        // `README.txt` and a bare `README` and only warns, so a package can
+        // satisfy `hpm check` and still be refused on upload.
+        match find_exact_entry(&package_dir, "README.md") {
+            NameMatch::Exact => {}
+            NameMatch::CaseDiffers(found) => bail!(
+                "SideFX's hpackage uploader reads `README.md` by that exact name and this \
+                 package has {found}. Rename it to README.md."
+            ),
+            NameMatch::Missing => bail!(
+                "SideFX's hpackage uploader requires a README.md in the package directory and \
+                 sends its text as the published description; it refuses the upload when the \
+                 file is absent. Add {}.",
+                package_dir.join("README.md").display()
+            ),
+        }
+        // The uploader also refuses a README still holding the placeholder
+        // its own scaffold writes.
+        let readme = std::fs::read_to_string(package_dir.join("README.md"))
+            .context("Failed to read README.md")?;
+        if readme.contains("<enter a one-line description") {
+            bail!(
+                "README.md still contains the placeholder line hpackage's scaffold writes \
+                 (`<enter a one-line description`), and its uploader refuses that. Write the \
+                 package description there."
+            );
+        }
+        NativePackageTarget::SideFxHpackage
+    } else {
+        NativePackageTarget::Generic
+    };
     let (native_filename, native_pkg) = manifest
-        .generate_houdini_native_package()
+        .generate_houdini_native_package_for(target)
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to generate the Houdini package.json for the archive")?;
     let hand_written = package_dir.join(&native_filename);

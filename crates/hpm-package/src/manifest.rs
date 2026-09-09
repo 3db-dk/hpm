@@ -43,7 +43,10 @@ use std::path::Path;
 
 use crate::dependency::DependencySpec;
 use crate::env_value::{EnvValue, ExpressionError, HoudiniRange};
-use crate::houdini::{HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata};
+use crate::houdini::{
+    HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata, NativePackageTarget,
+    normalize_hpackage_version,
+};
 use crate::package_path::PackagePath;
 use crate::platform::Platform;
 use crate::python::PythonDependencySpec;
@@ -465,6 +468,27 @@ impl PackageManifest {
     pub fn generate_houdini_native_package(
         &self,
     ) -> Result<(String, HoudiniNativePackage), String> {
+        self.generate_houdini_native_package_for(NativePackageTarget::Generic)
+    }
+
+    /// As [`generate_houdini_native_package`](Self::generate_houdini_native_package),
+    /// for a named consumer of the bundled json.
+    ///
+    /// [`NativePackageTarget::SideFxHpackage`] emits the file SideFX's
+    /// hpackage repository accepts, so a packed archive can be uploaded as
+    /// packed. Without it the desktop publisher has to rewrite the json and
+    /// re-zip, which invalidates the checksum and signature `hpm pack`
+    /// produced and puts a second zip writer in the release path.
+    ///
+    /// The normalization is safe for hpm's own install path because that
+    /// path never reads this file: the extractor recognizes the hpackage
+    /// layout and skips the root json. It is *not* unconditionally safe for
+    /// Houdini, which is why a bound that would change meaning fails the
+    /// generation instead of being rewritten.
+    pub fn generate_houdini_native_package_for(
+        &self,
+        target: NativePackageTarget,
+    ) -> Result<(String, HoudiniNativePackage), String> {
         let slug = self.package.slug().to_string();
 
         let pkg_root = format!("$HOUDINI_PACKAGE_PATH/{}", slug);
@@ -498,11 +522,29 @@ impl PackageManifest {
             env.push(env_map);
         }
 
-        let enable = self
-            .compat
-            .houdini
-            .as_ref()
-            .map(HoudiniRange::to_enable_expression);
+        let enable = match target {
+            NativePackageTarget::Generic => self
+                .compat
+                .houdini
+                .as_ref()
+                .map(HoudiniRange::to_enable_expression),
+            NativePackageTarget::SideFxHpackage => {
+                // hpackage refuses an upload whose json declares no Houdini
+                // version it can read, so an absent `[compat].houdini` is an
+                // error here rather than an omitted field.
+                let range = self.compat.houdini.as_ref().ok_or_else(|| {
+                    "publishing to SideFX's hpackage repository needs a declared Houdini \
+                     version: it reads the package's version from the `enable` expression, \
+                     and without `[compat].houdini` there is none to read"
+                        .to_string()
+                })?;
+                Some(
+                    range
+                        .to_enable_expression_hpackage()
+                        .map_err(|e| e.to_string())?,
+                )
+            }
+        };
 
         // Dependencies are advertised as `recommends`, never `requires`.
         //
@@ -549,7 +591,12 @@ impl PackageManifest {
             requires: None,
             recommends,
             hpackage: HpackageMetadata {
-                version: self.package.version.clone(),
+                version: match target {
+                    NativePackageTarget::Generic => self.package.version.clone(),
+                    NativePackageTarget::SideFxHpackage => {
+                        normalize_hpackage_version(&self.package.version)?
+                    }
+                },
             },
         };
 
