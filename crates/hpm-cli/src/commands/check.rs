@@ -190,6 +190,11 @@ async fn validate_project_structure(
     }
 }
 
+/// Digital-asset library extensions Houdini loads from an `otls` directory.
+/// `otl` is the historical spelling of `hda`; the `lc`/`nc` variants are the
+/// limited-commercial and non-commercial saves of the same format.
+const HDA_EXTENSIONS: [&str; 6] = ["hda", "otl", "hdalc", "otllc", "hdanc", "otlnc"];
+
 async fn validate_otls_directory(project_dir: &Path, result: &mut ValidationResult) {
     let otls_path = project_dir.join("otls");
 
@@ -199,7 +204,11 @@ async fn validate_otls_directory(project_dir: &Path, result: &mut ValidationResu
             for entry in entries.flatten() {
                 let path = entry.path();
                 if let Some(extension) = path.extension() {
-                    if extension == "hda" || extension == "otl" {
+                    // Houdini loads all six: the `lc` and `nc` suffixes are
+                    // limited-commercial and non-commercial assets, which are
+                    // real HDAs, just saved under a restricted license. See
+                    // <https://www.sidefx.com/docs/houdini/assets/install.html>.
+                    if HDA_EXTENSIONS.iter().any(|known| extension == *known) {
                         has_assets = true;
                         result.add_info(format!(
                             "[OK] Found Houdini asset: {}",
@@ -210,9 +219,14 @@ async fn validate_otls_directory(project_dir: &Path, result: &mut ValidationResu
             }
 
             if !has_assets {
-                result.add_warning(
-                    "otls directory exists but contains no .hda or .otl files".to_string(),
-                );
+                result.add_warning(format!(
+                    "otls directory exists but contains no digital assets ({})",
+                    HDA_EXTENSIONS
+                        .iter()
+                        .map(|e| format!(".{e}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
         }
         Err(e) => {

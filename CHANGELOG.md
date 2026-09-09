@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`hpm check` recognises limited-commercial and non-commercial digital
+  assets.** The `otls` scan accepted only `.hda` and `.otl`, so a package
+  whose operators are all `.hdalc` was warned as containing no assets at all.
+  All six extensions Houdini loads are now accepted — `.hda`, `.otl`,
+  `.hdalc`, `.otllc`, `.hdanc`, `.otlnc` — and the warning names them instead
+  of claiming only two exist. The `lc` and `nc` variants are ordinary HDAs
+  saved under a restricted license.
 - **Two doc comments described integrity checks hpm does not perform.** The
   archive extractor claimed archives are "checksum- and signature-verified"
   before extraction, and `RegistryEntry.sig` described the signature as
