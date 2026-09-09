@@ -376,8 +376,10 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
 ///
 /// This grants no privilege a well-formed archive couldn't claim for itself by
 /// declaring 0o755 — and hpm already runs `[scripts]` programs out of the
-/// installed tree. Archives are checksum- and signature-verified before they
-/// get here.
+/// installed tree. Archives are checksum-verified against the registry entry
+/// before they get here, when the entry carries a checksum; the Ed25519
+/// signature is *not* checked, because hpm does not verify signatures at all
+/// yet (see `docs/security.md`).
 ///
 /// The rule itself lives in [`crate::exec_mode`], which also applies it to
 /// trees installed before this extractor existed — those are never

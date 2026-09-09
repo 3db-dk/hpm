@@ -104,7 +104,11 @@ pub struct RegistryEntry {
     pub cksum: Option<String>,
     /// Download URL for the package archive
     pub dl: String,
-    /// Ed25519 signature of the checksum (prefixed with "ed25519:")
+    /// Ed25519 signature over the archive *bytes* — the same bytes `cksum`
+    /// hashes, not the checksum string — prefixed with "ed25519:". This is
+    /// what `packer::sign_archive` produces. Currently write-only: nothing on
+    /// the install path reads it, so a wrong or absent signature changes
+    /// nothing today.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sig: Option<String>,
     /// Key ID used for signing

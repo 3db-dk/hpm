@@ -83,7 +83,7 @@ does not block the install.
 
 `hpm pack` can sign the archive it produces with an Ed25519 key.
 
-> **hpm signs, but does not verify.** As of 0.29.2 signing is a
+> **hpm signs, but does not verify.** As of 0.32.0 signing is a
 > *produce-only* feature. `hpm` emits a signature and `keyId`, and the
 > registry entry carries `sig`/`kid` fields, but no hpm install path reads
 > or checks them — the only integrity check on download is the SHA-256

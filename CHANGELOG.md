@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two doc comments described integrity checks hpm does not perform.** The
+  archive extractor claimed archives are "checksum- and signature-verified"
+  before extraction, and `RegistryEntry.sig` described the signature as
+  covering the checksum rather than the archive bytes that `packer::sign_archive`
+  actually signs. Signature verification is still unimplemented; the comments
+  and the `docs/security.md` note now agree on that, re-verified at 0.32.0.
+
 ## [0.32.0] - 2026-08-26
 
 ### Fixed
