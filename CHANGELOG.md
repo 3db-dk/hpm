@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-09-22
+
 ### Fixed
 
 - **`hpm pack --sidefx` now checks the descriptor it ships, not just the one
