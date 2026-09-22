@@ -27,6 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drifting apart unnoticed. A `hpackage.version` SideFX will store
   differently is reported rather than refused: `0.1.0` uploads as `0.1`, and
   the served archive's URL uses the trimmed form.
+- **Forwarded `hpm run` arguments are quoted correctly on Windows.**
+  Per-argument quoting escaped embedded quotes but ignored the backslash rule
+  `CommandLineToArgvW` and the MSVC CRT parse `argv` with, where a run of
+  backslashes before a `"` is halved. A trailing separator — `hpm run x --
+  C:\out\` — came out as `"C:\out\"`, whose closing quote the child reads
+  as literal data, so the argument never terminated and swallowed the rest of
+  the command line; an argument already containing `\"` was escaped into a
+  sequence that ended the argument early instead. Arguments that worked
+  before are quoted byte-identically. One case has no fix at this layer and
+  is now documented rather than attempted: `cmd.exe` expands `%NAME%` inside
+  double quotes and its command-line parser, unlike a batch file's, offers no
+  way to suppress it. The Windows and POSIX quoting are also no longer behind
+  `#[cfg]` at their definition, so both are compiled and tested on every
+  host — the Windows path had not been built by CI on Linux or macOS at all.
 
 ## [0.33.0] - 2026-09-10
 

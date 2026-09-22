@@ -15,8 +15,20 @@
 //! script needs* and *what command line to run* (including per-arg quoting of
 //! forwarded args), while the [`ScriptSink`] owns *how to spawn* — `hpm run`
 //! shells out via `sh -c` / `cmd /S /C` and streams to the terminal, while an
-//! embedder may direct-spawn and stream to its own terminal widget and log.
-//! Each embedder wraps [`PreparedScript::command_line`] in its own shell.
+//! embedder may stream to its own terminal widget and log instead.
+//!
+//! A sink runs [`PreparedScript::command_line`] through a shell. That is the
+//! contract `[scripts]` publishes (see `docs/user-guide.md`, `hpm run`), so
+//! every `cmd` in every released package was written expecting shell
+//! semantics — globbing, `~`, word splitting, `$VAR` expanding to empty when
+//! unset. A sink that tokenizes the string and spawns argv directly is not
+//! implementing the same contract: it has to reimplement a shell, and every
+//! detail its dialect gets differently is a package that behaves one way
+//! under `hpm run` and another under that embedder. There is no structured
+//! form to hand out instead — `cmd` is a single string from the manifest down
+//! — so a sink that needs one is asking for a second dialect, not for one
+//! that already exists. Wrap the string in a shell, and suppress the console
+//! window on Windows with `CREATE_NO_WINDOW` if that is the concern.
 
 use crate::project::{PackageRunEnv, ProjectError};
 use crate::python::PythonError;
@@ -385,21 +397,76 @@ fn build_command_string(cmd: &str, extra_args: &[String]) -> String {
 /// Minimal POSIX/cmd shell quoting for trailing-arg pass-through.
 ///
 /// Not a general-purpose shell-quoter — `hpm run` forwards CLI args, which
-/// don't contain newlines or NULs in practice. POSIX path: single-quote and
-/// escape embedded single quotes via `'\''`. Windows path: double-quote and
-/// escape embedded double quotes — good enough for the values cmd.exe will
-/// accept.
+/// don't contain newlines or NULs in practice. The per-arg quoting targets
+/// the shell the sink will spawn into (`sh -c` / `cmd /S /C`); the sink
+/// supplies the outer wrapping.
 fn shell_quote(arg: &str) -> String {
     #[cfg(target_os = "windows")]
     {
-        let escaped = arg.replace('"', "\\\"");
-        format!("\"{}\"", escaped)
+        windows_quote(arg)
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let escaped = arg.replace('\'', "'\\''");
-        format!("'{}'", escaped)
+        posix_quote(arg)
     }
+}
+
+/// Single-quote and escape embedded single quotes via `'\''`. Robust for
+/// arbitrary content, since nothing inside `'…'` is special to a POSIX shell.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn posix_quote(arg: &str) -> String {
+    format!("'{}'", arg.replace('\'', "'\\''"))
+}
+
+/// Double-quote for the Windows command line, following the backslash rule
+/// `CommandLineToArgvW` and the MSVC CRT parse argv with: a run of N
+/// backslashes is literal on its own, but means N/2 backslashes when it
+/// precedes a `"`. So a run that lands before a quote — an embedded one or
+/// the closing one — has to be doubled, or the quote it precedes is read as
+/// data and the argument never ends.
+///
+/// The naive `arg.replace('"', "\\\"")` this replaces got both halves wrong.
+/// `C:\out\` came out as `"C:\out\"`, whose closing quote the CRT reads as a
+/// literal `"` — so a trailing-separator path (which is what `dirname`-style
+/// shell plumbing and tab-completion produce) swallowed the rest of the
+/// command line. And an argument already containing `\"` was escaped to
+/// `\\"`, which terminates the argument instead of quoting it.
+///
+/// One limitation has no fix at this layer and is not attempted: `cmd.exe`
+/// expands `%VAR%` inside double quotes, and its command-line parser (unlike
+/// a batch file's) has no escape for `%` — `^` is literal within quotes and
+/// `%%` is not collapsed. A forwarded arg containing `%NAME%` where `NAME` is
+/// set in the environment therefore reaches the child expanded. An unmatched
+/// `%`, or a name that is not set, passes through as written.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_quote(arg: &str) -> String {
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    let mut backslashes = 0usize;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => {
+                backslashes += 1;
+                out.push('\\');
+            }
+            '"' => {
+                // Double the run that precedes this quote, then escape the
+                // quote itself so the CRT reads it as data.
+                out.extend(std::iter::repeat_n('\\', backslashes + 1));
+                backslashes = 0;
+                out.push('"');
+            }
+            other => {
+                backslashes = 0;
+                out.push(other);
+            }
+        }
+    }
+    // Same rule for the closing quote: a trailing run would otherwise escape
+    // it and leave the argument unterminated.
+    out.extend(std::iter::repeat_n('\\', backslashes));
+    out.push('"');
+    out
 }
 
 #[cfg(test)]
@@ -489,11 +556,95 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
     fn posix_quote_handles_single_quotes() {
         // `hpm run x -- "it's"` should survive the trip through `sh -c`.
-        let q = shell_quote("it's");
-        assert_eq!(q, "'it'\\''s'");
+        assert_eq!(posix_quote("it's"), "'it'\\''s'");
+        // Nothing else is special inside `'…'`, so a backslash, a double
+        // quote and a metacharacter all pass through as written.
+        assert_eq!(posix_quote(r"C:\out\"), r"'C:\out\'");
+        assert_eq!(posix_quote("a b | c"), "'a b | c'");
+    }
+
+    /// Parse one fully-quoted argument the way `CommandLineToArgvW` and the
+    /// MSVC CRT do, so the quoting can be checked by round-trip rather than
+    /// by asserting a literal spelling. A run of N backslashes before a `"`
+    /// yields N/2 backslashes, and the quote is data when N was odd and a
+    /// mode toggle when it was even; a run not followed by `"` is literal.
+    fn crt_parse_single(command_line: &str) -> String {
+        let mut out = String::new();
+        let mut in_quotes = false;
+        let mut backslashes = 0usize;
+        for ch in command_line.chars() {
+            match ch {
+                '\\' => backslashes += 1,
+                '"' => {
+                    out.extend(std::iter::repeat_n('\\', backslashes / 2));
+                    if backslashes % 2 == 1 {
+                        out.push('"');
+                    } else {
+                        in_quotes = !in_quotes;
+                    }
+                    backslashes = 0;
+                }
+                other => {
+                    out.extend(std::iter::repeat_n('\\', backslashes));
+                    backslashes = 0;
+                    assert!(
+                        in_quotes || !other.is_whitespace(),
+                        "unquoted whitespace splits the argument: {command_line:?}"
+                    );
+                    out.push(other);
+                }
+            }
+        }
+        out.extend(std::iter::repeat_n('\\', backslashes));
+        assert!(!in_quotes, "unterminated quote in {command_line:?}");
+        out
+    }
+
+    /// Every forwarded arg must survive the trip through `cmd /S /C` into the
+    /// child's argv unchanged. Checked by round-trip so the property is what
+    /// is asserted, not one particular spelling of the escape.
+    #[test]
+    fn windows_quote_round_trips_through_the_crt_parser() {
+        for arg in [
+            "plain",
+            "with space",
+            r"C:\Program Files\Side Effects",
+            // Trailing separator: the case the old quoting broke outright,
+            // since `"C:\out\"` leaves the closing quote as data and the
+            // argument never terminates.
+            r"C:\out\",
+            r"C:\out\\",
+            "say \"hi\"",
+            // A backslash already sitting in front of a quote — the other
+            // half of the old bug, where `\"` escaped to `\\"` and ended the
+            // argument early.
+            r#"C:\path\"x"#,
+            r#""quoted""#,
+            "1001",
+            "--flag=value with space",
+            "trailing\\",
+            "",
+        ] {
+            let quoted = windows_quote(arg);
+            assert_eq!(
+                crt_parse_single(&quoted),
+                arg,
+                "arg {arg:?} quoted as {quoted:?}"
+            );
+        }
+    }
+
+    /// Regression: `C:\out\` used to quote to `"C:\out\"`, whose closing
+    /// quote the CRT reads as literal data — so the argument ran on and
+    /// swallowed the rest of the command line.
+    #[test]
+    fn windows_quote_doubles_a_trailing_backslash_run() {
+        assert_eq!(windows_quote(r"C:\out\"), r#""C:\out\\""#);
+        assert_eq!(windows_quote(r"C:\out\\"), r#""C:\out\\\\""#);
+        // A backslash not preceding a quote stays a single backslash.
+        assert_eq!(windows_quote(r"C:\out\bin"), r#""C:\out\bin""#);
     }
 }
