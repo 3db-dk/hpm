@@ -123,7 +123,7 @@ pub use dependency::DependencySpec;
 pub use env_value::{Condition, EnvValue, EnvValueBranch, HoudiniRange, InstallSource, OsKey};
 pub use houdini::{
     HoudiniEnvValue, HoudiniMethod, HoudiniNativePackage, HoudiniPackage, HpackageMetadata,
-    NativePackageTarget, normalize_hpackage_version,
+    NativePackageTarget, normalize_hpackage_version, validate_hpackage_descriptor,
 };
 pub use io_error::IoOp;
 pub use manifest::{

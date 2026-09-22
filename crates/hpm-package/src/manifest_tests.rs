@@ -1752,6 +1752,29 @@ fn generate_houdini_native_package_sidefx_normalizes_the_json() {
     assert_eq!(sidefx.enable.unwrap(), "houdini_version >= '21.0'");
 }
 
+/// The generator and the shipped-descriptor check have to agree: `hpm pack
+/// --sidefx` runs the check over whatever reaches the archive, so a
+/// generated descriptor that failed it would fail every `--sidefx` pack that
+/// does not hand-write one. Both encode the same hpackage rules, and this is
+/// what catches them drifting apart.
+#[test]
+fn generated_sidefx_descriptor_passes_the_shipped_descriptor_check() {
+    for (version, houdini) in [("0.1.0", ">=21"), ("1.2.3", ">=20.5"), ("2.0", ">=21.0.0")] {
+        let mut manifest = make_manifest();
+        manifest.package.version = version.to_string();
+        manifest.compat.houdini = Some(HoudiniRange::parse(houdini).unwrap());
+
+        let (filename, generated) = manifest
+            .generate_houdini_native_package_for(NativePackageTarget::SideFxHpackage)
+            .unwrap();
+        let json = serde_json::to_value(&generated).unwrap();
+
+        let stored = crate::validate_hpackage_descriptor(&json, &filename)
+            .unwrap_or_else(|e| panic!("generated descriptor for {version}/{houdini} failed: {e}"));
+        assert_eq!(stored, generated.hpackage.version);
+    }
+}
+
 /// hpackage refuses an upload whose json declares no Houdini version, and
 /// its message does not say why. Failing the pack names the cause instead.
 #[test]

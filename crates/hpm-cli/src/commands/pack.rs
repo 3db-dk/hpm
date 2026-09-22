@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
 use hpm_core::packer;
-use hpm_package::{NativePackageTarget, PackageManifest, Platform};
+use hpm_package::{NativePackageTarget, PackageManifest, Platform, validate_hpackage_descriptor};
 use std::path::{Path, PathBuf};
 
 use crate::console::Console;
@@ -216,14 +216,17 @@ pub async fn execute(config: &Config, options: PackOptions, console: &mut Consol
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to generate the Houdini package.json for the archive")?;
     let hand_written = package_dir.join(&native_filename);
-    let json_bytes = match find_exact_entry(&package_dir, &native_filename) {
+    let (json_bytes, authored) = match find_exact_entry(&package_dir, &native_filename) {
         // User has a hand-written file; ship it verbatim, don't overwrite
-        NameMatch::Exact => std::fs::read(&hand_written).with_context(|| {
-            format!(
-                "Failed to read hand-written Houdini package json {}",
-                hand_written.display()
-            )
-        })?,
+        NameMatch::Exact => (
+            std::fs::read(&hand_written).with_context(|| {
+                format!(
+                    "Failed to read hand-written Houdini package json {}",
+                    hand_written.display()
+                )
+            })?,
+            true,
+        ),
         // A file whose name differs only by case is not the descriptor
         // Houdini will look for, so it cannot be shipped as one — but the
         // author plainly meant it to be used, and silently generating over
@@ -235,12 +238,67 @@ pub async fn execute(config: &Config, options: PackOptions, console: &mut Consol
                  Generating the descriptor from hpm.toml instead — rename it to {native_filename} \
                  to ship it verbatim."
             ));
-            serde_json::to_vec_pretty(&native_pkg)
-                .context("Failed to serialize Houdini native package JSON")?
+            (
+                serde_json::to_vec_pretty(&native_pkg)
+                    .context("Failed to serialize Houdini native package JSON")?,
+                false,
+            )
         }
-        NameMatch::Missing => serde_json::to_vec_pretty(&native_pkg)
-            .context("Failed to serialize Houdini native package JSON")?,
+        NameMatch::Missing => (
+            serde_json::to_vec_pretty(&native_pkg)
+                .context("Failed to serialize Houdini native package JSON")?,
+            false,
+        ),
     };
+    // Check the descriptor that will actually ship, not the one hpm would
+    // have generated. A hand-written `{slug}.json` is shipped verbatim, so
+    // without this the generated path is the checked one and the authored
+    // path is not — which made `--sidefx` silently do nothing on exactly the
+    // packages whose author cared enough to write the file by hand, and left
+    // the constraint to be discovered at upload time by whatever tool
+    // publishes, in a message that does not name it.
+    //
+    // Generated descriptors are checked too. The generator and the check
+    // encode the same hpackage rules from opposite ends, so running both is
+    // what catches them drifting apart.
+    if sidefx {
+        let descriptor: serde_json::Value =
+            serde_json::from_slice(&json_bytes).with_context(|| {
+                format!("The Houdini descriptor {native_filename} is not valid JSON")
+            })?;
+        let stored_version =
+            validate_hpackage_descriptor(&descriptor, &native_filename).map_err(|why| {
+                // The messages name what an author should change, which is
+                // wrong for a descriptor hpm wrote: there is no file to edit,
+                // and the generator and this check encode the same rules from
+                // opposite ends, so disagreeing means one of them is wrong.
+                if authored {
+                    anyhow::anyhow!(why)
+                } else {
+                    anyhow::anyhow!(
+                        "hpm generated this descriptor from hpm.toml and then refused it, which \
+                         is a bug in hpm rather than something to fix in the package — please \
+                         report it. The check said: {why}"
+                    )
+                }
+            })?;
+        // hpackage stores the trimmed version and builds the served archive's
+        // URL from it, so a hand-written `0.1.0` publishes at `0.1`. The
+        // generator already trims, so this only fires on an authored file.
+        let declared = descriptor
+            .get("hpackage")
+            .and_then(|hpackage| hpackage.get("version"))
+            .and_then(|version| version.as_str())
+            .unwrap_or_default();
+        if declared != stored_version {
+            console.warn(format!(
+                "{native_filename} declares hpackage.version {declared}, which SideFX's \
+                 hpackage repository stores as {stored_version} — the published version and \
+                 the served archive's URL will both read {stored_version}."
+            ));
+        }
+    }
+
     let inject_files: Vec<(String, Vec<u8>)> = vec![(native_filename, json_bytes)];
     let content_prefix = manifest.package.slug().to_string();
 

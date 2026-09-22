@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`hpm pack --sidefx` now checks the descriptor it ships, not just the one
+  it generates.** A package directory holding a hand-written `{slug}.json`
+  has that file shipped verbatim, and it never passed through the generator
+  — so the stricter path was the one hpm controls and the looser one was the
+  one an author writes by hand, and `--sidefx` silently did nothing on
+  exactly those packages. The descriptor that reaches the archive is now
+  checked whichever way it got there: a bounded or object `enable`, an
+  operand hpackage cannot read as `major.minor`, a clause it does not match
+  (`>`, `==`), and a version it cannot store each fail the pack with the
+  constraint named, instead of being refused at upload time by whatever tool
+  publishes, in a message that does not say why. A hand-written file is still
+  shipped byte for byte — the check only reads it, and never rewrites what an
+  author wrote — and it reads only the fields it constrains, so a descriptor
+  may carry Houdini keys hpm does not model. Generated descriptors go through
+  the same check, which is what keeps the generator and the check from
+  drifting apart unnoticed. A `hpackage.version` SideFX will store
+  differently is reported rather than refused: `0.1.0` uploads as `0.1`, and
+  the served archive's URL uses the trimmed form.
+
 ## [0.33.0] - 2026-09-10
 
 ### Added

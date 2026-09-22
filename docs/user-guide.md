@@ -606,7 +606,7 @@ dependency before Houdini starts.
 | `--json` | Emit the result as JSON (useful in CI). |
 | `--platform <id>` | Override host-platform detection. Valid: `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, `windows-aarch64`, `universal`. Only legal when `[compat].platforms` is declared. |
 | `--verify-assets` | Fail the pack (and delete the archive) if any `[[operators]]` `source` is missing from the produced archive, instead of just warning. |
-| `--sidefx` | Shape the bundled `{slug}.json` for SideFX's hpackage repository, so the archive can be uploaded exactly as packed. Fails the pack if the manifest declares something hpackage cannot represent, or if `README.md` is missing. |
+| `--sidefx` | Shape the bundled `{slug}.json` for SideFX's hpackage repository, so the archive can be uploaded exactly as packed. Fails the pack if the manifest declares something hpackage cannot represent, if the descriptor that actually ships breaks its rules, or if `README.md` is missing. |
 
 **Packing for SideFX's hpackage repository**
 
@@ -677,6 +677,23 @@ macOS and Windows answer `exists` case-insensitively, so a repo holding
 and the generated descriptor when packed on Linux — the same source tree
 producing different archives depending on who built it. A file differing only
 by case is reported and skipped, and the descriptor is generated.
+
+Under `--sidefx` the descriptor that reaches the archive is checked against
+hpackage's rules whichever way it got there. A hand-written file is still
+shipped byte for byte — the check only reads it, and never rewrites what an
+author wrote — but one declaring a bounded or object `enable`, or a version
+hpackage cannot store, fails the pack with the constraint named rather than
+being refused at upload time by whatever tool publishes. Without this the
+path hpm generates was the checked one and the path an author hand-writes was
+not, so `--sidefx` silently did nothing on exactly the packages whose author
+cared enough to write the file by hand.
+
+The check reads the fields it constrains and ignores the rest, so a
+hand-written descriptor may use Houdini keys hpm does not model. Generated
+descriptors go through the same check, which is what keeps the generator and
+the check from drifting apart. A `hpackage.version` SideFX will store
+differently is reported but allowed: `0.1.0` uploads as `0.1`, and the served
+archive's URL uses the trimmed form.
 
 The flag does not affect an `hpm install`: the extractor skips this file and
 generates its own package json. It matters to a manual unzip into a Houdini
