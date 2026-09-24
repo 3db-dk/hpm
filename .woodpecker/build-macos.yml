@@ -6,7 +6,7 @@ depends_on:
   - check
 
 labels:
-  platform: darwin/amd64
+  platform: darwin/arm64
 
 skip_clone: true
 
@@ -19,7 +19,7 @@ steps:
       - git fetch --no-tags --depth=1 origin ${CI_COMMIT_SHA}
       - git reset --hard ${CI_COMMIT_SHA}
       - rustup default stable
-      - rustup target add aarch64-apple-darwin
+      - rustup target add x86_64-apple-darwin aarch64-apple-darwin
       - cargo build --release -p hpm-cli --bin hpm --target x86_64-apple-darwin
       - cargo build --release -p hpm-cli --bin hpm --target aarch64-apple-darwin
 
@@ -27,7 +27,7 @@ steps:
     image: bash
     commands:
       - rustup default stable
-      - cargo test --release --workspace --target x86_64-apple-darwin
+      - cargo test --release --workspace --target aarch64-apple-darwin
 
   - name: upload
     image: bash
