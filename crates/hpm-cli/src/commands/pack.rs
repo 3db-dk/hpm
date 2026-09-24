@@ -136,6 +136,7 @@ pub async fn execute(
             hpm_core::AssetIndex {
                 assets: Vec::new(),
                 missing_sources: Vec::new(),
+                missing_thumbnails: Vec::new(),
             }
         }
     };
@@ -158,6 +159,26 @@ pub async fn execute(
         for missing in &asset_index.missing_sources {
             console.warn(format!(
                 "Declared operator source not found in archive: {missing} (pass --verify-assets to fail the pack)"
+            ));
+        }
+    }
+
+    // Same guard for declared thumbnails: the index must not point the
+    // registry at an image the package doesn't ship.
+    if !asset_index.missing_thumbnails.is_empty() {
+        if verify_assets {
+            let _ = std::fs::remove_file(&result.archive_path);
+            let list = asset_index.missing_thumbnails.join("\n  - ");
+            bail!(
+                "operator thumbnail(s) declared in [[operators]] but missing from the packed archive:\n  - {list}\n\n\
+                 `thumbnail` must name the image's path inside the package (after [stage] placement). \
+                 Generate the thumbnails before packing, fix the path, or make sure [stage] includes \
+                 them. The archive was removed."
+            );
+        }
+        for missing in &asset_index.missing_thumbnails {
+            console.warn(format!(
+                "Declared operator thumbnail not found in archive: {missing} (pass --verify-assets to fail the pack)"
             ));
         }
     }

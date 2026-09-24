@@ -49,6 +49,7 @@ category = "Sop"
 tab_submenu = "Studio/Dynamics"
 icon = "SOP_rbd"
 source = "otls/rbd.hda"
+thumbnail = "thumbnails/studio--rbd_configure--2.0.svg"
 
 [[operators]]
 kind = "dso"
@@ -70,11 +71,100 @@ category = "Sop"
         m.operators[0].source,
         Some(OperatorSource::Single("otls/rbd.hda".to_string()))
     );
+    assert_eq!(
+        m.operators[0].thumbnail.as_deref(),
+        Some("thumbnails/studio--rbd_configure--2.0.svg")
+    );
+    assert!(m.validate().is_ok(), "{:?}", m.validate());
     // Optional fields default to None.
     assert_eq!(m.operators[1].kind, OperatorKind::Dso);
     assert_eq!(m.operators[1].label, None);
     assert_eq!(m.operators[1].source, None);
     assert_eq!(m.operators[1].tab_submenu, None);
+    assert_eq!(m.operators[1].thumbnail, None);
+}
+
+#[test]
+fn operator_thumbnail_round_trips_and_is_omitted_when_absent() {
+    let mut m = make_manifest();
+    m.operators.push(OperatorDecl {
+        kind: OperatorKind::Hda,
+        type_name: "studio::a::1.0".to_string(),
+        category: "Sop".to_string(),
+        label: None,
+        tab_submenu: None,
+        icon: None,
+        source: None,
+        thumbnail: Some("thumbnails/studio--a--1.0.svg".to_string()),
+    });
+    m.operators.push(OperatorDecl {
+        kind: OperatorKind::Hda,
+        type_name: "studio::b::1.0".to_string(),
+        category: "Sop".to_string(),
+        label: None,
+        tab_submenu: None,
+        icon: None,
+        source: None,
+        thumbnail: None,
+    });
+    let text = toml::to_string(&m).unwrap();
+    assert_eq!(
+        text.matches("thumbnail =").count(),
+        1,
+        "thumbnail key must be omitted when absent:\n{text}"
+    );
+    let (back, _) = parse_manifest_str(&text).unwrap();
+    assert_eq!(back.operators, m.operators);
+}
+
+#[test]
+fn strict_rejects_bad_operator_thumbnail_paths() {
+    for (bad, needle) in [
+        ("", "must not be empty"),
+        ("../thumbnails/x.svg", "`..`"),
+        ("thumbnails/../../x.svg", "`..`"),
+        ("/thumbnails/x.svg", "absolute"),
+        ("C:/thumbnails/x.svg", "absolute"),
+        ("thumbnails\\x.svg", "forward slashes"),
+    ] {
+        let mut m = make_manifest();
+        m.operators.push(OperatorDecl {
+            kind: OperatorKind::Hda,
+            type_name: "studio::a::1.0".to_string(),
+            category: "Sop".to_string(),
+            label: None,
+            tab_submenu: None,
+            icon: None,
+            source: None,
+            thumbnail: Some(bad.to_string()),
+        });
+        let report = m.validate_with(ValidationLevel::Strict);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("[[operators]][0].thumbnail") && e.contains(needle)),
+            "{bad:?}: {:?}",
+            report.errors
+        );
+    }
+}
+
+#[test]
+fn accepts_nested_relative_operator_thumbnail() {
+    let mut m = make_manifest();
+    m.operators.push(OperatorDecl {
+        kind: OperatorKind::Hda,
+        type_name: "th::apex_joints::8.1".to_string(),
+        category: "Sop".to_string(),
+        label: None,
+        tab_submenu: None,
+        icon: None,
+        source: None,
+        thumbnail: Some("thumbnails/th--apex_joints--8.1.svg".to_string()),
+    });
+    let report = m.validate_with(ValidationLevel::Strict);
+    assert!(report.is_ok(), "{:?}", report.errors);
 }
 
 #[test]
@@ -147,6 +237,7 @@ fn strict_rejects_operator_missing_required_fields() {
         tab_submenu: None,
         icon: None,
         source: None,
+        thumbnail: None,
     });
     let report = m.validate_with(ValidationLevel::Strict);
     assert!(!report.is_ok());

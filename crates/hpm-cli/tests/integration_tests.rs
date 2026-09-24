@@ -269,3 +269,112 @@ houdini = ">=20.5"
     // Check command should process the manifest
     assert!(output.status.success() || !output.stderr.is_empty());
 }
+
+/// Write a minimal package with one HDA operator declaring `thumbnail`, and
+/// optionally ship the thumbnail file itself.
+fn write_thumbnail_package(dir: &std::path::Path, thumbnail: &str, ship_thumbnail: bool) {
+    fs::create_dir_all(dir.join("otls")).unwrap();
+    fs::write(dir.join("otls/rbd.hda"), b"hda-bytes").unwrap();
+    if ship_thumbnail {
+        let path = dir.join(thumbnail);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>").unwrap();
+    }
+    let manifest = format!(
+        r#"
+[package]
+path = "studio/thumbtest"
+name = "thumbtest"
+version = "1.0.0"
+
+[[operators]]
+kind = "hda"
+type_name = "studio::rbd_configure::2.0"
+category = "Sop"
+source = "otls/rbd.hda"
+thumbnail = "{thumbnail}"
+
+[[operators]]
+kind = "hda"
+type_name = "studio::other::1.0"
+category = "Sop"
+source = "otls/rbd.hda"
+"#
+    );
+    fs::write(dir.join("hpm.toml"), manifest).unwrap();
+}
+
+/// `hpm pack --json` emits a declared `thumbnail` on its asset and omits the
+/// key on assets that don't declare one.
+#[test]
+fn test_pack_json_emits_operator_thumbnail() {
+    let pkg = TempDir::new().unwrap();
+    let out = TempDir::new().unwrap();
+    write_thumbnail_package(
+        pkg.path(),
+        "thumbnails/studio--rbd_configure--2.0.svg",
+        true,
+    );
+
+    let (mut cmd, _home) = hpm_binary_isolated();
+    let output = cmd
+        .args([
+            "--directory",
+            pkg.path().to_str().unwrap(),
+            "pack",
+            "--json",
+        ])
+        .args(["--verify-assets", "--output", out.path().to_str().unwrap()])
+        .output()
+        .expect("Failed to execute hpm pack");
+    assert!(
+        output.status.success(),
+        "pack failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout
+        .lines()
+        .find(|l| l.trim_start().starts_with('{'))
+        .expect("no JSON line in pack output");
+    let json: serde_json::Value = serde_json::from_str(line).unwrap();
+    let assets = json["assets"].as_array().unwrap();
+    assert_eq!(assets.len(), 2);
+    assert_eq!(
+        assets[0]["thumbnail"],
+        serde_json::json!("thumbnails/studio--rbd_configure--2.0.svg")
+    );
+    assert!(assets[1].get("thumbnail").is_none(), "{}", assets[1]);
+}
+
+/// `--verify-assets` fails the pack (and removes the archive) when a declared
+/// thumbnail isn't in the produced archive.
+#[test]
+fn test_pack_verify_assets_fails_on_missing_thumbnail() {
+    let pkg = TempDir::new().unwrap();
+    let out = TempDir::new().unwrap();
+    write_thumbnail_package(pkg.path(), "thumbnails/missing.svg", false);
+
+    let (mut cmd, _home) = hpm_binary_isolated();
+    let output = cmd
+        .args([
+            "--directory",
+            pkg.path().to_str().unwrap(),
+            "pack",
+            "--json",
+        ])
+        .args(["--verify-assets", "--output", out.path().to_str().unwrap()])
+        .output()
+        .expect("Failed to execute hpm pack");
+    assert!(!output.status.success(), "pack should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("thumbnail") && stderr.contains("thumbnails/missing.svg"),
+        "{stderr}"
+    );
+    assert!(
+        !out.path().join("thumbtest-1.0.0.zip").exists(),
+        "invalid archive must be removed"
+    );
+}

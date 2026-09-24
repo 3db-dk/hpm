@@ -13,7 +13,7 @@
 //! As a guard against drift between what's declared and what actually ships,
 //! [`collect_assets`] checks each resolved `source` against the produced archive
 //! and reports any that are missing (the CLI warns, or fails under
-//! `--verify-assets`).
+//! `--verify-assets`). A declared `thumbnail` is checked the same way.
 
 use std::path::Path;
 
@@ -51,6 +51,7 @@ fn to_asset(op: &OperatorDecl, source_file: Option<String>) -> Asset {
         tab_submenu: op.tab_submenu.clone(),
         icon: op.icon.clone(),
         source_file,
+        thumbnail: op.thumbnail.clone(),
     }
 }
 
@@ -63,9 +64,12 @@ fn to_asset(op: &OperatorDecl, source_file: Option<String>) -> Asset {
 /// the target platform is omitted from this platform's index (its file is not
 /// in this package). Every resolved source is then checked against the produced
 /// archive; paths not found are returned in [`AssetIndex::missing_sources`] for
-/// the caller to warn on or treat as fatal.
+/// the caller to warn on or treat as fatal. Each indexed operator's declared
+/// `thumbnail` is checked the same way and reported in
+/// [`AssetIndex::missing_thumbnails`].
 ///
-/// Short-circuits the archive read when no operator resolves to a source path.
+/// Short-circuits the archive read when no operator resolves to a source path
+/// or declares a thumbnail.
 pub fn collect_assets(
     archive_path: &Path,
     operators: &[OperatorDecl],
@@ -73,6 +77,7 @@ pub fn collect_assets(
 ) -> Result<AssetIndex, AssetIndexError> {
     let mut assets = Vec::new();
     let mut to_verify: Vec<String> = Vec::new();
+    let mut thumbnails: Vec<String> = Vec::new();
 
     for op in operators {
         let source_file = match op.resolved_source(platform) {
@@ -85,22 +90,26 @@ pub fn collect_assets(
             // operator isn't shipped here, so drop it from this index.
             SourceResolution::NotForPlatform => continue,
         };
+        if let Some(thumbnail) = &op.thumbnail {
+            thumbnails.push(thumbnail.clone());
+        }
         assets.push(to_asset(op, source_file));
     }
 
-    let missing_sources = if to_verify.is_empty() {
-        Vec::new()
+    let (missing_sources, missing_thumbnails) = if to_verify.is_empty() && thumbnails.is_empty() {
+        (Vec::new(), Vec::new())
     } else {
         let present = archive_entry_names(archive_path)?;
-        to_verify
-            .into_iter()
-            .filter(|src| !present.contains(src))
-            .collect()
+        let missing = |paths: Vec<String>| -> Vec<String> {
+            paths.into_iter().filter(|p| !present.contains(p)).collect()
+        };
+        (missing(to_verify), missing(thumbnails))
     };
 
     Ok(AssetIndex {
         assets,
         missing_sources,
+        missing_thumbnails,
     })
 }
 
@@ -128,6 +137,9 @@ pub struct AssetIndex {
     /// Declared `source` files that were not found in the produced archive.
     /// Empty on a clean run.
     pub missing_sources: Vec<String>,
+    /// Declared `thumbnail` files that were not found in the produced
+    /// archive. Empty on a clean run.
+    pub missing_thumbnails: Vec<String>,
 }
 
 #[cfg(test)]
@@ -166,6 +178,7 @@ mod tests {
             tab_submenu: None,
             icon: None,
             source: source.map(|s| OperatorSource::Single(s.to_string())),
+            thumbnail: None,
         }
     }
 
@@ -182,6 +195,7 @@ mod tests {
             tab_submenu: None,
             icon: None,
             source: Some(OperatorSource::PerPlatform(map)),
+            thumbnail: None,
         }
     }
 
@@ -314,5 +328,87 @@ mod tests {
             index.missing_sources,
             vec!["dso/linux-x86_64/scatter.so".to_string()]
         );
+    }
+
+    #[test]
+    fn thumbnail_is_emitted_and_verified_against_archive() {
+        let dir = TempDir::new().unwrap();
+        let archive = write_zip(
+            dir.path(),
+            &[
+                ("otls/rbd.hda", b"x"),
+                ("thumbnails/studio--rbd_configure--2.0.svg", b"<svg/>"),
+            ],
+        );
+
+        let mut rbd = op(
+            OperatorKind::Hda,
+            "studio::rbd_configure::2.0",
+            "Sop",
+            Some("otls/rbd.hda"),
+        );
+        rbd.thumbnail = Some("thumbnails/studio--rbd_configure--2.0.svg".to_string());
+
+        let index = collect_assets(&archive, &[rbd], None).unwrap();
+        assert_eq!(
+            index.assets[0].thumbnail.as_deref(),
+            Some("thumbnails/studio--rbd_configure--2.0.svg")
+        );
+        assert!(index.missing_sources.is_empty());
+        assert!(index.missing_thumbnails.is_empty());
+    }
+
+    #[test]
+    fn missing_thumbnail_is_reported_separately_from_sources() {
+        let dir = TempDir::new().unwrap();
+        let archive = write_zip(dir.path(), &[("otls/rbd.hda", b"x")]);
+
+        let mut rbd = op(
+            OperatorKind::Hda,
+            "studio::rbd_configure::2.0",
+            "Sop",
+            Some("otls/rbd.hda"),
+        );
+        rbd.thumbnail = Some("thumbnails/rbd.svg".to_string());
+
+        let index = collect_assets(&archive, &[rbd], None).unwrap();
+        assert_eq!(index.assets.len(), 1);
+        assert!(index.missing_sources.is_empty());
+        assert_eq!(
+            index.missing_thumbnails,
+            vec!["thumbnails/rbd.svg".to_string()]
+        );
+    }
+
+    #[test]
+    fn thumbnail_without_source_still_checks_archive() {
+        let dir = TempDir::new().unwrap();
+        let archive = write_zip(dir.path(), &[("README.md", b"hi")]);
+
+        let mut x = op(OperatorKind::Dso, "studio::x", "Sop", None);
+        x.thumbnail = Some("thumbnails/x.svg".to_string());
+
+        let index = collect_assets(&archive, &[x], None).unwrap();
+        assert!(index.missing_sources.is_empty());
+        assert_eq!(
+            index.missing_thumbnails,
+            vec!["thumbnails/x.svg".to_string()]
+        );
+    }
+
+    #[test]
+    fn thumbnail_of_operator_not_shipped_for_platform_is_not_checked() {
+        let dir = TempDir::new().unwrap();
+        let archive = write_zip(dir.path(), &[("dso/linux-x86_64/scatter.so", b"x")]);
+
+        let mut scatter = per_platform_op(
+            "studio::fast_scatter",
+            &[("linux-x86_64", "dso/linux-x86_64/scatter.so")],
+        );
+        scatter.thumbnail = Some("thumbnails/scatter.svg".to_string());
+
+        let index = collect_assets(&archive, &[scatter], Some(&Platform::MacosAarch64)).unwrap();
+        assert!(index.assets.is_empty());
+        assert!(index.missing_thumbnails.is_empty());
     }
 }

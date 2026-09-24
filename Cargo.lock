@@ -820,6 +820,7 @@ name = "hpm-assets"
 version = "0.27.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]

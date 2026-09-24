@@ -15,6 +15,7 @@ fn op(kind: OperatorKind, type_name: &str, category: &str, source: Option<&str>)
         tab_submenu: None,
         icon: None,
         source: source.map(|s| OperatorSource::Single(s.to_string())),
+        thumbnail: None,
     }
 }
 

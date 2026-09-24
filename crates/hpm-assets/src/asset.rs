@@ -63,6 +63,12 @@ pub struct Asset {
     /// (`otls/rbd.hda`, `dso/scatter.so`), if the author declared one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_file: Option<String>,
+
+    /// Package-relative path of the node thumbnail image (SVG) shipped
+    /// inside the package (`thumbnails/studio--rbd_configure--2.0.svg`), if
+    /// the author declared one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
 }
 
 /// Split a namespaced operator type name into `(namespace, base, version)`.
@@ -133,6 +139,43 @@ mod tests {
         assert_eq!(ns.as_deref(), Some("com.studio"));
         assert_eq!(base, "rbd_configure");
         assert_eq!(ver, None);
+    }
+
+    fn sample_asset(thumbnail: Option<&str>) -> Asset {
+        Asset {
+            kind: AssetKind::HdaOperator,
+            type_name: "studio::rbd_configure::2.0".to_string(),
+            category: "Sop".to_string(),
+            label: None,
+            namespace: Some("studio".to_string()),
+            op_version: Some("2.0".to_string()),
+            tab_submenu: None,
+            icon: None,
+            source_file: Some("otls/rbd.hda".to_string()),
+            thumbnail: thumbnail.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn serializes_thumbnail_when_present() {
+        let json = serde_json::to_value(sample_asset(Some(
+            "thumbnails/studio--rbd_configure--2.0.svg",
+        )))
+        .unwrap();
+        assert_eq!(
+            json["thumbnail"],
+            serde_json::json!("thumbnails/studio--rbd_configure--2.0.svg")
+        );
+        assert_eq!(json["kind"], serde_json::json!("hda_operator"));
+    }
+
+    #[test]
+    fn omits_thumbnail_when_absent() {
+        let json = serde_json::to_value(sample_asset(None)).unwrap();
+        assert!(json.get("thumbnail").is_none(), "{json}");
+        // Round-trips without the key.
+        let back: Asset = serde_json::from_value(json).unwrap();
+        assert_eq!(back.thumbnail, None);
     }
 
     #[test]

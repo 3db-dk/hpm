@@ -476,7 +476,7 @@ Pack runs `hpm check` first, then:
 2. Filters files by `[stage]` (per-platform `place` rules and `include`/`exclude` globs) when the manifest declares `[compat].platforms`.
 3. Produces a `.zip` archive plus a SHA-256 checksum.
 4. If a signing key is supplied, produces an Ed25519 signature over the archive bytes and emits a `keyId`.
-5. Builds a searchable **asset index** from the manifest's [`[[operators]]`](#operators) declarations and includes it in `--json` output (and warns if a declared `source` file is missing from the archive).
+5. Builds a searchable **asset index** from the manifest's [`[[operators]]`](#operators) declarations and includes it in `--json` output (and warns if a declared `source` or `thumbnail` file is missing from the archive).
 
 **Options**
 
@@ -486,7 +486,7 @@ Pack runs `hpm check` first, then:
 | `--output <dir>` | Output directory. Defaults to the current directory. |
 | `--json` | Emit the result as JSON (useful in CI). |
 | `--platform <id>` | Override host-platform detection. Valid: `linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, `windows-aarch64`, `universal`. Only legal when `[compat].platforms` is declared. |
-| `--verify-assets` | Fail the pack (and delete the archive) if any `[[operators]]` `source` is missing from the produced archive, instead of just warning. |
+| `--verify-assets` | Fail the pack (and delete the archive) if any `[[operators]]` `source` or `thumbnail` is missing from the produced archive, instead of just warning. |
 
 **Asset index in `--json` output**
 
@@ -511,7 +511,8 @@ HDA-vs-DSO is carried by `kind` (`hda_operator` / `dso_operator`).
       "op_version": "2.0",
       "tab_submenu": "Studio/Dynamics",
       "icon": "SOP_rbd",
-      "source_file": "otls/rbd.hda"
+      "source_file": "otls/rbd.hda",
+      "thumbnail": "thumbnails/studio--rbd_configure--2.0.svg"
     },
     {
       "kind": "dso_operator",
@@ -1173,6 +1174,7 @@ category    = "Sop"
 tab_submenu = "Studio/Dynamics"
 icon        = "SOP_rbd"
 source      = "otls/rbd.hda"
+thumbnail   = "thumbnails/studio--rbd_configure--2.0.svg"
 
 [[operators]]
 kind      = "dso"
@@ -1191,6 +1193,7 @@ source    = "dso/scatter.so"
 | `tab_submenu` | no | TAB submenu path, e.g. `Studio/Dynamics`. |
 | `icon` | no | Icon identifier, e.g. `SOP_rbd`. |
 | `source` | no | Where the operator's file lives **in the produced package** (after `[stage]` placement) — either a single archive-relative path or a per-platform table (see below). When set, `hpm pack` checks it against the produced archive. |
+| `thumbnail` | no | Package-relative path to a node thumbnail image (SVG) shipped inside the package, e.g. `thumbnails/studio--rbd_configure--2.0.svg`. Must be relative, use `/` separators, and contain no `..` components. Emitted as `thumbnail` on the operator's asset; `hpm pack` checks it against the produced archive like `source`. |
 
 **Per-platform `source` (multi-platform DSOs)**
 
@@ -1217,8 +1220,8 @@ name/category with no path and no check.)
 
 **Verifying sources at pack time**
 
-By default `hpm pack` *warns* when a declared `source` is missing from the
-produced archive. Pass `--verify-assets` to make it a hard error instead (and
+By default `hpm pack` *warns* when a declared `source` or `thumbnail` is
+missing from the produced archive. Pass `--verify-assets` to make it a hard error instead (and
 delete the invalid archive) — recommended in CI so a package never publishes an
 index advertising a file it doesn't ship. The check runs against the built
 archive, so build compiled artifacts before packing.

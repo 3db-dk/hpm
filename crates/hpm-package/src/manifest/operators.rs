@@ -83,6 +83,12 @@ pub struct OperatorDecl {
     /// `hpm pack` checks the resolved path against the produced archive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<OperatorSource>,
+    /// Package-relative path to a node thumbnail image (SVG) shipped inside
+    /// the package (`thumbnails/studio--rbd_configure--2.0.svg`). Must be a
+    /// relative path without `..` components; `hpm pack` checks it against the
+    /// produced archive. Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
 }
 
 impl OperatorDecl {
@@ -108,4 +114,33 @@ impl OperatorDecl {
             },
         }
     }
+}
+
+/// Check that a declared `thumbnail` path is usable as an archive entry name:
+/// non-empty, relative, `/`-separated, and free of `..` components.
+///
+/// Returns a human-readable reason on failure (the caller prefixes the
+/// `[[operators]][i].thumbnail` location).
+pub fn validate_thumbnail_path(path: &str) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("must not be empty".to_string());
+    }
+    if path.contains('\\') {
+        return Err(format!(
+            "'{}' must use forward slashes (it names a path inside the package archive)",
+            path
+        ));
+    }
+    let bytes = path.as_bytes();
+    let has_drive_prefix = bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic();
+    if path.starts_with('/') || has_drive_prefix {
+        return Err(format!(
+            "'{}' must be a package-relative path, not an absolute path",
+            path
+        ));
+    }
+    if path.split('/').any(|seg| seg == "..") {
+        return Err(format!("'{}' must not contain `..` components", path));
+    }
+    Ok(())
 }

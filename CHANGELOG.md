@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-operator node thumbnails.** `[[operators]]` entries accept an optional
+  `thumbnail` — a package-relative path to an SVG shipped inside the package
+  (e.g. `thumbnails/studio--rbd_configure--2.0.svg`). `hpm pack --json` emits it
+  as `thumbnail` on the operator's asset (omitted when absent), so a registry
+  can show a node thumbnail per operator. The path must be relative,
+  `/`-separated and free of `..` components (checked at manifest validation),
+  and `hpm pack` checks it against the produced archive exactly like `source`:
+  a warning by default, a hard error (archive removed) under `--verify-assets`.
+
 ## [0.27.0] - 2026-07-07
 
 ### Added

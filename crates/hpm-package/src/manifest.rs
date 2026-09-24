@@ -32,7 +32,9 @@ pub use env::{EnvMethod, ManifestEnvEntry};
 pub use error::ManifestLoadError;
 pub use info::PackageInfo;
 pub use legacy::{MigrationReport, MigrationWarning};
-pub use operators::{OperatorDecl, OperatorKind, OperatorSource, SourceResolution};
+pub use operators::{
+    OperatorDecl, OperatorKind, OperatorSource, SourceResolution, validate_thumbnail_path,
+};
 pub use registry::{RegistryConfig, RegistryType};
 pub use scripts::{PackageScripts, ScriptEntry, ScriptEnv};
 pub use stage::{PlaceRule, PlatformStaging, StageConfig, StagePlatformRules};
@@ -307,7 +309,8 @@ impl PackageManifest {
         // `type_name` and `category` — those are the fields the index keys on,
         // and an empty value would publish a useless entry. A per-platform
         // `source` table must key on platforms declared in [compat].platforms,
-        // mirroring the [stage.platform.*] check.
+        // mirroring the [stage.platform.*] check. A `thumbnail` must be a
+        // package-relative, `/`-separated path without `..` components.
         for (i, op) in self.operators.iter().enumerate() {
             if op.type_name.trim().is_empty() {
                 report.errors.push(format!(
@@ -337,6 +340,13 @@ impl PackageManifest {
                             .push(format!("[[operators]][{}].source.{}: {}", i, key, e)),
                     }
                 }
+            }
+            if let Some(thumbnail) = &op.thumbnail
+                && let Err(e) = operators::validate_thumbnail_path(thumbnail)
+            {
+                report
+                    .errors
+                    .push(format!("[[operators]][{}].thumbnail: {}", i, e));
             }
         }
 

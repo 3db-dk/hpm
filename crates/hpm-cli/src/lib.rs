@@ -560,8 +560,8 @@ pub enum Commands {
         /// Target platform (defaults to host platform when `[compat].platforms` is declared)
         #[arg(long)]
         platform: Option<String>,
-        /// Fail the pack if any `[[operators]]` `source` is missing from the
-        /// produced archive (default: warn only).
+        /// Fail the pack if any `[[operators]]` `source` or `thumbnail` is
+        /// missing from the produced archive (default: warn only).
         #[arg(long)]
         verify_assets: bool,
     },
