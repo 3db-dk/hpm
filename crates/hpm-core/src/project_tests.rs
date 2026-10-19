@@ -1125,6 +1125,93 @@ fn list_dependencies_resolves_creator_scoped_manifests() {
     );
 }
 
+/// The installed copy reported for a dependency is the version the project
+/// installs, not whichever version the store scan meets first. With
+/// TumblePipe 1.40.1 and 1.76.0 both in the store, a project on 1.76.0 was
+/// handed 1.40.1, and TumbleTrove Desktop ran that release's (absent)
+/// `tt_prepare`, so a launch never migrated the project.
+///
+/// Exhaustive over which of three installed versions the manifest pins,
+/// plus no pin (highest wins), in a store holding all three.
+#[test]
+fn list_dependencies_reports_the_version_the_project_installs() {
+    for pin in [Some("0.9.0"), Some("1.0.0"), Some("1.2.0"), None] {
+        let temp_dir = TempDir::new().unwrap();
+        let (config, storage_manager) = test_setup(temp_dir.path());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        for version in ["1.0.0", "0.9.0", "1.2.0"] {
+            let dir = config
+                .storage
+                .packages_dir
+                .join("acme")
+                .join(format!("tools@{version}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("hpm.toml"),
+                format!(
+                    "[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"{version}\"\n"
+                ),
+            )
+            .unwrap();
+        }
+        if let Some(version) = pin {
+            std::fs::write(
+                project_root.join("hpm.toml"),
+                format!(
+                    "[package]\npath = \"acme/project\"\nname = \"P\"\nversion = \"0.1.0\"\n\n\
+                     [dependencies]\n\"acme/tools\" = \"{version}\"\n"
+                ),
+            )
+            .unwrap();
+        }
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+        let pkg_dir = &project_manager.project_paths.packages_dir;
+        std::fs::write(pkg_dir.join("acme.tools.json"), b"{}").unwrap();
+
+        let deps = project_manager.list_dependencies().unwrap();
+        let got = deps[0]
+            .installed_package
+            .as_ref()
+            .map(|p| p.manifest.package.version.clone());
+        assert_eq!(got.as_deref(), Some(pin.unwrap_or("1.2.0")), "pin {pin:?}");
+    }
+}
+
+/// A pinned version that is not in the store resolves to nothing, never to
+/// another installed version of the package.
+#[test]
+fn list_dependencies_never_substitutes_another_version() {
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let project_root = temp_dir.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let dir = config.storage.packages_dir.join("acme").join("tools@1.0.0");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("hpm.toml"),
+        "[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project_root.join("hpm.toml"),
+        "[package]\npath = \"acme/project\"\nname = \"P\"\nversion = \"0.1.0\"\n\n\
+         [dependencies]\n\"acme/tools\" = \"2.0.0\"\n",
+    )
+    .unwrap();
+    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+    std::fs::write(
+        project_manager
+            .project_paths
+            .packages_dir
+            .join("acme.tools.json"),
+        b"{}",
+    )
+    .unwrap();
+    let deps = project_manager.list_dependencies().unwrap();
+    assert!(deps[0].installed_package.is_none(), "{deps:?}");
+}
+
 /// Files in the manifest directory that are not per-package manifests must
 /// not surface as dependencies — they would carry a name matching no
 /// installed package.

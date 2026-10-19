@@ -651,6 +651,15 @@ impl ProjectManager {
         Ok(())
     }
 
+    /// The project's dependencies, each with the installed copy it uses.
+    ///
+    /// The copy is the version the project's manifest names; only when the
+    /// manifest names none (no manifest, a path dependency) is it the
+    /// highest version installed. It used to be whichever version of the
+    /// package the store scan met first: a project on TumblePipe 1.76.0
+    /// with 1.40.1 also in the store was handed 1.40.1, so TumbleTrove
+    /// Desktop ran that release's `tt_*` hooks (or none, as it declared
+    /// none), and `generate_houdini_manifests` could point Houdini at it.
     pub fn list_dependencies(&self) -> Result<Vec<ProjectDependency>, ProjectError> {
         let mut dependencies = vec![];
 
@@ -667,6 +676,10 @@ impl ProjectManager {
         })?;
 
         let installed_packages = self.storage_manager.list_installed()?;
+        let declared = self
+            .load_project_manifest()?
+            .map(|m| m.dependencies)
+            .unwrap_or_default();
 
         for entry in entries.flatten() {
             let path = entry.path();
@@ -688,10 +701,15 @@ impl ProjectManager {
                 continue;
             };
 
-            let installed_package = installed_packages
-                .iter()
-                .find(|p| p.manifest.package.path == package_path)
-                .cloned();
+            let pinned = declared
+                .get(package_path.as_str())
+                .and_then(|spec| match spec {
+                    hpm_package::DependencySpec::Registry { version, .. }
+                    | hpm_package::DependencySpec::Url { version, .. } => Some(version.as_str()),
+                    hpm_package::DependencySpec::Path { .. } => None,
+                });
+            let installed_package =
+                installed_copy(&installed_packages, &package_path, pinned).cloned();
 
             dependencies.push(ProjectDependency {
                 name: package_path.as_str().to_string(),
@@ -700,6 +718,32 @@ impl ProjectManager {
         }
 
         Ok(dependencies)
+    }
+}
+
+/// The installed copy of `path` a project uses: the `pinned` version when
+/// the manifest names one, else the highest version installed. `None` when
+/// the pinned version is not in the store: another version would be a
+/// different package from the one the project installs.
+fn installed_copy<'a>(
+    installed: &'a [InstalledPackage],
+    path: &hpm_package::PackagePath,
+    pinned: Option<&str>,
+) -> Option<&'a InstalledPackage> {
+    let mut copies = installed
+        .iter()
+        .filter(|p| &p.manifest.package.path == path);
+    match pinned {
+        Some(version) => copies.find(|p| p.manifest.package.version == version),
+        None => copies.max_by(|a, b| {
+            match (
+                semver::Version::parse(&a.manifest.package.version),
+                semver::Version::parse(&b.manifest.package.version),
+            ) {
+                (Ok(x), Ok(y)) => x.cmp(&y),
+                _ => a.manifest.package.version.cmp(&b.manifest.package.version),
+            }
+        }),
     }
 }
 
