@@ -284,6 +284,7 @@ mod tests {
             description: None,
             author: None,
             created_at: None,
+            deps: Vec::new(),
         }
     }
 

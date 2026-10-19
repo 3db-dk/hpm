@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Registry entries carry `deps`, and `registry::solve` chooses a set of
+  versions that works together.** The registry index has always had Cargo's
+  `deps` field, but `RegistryEntry` dropped it, so nothing could see that
+  TumblePipe 1.74 declares `tumbletrove/tumbletrove = ">=0.47, <0.48"`, and a
+  client taking each package's newest version paired it with TumbleTrove
+  0.48, which removed an API 1.74 calls. `RegistryEntry::deps` reads the
+  field, and `registry::solve::solve` picks one version per package given
+  the target Houdini and any pins: a pin stands, an unpinned package takes
+  its newest non-yanked version whose `houdini_compat` admits the target and
+  whose requirements agree with the rest of the set, backtracking until they
+  do. A conflict names the package and the requirement that could not be
+  met. It is pure over version lists the caller fetched, and is checked
+  against a brute-force search by property.
+
 ## [0.33.1] - 2026-09-22
 
 ### Fixed

@@ -9,6 +9,7 @@
 
 pub mod api;
 pub mod git;
+pub mod solve;
 pub mod types;
 
 use async_trait::async_trait;
@@ -18,7 +19,7 @@ use thiserror::Error;
 
 pub use api::ApiRegistry;
 pub use git::GitRegistry;
-pub use types::{PlatformTag, RegistryEntry, SearchResults};
+pub use types::{PlatformTag, RegistryDep, RegistryEntry, SearchResults};
 
 /// Errors that can occur during registry operations.
 #[derive(Error, Debug)]
@@ -495,6 +496,7 @@ mod dedupe_tests {
             description: None,
             author: None,
             created_at: None,
+            deps: Vec::new(),
         }
     }
 
@@ -684,6 +686,7 @@ mod set_tests {
                         description: None,
                         author: None,
                         created_at: None,
+                        deps: Vec::new(),
                     })
                     .collect(),
             }

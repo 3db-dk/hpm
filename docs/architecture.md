@@ -264,14 +264,26 @@ file that omits a section leaves the lower layers untouched.
 
 ## Dependency resolution
 
-HPM currently does naive per-package version selection: for each declared
-registry dependency, query the registry, filter non-yanked versions, and
-pick the highest that matches the spec's `VersionReq`. There is no
-transitive constraint solving — every dependency is treated as a direct
-dependency, and registry packages don't declare their own deps in a way
-the install path consumes. A proper constraint solver (PubGrub-style or
-otherwise) will be reintroduced if/when transitive resolution becomes a
-real requirement.
+`hpm install` installs the versions a project's manifest names: an exact
+version is looked up as written, and `hpm add` / `hpm update` resolve a
+range to the highest non-yanked match and write that version back. There is
+no transitive installation — every dependency is a direct dependency of the
+project.
+
+Choosing *which* versions a set of packages should use is
+`hpm_core::registry::solve`. A registry entry carries `deps`, the version
+ranges that version requires of other packages (its manifest's
+`[dependencies]`, as the registry stores them), and `houdini_compat`.
+`solve` takes the registry's version lists for a set of packages, the
+target Houdini, and any pins, and returns one version per package such
+that every chosen version's `deps` on the others hold: a pin stands as
+written, and an unpinned package takes its newest non-yanked version that
+supports the Houdini, backtracking when that version cannot coexist with
+the rest. A requirement on a package outside the set constrains nothing;
+it does not add the package. TumbleTrove Desktop writes a project's
+manifest from these selections, which is what keeps a release that breaks
+an older version of a dependent package from reaching projects on that
+version.
 
 ### Version requirement grammar
 

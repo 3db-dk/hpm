@@ -133,6 +133,23 @@ pub struct RegistryEntry {
     /// registries; git registries may omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    /// Version ranges this version requires of other packages — its
+    /// manifest's `[dependencies]` registry entries, as the registry stores
+    /// them. The field name is Cargo's index field, which registries already
+    /// emitted (as an empty list) before anything read it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deps: Vec<RegistryDep>,
+}
+
+/// One package-to-package requirement on a [`RegistryEntry`]: `name` is the
+/// scoped path of the required package, `req` a semver requirement in
+/// Cargo's grammar (`">=0.47, <0.48"`), except that a bare full version
+/// (`"0.47.0"`) means exactly that version, as it does in a manifest. See
+/// [`crate::registry::solve`] for how a set of these is satisfied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegistryDep {
+    pub name: String,
+    pub req: String,
 }
 
 /// Search results returned from a registry search.

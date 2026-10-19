@@ -91,7 +91,8 @@ pub use storage::{StorageError, StorageManager};
 // `ApiRegistry`/`GitRegistry` are only useful if you're building a custom
 // `RegistrySet`.
 pub use registry::{
-    ApiRegistry, GitRegistry, Registry, RegistryEntry, RegistryError, RegistrySet, SearchResults,
+    ApiRegistry, GitRegistry, Registry, RegistryDep, RegistryEntry, RegistryError, RegistrySet,
+    SearchResults,
 };
 
 // Lock file. `LockFile::load` / `LockFile::save` and `verify_checksums`

@@ -1020,6 +1020,25 @@ wins. Add a pin from the command line with `hpm add <package> --registry <name>`
 The lock file (`hpm.lock`) records the resolved version and SHA-256 checksum
 for each dependency, so subsequent installs are reproducible and tamper-evident.
 
+**What a package's `[dependencies]` mean to the projects that use it.** When
+a package version is published, its registry dependencies (not `path` or
+`url` links) are registered with it, and the registry serves them as that
+version's `deps`. A client choosing versions for a project (TumbleTrove
+Desktop does, at every launch) gives each unpinned package the newest version
+whose `[compat].houdini` supports the project's Houdini and whose ranges agree
+with the versions chosen for the project's other packages, and installs a
+required package the project does not list. So declare the range you have
+tested against, with an upper bound when a dependency's next release may
+break you:
+
+```toml
+[dependencies]
+"tumbletrove/tumbletrove" = ">=0.47, <0.48"
+```
+
+A bare full version (`"1.0.0"`) means exactly that version, here as
+everywhere in the manifest; use `"^1.0"` or `">=1.0, <2"` for a range.
+
 ### `[python_dependencies]`
 
 Python packages, installed through the bundled `uv` into a shared venv:

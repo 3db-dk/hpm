@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 256300ffebe321a02cc9332ce82e62c1e96546d6c30aada271002db9cb052833 # shrinks to (lists, pins, houdini) = ([[RegistryEntry { name: "a/x", version: "0.1.0", cksum: None, dl: "https://pkg.example/a/x-0.1.0.zip", sig: None, kid: None, houdini_compat: None, platform: None, yanked: false, description: None, author: None, created_at: None, deps: [RegistryDep { name: "a/y", req: ">=0.2.0" }] }], [RegistryEntry { name: "a/y", version: "0.1.0", cksum: None, dl: "https://pkg.example/a/y-0.1.0.zip", sig: None, kid: None, houdini_compat: None, platform: None, yanked: false, description: None, author: None, created_at: None, deps: [] }], [RegistryEntry { name: "a/z", version: "0.1.0", cksum: None, dl: "https://pkg.example/a/z-0.1.0.zip", sig: None, kid: None, houdini_compat: None, platform: None, yanked: false, description: None, author: None, created_at: None, deps: [] }]], [None, None, None], None)
