@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.1] - 2026-10-19
+
+### Fixed
+
+- **A project's dependency reports the installed copy the project uses.**
+  `ProjectManager::list_dependencies` matched an installed package by path
+  alone, so with several versions in the store it returned whichever the
+  scan met first. A project on TumblePipe 1.76.0 with 1.40.1 also installed
+  was handed 1.40.1: TumbleTrove Desktop ran that release's `tt_*` hooks,
+  which it did not declare, so no launch ever migrated a project, and
+  `generate_houdini_manifests` could point Houdini at the old copy. The copy
+  is now the version the project manifest names, else the highest installed.
+
 ## [0.34.0] - 2026-10-19
 
 ### Added

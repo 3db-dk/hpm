@@ -813,14 +813,14 @@ dependencies = [
 
 [[package]]
 name = "hpm-assets"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "hpm-cli"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -847,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-config"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "hpm-package",
  "serde",
@@ -859,7 +859,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-core"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -895,7 +895,7 @@ dependencies = [
 
 [[package]]
 name = "hpm-package"
-version = "0.34.0"
+version = "0.34.1"
 dependencies = [
  "indexmap",
  "proptest",
