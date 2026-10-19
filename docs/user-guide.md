@@ -26,7 +26,7 @@ global configuration, and troubleshooting.
 ### Prerequisites
 
 - SideFX Houdini 20.5, 21.x, or 22.x (for integration — HPM itself runs fine without it).
-- Rust 1.85+ if building from source.
+- Rust 1.89+ if building from source.
 - Git (optional; used by `hpm init --vcs git`).
 
 ### From a pre-built binary

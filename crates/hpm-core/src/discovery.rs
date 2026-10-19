@@ -28,10 +28,10 @@ impl ProjectDiscovery {
 
         // Process explicit project paths
         for path in &self.config.explicit_paths {
-            if seen_paths.insert(path.clone()) {
-                if let Some(project) = self.check_project_path(path)? {
-                    projects.push(project);
-                }
+            if seen_paths.insert(path.clone())
+                && let Some(project) = self.check_project_path(path)?
+            {
+                projects.push(project);
             }
         }
 

@@ -99,7 +99,7 @@ fn archive_contains_expected_files() {
     let file = fs::File::open(&archive_path).unwrap();
     let mut zip = zip::ZipArchive::new(file).unwrap();
     let names: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
         .collect();
 
     assert!(names.contains(&"hpm.toml".to_string()));
@@ -186,7 +186,7 @@ fn archive_packs_symlinked_files_as_their_contents() {
     let file = fs::File::open(&archive_path).unwrap();
     let mut zip = zip::ZipArchive::new(file).unwrap();
     let names: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
         .collect();
 
     assert!(names.contains(&"lib/libfoo.so".to_string()), "{names:?}");
@@ -502,7 +502,7 @@ fn platform_archive_excludes_other_platforms() {
     let file = fs::File::open(&result.archive_path).unwrap();
     let mut zip = zip::ZipArchive::new(file).unwrap();
     let names: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
         .collect();
 
     // Should contain linux files
@@ -571,7 +571,7 @@ fn shared_glob_across_platforms_rides_through_each_archive() {
         let file = fs::File::open(&result.archive_path).unwrap();
         let mut zip = zip::ZipArchive::new(file).unwrap();
         let names: Vec<String> = (0..zip.len())
-            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
 
         assert!(
@@ -642,7 +642,7 @@ fn target_glob_overrides_other_platform_match() {
     let file = fs::File::open(&result.archive_path).unwrap();
     let mut zip = zip::ZipArchive::new(file).unwrap();
     let names: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
         .collect();
 
     assert!(names.contains(&"shared/binary.so".to_string()));
@@ -702,7 +702,7 @@ fn inject_files_added_to_archive() {
     let file = fs::File::open(&result.archive_path).unwrap();
     let mut zip = zip::ZipArchive::new(file).unwrap();
     let names: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
         .collect();
 
     assert!(names.contains(&"test-pkg.json".to_string()));
@@ -748,7 +748,7 @@ fn content_prefix_produces_hpackage_layout() {
     let file = fs::File::open(&result.archive_path).unwrap();
     let mut zip = zip::ZipArchive::new(file).unwrap();
     let names: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
         .collect();
 
     // Injected json at the root; all content under the slug folder.
@@ -794,7 +794,7 @@ fn hand_written_json_ships_once_at_root_under_prefix() {
     let file = fs::File::open(&result.archive_path).unwrap();
     let mut zip = zip::ZipArchive::new(file).unwrap();
     let names: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
         .collect();
 
     assert_eq!(

@@ -50,7 +50,7 @@ tempfile.workspace = true
 # NTFS junctions for dev-link installs. Junctions work without Developer
 # Mode/admin (unlike NTFS directory symlinks), which is the realistic baseline
 # for Houdini Windows users.
-junction = "2.0"
+junction = "2.1"
 
 [dev-dependencies]
 tempfile.workspace = true

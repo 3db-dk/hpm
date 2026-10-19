@@ -70,7 +70,10 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
             .map_err(|e| FetchError::ExtractionError(e.to_string()))?;
 
         if let Some(ref skip) = layout.skip_entry
-            && file.name() == skip
+            && file
+                .name()
+                .map_err(|e| FetchError::ExtractionError(e.to_string()))?
+                == *skip
         {
             continue;
         }
@@ -169,8 +172,9 @@ fn archive_layout_sync(
     for i in 0..archive.len() {
         let name = archive
             .name_for_index(i)
-            .ok_or_else(|| FetchError::ExtractionError("Invalid archive entry".to_string()))?;
-        names.push(name.to_string());
+            .ok_or_else(|| FetchError::ExtractionError("Invalid archive entry".to_string()))?
+            .map_err(|e| FetchError::ExtractionError(e.to_string()))?;
+        names.push(name.into_owned());
     }
     Ok(resolve_archive_layout(&names))
 }

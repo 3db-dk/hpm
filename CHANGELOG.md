@@ -23,6 +23,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   met. It is pure over version lists the caller fetched, and is checked
   against a brute-force search by property.
 
+### Changed
+
+- Dependencies refreshed. `zip` 8 → 9 is the only semver-major move; the rest
+  is a lockfile refresh within existing ranges. The tree went from 308 to 301
+  crates.
+- **An archive entry whose name is flagged UTF-8 but is not valid UTF-8 now
+  fails the install** instead of extracting. `zip` 8 decoded such a name
+  lossily, so the entry landed under a filename with U+FFFD in place of the
+  bad bytes — a file that existed on disk under a name nothing in the package
+  referred to. `zip` 9 reports the name as undecodable, and hpm surfaces that
+  as an extraction error. Archives from ordinary tools are
+  unaffected: names that are not UTF-8 are written without the flag and
+  decode as CP437, as before.
+- **Minimum supported Rust version raised from 1.85 to 1.89.** The declared
+  1.85 had already stopped being true — `time` and `zip` 8.6 required 1.88 —
+  and `aes` 0.9.3 now requires 1.89. Builds from the pinned `stable`
+  toolchain are unaffected.
+
 ## [0.33.1] - 2026-09-22
 
 ### Fixed

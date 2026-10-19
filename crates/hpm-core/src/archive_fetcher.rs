@@ -370,7 +370,7 @@ mod tests {
         let mut buf = std::io::Cursor::new(Vec::new());
         {
             let mut zip = zip::ZipWriter::new(&mut buf);
-            let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+            let options = zip::write::SimpleFileOptions::default();
             zip.start_file("pkg-1.0/hpm.toml", options).unwrap();
             use std::io::Write;
             zip.write_all(b"[package]\n").unwrap();

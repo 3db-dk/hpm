@@ -88,16 +88,15 @@ pub async fn install_dependencies(
                      Delete the corrupted package and run 'hpm install' again.",
                     )?;
                 info!("Cached packages verified successfully");
-                if let Some(ref metadata) = lock.metadata {
-                    if let Some(days) = metadata.days_since_generated() {
-                        if days > 90 {
-                            warn!(
-                                "Lock file is {} days old. \
+                if let Some(ref metadata) = lock.metadata
+                    && let Some(days) = metadata.days_since_generated()
+                    && days > 90
+                {
+                    warn!(
+                        "Lock file is {} days old. \
                                  Consider running 'hpm update' to check for newer versions.",
-                                days
-                            );
-                        }
-                    }
+                        days
+                    );
                 }
                 Some(lock)
             }
@@ -137,13 +136,13 @@ pub async fn install_dependencies(
         // --frozen-lockfile: the new lockfile must equal the existing one.
         // has_changes() compares dependencies + python_dependencies only,
         // ignoring metadata.generated_at which always differs.
-        if let Some(ref existing) = existing_lock {
-            if new_lock.has_changes(existing) {
-                bail!(
-                    "--frozen-lockfile is set but the resolved dependency set differs from hpm.lock. \
+        if let Some(ref existing) = existing_lock
+            && new_lock.has_changes(existing)
+        {
+            bail!(
+                "--frozen-lockfile is set but the resolved dependency set differs from hpm.lock. \
                      Re-run without --frozen-lockfile to regenerate it."
-                );
-            }
+            );
         }
         info!("Skipping lock file update (--frozen-lockfile)");
     } else {

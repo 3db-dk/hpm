@@ -56,10 +56,11 @@ pub async fn audit_packages(
             .dependencies
             .iter()
             .filter_map(|(name, spec)| {
-                if let hpm_package::DependencySpec::Url { url, .. } = spec {
-                    if url.starts_with("http://") && !url.starts_with("https://") {
-                        return Some(name.clone());
-                    }
+                if let hpm_package::DependencySpec::Url { url, .. } = spec
+                    && url.starts_with("http://")
+                    && !url.starts_with("https://")
+                {
+                    return Some(name.clone());
                 }
                 None
             })
@@ -83,13 +84,13 @@ pub async fn audit_packages(
         match hpm_core::LockFile::load(&lock_path) {
             Ok(lock) => {
                 // Check 3: Lock file staleness
-                if let Some(ref metadata) = lock.metadata {
-                    if let Some(days) = metadata.days_since_generated() {
-                        if days > 90 {
-                            warnings.push(format!("Lock file is {} days old", days));
-                        } else {
-                            passed.push("Lock file is recent");
-                        }
+                if let Some(ref metadata) = lock.metadata
+                    && let Some(days) = metadata.days_since_generated()
+                {
+                    if days > 90 {
+                        warnings.push(format!("Lock file is {} days old", days));
+                    } else {
+                        passed.push("Lock file is recent");
                     }
                 }
 

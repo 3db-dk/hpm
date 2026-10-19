@@ -380,15 +380,15 @@ async fn check_package_size(project_dir: &Path, result: &mut ValidationResult) {
         .collect::<Result<Vec<_>, _>>()
     {
         for entry in entries {
-            if entry.file_type().is_file() {
-                if let Ok(metadata) = entry.metadata() {
-                    let size = metadata.len();
-                    total_size += size;
+            if entry.file_type().is_file()
+                && let Ok(metadata) = entry.metadata()
+            {
+                let size = metadata.len();
+                total_size += size;
 
-                    // Flag files larger than 10MB
-                    if size > 10 * 1024 * 1024 {
-                        large_files.push((entry.path().to_path_buf(), size));
-                    }
+                // Flag files larger than 10MB
+                if size > 10 * 1024 * 1024 {
+                    large_files.push((entry.path().to_path_buf(), size));
                 }
             }
         }

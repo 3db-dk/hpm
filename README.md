@@ -12,7 +12,7 @@ Houdini to pick the packages up on launch.
 
 Download a pre-built binary from the
 [latest release](https://github.com/3db-dk/hpm/releases/latest),
-or build from source (requires Rust 1.85+):
+or build from source (requires Rust 1.89+):
 
 ```sh
 git clone https://github.com/3db-dk/hpm.git

@@ -70,7 +70,7 @@ which converts them to exit codes and help hints.
 
 Key non-functional properties:
 
-- **Language**: Rust, edition 2024, MSRV 1.85.
+- **Language**: Rust, edition 2024, MSRV 1.89.
 - **Async runtime**: Tokio, multi-thread.
 - **Configuration**: TOML throughout (manifests, lock file, global config).
 - **Testing**: unit, integration, and property-based (proptest) tests.

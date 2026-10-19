@@ -143,13 +143,13 @@ impl VenvManager {
         // Also rebuild when metadata.json is from an incompatible schema —
         // otherwise launch fails hard on the parse error with no way to
         // clear the cache from the UI.
-        if venv_path.exists() {
-            if let Some(reason) = self.venv_staleness_reason(&venv_path, resolved_deps).await {
-                warn!("Rebuilding venv {}: {}", hash, reason);
-                fs::remove_dir_all(&venv_path)
-                    .await
-                    .map_err(|e| IoOp::wrap("remove stale virtual environment", &venv_path, e))?;
-            }
+        if venv_path.exists()
+            && let Some(reason) = self.venv_staleness_reason(&venv_path, resolved_deps).await
+        {
+            warn!("Rebuilding venv {}: {}", hash, reason);
+            fs::remove_dir_all(&venv_path)
+                .await
+                .map_err(|e| IoOp::wrap("remove stale virtual environment", &venv_path, e))?;
         }
 
         if !venv_path.exists() {
@@ -439,16 +439,14 @@ impl VenvManager {
                     .any(|pkg| active_packages.contains(pkg))
             };
 
-            if !is_used {
-                if let Ok(size) = self.calculate_venv_size(&venv_meta.path).await {
-                    orphaned.push(OrphanedVenv {
-                        hash: venv_meta.hash,
-                        path: venv_meta.path,
-                        size,
-                        created_at: venv_meta.created_at,
-                        last_used: venv_meta.last_used,
-                    });
-                }
+            if !is_used && let Ok(size) = self.calculate_venv_size(&venv_meta.path).await {
+                orphaned.push(OrphanedVenv {
+                    hash: venv_meta.hash,
+                    path: venv_meta.path,
+                    size,
+                    created_at: venv_meta.created_at,
+                    last_used: venv_meta.last_used,
+                });
             }
         }
 

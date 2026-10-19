@@ -174,7 +174,7 @@ async fn extract_zip(archive_data: &[u8], target_path: &Path) -> Result<(), Pyth
 
         for i in 0..archive.len() {
             let mut file = archive.by_index(i)?;
-            let name = file.name().to_string();
+            let name = file.name()?.into_owned();
 
             if name.ends_with(uv_binary_name) || name == uv_binary_name {
                 let mut contents = Vec::new();

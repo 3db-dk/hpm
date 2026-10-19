@@ -124,8 +124,10 @@ fn archive_entry_names(
     let mut zip = zip::ZipArchive::new(file)?;
     let mut names = std::collections::HashSet::with_capacity(zip.len());
     for i in 0..zip.len() {
-        if let Ok(entry) = zip.by_index(i) {
-            names.insert(entry.name().to_string());
+        if let Ok(entry) = zip.by_index(i)
+            && let Ok(name) = entry.name()
+        {
+            names.insert(name.into_owned());
         }
     }
     Ok(names)
