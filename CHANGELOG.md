@@ -27,8 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it: a bare `1.2.3` is exactly that version), else the highest one its
   range admits; a path dependency protects only its `_dev/` install.
 
+- **A download is no longer kept twice.** Every install extracted its
+  archive into `~/.hpm/fetch/`, copied that into the store, and left the
+  extracted copy behind, so each installed version took twice its size and
+  the staging copy outlived the store's when the version was removed. Both
+  fetch-and-install paths now go through one sequence that removes the
+  staging copy once the store holds the package.
+
 ### Added
 
+- **`StorageManager::sweep_fetch_staging`** removes what earlier installs
+  left in fetch staging, skipping entries younger than a given age so it
+  never races an extraction in flight.
 - **`hpm_core::disk_full`** recognises a full disk from an `io::Error`, an
   error's source chain, or a child process's message, with the per-platform
   codes that collide across platforms kept apart.

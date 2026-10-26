@@ -1422,3 +1422,48 @@ async fn a_bare_slug_key_still_matches() {
         .unwrap();
     assert_eq!(orphans, vec!["tool@2.0.0"]);
 }
+
+// ------------------------------------------------------------------
+// Fetch staging sweep
+// ------------------------------------------------------------------
+
+/// Old leftovers in staging are removed and counted; a young entry (an
+/// extraction that may be in flight) and the store itself are not touched.
+#[test]
+fn sweep_fetch_staging_removes_only_old_leftovers() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    plant_installed(temp.path(), "studio/tool", "1.0.0", &[]);
+    let staging = temp.path().join("fetch");
+    let leftover = staging.join("studio-tool-1.0.0");
+    std::fs::create_dir_all(leftover.join("python")).unwrap();
+    std::fs::write(leftover.join("python").join("a.py"), vec![0u8; 1000]).unwrap();
+    std::fs::write(leftover.join("hpm.toml"), vec![0u8; 24]).unwrap();
+
+    // Nothing is old enough under an hour's minimum age.
+    assert_eq!(
+        storage.sweep_fetch_staging(std::time::Duration::from_secs(3600)),
+        (0, 0)
+    );
+    assert!(leftover.exists());
+
+    let (removed, freed) = storage.sweep_fetch_staging(std::time::Duration::ZERO);
+    assert_eq!((removed, freed), (1, 1024));
+    assert!(!leftover.exists());
+    assert!(staging.exists(), "the staging directory itself stays");
+    assert_eq!(
+        storage.list_installed().unwrap().len(),
+        1,
+        "the store is untouched"
+    );
+}
+
+#[test]
+fn sweep_fetch_staging_without_a_staging_dir_is_a_no_op() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    assert_eq!(
+        storage.sweep_fetch_staging(std::time::Duration::ZERO),
+        (0, 0)
+    );
+}

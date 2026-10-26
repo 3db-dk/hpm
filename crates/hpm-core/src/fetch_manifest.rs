@@ -76,8 +76,9 @@ pub async fn fetch_manifest(
         .map_err(|e| FetchManifestError::Fetch(crate::archive_fetcher::FetchError::from(e)))?;
 
     let fetcher = build_fetcher(storage)?;
-    let fetch_result = fetcher.fetch(&source, name).await?;
-    let installed = storage.install_into_cas(&fetch_result.package_path).await?;
+    let (installed, _checksum) = fetcher
+        .fetch_into_store::<FetchManifestError>(storage, &source, name)
+        .await?;
 
     info!(
         "fetch_manifest: installed {}@{} into CAS",

@@ -97,6 +97,76 @@ impl StorageManager {
         (swept, repaired)
     }
 
+    /// The directories downloads are extracted into before they are copied
+    /// into the store: `<home>/fetch`, where [`crate::ProjectManager`] puts
+    /// it, and `<packages_dir>/../fetch`, where `fetch_manifest` does. They are
+    /// the same directory unless `packages_dir` was moved out of `home_dir`.
+    fn fetch_staging_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = vec![self.config.home_dir.join("fetch")];
+        if let Some(parent) = self.config.packages_dir.parent() {
+            let other = parent.join("fetch");
+            if !dirs.contains(&other) {
+                dirs.push(other);
+            }
+        }
+        dirs
+    }
+
+    /// Remove extracted downloads left in the fetch staging directory,
+    /// returning `(entries_removed, bytes_freed)`.
+    ///
+    /// Every download used to stay there after it was copied into the store,
+    /// so each installed version was on disk twice, and the copy in staging
+    /// outlived the store's own when the version was removed. Installs now
+    /// remove their staging copy ([`crate::archive_fetcher`]); this clears
+    /// what earlier installs left. An entry younger than `min_age` is skipped:
+    /// it may be an extraction another process has in flight. Nothing in
+    /// staging is referenced once its install finished, and anything missing
+    /// is downloaded again.
+    pub fn sweep_fetch_staging(&self, min_age: std::time::Duration) -> (usize, u64) {
+        let mut removed = 0;
+        let mut freed = 0;
+        for dir in self.fetch_staging_dirs() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                    continue;
+                };
+                let old_enough = meta
+                    .modified()
+                    .ok()
+                    .and_then(|m| m.elapsed().ok())
+                    .is_some_and(|age| age >= min_age);
+                if !old_enough {
+                    continue;
+                }
+                let size = crate::storage::dir_size(&path);
+                let result = if meta.is_dir() {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                };
+                match result {
+                    Ok(()) => {
+                        removed += 1;
+                        freed += size;
+                    }
+                    Err(e) => warn!(
+                        "Could not remove fetch staging entry {}: {e}",
+                        path.display()
+                    ),
+                }
+            }
+        }
+        if removed > 0 {
+            info!("Removed {removed} leftover download(s) from fetch staging ({freed} bytes)");
+        }
+        (removed, freed)
+    }
+
     pub fn list_installed(&self) -> Result<Vec<InstalledPackage>, StorageError> {
         let mut packages = Vec::new();
 
@@ -526,6 +596,19 @@ impl StorageManager {
         debug!("Found {} dev installs in {}", out.len(), dev_root.display());
         Ok(out)
     }
+}
+
+/// Bytes under `path`, links counted as themselves and never followed.
+pub(crate) fn dir_size(path: &std::path::Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if !meta.is_dir() {
+        return meta.len();
+    }
+    std::fs::read_dir(path)
+        .map(|entries| entries.flatten().map(|e| dir_size(&e.path())).sum())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

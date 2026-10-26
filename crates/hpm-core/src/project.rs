@@ -899,9 +899,9 @@ pub(crate) async fn fetch_and_install_pkg(
     version: &str,
     source: PackageSource,
 ) -> Result<(InstalledPackage, String), ProjectError> {
-    let fetch_result = fetcher.fetch(&source, name).await?;
-    let checksum = fetch_result.checksum.clone();
-    let installed = storage.install_into_cas(&fetch_result.package_path).await?;
+    let (installed, checksum) = fetcher
+        .fetch_into_store::<ProjectError>(storage, &source, name)
+        .await?;
     info!("Successfully fetched and installed {}@{}", name, version);
     Ok((installed, checksum))
 }

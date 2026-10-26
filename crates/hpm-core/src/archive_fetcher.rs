@@ -150,6 +150,30 @@ impl ArchiveFetcher {
         })
     }
 
+    /// Fetch `source` and copy it into the store, then remove the extracted
+    /// staging copy: once the store holds the package nothing reads staging
+    /// again, and leaving it kept every installed version on disk twice.
+    /// The one fetch-and-install sequence, for every caller.
+    pub(crate) async fn fetch_into_store<E>(
+        &self,
+        storage: &crate::storage::StorageManager,
+        source: &PackageSource,
+        package_name: &str,
+    ) -> Result<(crate::storage::InstalledPackage, String), E>
+    where
+        E: From<FetchError> + From<crate::storage::StorageError>,
+    {
+        let fetched = self.fetch(source, package_name).await?;
+        let installed = storage.install_into_cas(&fetched.package_path).await?;
+        if let Err(e) = tokio::fs::remove_dir_all(&fetched.package_path).await {
+            warn!(
+                "Installed {} but could not remove its staging copy at {:?}: {}",
+                package_name, fetched.package_path, e
+            );
+        }
+        Ok((installed, fetched.checksum))
+    }
+
     /// Fetch a package archive — download to the URL-keyed cache file,
     /// extract into the staging dir, and report the on-disk checksum.
     ///
@@ -387,6 +411,72 @@ mod tests {
             .iter()
             .map(|b| format!("{:02x}", b))
             .collect()
+    }
+
+    /// Installing a download leaves no copy of it in staging. Every install
+    /// used to, so each version in the store was on disk twice.
+    #[tokio::test]
+    async fn fetch_into_store_removes_the_staging_copy() {
+        let temp = TempDir::new().unwrap();
+        let storage = crate::storage::StorageManager::new(hpm_config::StorageConfig {
+            home_dir: temp.path().to_path_buf(),
+            cache_dir: temp.path().join("cache"),
+            packages_dir: temp.path().join("packages"),
+            registry_cache_dir: temp.path().join("registry"),
+        })
+        .unwrap();
+        let staging = temp.path().join("fetch");
+        let fetcher = ArchiveFetcher::new(temp.path().join("cache"), staging.clone()).unwrap();
+
+        // Pre-place the archive in the download cache so no network happens.
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            use std::io::Write;
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("tool-1.0.0/hpm.toml", options).unwrap();
+            zip.write_all(
+                b"[package]\npath = \"studio/tool\"\nname = \"tool\"\nversion = \"1.0.0\"\n",
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+        std::fs::write(
+            temp.path().join("cache").join("studio-tool-1.0.0"),
+            buf.into_inner(),
+        )
+        .unwrap();
+
+        let source = PackageSource::url("https://example.invalid/tool.zip", "1.0.0").unwrap();
+        let (installed, _) = fetcher
+            .fetch_into_store::<FetchIntoStoreTestError>(&storage, &source, "studio/tool")
+            .await
+            .unwrap();
+
+        assert_eq!(installed.version, "1.0.0");
+        assert!(installed.install_path.join("hpm.toml").exists());
+        assert_eq!(
+            std::fs::read_dir(&staging).unwrap().count(),
+            0,
+            "the staging copy must be gone once the store holds the package"
+        );
+    }
+
+    #[derive(Debug)]
+    #[allow(dead_code)]
+    enum FetchIntoStoreTestError {
+        Fetch(FetchError),
+        Storage(crate::storage::StorageError),
+    }
+    impl From<FetchError> for FetchIntoStoreTestError {
+        fn from(e: FetchError) -> Self {
+            Self::Fetch(e)
+        }
+    }
+    impl From<crate::storage::StorageError> for FetchIntoStoreTestError {
+        fn from(e: crate::storage::StorageError) -> Self {
+            Self::Storage(e)
+        }
     }
 
     /// A checksum mismatch must abort before extraction and remove the
