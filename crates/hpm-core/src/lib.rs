@@ -83,7 +83,7 @@ pub use script_run::{
 
 // Configuration. Re-exported from hpm-config so a single `hpm-core` dep
 // covers both for embedded callers.
-pub use hpm_config::{Config, RegistrySourceConfig, RegistryType};
+pub use hpm_config::{Config, ProjectsConfig, RegistrySourceConfig, RegistryType};
 
 // Storage / CAS layer.
 pub use storage::{StorageError, StorageManager};
