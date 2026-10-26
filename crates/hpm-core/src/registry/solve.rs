@@ -361,7 +361,7 @@ fn meets(req: &str, cand: &Candidate<'_>) -> bool {
 /// ([`RegistrySet::resolve`](super::RegistrySet::resolve) looks one up
 /// directly); Cargo's grammar alone would read it as `^1.2.3`. Anything else
 /// is Cargo's grammar.
-fn requirement(req: &str) -> Option<VersionReq> {
+pub(crate) fn requirement(req: &str) -> Option<VersionReq> {
     let req = req.trim();
     if Version::parse(req).is_ok() {
         return VersionReq::parse(&format!("={req}")).ok();

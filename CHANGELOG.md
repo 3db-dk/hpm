@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now reinstalls the managed interpreter once (it lives in HPM's own tree and
   is re-downloadable), unless the failure is the disk being full, which a
   reinstall cannot fix.
+- **`hpm clean` keeps the version a project uses.** The collector looked an
+  installed package up by bare slug in a map that kept one arbitrary version
+  per slug, so with several versions in the store it protected whichever
+  the scan met last and removed the one the project depended on, and a
+  scoped `creator/slug` key matched nothing, so every package a TumbleTrove
+  Desktop project used was classified orphaned. A dependency now resolves
+  to the installed copy at the version it names (read as the solver reads
+  it: a bare `1.2.3` is exactly that version), else the highest one its
+  range admits; a path dependency protects only its `_dev/` install.
 
 ### Added
 

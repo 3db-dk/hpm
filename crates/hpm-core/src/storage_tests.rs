@@ -1265,3 +1265,160 @@ async fn cleanup_comprehensive_reports_dev_orphans() {
     assert_eq!(real.removed_dev_installs, vec!["_dev/orphan@1.0.0"]);
     assert!(!dev_path.exists());
 }
+
+// ------------------------------------------------------------------
+// Registry (CAS) package cleanup
+// ------------------------------------------------------------------
+
+/// Plant an installed registry package at `packages/<creator>/<slug>@<version>/`,
+/// declaring `deps` (name, requirement) as its own registry dependencies.
+fn plant_installed(home: &std::path::Path, path: &str, version: &str, deps: &[(&str, &str)]) {
+    let (creator, slug) = path.split_once('/').unwrap();
+    let dir = home
+        .join("packages")
+        .join(creator)
+        .join(format!("{slug}@{version}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut manifest =
+        format!("[package]\npath = \"{path}\"\nname = \"{slug}\"\nversion = \"{version}\"\n");
+    if !deps.is_empty() {
+        manifest.push_str("\n[dependencies]\n");
+        for (name, req) in deps {
+            manifest.push_str(&format!("\"{name}\" = \"{req}\"\n"));
+        }
+    }
+    std::fs::write(dir.join("hpm.toml"), manifest).unwrap();
+}
+
+/// A project manifest naming `deps` exactly as TumbleTrove Desktop writes
+/// one: scoped keys, each at the exact version a launch selected.
+fn write_project(dir: &std::path::Path, deps: &[(&str, &str)]) {
+    std::fs::create_dir_all(dir).unwrap();
+    let mut manifest =
+        "[package]\npath = \"studio/project\"\nname = \"project\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
+            .to_string();
+    for (name, version) in deps {
+        manifest.push_str(&format!("\"{name}\" = \"{version}\"\n"));
+    }
+    std::fs::write(dir.join("hpm.toml"), manifest).unwrap();
+}
+
+fn test_storage(temp: &TempDir) -> StorageManager {
+    StorageManager::new(StorageConfig {
+        home_dir: temp.path().to_path_buf(),
+        packages_dir: temp.path().join("packages"),
+        cache_dir: temp.path().join("cache"),
+        registry_cache_dir: temp.path().join("registry"),
+    })
+    .unwrap()
+}
+
+/// With several versions of a package installed, cleanup keeps the one the
+/// project names and offers the rest, whichever order the store scan finds
+/// them in. It used to key the installed set by bare slug, keeping one
+/// arbitrary version, and a scoped key matched nothing, so every version of
+/// every package a Desktop project used was classified orphaned.
+#[tokio::test]
+async fn cleanup_keeps_the_version_a_project_names() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    for v in ["1.40.1", "1.74.3", "1.76.1"] {
+        plant_installed(temp.path(), "tumbletrove/tumblepipe", v, &[]);
+    }
+    let project = temp.path().join("project-h21");
+    write_project(&project, &[("tumbletrove/tumblepipe", "1.74.3")]);
+
+    let mut orphans = storage
+        .cleanup_unused_dry_run(&projects_config_with(vec![project]))
+        .await
+        .unwrap();
+    orphans.sort();
+    assert_eq!(orphans, vec!["tumblepipe@1.40.1", "tumblepipe@1.76.1"]);
+}
+
+/// Two projects on different versions keep both.
+#[tokio::test]
+async fn cleanup_keeps_each_projects_version() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    for v in ["1.74.3", "1.75.0", "1.76.1"] {
+        plant_installed(temp.path(), "tumbletrove/tumblepipe", v, &[]);
+    }
+    let a = temp.path().join("a");
+    let b = temp.path().join("b");
+    write_project(&a, &[("tumbletrove/tumblepipe", "1.74.3")]);
+    write_project(&b, &[("tumbletrove/tumblepipe", "1.76.1")]);
+
+    let orphans = storage
+        .cleanup_unused_dry_run(&projects_config_with(vec![a, b]))
+        .await
+        .unwrap();
+    assert_eq!(orphans, vec!["tumblepipe@1.75.0"]);
+}
+
+/// A package's own dependency range protects the highest installed version
+/// it admits, and only that one.
+#[tokio::test]
+async fn cleanup_keeps_the_copy_a_dependency_range_resolves_to() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    plant_installed(
+        temp.path(),
+        "tumbletrove/tumblepipe",
+        "1.74.3",
+        &[("tumbletrove/tumbletrove", ">=0.47, <0.48")],
+    );
+    for v in ["0.46.0", "0.47.1", "0.47.2", "0.48.0"] {
+        plant_installed(temp.path(), "tumbletrove/tumbletrove", v, &[]);
+    }
+    let project = temp.path().join("project");
+    write_project(&project, &[("tumbletrove/tumblepipe", "1.74.3")]);
+
+    let mut orphans = storage
+        .cleanup_unused_dry_run(&projects_config_with(vec![project]))
+        .await
+        .unwrap();
+    orphans.sort();
+    assert_eq!(
+        orphans,
+        vec![
+            "tumbletrove@0.46.0",
+            "tumbletrove@0.47.1",
+            "tumbletrove@0.48.0"
+        ]
+    );
+}
+
+/// A version the project names but the store lacks protects no other
+/// version of the package in its place.
+#[tokio::test]
+async fn a_missing_version_protects_no_substitute() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    plant_installed(temp.path(), "tumbletrove/tumblepipe", "1.76.1", &[]);
+    let project = temp.path().join("project");
+    write_project(&project, &[("tumbletrove/tumblepipe", "1.74.3")]);
+
+    let orphans = storage
+        .cleanup_unused_dry_run(&projects_config_with(vec![project]))
+        .await
+        .unwrap();
+    assert_eq!(orphans, vec!["tumblepipe@1.76.1"]);
+}
+
+/// A bare-slug key, as older hand-written manifests use, still matches.
+#[tokio::test]
+async fn a_bare_slug_key_still_matches() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    plant_installed(temp.path(), "studio/tool", "1.0.0", &[]);
+    plant_installed(temp.path(), "studio/tool", "2.0.0", &[]);
+    let project = temp.path().join("project");
+    write_project(&project, &[("tool", "1.0.0")]);
+
+    let orphans = storage
+        .cleanup_unused_dry_run(&projects_config_with(vec![project]))
+        .await
+        .unwrap();
+    assert_eq!(orphans, vec!["tool@2.0.0"]);
+}

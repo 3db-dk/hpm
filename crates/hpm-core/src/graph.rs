@@ -168,18 +168,11 @@ impl DependencyResolver {
 
         info!("Building dependency graph from {} projects", projects.len());
 
-        // Create a map of installed packages for quick lookup
-        // Use &str keys to avoid cloning package names
-        let installed_map: HashMap<&str, &InstalledPackage> = installed_packages
-            .iter()
-            .map(|pkg| (pkg.manifest.package.slug(), pkg))
-            .collect();
-
         // Process each project
         for project in projects {
             self.process_project_dependencies(
                 project,
-                &installed_map,
+                &installed_packages,
                 &mut graph,
                 &mut HashSet::new(), // visited set for cycle detection
             )?;
@@ -209,7 +202,7 @@ impl DependencyResolver {
     fn process_project_dependencies<'a>(
         &self,
         project: &'a DiscoveredProject,
-        installed_map: &HashMap<&str, &'a InstalledPackage>,
+        installed_map: &'a [InstalledPackage],
         graph: &mut DependencyGraph,
         visited: &mut HashSet<&'a str>,
     ) -> Result<(), DependencyError> {
@@ -256,7 +249,7 @@ impl DependencyResolver {
     fn process_transitive_dependencies<'a>(
         &self,
         package: &'a InstalledPackage,
-        installed_map: &HashMap<&str, &'a InstalledPackage>,
+        installed_map: &'a [InstalledPackage],
         graph: &mut DependencyGraph,
         visited: &mut HashSet<&'a str>,
         parent_id: &PackageId,
@@ -303,18 +296,34 @@ impl DependencyResolver {
         Ok(())
     }
 
-    /// Resolve a dependency name to its PackageId and optional installed package.
+    /// Resolve a dependency to its PackageId and the installed copy it uses.
+    ///
+    /// The copy is chosen by the dependency's name *and* version: the exact
+    /// version the spec names, else the highest installed version its
+    /// requirement admits. It used to be looked up by bare slug alone, in a
+    /// map that kept one arbitrary version per slug, so with several versions
+    /// in the store `hpm clean` protected whichever one the scan met last and
+    /// deleted the one the project used; and a scoped `creator/slug` key, the
+    /// form TumbleTrove Desktop writes, matched nothing at all.
+    ///
+    /// A path dependency has no copy in the store: it is served from `_dev/`,
+    /// which [`StorageManager::cleanup_unused_dev_installs`] protects.
     fn resolve_dependency<'a>(
         &self,
         dep_name: &str,
         dep_spec: &DependencySpec,
-        installed_map: &HashMap<&str, &'a InstalledPackage>,
+        installed: &'a [InstalledPackage],
     ) -> (PackageId, Option<&'a InstalledPackage>) {
-        if let Some(installed) = installed_map.get(dep_name) {
-            (PackageId::from(*installed), Some(*installed))
-        } else {
-            let version = self.extract_version_from_spec(dep_spec);
-            (PackageId::new(dep_name.to_string(), version), None)
+        let version = self.extract_version_from_spec(dep_spec);
+        let copy = match dep_spec {
+            DependencySpec::Path { .. } => None,
+            DependencySpec::Registry { .. } | DependencySpec::Url { .. } => {
+                installed_copy_for(installed, dep_name, &version)
+            }
+        };
+        match copy {
+            Some(installed) => (PackageId::from(installed), Some(installed)),
+            None => (PackageId::new(dep_name.to_string(), version), None),
         }
     }
 
@@ -354,6 +363,41 @@ impl DependencyResolver {
             DependencySpec::Path { .. } => "local".to_string(),
         }
     }
+}
+
+/// The installed copy of the package `name` (a scoped `creator/slug`, or a
+/// bare slug in older manifests) that a dependency on `requirement` uses:
+/// the copy at exactly that version, else the highest copy the requirement
+/// admits, read as the solver reads it. `None` when no installed copy satisfies it.
+fn installed_copy_for<'a>(
+    installed: &'a [InstalledPackage],
+    name: &str,
+    requirement: &str,
+) -> Option<&'a InstalledPackage> {
+    let named = |p: &&InstalledPackage| {
+        if name.contains('/') {
+            p.manifest.package.path.as_str() == name
+        } else {
+            p.manifest.package.slug() == name
+        }
+    };
+    if let Some(exact) = installed
+        .iter()
+        .filter(named)
+        .find(|p| p.version == requirement)
+    {
+        return Some(exact);
+    }
+    // The grammar the solver reads a requirement with, so a bare `1.2.3`
+    // is exactly that version here too and never Cargo's `^1.2.3`.
+    let req = crate::registry::solve::requirement(requirement)?;
+    installed
+        .iter()
+        .filter(named)
+        .filter_map(|p| semver::Version::parse(&p.version).ok().map(|v| (v, p)))
+        .filter(|(v, _)| req.matches(v))
+        .max_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(_, p)| p)
 }
 
 #[derive(Debug, thiserror::Error)]
