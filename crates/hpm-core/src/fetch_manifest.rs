@@ -19,11 +19,19 @@ use std::path::Path;
 use thiserror::Error;
 use tracing::{debug, info};
 
+impl From<StorageError> for FetchManifestError {
+    fn from(e: StorageError) -> Self {
+        Self::Storage(Box::new(e))
+    }
+}
+
 /// Errors that can occur while fetching a package manifest.
 #[derive(Debug, Error)]
 pub enum FetchManifestError {
+    /// Boxed: `StorageError` is large enough on Windows (its paths are
+    /// wider) to trip clippy's `result_large_err` on every function here.
     #[error("storage error: {0}")]
-    Storage(#[from] StorageError),
+    Storage(Box<StorageError>),
 
     #[error("registry error: {0}")]
     Registry(#[from] RegistryError),

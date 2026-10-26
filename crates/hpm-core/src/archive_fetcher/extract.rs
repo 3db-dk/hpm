@@ -689,7 +689,8 @@ mod tests {
     }
 
     /// A 4-byte ELF header is enough for the magic probe; the payload never
-    /// gets executed, only sniffed.
+    /// gets executed, only sniffed. Every test using it is Unix-only.
+    #[cfg(unix)]
     const ELF_STUB: &[u8] = b"\x7fELFrest-of-a-binary";
 
     /// Regression: `hpm pack` shipped every zip entry as 0o644, so the

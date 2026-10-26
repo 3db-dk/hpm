@@ -14,7 +14,9 @@ use super::stage_filter::{StageFilter, collect_stage_entries};
 
 /// Archive mode for a non-executable file.
 const MODE_REGULAR: u32 = 0o644;
-/// Archive mode for an executable file.
+/// Archive mode for an executable file. Unix only: a Windows host has no
+/// executable bit to read, so it stamps every entry [`MODE_REGULAR`].
+#[cfg(unix)]
 const MODE_EXECUTABLE: u32 = 0o755;
 
 /// The Unix mode to stamp on `source`'s archive entry.
