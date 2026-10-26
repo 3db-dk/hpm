@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tokio::fs;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 const UV_VERSION: &str = "0.5.9";
 
@@ -317,15 +317,42 @@ pub async fn ensure_managed_python(version: &str) -> Result<(), PythonError> {
     }
 
     debug!("Ensuring managed Python {} is available", version);
-    run_uv_command(&["python", "install", version])
-        .await
-        .map_err(|e| e.uv_context(format!("Failed to install managed Python {}", version)))?;
+    let context = || format!("Failed to install managed Python {}", version);
+    match run_uv_command(&["python", "install", version]).await {
+        Ok(_) => {}
+        Err(PythonError::UvCommand { stderr, .. }) if should_reinstall(&stderr) => {
+            // `uv python install` of an existing version re-checks the copy on
+            // disk, so a failure here is usually a damaged install rather than
+            // a missing one. A disk that filled while uv rewrote the copy's
+            // `_sysconfigdata` leaves a truncated file, and every later run
+            // stops on it with "Unexpected end of file". The copy lives in
+            // HPM's own tree and is re-downloadable, so replace it once.
+            warn!(
+                "Managed Python {} failed its install check ({}); reinstalling it",
+                version,
+                stderr.trim()
+            );
+            run_uv_command(&["python", "install", "--reinstall", version])
+                .await
+                .map_err(|e| e.uv_context(context()))?;
+        }
+        Err(e) => return Err(e.uv_context(context())),
+    }
 
     installed_python_versions()
         .lock()
         .unwrap()
         .insert(version.to_string());
     Ok(())
+}
+
+/// Whether a failed `uv python install` is worth one `--reinstall`.
+///
+/// Everything except a full disk: reinstalling there deletes a copy that may
+/// be intact only to fail writing the new one, and the error the user needs
+/// is the one they already have.
+fn should_reinstall(stderr: &str) -> bool {
+    !crate::disk_full::is_disk_full_message(stderr)
 }
 
 /// Run UV with HPM's isolated cache and config applied per-invocation.

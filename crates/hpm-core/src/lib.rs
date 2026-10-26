@@ -44,6 +44,7 @@
 pub mod archive_fetcher;
 pub mod asset_index;
 pub mod discovery;
+pub mod disk_full;
 pub mod exec_mode;
 pub mod fetch_manifest;
 pub mod global;

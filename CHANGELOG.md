@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A managed Python damaged by a full disk repairs itself.** When the disk
+  filled while uv was rewriting a fresh CPython's `_sysconfigdata`, the
+  truncated file stayed behind, and every later `uv python install` stopped on
+  it with `Unexpected end of file`, so no project with Python dependencies
+  could resolve until someone deleted the copy by hand. A failed install check
+  now reinstalls the managed interpreter once (it lives in HPM's own tree and
+  is re-downloadable), unless the failure is the disk being full, which a
+  reinstall cannot fix.
+
+### Added
+
+- **`hpm_core::disk_full`** recognises a full disk from an `io::Error`, an
+  error's source chain, or a child process's message, with the per-platform
+  codes that collide across platforms kept apart.
+
 ## [0.34.1] - 2026-10-19
 
 ### Fixed
