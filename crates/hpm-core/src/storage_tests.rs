@@ -119,8 +119,13 @@ fn repair_exec_modes_sweeps_every_installed_package() {
         // Mach-O 64-bit little-endian magic.
         std::fs::write(&tool, [0xCFu8, 0xFA, 0xED, 0xFE]).unwrap();
         std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o644)).unwrap();
-        std::fs::write(dir.join("data.hda"), b"INDX").unwrap();
-        tools.push((tool, dir.join("data.hda")));
+        let data = dir.join("data.hda");
+        std::fs::write(&data, b"INDX").unwrap();
+        // Pinned rather than left to the umask, which differs between
+        // machines (002 on the Linux worker gave 0o664) and is not what this
+        // test is about: only that the sweep leaves a data file's mode alone.
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o644)).unwrap();
+        tools.push((tool, data));
     }
 
     let (swept, repaired) = storage_manager.repair_exec_modes();
