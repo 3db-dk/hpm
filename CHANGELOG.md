@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-11-02
+
 ### Added
 
 - **`StorageManager::evict_download(name, version)`** forgets a version's
@@ -15,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   download. A reinstall otherwise reuses a leftover staging copy as it stands,
   which would reproduce the damage. TumbleTrove Desktop uses it to repair a
   package whose program the OS refuses to start.
+- **`StorageManager::sweep_fetch_staging`** removes what earlier installs
+  left in fetch staging, skipping entries younger than a given age so it
+  never races an extraction in flight.
+- **`hpm_core::disk_full`** recognises a full disk from an `io::Error`, an
+  error's source chain, or a child process's message, with the per-platform
+  codes that collide across platforms kept apart.
+
+### Changed
+
+- **`StorageError` has a new `Stage` variant**, returned when a dev copy's
+  file set cannot be built from the workspace's ignore files and `[stage]`
+  rules (a bad glob, an unreadable `.hpmignore`). Code that matches
+  `StorageError` exhaustively needs an arm for it.
 
 ### Fixed
 
@@ -56,15 +71,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the staging copy outlived the store's when the version was removed. Both
   fetch-and-install paths now go through one sequence that removes the
   staging copy once the store holds the package.
-
-### Added
-
-- **`StorageManager::sweep_fetch_staging`** removes what earlier installs
-  left in fetch staging, skipping entries younger than a given age so it
-  never races an extraction in flight.
-- **`hpm_core::disk_full`** recognises a full disk from an `io::Error`, an
-  error's source chain, or a child process's message, with the per-platform
-  codes that collide across platforms kept apart.
 
 ## [0.34.1] - 2026-10-19
 
