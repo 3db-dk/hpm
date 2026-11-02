@@ -200,7 +200,7 @@ or `name@version`. `name` uses the `creator/slug` form.
 | Flag | Description |
 |------|-------------|
 | `--path <dir>` | Add as a local path dependency (only valid with a single package). Path dependencies install into a `_dev/` subtree of the global packages dir so they never overwrite a registry install at the same `(slug, version)`. |
-| `--link` | For path dependencies, install as a symlink (Unix) or NTFS junction (Windows) instead of copying. Working-tree edits become visible to a live Houdini session without re-running `hpm install`. Requires `--path`. Packages that declare native `[compat].platforms` (a DSO/HDK build, not `universal`) are installed as a copy even with `--link`: a linked native binary can't be rebuilt in place while a Houdini session has it loaded (Windows `LNK1104`), and a mapped DSO needs a relaunch to reload anyway. |
+| `--link` | For path dependencies, install as a symlink (Unix) or NTFS junction (Windows) instead of copying. Working-tree edits become visible to a live Houdini session without re-running `hpm install`. Requires `--path`. Packages that declare native `[compat].platforms` (a DSO/HDK build, not `universal`) are installed as a copy of their install image even with `--link`: a linked native binary can't be rebuilt in place while a Houdini session has it loaded (Windows `LNK1104`), and a mapped DSO needs a relaunch to reload anyway. |
 | `-m, --manifest <path>` | Path to the manifest to modify (`hpm.toml` or containing dir). Defaults to cwd. |
 | `--optional` | Mark all added dependencies as optional. |
 | `--registry <name>` | Resolve from this configured registry only, and record `registry = "<name>"` in `hpm.toml` so later installs and updates keep using it. Errors if the name is not configured. Not valid with `--path`. |
@@ -999,7 +999,9 @@ one of four shapes:
 # 3. Direct URL (pre-built archive — ZIP or gzipped tar both accepted)
 "studio/prebuilt" = { url = "https://pkg.example.com/prebuilt-1.0.0.zip", version = "1.0.0" }
 
-# 4. Local path (development)
+# 4. Local path (development). Installs a copy of the package's install
+#    image: the files `hpm pack` would ship (see [stage]), not the whole
+#    workspace, so .git/, build trees and virtualenvs are never copied.
 local-tools = { path = "../local-tools" }
 local-tools = { path = "../local-tools", optional = true }
 
@@ -1314,7 +1316,28 @@ archive from the workspace — useful in CI where you build immediately
 before packing. `hpm build` runs `prepack` scripts and materialises the
 same install image into `output_dir` on disk, so a path-dep consumer
 working in another project can pick it up live (with `link = true`,
-edits flow through without re-running `hpm install`).
+edits flow through without re-running `hpm install`). A copied path
+dependency (`{ path = "..." }`, or a native package with `link = true`)
+installs this same image for the host platform, using the base `[stage]`
+plus the `release` profile.
+
+**`.hpmignore`.** Ignore rules come from `.gitignore` and then
+`.hpmignore`, both in gitignore syntax; `.git/` and `.hpm/` are always
+excluded. `.hpmignore` exists mostly to re-include build outputs that
+`.gitignore` keeps out of the repository:
+
+```gitignore
+# .gitignore ignores resolver/ and *.hda; ship them anyway
+!resolver/
+!resolver/**
+!otls/*.hda
+```
+
+One difference from git: the rule nearest to a file decides. A file or
+directory matched by a `!` rule is shipped even when an ancestor
+directory is ignored, so `!build/Release/*.dll` ships those DLLs under an
+ignored `build/`. Git would not re-include them. `[stage].include` cannot
+re-include an ignored path; a `!` rule is the only way.
 
 #### Build profiles — `[stage.profile.<name>]`
 
