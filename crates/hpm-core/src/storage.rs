@@ -235,6 +235,26 @@ impl StorageManager {
         Ok(packages)
     }
 
+    /// The installed package rooted at `dir`, if `dir` is one inside this
+    /// store: a registry install, or a path dependency's dev install under
+    /// `_dev/` (which [`list_installed`](Self::list_installed) hides).
+    /// `None` for a directory outside the store or one without a readable
+    /// `hpm.toml`.
+    ///
+    /// For callers that already know *which* install a project uses (the
+    /// `hpath` of its emitted Houdini manifest) and need its manifest; it
+    /// never chooses between versions.
+    pub fn installed_at(&self, dir: &std::path::Path) -> Option<InstalledPackage> {
+        if !dir.starts_with(&self.config.packages_dir) {
+            return None;
+        }
+        let is_dev = dir.starts_with(self.config.packages_dir.join(DEV_INSTALL_DIR));
+        match self.parse_installed_package(dir.to_path_buf()) {
+            Ok(Some(pkg)) => Some(InstalledPackage { is_dev, ..pkg }),
+            _ => None,
+        }
+    }
+
     /// Recursively collect installed packages from a directory.
     ///
     /// With scoped package paths (e.g. `creator/slug`), packages live at

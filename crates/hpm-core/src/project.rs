@@ -653,9 +653,16 @@ impl ProjectManager {
 
     /// The project's dependencies, each with the installed copy it uses.
     ///
-    /// The copy is the version the project's manifest names; only when the
-    /// manifest names none (no manifest, a path dependency) is it the
-    /// highest version installed. It used to be whichever version of the
+    /// The copy is the install the package's emitted Houdini manifest
+    /// points `hpath` at, which is what Houdini loads: for a path dependency
+    /// that is its dev install under `_dev/`, which the store listing never
+    /// shows. Without a readable `hpath`, it is the version the project's
+    /// manifest names, or the highest installed when it names none; a path
+    /// dependency then has none. Choosing by version alone handed a dev
+    /// launch's TumbleTrove Desktop the newest *registry* TumblePipe
+    /// (1.88.1) for a 1.89.0 dev override, so it ran that release's
+    /// `tt_prepare`, whose migrations stopped a layout short of what the
+    /// dev build reads. Before that it was whichever version of the
     /// package the store scan met first: a project on TumblePipe 1.76.0
     /// with 1.40.1 also in the store was handed 1.40.1, so TumbleTrove
     /// Desktop ran that release's `tt_*` hooks (or none, as it declared
@@ -701,15 +708,30 @@ impl ProjectManager {
                 continue;
             };
 
-            let pinned = declared
-                .get(package_path.as_str())
-                .and_then(|spec| match spec {
-                    hpm_package::DependencySpec::Registry { version, .. }
-                    | hpm_package::DependencySpec::Url { version, .. } => Some(version.as_str()),
-                    hpm_package::DependencySpec::Path { .. } => None,
-                });
-            let installed_package =
-                installed_copy(&installed_packages, &package_path, pinned).cloned();
+            // The install the emitted manifest points Houdini at is the one
+            // the project uses, dev installs included. Only without it (an
+            // unreadable or hand-written file) is the copy chosen by version.
+            let spec = declared.get(package_path.as_str());
+            let emitted = emitted_install_dir(&path)
+                .and_then(|dir| self.storage_manager.installed_at(&dir))
+                .filter(|p| p.manifest.package.path == package_path);
+            let installed_package = match (emitted, spec) {
+                (Some(pkg), _) => Some(pkg),
+                // A path dependency's copy lives under `_dev/`, which the
+                // store listing hides: any registry copy found there is a
+                // different build, so report none rather than that one.
+                (None, Some(hpm_package::DependencySpec::Path { .. })) => None,
+                (None, spec) => {
+                    let pinned = spec.and_then(|spec| match spec {
+                        hpm_package::DependencySpec::Registry { version, .. }
+                        | hpm_package::DependencySpec::Url { version, .. } => {
+                            Some(version.as_str())
+                        }
+                        hpm_package::DependencySpec::Path { .. } => None,
+                    });
+                    installed_copy(&installed_packages, &package_path, pinned).cloned()
+                }
+            };
 
             dependencies.push(ProjectDependency {
                 name: package_path.as_str().to_string(),
@@ -719,6 +741,22 @@ impl ProjectManager {
 
         Ok(dependencies)
     }
+}
+
+/// The install directory an emitted Houdini package manifest (`<creator>.
+/// <slug>.json`) points at: its first `hpath` entry, written by
+/// [`houdini_emit::build_houdini_package`] as the install's root. `None`
+/// for a file that cannot be read or has no `hpath`.
+fn emitted_install_dir(manifest: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(manifest).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let hpath = value.get("hpath")?;
+    let first = match hpath {
+        serde_json::Value::Array(items) => items.first()?.as_str()?,
+        serde_json::Value::String(s) => s.as_str(),
+        _ => return None,
+    };
+    Some(PathBuf::from(first))
 }
 
 /// The installed copy of `path` a project uses: the `pinned` version when

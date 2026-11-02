@@ -1178,6 +1178,124 @@ fn list_dependencies_reports_the_version_the_project_installs() {
     }
 }
 
+/// A path dependency's installed copy is its dev install under `_dev/`, the
+/// one the emitted Houdini manifest's `hpath` names, never the newest
+/// registry copy of the package. A dev launch of TumblePipe 1.89.0 with
+/// 1.88.1 in the store was handed 1.88.1, so Desktop ran that release's
+/// `tt_prepare` and the project was left a migration short.
+///
+/// Also: with no readable `hpath`, a path dependency reports no copy rather
+/// than a registry one.
+#[test]
+fn list_dependencies_reports_a_path_dependencys_dev_install() {
+    for emitted in [true, false] {
+        let temp_dir = TempDir::new().unwrap();
+        let (config, storage_manager) = test_setup(temp_dir.path());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let manifest = |version: &str| {
+            format!("[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"{version}\"\n")
+        };
+        let registry = config
+            .storage
+            .packages_dir
+            .join("acme")
+            .join("tools@1.88.1");
+        std::fs::create_dir_all(&registry).unwrap();
+        std::fs::write(registry.join("hpm.toml"), manifest("1.88.1")).unwrap();
+        let dev = config
+            .storage
+            .packages_dir
+            .join("_dev")
+            .join("tools@1.89.0")
+            .join("c528e8cc");
+        std::fs::create_dir_all(&dev).unwrap();
+        std::fs::write(dev.join("hpm.toml"), manifest("1.89.0")).unwrap();
+        std::fs::write(
+            project_root.join("hpm.toml"),
+            "[package]\npath = \"acme/project\"\nname = \"P\"\nversion = \"0.1.0\"\n\n\
+             [dependencies]\n\"acme/tools\" = { path = \"C:/work/tools\", link = true }\n",
+        )
+        .unwrap();
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+        let pkg_dir = &project_manager.project_paths.packages_dir;
+        let body = if emitted {
+            serde_json::json!({ "hpath": [dev.to_string_lossy()] }).to_string()
+        } else {
+            "{}".to_string()
+        };
+        std::fs::write(pkg_dir.join("acme.tools.json"), body).unwrap();
+
+        let deps = project_manager.list_dependencies().unwrap();
+        let got = deps[0].installed_package.as_ref();
+        if emitted {
+            let got = got.expect("the dev install must be found");
+            assert_eq!(got.manifest.package.version, "1.89.0");
+            assert_eq!(got.install_path, dev);
+            assert!(got.is_dev);
+        } else {
+            assert!(got.is_none(), "no hpath: got {got:?}, want none");
+        }
+    }
+}
+
+/// A registry dependency follows the emitted `hpath` too, so it is reported
+/// as the copy Houdini loads, and an `hpath` outside the store is ignored
+/// in favour of the pinned version.
+#[test]
+fn list_dependencies_follows_the_emitted_hpath() {
+    for (target, want) in [("1.0.0", "1.0.0"), ("1.2.0", "1.2.0"), ("outside", "1.2.0")] {
+        let temp_dir = TempDir::new().unwrap();
+        let (config, storage_manager) = test_setup(temp_dir.path());
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let manifest = |version: &str| {
+            format!("[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"{version}\"\n")
+        };
+        for version in ["1.0.0", "1.2.0"] {
+            let dir = config
+                .storage
+                .packages_dir
+                .join("acme")
+                .join(format!("tools@{version}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("hpm.toml"), manifest(version)).unwrap();
+        }
+        let outside = temp_dir.path().join("elsewhere").join("tools@1.0.0");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("hpm.toml"), manifest("1.0.0")).unwrap();
+        std::fs::write(
+            project_root.join("hpm.toml"),
+            "[package]\npath = \"acme/project\"\nname = \"P\"\nversion = \"0.1.0\"\n\n\
+             [dependencies]\n\"acme/tools\" = \"1.2.0\"\n",
+        )
+        .unwrap();
+        let hpath = if target == "outside" {
+            outside.clone()
+        } else {
+            config
+                .storage
+                .packages_dir
+                .join("acme")
+                .join(format!("tools@{target}"))
+        };
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+        let pkg_dir = &project_manager.project_paths.packages_dir;
+        std::fs::write(
+            pkg_dir.join("acme.tools.json"),
+            serde_json::json!({ "hpath": [hpath.to_string_lossy()] }).to_string(),
+        )
+        .unwrap();
+
+        let deps = project_manager.list_dependencies().unwrap();
+        let got = deps[0]
+            .installed_package
+            .as_ref()
+            .map(|p| p.manifest.package.version.as_str());
+        assert_eq!(got, Some(want), "hpath at {target}");
+    }
+}
+
 /// A pinned version that is not in the store resolves to nothing, never to
 /// another installed version of the package.
 #[test]
