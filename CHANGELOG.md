@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`StorageManager::installed_at(dir)`** returns the installed package
+  rooted at a directory inside the store, dev installs under `_dev/`
+  included (which `list_installed` hides). It never chooses between
+  versions; it is for callers that already know which install they want.
+
+### Fixed
+
+- **`ProjectManager::list_dependencies` reports a path dependency's dev
+  install.** It chose each dependency's copy by version from the store
+  listing, which hides `_dev/`, so a path dependency (a dev override)
+  was handed the newest *registry* copy of the package. An embedder that
+  runs hooks from that copy (TumbleTrove Desktop's `tt_prepare`) ran the
+  released build's hook instead of the dev build's. The copy is now the
+  install the package's emitted Houdini manifest points `hpath` at, which
+  is what Houdini loads. Without a readable `hpath`, a registry
+  dependency still falls back to its pinned version, and a path
+  dependency reports no copy rather than a different build.
+
 ## [0.35.0] - 2026-11-02
 
 ### Added
