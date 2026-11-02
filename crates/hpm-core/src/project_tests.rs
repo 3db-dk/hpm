@@ -1296,6 +1296,163 @@ fn list_dependencies_follows_the_emitted_hpath() {
     }
 }
 
+/// What a dependency's emitted Houdini manifest says, for the
+/// `list_dependencies` property below.
+#[derive(Debug, Clone)]
+enum Emitted {
+    /// `hpath` names the registry copy of this version (installed or not).
+    Registry(&'static str),
+    /// `hpath` names the dev install (present or not).
+    Dev,
+    /// `hpath` names a package directory outside the store.
+    Outside,
+    /// `hpath` names an installed copy of a *different* package.
+    Foreign,
+    /// A manifest with no `hpath`.
+    NoHpath,
+    /// Not JSON at all.
+    Malformed,
+}
+
+/// How the project's `hpm.toml` declares the dependency.
+#[derive(Debug, Clone)]
+enum Declared {
+    NoManifest,
+    Pinned(&'static str),
+    Path,
+}
+
+const VERSIONS: [&str; 4] = ["0.9.0", "1.0.0", "1.2.0", "1.88.1"];
+
+fn emitted_strategy() -> impl Strategy<Value = Emitted> {
+    prop_oneof![
+        prop::sample::select(VERSIONS.to_vec()).prop_map(Emitted::Registry),
+        Just(Emitted::Dev),
+        Just(Emitted::Outside),
+        Just(Emitted::Foreign),
+        Just(Emitted::NoHpath),
+        Just(Emitted::Malformed),
+    ]
+}
+
+fn declared_strategy() -> impl Strategy<Value = Declared> {
+    prop_oneof![
+        Just(Declared::NoManifest),
+        // "2.0.0" is never installed: a pin the store cannot satisfy.
+        prop::sample::select(vec!["0.9.0", "1.0.0", "1.2.0", "1.88.1", "2.0.0"])
+            .prop_map(Declared::Pinned),
+        Just(Declared::Path),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(96))]
+
+    /// `list_dependencies` reports, for any store (some registry versions,
+    /// maybe a dev install) and any way the project declares and emits the
+    /// dependency, exactly the copy this oracle names:
+    ///
+    /// 1. the install the emitted `hpath` names, when it is one of this
+    ///    package's installs inside the store, dev installs included;
+    /// 2. else nothing for a path dependency (never a registry build);
+    /// 3. else the pinned version if installed, nothing if not;
+    /// 4. else (no manifest) the highest registry version installed.
+    ///
+    /// Rule 1 for dev installs and rule 2 are the 2026-11-02 regression: a
+    /// dev launch of TumblePipe 1.89.0 was handed the registry 1.88.1.
+    #[test]
+    fn prop_list_dependencies_reports_the_copy_houdini_loads(
+        installed in prop::collection::vec(any::<bool>(), VERSIONS.len()),
+        dev_present in any::<bool>(),
+        emitted in emitted_strategy(),
+        declared in declared_strategy(),
+    ) {
+        let temp_dir = TempDir::new().unwrap();
+        let (config, storage_manager) = test_setup(temp_dir.path());
+        let store = config.storage.packages_dir.clone();
+        let project_root = temp_dir.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let manifest = |path: &str, version: &str| {
+            format!("[package]\npath = \"{path}\"\nname = \"T\"\nversion = \"{version}\"\n")
+        };
+        let registry_dir = |v: &str| store.join("acme").join(format!("tools@{v}"));
+        for (v, present) in VERSIONS.iter().zip(&installed) {
+            if *present {
+                std::fs::create_dir_all(registry_dir(v)).unwrap();
+                std::fs::write(registry_dir(v).join("hpm.toml"), manifest("acme/tools", v)).unwrap();
+            }
+        }
+        let dev_dir = store.join("_dev").join("tools@1.89.0").join("c528e8cc");
+        if dev_present {
+            std::fs::create_dir_all(&dev_dir).unwrap();
+            std::fs::write(dev_dir.join("hpm.toml"), manifest("acme/tools", "1.89.0")).unwrap();
+        }
+        let foreign_dir = store.join("acme").join("other@1.0.0");
+        std::fs::create_dir_all(&foreign_dir).unwrap();
+        std::fs::write(foreign_dir.join("hpm.toml"), manifest("acme/other", "1.0.0")).unwrap();
+        let outside_dir = temp_dir.path().join("elsewhere").join("tools@1.0.0");
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        std::fs::write(outside_dir.join("hpm.toml"), manifest("acme/tools", "1.0.0")).unwrap();
+
+        let dependency = match &declared {
+            Declared::NoManifest => None,
+            Declared::Pinned(v) => Some(format!("\"{v}\"")),
+            Declared::Path => Some("{ path = \"C:/work/tools\", link = true }".to_string()),
+        };
+        if let Some(dep) = dependency {
+            std::fs::write(
+                project_root.join("hpm.toml"),
+                format!(
+                    "[package]\npath = \"acme/project\"\nname = \"P\"\nversion = \"0.1.0\"\n\n\
+                     [dependencies]\n\"acme/tools\" = {dep}\n"
+                ),
+            )
+            .unwrap();
+        }
+        let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
+        let hpath_body = |dir: &Path| serde_json::json!({ "hpath": [dir.to_string_lossy()] }).to_string();
+        let body = match &emitted {
+            Emitted::Registry(v) => hpath_body(&registry_dir(v)),
+            Emitted::Dev => hpath_body(&dev_dir),
+            Emitted::Outside => hpath_body(&outside_dir),
+            Emitted::Foreign => hpath_body(&foreign_dir),
+            Emitted::NoHpath => "{}".to_string(),
+            Emitted::Malformed => "not json".to_string(),
+        };
+        std::fs::write(project_manager.project_paths.packages_dir.join("acme.tools.json"), body)
+            .unwrap();
+
+        // The oracle.
+        let is_installed = |v: &str| {
+            VERSIONS.iter().zip(&installed).any(|(x, present)| *x == v && *present)
+        };
+        let from_hpath = match &emitted {
+            Emitted::Registry(v) if is_installed(v) => Some((v.to_string(), false)),
+            Emitted::Dev if dev_present => Some(("1.89.0".to_string(), true)),
+            _ => None,
+        };
+        let want = from_hpath.or_else(|| match &declared {
+            Declared::Path => None,
+            Declared::Pinned(v) => is_installed(v).then(|| (v.to_string(), false)),
+            Declared::NoManifest => VERSIONS
+                .iter()
+                .zip(&installed)
+                .filter(|(_, present)| **present)
+                .map(|(v, _)| semver::Version::parse(v).unwrap())
+                .max()
+                .map(|v| (v.to_string(), false)),
+        });
+
+        let deps = project_manager.list_dependencies().unwrap();
+        prop_assert_eq!(deps.len(), 1);
+        let got = deps[0]
+            .installed_package
+            .as_ref()
+            .map(|p| (p.manifest.package.version.clone(), p.is_dev));
+        prop_assert_eq!(got, want);
+    }
+}
+
 /// A pinned version that is not in the store resolves to nothing, never to
 /// another installed version of the package.
 #[test]
