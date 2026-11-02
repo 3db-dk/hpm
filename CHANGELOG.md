@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`StorageManager::evict_download(name, version)`** forgets a version's
+  cached archive and any extracted copy left in fetch staging, so an embedder
+  that found an installed copy damaged can reinstall it from a fresh, verified
+  download. A reinstall otherwise reuses a leftover staging copy as it stands,
+  which would reproduce the damage. TumbleTrove Desktop uses it to repair a
+  package whose program the OS refuses to start.
+
 ### Fixed
 
 - **A managed Python damaged by a full disk repairs itself.** When the disk

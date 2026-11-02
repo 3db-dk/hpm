@@ -1472,3 +1472,48 @@ fn sweep_fetch_staging_without_a_staging_dir_is_a_no_op() {
         (0, 0)
     );
 }
+
+/// Eviction removes the archive, its partial download and the extracted
+/// staging copy for exactly the named version, and leaves the store, other
+/// versions and other packages alone.
+#[test]
+fn evict_download_removes_only_that_versions_downloads() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    plant_installed(temp.path(), "studio/tool", "1.0.0", &[]);
+    let staging = temp.path().join("fetch");
+    let cache = temp.path().join("cache");
+    std::fs::create_dir_all(staging.join("studio-tool-1.0.0").join("bin")).unwrap();
+    std::fs::write(
+        staging.join("studio-tool-1.0.0").join("bin").join("x"),
+        b"x",
+    )
+    .unwrap();
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("studio-tool-1.0.0"), b"zip").unwrap();
+    std::fs::write(cache.join("studio-tool-1.0.0.part"), b"zi").unwrap();
+    // Neighbours that share a prefix must survive.
+    std::fs::write(cache.join("studio-tool-1.0.01"), b"zip").unwrap();
+    std::fs::write(cache.join("studio-tool-2.0.0"), b"zip").unwrap();
+    std::fs::create_dir_all(staging.join("studio-other-1.0.0")).unwrap();
+
+    assert_eq!(storage.evict_download("studio/tool", "1.0.0"), 3);
+
+    assert!(!staging.join("studio-tool-1.0.0").exists());
+    assert!(!cache.join("studio-tool-1.0.0").exists());
+    assert!(!cache.join("studio-tool-1.0.0.part").exists());
+    assert!(cache.join("studio-tool-1.0.01").exists());
+    assert!(cache.join("studio-tool-2.0.0").exists());
+    assert!(staging.join("studio-other-1.0.0").exists());
+    assert_eq!(
+        storage.list_installed().unwrap().len(),
+        1,
+        "the store is untouched"
+    );
+
+    assert_eq!(
+        storage.evict_download("studio/tool", "1.0.0"),
+        0,
+        "nothing left to evict"
+    );
+}

@@ -167,6 +167,61 @@ impl StorageManager {
         (removed, freed)
     }
 
+    /// Forget everything downloaded for `name@version`: its cached archive and
+    /// any extracted copy still in fetch staging. Returns how many entries
+    /// were removed.
+    ///
+    /// For an embedder that has found an installed copy damaged and is about
+    /// to reinstall it. A reinstall that finds either of these reuses it: an
+    /// extracted staging copy is copied into the store as it stands, without
+    /// any check, and a cached archive is only checked when the registry
+    /// supplied a checksum. Either could be the source of the damage, so the
+    /// reinstall would reproduce it. Evicting both first makes the next
+    /// install download and verify the archive again.
+    ///
+    /// `name` is the dependency name the fetch was keyed by (`creator/slug`
+    /// for a registry package). The store's own copy is not touched; removing
+    /// that is the caller's decision.
+    pub fn evict_download(&self, name: &str, version: &str) -> usize {
+        let key =
+            crate::archive_fetcher::fetcher_install_dir(std::path::Path::new(""), name, version);
+        let mut entries: Vec<PathBuf> = self
+            .fetch_staging_dirs()
+            .into_iter()
+            .map(|dir| dir.join(&key))
+            .collect();
+        let mut cache_dirs = vec![self.config.home_dir.join("cache")];
+        if !cache_dirs.contains(&self.config.cache_dir) {
+            cache_dirs.push(self.config.cache_dir.clone());
+        }
+        for dir in cache_dirs {
+            entries.push(dir.join(&key));
+            let mut part = key.clone().into_os_string();
+            part.push(".part");
+            entries.push(dir.join(part));
+        }
+
+        let mut removed = 0;
+        for path in entries {
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            let result = if meta.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            match result {
+                Ok(()) => {
+                    debug!("Evicted download {}", path.display());
+                    removed += 1;
+                }
+                Err(e) => warn!("Could not evict download {}: {e}", path.display()),
+            }
+        }
+        removed
+    }
+
     pub fn list_installed(&self) -> Result<Vec<InstalledPackage>, StorageError> {
         let mut packages = Vec::new();
 
