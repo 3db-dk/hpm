@@ -865,3 +865,57 @@ fn signing_matches_the_published_wire_format() {
     );
     assert_eq!(key_id, "197f6b23e16c8532");
 }
+
+mod properties {
+    use super::super::prop_support::{file_tree, ignore_file, write_tree};
+    use super::*;
+    use proptest::prelude::*;
+    use std::collections::BTreeSet;
+
+    /// The reference walk: visit every file and keep the ones that neither the
+    /// file nor any ancestor directory excludes. This is the walk
+    /// `collect_stage_entries` did before it learned to prune.
+    fn reference_files(root: &Path, ignore: &ignore::gitignore::Gitignore) -> BTreeSet<String> {
+        walkdir::WalkDir::new(root)
+            .into_iter()
+            .map(Result::unwrap)
+            .filter(|e| e.file_type().is_file())
+            .filter_map(|e| {
+                let rel = e.path().strip_prefix(root).unwrap().to_path_buf();
+                (!ignore.matched_path_or_any_parents(&rel, false).is_ignore())
+                    .then(|| hpm_package::path_util::relative_path_to_forward_slash(&rel))
+            })
+            .collect()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        /// Pruning ignored directories during the staging walk must be exact:
+        /// the result equals a full walk that checks every file against its
+        /// ancestors. The rule pool mixes directory excludes with `!`
+        /// re-includes, including ones under an excluded parent (which gitignore
+        /// says cannot take effect), so a pruning shortcut that drops a
+        /// re-included file, or keeps one it shouldn't, fails here.
+        #[test]
+        fn prop_pruned_walk_matches_full_walk(
+            files in file_tree(),
+            gitignore in ignore_file(),
+            hpmignore in ignore_file(),
+        ) {
+            let dir = TempDir::new().unwrap();
+            write_tree(dir.path(), &files);
+            fs::write(dir.path().join(".gitignore"), &gitignore).unwrap();
+            fs::write(dir.path().join(".hpmignore"), &hpmignore).unwrap();
+            let ignore = build_ignore_rules(dir.path()).unwrap();
+
+            let walked: BTreeSet<String> = collect_stage_entries(dir.path(), &ignore, None, None)
+                .unwrap()
+                .into_iter()
+                .map(|(_, dest)| dest)
+                .collect();
+
+            prop_assert_eq!(walked, reference_files(dir.path(), &ignore));
+        }
+    }
+}

@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A dev copy installs the package's image, not its whole workspace.** A
+  path dependency installed as a copy (including a `link = true` one that
+  declares native platforms) cloned the entire workspace: `.git/`, cargo
+  `target/` dirs, CMake build trees and virtualenvs. On a native package
+  that came to 19 GB and 62,000 files, so a TumbleTrove Desktop dev launch
+  took longer than the request that asked for it. The copy now
+  stages the same files `hpm pack` / `hpm build` would: `.gitignore` and
+  `.hpmignore` (with `!` re-includes), `[stage]` include/exclude and the
+  host's place rules, plus `hpm.toml`. The content hash covers only those
+  files, so a rebuild in an ignored tree no longer forces a recopy. When the
+  ignore files have no `!` rules, pack, build and dev copies also skip
+  ignored directories instead of walking every file inside them. The dev
+  copy's hashing and copying no longer block an async worker thread.
+
 - **A managed Python damaged by a full disk repairs itself.** When the disk
   filled while uv was rewriting a fresh CPython's `_sysconfigdata`, the
   truncated file stayed behind, and every later `uv python install` stopped on

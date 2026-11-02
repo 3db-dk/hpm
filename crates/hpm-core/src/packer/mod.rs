@@ -15,6 +15,8 @@ use hpm_package::platform::Platform;
 use std::path::Path;
 
 mod archive;
+#[cfg(test)]
+pub(crate) mod prop_support;
 mod signing;
 mod stage_filter;
 
@@ -23,6 +25,7 @@ pub use signing::{
     SigningKey, compute_archive_checksum, compute_bytes_checksum, load_signing_key,
     load_signing_key_from_pem, sign_archive, sign_bytes,
 };
+pub(crate) use stage_filter::collect_stage_entries;
 pub use stage_filter::{StageFilter, build_ignore_rules, stage_to_dir};
 
 /// Errors from packing operations.

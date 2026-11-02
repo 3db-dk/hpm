@@ -1517,3 +1517,77 @@ fn evict_download_removes_only_that_versions_downloads() {
         "nothing left to evict"
     );
 }
+
+/// Regression: a dev copy must stage the same file set `hpm pack` ships, not
+/// the raw workspace. Copying `.git/`, cargo `target/` and CMake trees made a
+/// native package's dev copy tens of gigabytes, so it outlasted the caller
+/// that requested the launch. `.gitignore` drops build trees, `.hpmignore`'s
+/// `!` re-includes a gitignored build output, `[stage]` include/exclude narrow
+/// the rest, and `hpm.toml` ships even though the allowlist omits it.
+#[tokio::test]
+async fn dev_copy_stages_the_pack_file_set() {
+    let temp_dir = TempDir::new().unwrap();
+    let storage_config = StorageConfig {
+        home_dir: temp_dir.path().to_path_buf(),
+        packages_dir: temp_dir.path().join("packages"),
+        cache_dir: temp_dir.path().join("cache"),
+        registry_cache_dir: temp_dir.path().join("registry"),
+    };
+    let storage_manager = StorageManager::new(storage_config).unwrap();
+
+    let source = temp_dir.path().join("dev-source");
+    let write = |rel: &str, body: &str| {
+        let path = source.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    };
+    write(
+        "hpm.toml",
+        "[package]\npath = \"creator/foo\"\nname = \"Foo\"\nversion = \"1.0.0\"\n\n\
+         [stage]\ninclude = [\"python/**\", \"resolver/**\", \"otls/**\"]\n\
+         exclude = [\"**/__pycache__/**\"]\n",
+    );
+    write(".gitignore", "target/\nbuild-*/\nresolver/\n");
+    write(".hpmignore", "!resolver/\n!resolver/**\n");
+    write("python/foo/__init__.py", "x = 1");
+    write("python/foo/__pycache__/__init__.cpython.pyc", "bytecode");
+    write("resolver/lib/resolver.so", "BUILT");
+    write("otls/foo.hda", "HDA");
+    write(".git/HEAD", "ref: refs/heads/main");
+    write("src/crate/target/debug/huge.rlib", "junk");
+    write("build-release/CMakeCache.txt", "junk");
+    write("tests/test_foo.py", "not in the allowlist");
+
+    let installed = storage_manager.install_as_dev_copy(&source).await.unwrap();
+    let root = &installed.install_path;
+
+    let mut files: Vec<String> = walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .map(|e| {
+            e.path()
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    files.sort();
+    assert_eq!(
+        files,
+        vec![
+            "hpm.toml",
+            "otls/foo.hda",
+            "python/foo/__init__.py",
+            "resolver/lib/resolver.so",
+        ]
+    );
+
+    // Churn in an ignored tree (a rebuild's object files, a git fetch) must not
+    // change the content hash, or every launch would recopy.
+    write("build-release/CMakeCache.txt", "junk-changed-and-longer");
+    write(".git/HEAD", "ref: refs/heads/other-branch");
+    let again = storage_manager.install_as_dev_copy(&source).await.unwrap();
+    assert_eq!(again.install_path, installed.install_path);
+}

@@ -15,6 +15,11 @@ pub enum StorageError {
     #[error(transparent)]
     Manifest(#[from] ManifestLoadError),
 
+    /// Building a dev copy's file set from the workspace's ignore files and
+    /// `[stage]` rules failed (bad glob, unreadable `.hpmignore`, walk error).
+    #[error("Failed to stage dev copy: {0}")]
+    Stage(#[from] crate::packer::PackError),
+
     #[error("Package not found: {0}")]
     PackageNotFound(String),
 

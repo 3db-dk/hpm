@@ -6,8 +6,9 @@
 //! [`StorageManager`](super::StorageManager) impl can read top-down.
 
 use super::error::StorageError;
-use hpm_package::IoOp;
-use hpm_package::path_util::relative_path_to_forward_slash;
+use crate::packer::{StageFilter, build_ignore_rules, collect_stage_entries};
+use hpm_package::platform::Platform;
+use hpm_package::{IoOp, PackageManifest};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -246,42 +247,70 @@ pub(super) fn clear_container_link(container: &Path) -> Result<(), StorageError>
     Ok(())
 }
 
-/// Hash the `source` workspace to a hex SHA-256 over every file's relative
-/// path, byte length, and modification time. Stat-only — it never reads file
-/// contents, so it stays cheap even for a native package with hundreds of
-/// megabytes of DSOs.
+/// `[stage.profile.*]` table a dev copy is staged with — the same default
+/// `hpm build` uses when no `--profile` is given.
+const DEV_COPY_PROFILE: &str = "release";
+
+/// The file set a dev copy installs, and the hash that names its directory.
+pub(super) struct DevCopyImage {
+    /// `(workspace source file, install-relative destination)`, sorted by
+    /// destination.
+    pub(super) entries: Vec<(PathBuf, String)>,
+    /// Hex SHA-256 over the entries; see [`dev_copy_image`].
+    pub(super) hash: String,
+}
+
+/// Compute the install image of the `source` workspace: exactly the files
+/// `hpm pack` / `hpm build` would stage for the host platform. That means
+/// `.gitignore` + `.hpmignore` (with `!` re-includes), the `[stage]`
+/// include/exclude globs, and the host's `[stage.platform.*]` place rules.
+/// A dev copy used to clone the whole workspace, `.git/`, cargo `target/`
+/// dirs, CMake build trees and virtualenvs included. On a native package
+/// that was tens of gigabytes, and the copy outlasted the caller.
 ///
-/// This hash *names* the content-addressed install directory
-/// (`_dev/<slug>@<version>/<hash>/`): any workspace rebuild bumps a source
-/// file's mtime (and usually its length), changing the digest so the next
-/// launch installs into — and points Houdini at — a fresh directory, while a
-/// concurrently-running Houdini keeps mapping the directory it was launched
-/// from. Symlinks are skipped, matching the file-only walk the CAS checksum
-/// uses.
-pub(super) fn source_hash(source: &Path) -> std::io::Result<String> {
-    let mut hasher = Sha256::new();
+/// `hpm.toml` is always part of the image, even when a `[stage].include`
+/// allowlist omits it: the store reads it to recognise a complete copy
+/// ([`dev_copy_is_complete`]) and to load the installed package.
+///
+/// The hash is a SHA-256 over each entry's destination path, byte length and
+/// modification time. Stat-only, so it stays cheap even with hundreds of
+/// megabytes of DSOs. It *names* the content-addressed install directory
+/// (`_dev/<slug>@<version>/<hash>/`): a workspace rebuild bumps a staged
+/// file's mtime, changing the digest, so the next launch installs into (and
+/// points Houdini at) a fresh directory while a running Houdini keeps the one
+/// it was launched from. Edits to ignored files (build trees, `.git/`) no
+/// longer change the hash, so they no longer force a recopy.
+pub(super) fn dev_copy_image(
+    source: &Path,
+    manifest: &PackageManifest,
+) -> Result<DevCopyImage, StorageError> {
+    let stage = manifest.stage.resolved_for_profile(DEV_COPY_PROFILE);
+    // Mirror `hpm build`'s target: the host when the package declares
+    // platforms, otherwise no per-platform placement.
+    let target = if manifest.compat.platforms.is_empty() {
+        None
+    } else {
+        Platform::current()
+    };
+    let filter = StageFilter::new(&stage, target.as_ref())?;
+    let ignore = build_ignore_rules(source)?;
+    let mut entries = collect_stage_entries(source, &ignore, Some(&filter), None)?;
 
-    // Walk errors propagate: a digest over a silently truncated tree would
-    // name a content-addressed directory that doesn't match the workspace.
-    let mut entries = Vec::new();
-    for entry in walkdir::WalkDir::new(source) {
-        let entry = entry.map_err(|e| {
-            e.into_io_error()
-                .unwrap_or_else(|| std::io::Error::other("walk error"))
-        })?;
-        if entry.file_type().is_file() {
-            entries.push(entry);
-        }
+    if !entries.iter().any(|(_, dest)| dest == "hpm.toml") {
+        entries.push((source.join("hpm.toml"), "hpm.toml".to_string()));
     }
-    // Sort for a deterministic digest independent of readdir order.
-    entries.sort_by(|a, b| a.path().cmp(b.path()));
+    // Sort for a deterministic digest independent of walk order and of where
+    // place rules moved a file.
+    entries.sort_by(|a, b| a.1.cmp(&b.1));
 
-    for entry in entries {
-        let relative_path = entry.path().strip_prefix(source).unwrap_or(entry.path());
-        hasher.update(relative_path_to_forward_slash(relative_path).as_bytes());
+    let mut hasher = Sha256::new();
+    for (path, dest) in &entries {
+        hasher.update(dest.as_bytes());
         hasher.update(b"\0");
-
-        let meta = entry.metadata()?;
+        // `metadata` follows links: a staged file symlink is copied as its
+        // target's bytes, so the target's stat is what fingerprints it.
+        let meta =
+            std::fs::metadata(path).map_err(|e| IoOp::wrap("stat dev source file", path, e))?;
         hasher.update(meta.len().to_le_bytes());
         if let Ok(dur) = meta.modified().and_then(|m| {
             m.duration_since(std::time::UNIX_EPOCH)
@@ -292,7 +321,35 @@ pub(super) fn source_hash(source: &Path) -> std::io::Result<String> {
         }
     }
 
-    Ok(hex_digest(hasher))
+    Ok(DevCopyImage {
+        entries,
+        hash: hex_digest(hasher),
+    })
+}
+
+/// Hash naming the current dev copy of the `source` workspace: the
+/// [`dev_copy_image`] hash, with the manifest read from `source`. Used by
+/// cleanup to tell the live copy from superseded ones.
+pub(super) fn source_hash(source: &Path) -> Result<String, StorageError> {
+    let manifest = PackageManifest::from_path(&source.join("hpm.toml"))?;
+    Ok(dev_copy_image(source, &manifest)?.hash)
+}
+
+/// Copy a [`DevCopyImage`]'s entries into `target`.
+pub(super) fn copy_dev_image(
+    entries: &[(PathBuf, String)],
+    target: &Path,
+) -> Result<(), StorageError> {
+    std::fs::create_dir_all(target).map_err(|e| IoOp::wrap("create dev copy target", target, e))?;
+    for (source, dest) in entries {
+        let dest = target.join(dest);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| IoOp::wrap("create dev copy directory", parent, e))?;
+        }
+        std::fs::copy(source, &dest).map_err(|e| IoOp::wrap("copy file to", &dest, e))?;
+    }
+    Ok(())
 }
 
 fn hex_digest(hasher: Sha256) -> String {
@@ -444,7 +501,10 @@ mod tests {
     fn source_hash_is_stable_hex_and_tracks_changes() {
         let tmp = tempfile::TempDir::new().unwrap();
         let src = tmp.path().join("src");
-        write(&src.join("hpm.toml"), "name = 'x'");
+        write(
+            &src.join("hpm.toml"),
+            "[package]\npath = \"creator/x\"\nname = \"X\"\nversion = \"1.0.0\"\n",
+        );
         write(&src.join("dso/plugin.so"), "BINARY");
 
         let first = source_hash(&src).unwrap();
@@ -553,5 +613,93 @@ mod tests {
         write(&dir_container.join(&hash).join("hpm.toml"), "name = 'x'");
         clear_container_link(&dir_container).unwrap();
         assert!(dir_container.join(&hash).exists(), "hash copy preserved");
+    }
+
+    mod properties {
+        use super::*;
+        use crate::packer::prop_support::{
+            STAGE_EXCLUDES, STAGE_INCLUDES, file_tree, glob_subset, ignore_file, write_tree,
+        };
+        use proptest::prelude::*;
+        use std::collections::BTreeSet;
+
+        fn manifest_toml(include: &[String], exclude: &[String]) -> String {
+            let list = |v: &[String]| {
+                v.iter()
+                    .map(|g| format!("{g:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!(
+                "[package]\npath = \"creator/x\"\nname = \"X\"\nversion = \"1.0.0\"\n\n\
+                 [stage]\ninclude = [{}]\nexclude = [{}]\n",
+                list(include),
+                list(exclude)
+            )
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(96))]
+
+            /// A dev copy carries exactly the files `hpm pack` would ship, plus
+            /// `hpm.toml`, and its hash depends on those files only. Changing
+            /// an excluded file leaves the hash (and so the install directory)
+            /// alone; growing a staged file moves it. If the dev copy drifts
+            /// from pack's file set, or the hash starts covering ignored files
+            /// again (the full-workspace recopy that outlasted Desktop's launch
+            /// request), this fails.
+            #[test]
+            fn prop_dev_copy_image_is_pack_file_set(
+                files in file_tree(),
+                gitignore in ignore_file(),
+                hpmignore in ignore_file(),
+                include in glob_subset(STAGE_INCLUDES),
+                exclude in glob_subset(STAGE_EXCLUDES),
+            ) {
+                let tmp = tempfile::TempDir::new().unwrap();
+                let src = tmp.path();
+                write_tree(src, &files);
+                std::fs::write(src.join(".gitignore"), &gitignore).unwrap();
+                std::fs::write(src.join(".hpmignore"), &hpmignore).unwrap();
+                std::fs::write(src.join("hpm.toml"), manifest_toml(&include, &exclude)).unwrap();
+                let manifest = PackageManifest::from_path(&src.join("hpm.toml")).unwrap();
+
+                // What pack stages, computed the way `hpm pack` does.
+                let stage = manifest.stage.resolved_for_profile(DEV_COPY_PROFILE);
+                let filter = StageFilter::new(&stage, None).unwrap();
+                let ignore = build_ignore_rules(src).unwrap();
+                let mut expected: BTreeSet<String> =
+                    collect_stage_entries(src, &ignore, Some(&filter), None)
+                        .unwrap()
+                        .into_iter()
+                        .map(|(_, dest)| dest)
+                        .collect();
+                expected.insert("hpm.toml".to_string());
+
+                let image = dev_copy_image(src, &manifest).unwrap();
+                let dests: Vec<&String> = image.entries.iter().map(|(_, d)| d).collect();
+                prop_assert!(dests.windows(2).all(|w| w[0] < w[1]), "entries sorted and unique");
+                let got: BTreeSet<String> = dests.into_iter().cloned().collect();
+                prop_assert_eq!(&got, &expected);
+                prop_assert!(is_hash_dir_name(&image.hash));
+
+                // Grow every file: excluded ones must not move the hash, staged
+                // ones (other than hpm.toml, which is always present) must.
+                let staged_payload = files.iter().any(|f| got.contains(f));
+                for rel in files.iter().filter(|f| !got.contains(*f)) {
+                    std::fs::write(src.join(rel), format!("{rel}-rebuilt-and-longer")).unwrap();
+                }
+                let after_excluded = dev_copy_image(src, &manifest).unwrap();
+                prop_assert_eq!(&after_excluded.hash, &image.hash, "excluded file changed the hash");
+
+                for rel in files.iter().filter(|f| got.contains(*f)) {
+                    std::fs::write(src.join(rel), format!("{rel}-rebuilt-and-longer")).unwrap();
+                }
+                let after_staged = dev_copy_image(src, &manifest).unwrap();
+                if staged_payload {
+                    prop_assert_ne!(&after_staged.hash, &image.hash, "staged file change missed");
+                }
+            }
+        }
     }
 }

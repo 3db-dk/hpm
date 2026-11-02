@@ -543,9 +543,19 @@ Path deps come in two install styles, selected by the `link` field on
 the manifest's `{ path = "...", link = ? }` spec:
 
 - **Copy** (default, `link = false`): `install_as_dev_copy` snapshot-copies
-  the workspace into a content-addressed `_dev/<slug>@<version>/<source-hash>/`
-  directory (see below). Subsequent working-tree edits don't reach the install
-  until the next `hpm install`.
+  the workspace's *install image* into a content-addressed
+  `_dev/<slug>@<version>/<source-hash>/` directory (see below). The image is
+  the file set `hpm pack` / `hpm build` would stage for the host platform
+  (`dev_copy_image`): `.gitignore` + `.hpmignore` with `!` re-includes, the
+  `[stage]` include/exclude globs of the `release` profile, and the host's
+  `[stage.platform.*]` place rules, plus `hpm.toml` always. `.git/`, build
+  trees and virtualenvs are never copied. The walk is the packer's
+  `collect_stage_entries`, shared with pack and build so the three cannot
+  disagree; it skips ignored directories without descending into them, but
+  only when the ignore files have no `!` rules, because a `!` rule can
+  re-include a file under an ignored directory (the nearest matching rule
+  wins). Subsequent working-tree edits don't reach the install until the next
+  `hpm install`.
 - **Link** (`link = true`): `install_as_dev_link` creates a symlink
   (Unix) or NTFS junction (Windows) at `_dev/<slug>@<version>/` pointing
   at the canonicalized workspace. Edits are live; Houdini's HPATH
@@ -565,8 +575,9 @@ relaunch, which re-copies and re-runs prepack. Pure-data / pure-Python /
 `universal`-only link installs are unaffected.
 
 Dev copies are **content-addressed** so a re-sync never clears a directory a
-running Houdini has mapped. `source_hash` fingerprints the workspace (relative
-path + length + mtime of every file, stat-only) and that hash *names* the
+running Houdini has mapped. `dev_copy_image` fingerprints the staged file set
+(destination path + length + mtime of every staged file, stat-only, so churn in
+ignored build trees does not force a recopy) and that hash *names* the
 install directory: the copy lands at `_dev/<slug>@<version>/<source-hash>/`, and
 the generated Houdini manifest points `hpath` there. `install_inner` stages the
 copy into a hidden `.stage-<pid>-<n>` directory and commits it with an atomic,

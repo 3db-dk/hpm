@@ -177,14 +177,42 @@ pub fn build_ignore_rules(dir: &Path) -> Result<Gitignore, PackError> {
 /// `skip_prefix` (relative to `package_dir`) excludes a subtree — used by
 /// [`stage_to_dir`] when the output directory sits inside the package root,
 /// so a re-run never re-stages its own previous output.
-pub(super) fn collect_stage_entries(
+///
+/// Also backs dev copies (`StorageManager::install_as_dev_copy`), so a dev
+/// install carries exactly the image a registry consumer would get.
+pub(crate) fn collect_stage_entries(
     package_dir: &Path,
     ignore: &Gitignore,
     stage_filter: Option<&StageFilter>,
     skip_prefix: Option<&Path>,
 ) -> Result<Vec<(PathBuf, String)>, PackError> {
     let mut entries: Vec<(PathBuf, String)> = Vec::new();
-    for entry in WalkDir::new(package_dir).sort_by_file_name() {
+    // Prune ignored directories instead of descending into them: `.git/`,
+    // cargo `target/` and CMake build trees can hold tens of thousands of
+    // files, and walking them only to discard every entry turns a dev copy of
+    // a native package into a long stat storm.
+    //
+    // Pruning is only exact when no `!` rule exists. The per-entry check below
+    // (`matched_path_or_any_parents`) lets the *nearest* matching rule win, so
+    // unlike git a re-include such as `!build/Release/*.dll` does take effect
+    // under an excluded `build/`, and packages rely on that. With any
+    // whitelist present, walk everything and let the per-entry check decide.
+    // `prop_pruned_walk_matches_full_walk` pins the equivalence.
+    let can_prune = ignore.num_whitelists() == 0;
+    let walker = WalkDir::new(package_dir)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_entry(|entry| {
+            if !can_prune || !entry.file_type().is_dir() {
+                return true;
+            }
+            let relative = entry
+                .path()
+                .strip_prefix(package_dir)
+                .unwrap_or(entry.path());
+            relative == Path::new("") || !ignore.matched(relative, true).is_ignore()
+        });
+    for entry in walker {
         let entry = entry.map_err(|e| {
             IoOp::wrap(
                 "walk package source tree",

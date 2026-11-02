@@ -26,8 +26,8 @@ pub use types::{InstalledPackage, PackageSpec, VersionReq};
 
 use dev_install::{
     DEV_INSTALL_DIR, InstallStyle, clear_container_link, clear_existing_install,
-    commit_staged_copy, create_dev_link, dev_copy_is_complete, dev_copy_target,
-    remove_install_entry, source_hash, stage_dir,
+    commit_staged_copy, copy_dev_image, create_dev_link, dev_copy_image, dev_copy_is_complete,
+    dev_copy_target, remove_install_entry, stage_dir,
 };
 #[derive(Debug, Clone)]
 pub struct StorageManager {
@@ -347,6 +347,12 @@ impl StorageManager {
     /// Dev installs live in their own namespace because they share `(slug,
     /// version)` keys with registry packages but carry user-authored content
     /// that must not be cached as the canonical install for that coordinate.
+    ///
+    /// The copy holds the package's install image, not the whole workspace:
+    /// the files `hpm pack` / `hpm build` would stage for the host platform
+    /// (`.gitignore` + `.hpmignore`, `[stage]` include/exclude and place
+    /// rules), plus `hpm.toml`. It lands in a content-addressed
+    /// `<slug>@<version>/<hash>/` directory named after those files.
     pub async fn install_as_dev_copy(
         &self,
         source_path: &std::path::Path,
@@ -366,8 +372,9 @@ impl StorageManager {
     /// concrete `[compat].platforms` (see
     /// [`CompatConfig::declares_native_platforms`]), this falls back to a copy
     /// so an in-place DSO rebuild isn't blocked by a running Houdini session
-    /// holding the mapped binary. The returned [`InstalledPackage`] is a copy
-    /// in that case, not a link.
+    /// holding the mapped binary. The returned [`InstalledPackage`] is then a
+    /// copy of the install image, exactly as [`Self::install_as_dev_copy`]
+    /// makes, not a link.
     ///
     /// [`CompatConfig::declares_native_platforms`]: hpm_package::CompatConfig::declares_native_platforms
     pub async fn install_as_dev_link(
@@ -449,8 +456,8 @@ impl StorageManager {
 
             InstallStyle::DevCopy => {
                 // Content-addressed install. The copy lands at
-                // `<container>/<hash>`, where `hash` fingerprints the source
-                // workspace, and the regenerated Houdini manifest points `hpath`
+                // `<container>/<hash>`, where `hash` fingerprints the staged
+                // file set, and the regenerated Houdini manifest points `hpath`
                 // there. A rebuild yields a *new* hash directory: a
                 // concurrently-running Houdini keeps mapping the directory it was
                 // launched from, so nothing is ever removed out from under a live
@@ -458,8 +465,25 @@ impl StorageManager {
                 // (`PackageInUse`) failure on the rebuild-then-relaunch loop,
                 // which the old in-place clear-and-recopy could not avoid once a
                 // second session had the copy mapped.
-                let hash = source_hash(source_path)
-                    .map_err(|e| IoOp::wrap("fingerprint dev source", source_path, e))?;
+                //
+                // Stage the same file set `hpm pack` / `hpm build` would ship
+                // (ignore files + `[stage]`), not the raw workspace. Walking and
+                // copying are blocking filesystem work, so keep them off the
+                // async worker threads.
+                let image = {
+                    let source = source_path.to_path_buf();
+                    let manifest = manifest.clone();
+                    tokio::task::spawn_blocking(move || dev_copy_image(&source, &manifest))
+                        .await
+                        .map_err(|e| {
+                            IoOp::wrap(
+                                "fingerprint dev source",
+                                source_path,
+                                std::io::Error::other(e),
+                            )
+                        })??
+                };
+                let hash = image.hash.clone();
                 let target_dir = dev_copy_target(&dev_container, &hash);
 
                 // Clear only a stale *link* left by a prior DevLink install of
@@ -482,12 +506,29 @@ impl StorageManager {
                     // rename so a crash mid-copy never leaves a half-populated
                     // hash directory that a later launch would trust as complete.
                     let staged = stage_dir(&dev_container);
-                    if let Err(e) = self.copy_directory(source_path, &staged) {
+                    let file_count = image.entries.len();
+                    let copied = {
+                        let dest = staged.clone();
+                        tokio::task::spawn_blocking(move || copy_dev_image(&image.entries, &dest))
+                            .await
+                            .map_err(|e| {
+                                StorageError::from(IoOp::wrap(
+                                    "copy dev image to",
+                                    &staged,
+                                    std::io::Error::other(e),
+                                ))
+                            })
+                            .and_then(|r| r)
+                    };
+                    if let Err(e) = copied {
                         let _ = std::fs::remove_dir_all(&staged);
                         return Err(e);
                     }
                     commit_staged_copy(&staged, &target_dir)?;
-                    info!("Successfully installed {kind}{}@{}", name, version);
+                    info!(
+                        "Successfully installed {kind}{}@{} ({} files)",
+                        name, version, file_count
+                    );
                 }
 
                 Ok(InstalledPackage {
@@ -530,7 +571,9 @@ impl StorageManager {
         }
     }
 
-    /// Copy a directory recursively
+    /// Copy a directory recursively, unfiltered. Only for content that is
+    /// already an install image (an extracted archive going into the CAS);
+    /// dev copies go through `dev_copy_image` instead.
     fn copy_directory(
         &self,
         source: &std::path::Path,
