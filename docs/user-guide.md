@@ -1190,33 +1190,49 @@ variable expansion handles it.
 Malformed selectors fail at manifest validation time, so authors find
 them before publish, not at install.
 
-#### HDK plugin pattern (dev-only paths)
+#### HDK plugins: where a dev install finds its DSOs
 
-The canonical use of `install_source` is HDK plugin development: a
-build-tree path that must reach the dev's own Houdini but never leak to a
-registry consumer. Express this with a single `[runtime]` entry whose
-dev variant points at `build/` and whose fallback points at the staged
-artifact:
+Point `HOUDINI_DSO_PATH` at the directory your `[stage]` rules place the
+binaries into, **the same value for a dev install and a registry install**:
 
 ```toml
-[runtime.HOUDINI_DSO_PATH]
-method = "prepend"
+[runtime]
+HOUDINI_DSO_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/dso" }
+
+[stage.platform.windows-x86_64]
+place = [{ from = "build/Release/*.dll", to = "dso/" }]
+```
+
+A dev install is not the workspace. A path dependency is installed as a
+**copy of the staged image**: exactly the files `hpm build` would stage for
+this machine (`.gitignore` + `.hpmignore`, `[stage]` include/exclude, the
+release profile, and the host's `[stage.platform.*]` place rules), in a
+content-addressed `_dev/<slug>@<version>/<hash>/` directory. A package that
+declares native platforms in `[compat].platforms` is always copied, even with
+`link = true`, so a rebuild is never blocked by the DLL a running Houdini has
+mapped. A build tree such as `build/Release` is usually gitignored or moved by
+a place rule, so **it does not exist in a dev install**: a dev variant pointing
+`HOUDINI_DSO_PATH` at it gives Houdini a directory that isn't there, and the
+dev launch registers no operators, with no error. Pointing at the placed
+`dso/` works for both install kinds, and a rebuild reaches the next dev
+install through the place rule.
+
+Keep `install_source` for values that really differ between the developer's
+own Houdini and a consumer's, such as a dev-only debug switch:
+
+```toml
+[runtime.MYPLUGIN_DEBUG]
+method = "set"
 value = [
-  # While developing the package locally:
-  { when = { install_source = "dev", os = "windows" }, set = "$HPM_PACKAGE_ROOT/build/Release" },
-  { when = { install_source = "dev", os = "linux"   }, set = "$HPM_PACKAGE_ROOT/build/lib" },
-  { when = { install_source = "dev", os = "macos"   }, set = "$HPM_PACKAGE_ROOT/build/lib" },
-  # What ships in the published archive:
-  { when = {}, set = "$HPM_PACKAGE_ROOT/dso" },
+  { when = { install_source = "dev" }, set = "1" },
+  { when = {}, set = "0" },
 ]
 ```
 
-When this package is consumed via `{ path = "..." }`, the dev variant fires
-and points Houdini at the live build directory. When it ships through a
-registry, hpm filters the dev variants out at install time, the fallback
-fires, and Houdini sees only the published `dso/` location. If you want
-the variable to disappear entirely for non-dev consumers, omit the
-fallback branch — an entry with no surviving variants is not emitted.
+Only a `link = true` install of a package with no native platforms points
+at the workspace itself, so a build-tree path resolves only there. Don't rely
+on it for DSOs: a native package should declare its platforms, which makes
+its dev install a copy.
 
 When a key appears in both the project and the package, the project
 entry's `method` decides whether it replaces or combines:
@@ -1291,10 +1307,10 @@ toolbars there but registers no operators, with no error. Convention
 folders work on every install route; `[runtime]` does not.
 
 `place` is what makes this cheap: let the build write wherever suits it and
-relocate at pack time, leaving the source tree alone. When a dev-override
-install still needs the build-tree path, gate that variable on
-`install_source = "dev"` (see [HDK plugin pattern](#hdk-plugin-pattern-dev-only-paths))
-so it never reaches a published archive.
+relocate at pack time, leaving the source tree alone. A dev install is a copy
+of that same staged image, so the placed path is the one to point at there too
+(see [HDK plugins: where a dev install finds its
+DSOs](#hdk-plugins-where-a-dev-install-finds-its-dsos)).
 
 **Per-platform packing semantics.** When packing for `--platform <X>`:
 

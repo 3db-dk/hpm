@@ -300,7 +300,8 @@ fn find_env_entry<'a>(
 }
 
 /// Build a `[runtime]` entry with conditional variants gated on
-/// install_source. Mirrors the canonical HDK-plugin use case.
+/// install_source. The value is only test data: a real dev install is a
+/// staged copy with no build tree (see the user guide's HDK plugins section).
 fn dev_only_runtime_entry(value: &str) -> ManifestEnvEntry {
     use hpm_package::{Condition, EnvValue, EnvValueBranch};
     ManifestEnvEntry {

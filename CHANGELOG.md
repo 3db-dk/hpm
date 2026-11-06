@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The user guide no longer points dev installs at the build tree.** Its HDK
+  plugin pattern gated `HOUDINI_DSO_PATH` on `install_source = "dev"` with a
+  path into `build/Release`. Since 0.35.0 a dev install is a copy of the staged
+  image, which has no build tree, so that setting left a dev launch with no
+  operators. The guide now points both kinds of install at the directory
+  `[stage]` places the binaries into, and keeps `install_source` for values
+  that really differ between them.
+
 ## [0.35.1] - 2026-11-02
 
 ### Added
