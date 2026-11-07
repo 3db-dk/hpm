@@ -51,6 +51,7 @@ pub mod global;
 pub mod graph;
 pub mod houdini_prefs;
 pub(crate) mod http;
+pub mod install_manifest;
 pub mod lock;
 pub mod package_source;
 pub mod packer;

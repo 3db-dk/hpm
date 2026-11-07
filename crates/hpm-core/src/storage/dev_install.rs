@@ -160,6 +160,9 @@ pub(super) fn remove_install_entry(
     // in-tree marker would perturb the package's tree hash. Drop it here so it
     // doesn't outlive the tree it describes.
     crate::exec_mode::forget_repair(target_dir);
+    // Same for the install record, and first: a record must never describe
+    // a tree that is half removed.
+    crate::install_manifest::forget(target_dir);
 
     if is_link_entry(meta, target_dir)
         .map_err(|e| IoOp::wrap("inspect install entry at", target_dir, e))?

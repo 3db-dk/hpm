@@ -184,6 +184,7 @@ Audit runs against the current project and reports:
 | `hpm.lock` presence | `PASS` or `WARN` (`No lock file found`). |
 | `hpm.lock` staleness | `PASS` (recent) or `WARN` (`Lock file is N days old`) when `N > 90`. |
 | Package checksum verification | `PASS` or `WARN` (`Checksum verification failed: ...`). |
+| Installed files against their install records | `PASS` (`Installed files match their install records`) or a `WARN` per recorded file that is missing, truncated or changed. Packages installed before hpm 0.36.0 have no record and are skipped. |
 
 Every offender is a warning, not an error — `hpm audit` never fails the
 shell. Wire it into pre-release checklists and CI as an advisory step.

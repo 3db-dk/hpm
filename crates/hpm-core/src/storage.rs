@@ -462,9 +462,34 @@ impl StorageManager {
         match style {
             InstallStyle::CasCopy => {
                 let target_dir = self.config.package_dir(name, version);
+                // Record what is being installed from the extracted archive
+                // itself, before the copy, so a copy cut short shows up as
+                // damage rather than as a smaller healthy package.
+                let record = {
+                    let source = source_path.to_path_buf();
+                    tokio::task::spawn_blocking(move || {
+                        crate::install_manifest::record_tree(&source)
+                    })
+                    .await
+                    .map_err(|e| {
+                        IoOp::wrap("record install of", source_path, std::io::Error::other(e))
+                    })??
+                };
                 // Symlink-safe replacement: never `remove_dir_all` a junction.
                 clear_existing_install(&target_dir, name, version)?;
+                // A previous install's record goes even when nothing was
+                // there to clear (a tree moved aside by an embedder's repair).
+                crate::install_manifest::forget(&target_dir);
                 self.copy_directory(source_path, &target_dir)?;
+                // Written last: its presence says the copy completed. A
+                // failure costs the ability to check this install, not the
+                // install, so it warns.
+                if let Err(e) = crate::install_manifest::write(&target_dir, &record) {
+                    warn!(
+                        "Installed {}@{} but could not write its install record: {}",
+                        name, version, e
+                    );
+                }
                 info!("Successfully installed {kind}{}@{}", name, version);
                 Ok(InstalledPackage {
                     version: version.clone(),
@@ -639,6 +664,25 @@ impl StorageManager {
         }
 
         Ok(())
+    }
+
+    /// Compare an installed package with the record its install wrote
+    /// (blocking; it reads every recorded file). See
+    /// [`crate::install_manifest`].
+    ///
+    /// A dev install is always [`Verification::Unrecorded`]: it is a copy of
+    /// the user's own working tree, and there is nothing to compare it with
+    /// but itself.
+    ///
+    /// [`Verification::Unrecorded`]: crate::install_manifest::Verification::Unrecorded
+    pub fn verify_installed(
+        &self,
+        package: &InstalledPackage,
+    ) -> Result<crate::install_manifest::Verification, StorageError> {
+        if package.is_dev {
+            return Ok(crate::install_manifest::Verification::Unrecorded);
+        }
+        Ok(crate::install_manifest::verify(&package.install_path)?)
     }
 
     pub async fn remove_package(&self, name: &str, version: &str) -> Result<(), StorageError> {

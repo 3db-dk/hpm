@@ -9,6 +9,8 @@
 //! 2. **Lock File Presence**: Verifies hpm.lock exists for reproducible builds
 //! 3. **Lock File Staleness**: Warns if lock file is older than 90 days
 //! 4. **Checksum Verification**: Validates package checksums against lock file
+//! 5. **Installed Files**: Compares each locked package's files with the
+//!    record its install wrote (missing, truncated or changed files)
 //!
 //! ## Usage
 //!
@@ -99,6 +101,19 @@ pub async fn audit_packages(
                     Ok(()) => passed.push("Package checksums verified"),
                     Err(e) => warnings.push(format!("Checksum verification failed: {e}")),
                 }
+
+                // Check 5: Installed files against their install records
+                let (checked, unrecorded, problems) =
+                    audit_installed_files(&lock, &config.storage.packages_dir);
+                if problems.is_empty() && checked > 0 {
+                    passed.push("Installed files match their install records");
+                }
+                warnings.extend(problems);
+                if unrecorded > 0 {
+                    info!(
+                        "{unrecorded} installed package(s) predate install records and were not checked"
+                    );
+                }
             }
             Err(e) => {
                 warnings.push(format!("Failed to load lock file: {}", e));
@@ -134,6 +149,48 @@ pub async fn audit_packages(
     }
 
     Ok(())
+}
+
+/// Compare every locked package's installed files with its install record.
+/// Returns `(packages_checked, packages_unrecorded, warnings)`; a package
+/// that is not installed is check 4's to report, not this one's.
+fn audit_installed_files(
+    lock: &hpm_core::LockFile,
+    packages_dir: &std::path::Path,
+) -> (usize, usize, Vec<String>) {
+    use hpm_core::install_manifest::{ProblemKind, Verification, verify};
+
+    let mut checked = 0;
+    let mut unrecorded = 0;
+    let mut warnings = Vec::new();
+    for (name, dep) in &lock.dependencies {
+        let dir = hpm_core::archive_fetcher::cas_install_dir(packages_dir, name, &dep.version);
+        if !dir.is_dir() {
+            continue;
+        }
+        match verify(&dir) {
+            Ok(Verification::Unrecorded) => unrecorded += 1,
+            Ok(Verification::Checked(report)) => {
+                checked += 1;
+                for problem in report.problems {
+                    let what = match problem.kind {
+                        ProblemKind::Missing => "is missing".to_string(),
+                        ProblemKind::Truncated { expected, actual } => {
+                            format!("is truncated ({actual} of {expected} bytes)")
+                        }
+                        ProblemKind::Changed => "differs from what was installed".to_string(),
+                        ProblemKind::Unreadable { error } => format!("cannot be read ({error})"),
+                    };
+                    warnings.push(format!("{name}@{}: {} {what}", dep.version, problem.path));
+                }
+            }
+            Err(e) => warnings.push(format!(
+                "{name}@{}: install record could not be read: {e}",
+                dep.version
+            )),
+        }
+    }
+    (checked, unrecorded, warnings)
 }
 
 #[cfg(test)]
@@ -204,5 +261,46 @@ mod tests {
         let result = audit_packages(&config, Some(manifest_path), &mut Console::new()).await;
 
         assert!(result.is_ok());
+    }
+
+    /// Check 5 names the damaged file of a locked package, ignores what a
+    /// session wrote into it, and leaves a package without a record alone.
+    #[test]
+    fn installed_files_check_reports_only_damage() {
+        let temp_dir = TempDir::new().unwrap();
+        let packages = temp_dir.path().join("packages");
+        let dir = packages.join("tool@1.0.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tt_prepare.exe"), b"MZ-full-binary").unwrap();
+        let record = hpm_core::install_manifest::record_tree(&dir).unwrap();
+        hpm_core::install_manifest::write(&dir, &record).unwrap();
+        std::fs::create_dir_all(packages.join("old@1.0.0")).unwrap();
+
+        let mut lock = hpm_core::LockFile::new("p".into(), "1.0.0".into());
+        for name in ["studio/tool", "studio/old"] {
+            lock.add_dependency(
+                name.into(),
+                hpm_core::lock::LockedDependency {
+                    version: "1.0.0".into(),
+                    checksum: None,
+                    source: hpm_core::lock::LockedSource::url(
+                        "https://example.invalid/a.zip",
+                        "1.0.0",
+                    ),
+                },
+            );
+        }
+
+        std::fs::create_dir_all(dir.join("__pycache__")).unwrap();
+        std::fs::write(dir.join("__pycache__/a.pyc"), b"x").unwrap();
+        assert_eq!(audit_installed_files(&lock, &packages), (1, 1, vec![]));
+
+        std::fs::write(dir.join("tt_prepare.exe"), b"MZ").unwrap();
+        let (checked, unrecorded, warnings) = audit_installed_files(&lock, &packages);
+        assert_eq!((checked, unrecorded), (1, 1));
+        assert_eq!(
+            warnings,
+            ["studio/tool@1.0.0: tt_prepare.exe is truncated (2 of 14 bytes)"]
+        );
     }
 }

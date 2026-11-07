@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Installs record their files, and `hpm audit` checks them.** A package
+  installed from a registry or URL now gets `<slug>@<version>.files.json`
+  beside its directory, listing the path, size and SHA-256 of every file the
+  archive installed. `hpm audit` compares each locked package with that record
+  and warns about every file that is missing, cut short or changed. Files
+  Houdini and Python add to a package while it is used (`__pycache__`, HDA
+  backups) are not in the record and are never reported. Packages installed
+  by an earlier hpm have no record until they are next installed. For
+  embedders: `hpm_core::install_manifest::verify` and
+  `StorageManager::verify_installed`.
+
 ## [0.35.2] - 2026-11-06
 
 ### Fixed

@@ -419,6 +419,9 @@ layout is content-addressable where it helps:
 │   ├── slug@1.0.0.exec-modes       # executable-bit sweep stamp; sits
 │   │                               # beside the tree, not in it, since
 │   │                               # the package checksum covers contents
+│   ├── slug@1.0.0.files.json       # install record: path, size and
+│   │                               # sha256 of every installed file,
+│   │                               # written last; read by verify
 │   └── _dev/                       # path-installed (dev) packages
 │       └── slug@1.0.0/             # never substituted for a registry hit
 │           └── …                   # at the same (slug, version)

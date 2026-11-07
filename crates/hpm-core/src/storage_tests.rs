@@ -1591,3 +1591,64 @@ async fn dev_copy_stages_the_pack_file_set() {
     let again = storage_manager.install_as_dev_copy(&source).await.unwrap();
     assert_eq!(again.install_path, installed.install_path);
 }
+
+/// A store install writes its record beside the tree, the record checks the
+/// tree as intact, a damaged file is reported, a dev copy is never checked,
+/// a reinstall replaces the record, and removal takes it away.
+#[tokio::test]
+async fn store_installs_carry_an_install_record_through_their_lifecycle() {
+    use crate::install_manifest::{ProblemKind, Verification, record_path};
+
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+
+    let source = temp.path().join("reg-source");
+    write_source_package(&source, "creator/bar", "2.0.0", "registry");
+    let installed = storage.install_into_cas(&source).await.unwrap();
+    let record = record_path(&installed.install_path).unwrap();
+    assert!(record.is_file(), "a store install writes its record");
+    assert_eq!(record.parent(), installed.install_path.parent());
+
+    let Verification::Checked(report) = storage.verify_installed(&installed).unwrap() else {
+        panic!("a fresh store install is recorded");
+    };
+    assert_eq!(report.files, 2);
+    assert!(report.is_intact());
+
+    // What a session writes into the package is not damage; a cut-short
+    // file is.
+    std::fs::create_dir_all(installed.install_path.join("__pycache__")).unwrap();
+    std::fs::write(installed.install_path.join("__pycache__/x.pyc"), b"pyc").unwrap();
+    std::fs::write(installed.install_path.join("MARKER"), b"reg").unwrap();
+    let Verification::Checked(report) = storage.verify_installed(&installed).unwrap() else {
+        panic!("still recorded");
+    };
+    assert_eq!(report.problems.len(), 1);
+    assert_eq!(report.problems[0].path, "MARKER");
+    assert_eq!(
+        report.problems[0].kind,
+        ProblemKind::Truncated {
+            expected: 8,
+            actual: 3
+        }
+    );
+
+    // A reinstall rewrites the tree and its record together.
+    let reinstalled = storage.install_into_cas(&source).await.unwrap();
+    let Verification::Checked(report) = storage.verify_installed(&reinstalled).unwrap() else {
+        panic!("a reinstall is recorded");
+    };
+    assert!(report.is_intact());
+
+    // A dev copy is the user's own tree: nothing to check it against.
+    let dev_source = temp.path().join("dev-source");
+    write_source_package(&dev_source, "creator/foo", "1.0.0", "dev");
+    let dev = storage.install_as_dev_copy(&dev_source).await.unwrap();
+    assert_eq!(
+        storage.verify_installed(&dev).unwrap(),
+        Verification::Unrecorded
+    );
+
+    storage.remove_package("bar", "2.0.0").await.unwrap();
+    assert!(!record.exists(), "removal takes the record with the tree");
+}
