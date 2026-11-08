@@ -141,8 +141,9 @@ enum Mutation {
     FlipByte(usize),
     /// Write the same bytes back: touches the mtime, changes nothing.
     RewriteIdentical,
-    /// Widen the mode: not content, so not a problem.
-    #[cfg(unix)]
+    /// Widen the mode (Unix; nothing to widen on Windows): not content, so
+    /// not a problem. Kept on every platform so the strategy below needs no
+    /// `cfg` inside `prop_oneof!`, which does not expand one.
     Chmod,
     /// Replace the file with a directory of the same name.
     BecomeDir,
@@ -156,7 +157,6 @@ fn mutation() -> impl Strategy<Value = Mutation> {
         prop::collection::vec(any::<u8>(), 1..8).prop_map(Mutation::Append),
         any::<usize>().prop_map(Mutation::FlipByte),
         Just(Mutation::RewriteIdentical),
-        #[cfg(unix)]
         Just(Mutation::Chmod),
         Just(Mutation::BecomeDir),
     ]
@@ -206,10 +206,12 @@ fn apply(dir: &Path, rel: &str, bytes: &[u8], m: &Mutation) -> Option<ProblemKin
             std::fs::write(&path, bytes).unwrap();
             None
         }
-        #[cfg(unix)]
         Mutation::Chmod => {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
             None
         }
         Mutation::BecomeDir => {
