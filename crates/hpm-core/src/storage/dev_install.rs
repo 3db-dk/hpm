@@ -100,47 +100,26 @@ pub(super) fn create_dev_link(
     }
 }
 
-/// Returns true when the entry at `path` is a symlink (Unix) or a
-/// junction/symlink (Windows). Caller must have already verified the entry
-/// exists (typically by reading `symlink_metadata` themselves) — this helper
-/// is a pure file-type predicate that doesn't follow links.
+/// Whether `meta` (from `symlink_metadata`, so the entry itself and not its
+/// target) describes a link: a symlink, or on Windows a junction. Callers
+/// unlink such an entry and never recurse into it, since a `DevLink`
+/// install's target is the user's own workspace.
 ///
-/// Returns `Err` on Windows when `junction::exists` fails for a *genuine*
-/// reason (permission denied, FS error). The error must propagate —
-/// silently treating "junction check failed" as "not a junction" would let
-/// `remove_dir_all` recurse into the user's workspace the next time around.
-///
-/// `ERROR_NOT_A_REPARSE_POINT` (Windows error 4390) is *not* a genuine
-/// failure — it is how the underlying `DeviceIoControl(FSCTL_GET_REPARSE_POINT)`
-/// reports "this exists but isn't a reparse point", i.e. the negative
-/// answer for our predicate. Map it to `Ok(false)`. Without this, every
-/// `_dev/<slug>@<version>/` install made with `install_as_dev_copy`
-/// (a plain directory, no reparse point) raises an IoOp on
-/// inspection, breaking orphan detection and the copy→link switch path.
+/// On Windows, `symlink_metadata` reads the entry's reparse tag and
+/// `FileType::is_symlink` is true for the name-surrogate tags, which are
+/// symlinks and junctions (`IO_REPARSE_TAG_MOUNT_POINT`), while a placeholder
+/// such as a OneDrive cloud file stays a directory. This used to ask
+/// `junction::exists` as well, for a stdlib that reported junctions as plain
+/// directories; that call opens the directory with `share_mode(0)`, so it
+/// failed with os error 32 whenever anything else had the directory open (a
+/// reclaim listing it, a second install, Explorer showing it) and an
+/// install failed with it. The `path` argument is kept for the callers.
 pub(super) fn is_link_entry(
     meta: &std::fs::Metadata,
     path: &std::path::Path,
 ) -> std::io::Result<bool> {
-    if meta.file_type().is_symlink() {
-        return Ok(true);
-    }
-    #[cfg(windows)]
-    {
-        // Older Rust stdlib reports junctions as non-symlinks; ask the
-        // junction crate directly so callers never accidentally fall through
-        // to `remove_dir_all` on a reparse point.
-        const ERROR_NOT_A_REPARSE_POINT: i32 = 4390;
-        match junction::exists(path) {
-            Ok(b) => Ok(b),
-            Err(e) if e.raw_os_error() == Some(ERROR_NOT_A_REPARSE_POINT) => Ok(false),
-            Err(e) => Err(e),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = path;
-        Ok(false)
-    }
+    let _ = path;
+    Ok(meta.file_type().is_symlink())
 }
 
 /// Remove an install entry without following links. The caller is
@@ -421,6 +400,36 @@ pub(super) fn commit_staged_copy(staged: &Path, target: &Path) -> Result<(), Sto
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A junction is a link, a plain directory is not, judged from the
+    /// entry's own metadata. And the judgement holds while another handle on
+    /// the directory is open: the old exclusive open failed exactly then,
+    /// with os error 32, when a reclaim was listing the container.
+    #[cfg(windows)]
+    #[test]
+    fn junctions_are_links_and_judging_one_needs_no_exclusive_open() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join("workspace");
+        std::fs::create_dir_all(&target).unwrap();
+        let link = tmp.path().join("rig@1.0.0-link");
+        junction::create(&target, &link).unwrap();
+        let plain = tmp.path().join("rig@1.0.0");
+        std::fs::create_dir_all(plain.join("a")).unwrap();
+
+        let meta = |p: &std::path::Path| std::fs::symlink_metadata(p).unwrap();
+        assert!(is_link_entry(&meta(&link), &link).unwrap(), "a junction");
+        assert!(
+            !is_link_entry(&meta(&plain), &plain).unwrap(),
+            "a plain directory"
+        );
+
+        // Another open handle on the directory, as a concurrent reclaim's
+        // listing has.
+        let _listing = std::fs::read_dir(&plain).unwrap();
+        let _held = std::fs::File::open(plain.join("a")).ok();
+        assert!(!is_link_entry(&meta(&plain), &plain).unwrap());
+        assert!(is_link_entry(&meta(&link), &link).unwrap());
+    }
 
     /// Regression for the Windows reparse-point bug: a plain directory
     /// (a `DevCopy` install) must inspect as "not a link", not as
