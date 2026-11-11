@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-11-11
+
 ### Fixed
 
 - **Dev copies no longer pile up.** A path dependency that is installed as a
@@ -22,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A dev copy cut short (hpm crashed or was killed mid-copy) no longer leaves
   its unfinished staging directory behind for good: it is removed once the
   process that was copying is gone.
+- On Windows, a dev install no longer fails with "The process cannot access
+  the file because it is being used by another process" (os error 32) while
+  something else has the package's `_dev` folder open: another install, a
+  clean-up pass, or Explorer showing the folder.
 - `hpm clean` no longer leaves a half-deleted dev copy behind when a running
   Houdini has files open in it on Windows, and can delete read-only files
   (older dev copies carried a `.git` directory).
