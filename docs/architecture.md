@@ -600,14 +600,37 @@ platforms. At install time only a stale *link* left by a prior `link = true`
 install is cleared (`clear_container_link`, link-safe); the directory of live
 hashes is left in place.
 
-Superseded hash directories accumulate across a dev-iteration loop and are
-reclaimed by `hpm clean`: `cleanup_unused_dev_installs` removes whole orphan
-containers (tolerant of in-use) and, for still-referenced installs, prunes every
-hash directory except the one matching the current source
-(`prune_stale_dev_hashes`). Reclamation is best-effort and carries the same "run
-when Houdini sessions are closed" expectation as CAS package cleanup — a copy
-still mapped by a live process is skipped (on Windows the OS lock fails the
-removal) rather than force-removed.
+A copy is kept while something uses it, and removed once nothing does
+(`storage::dev_users`). Each user is a small record beside the copy, under
+`<container>/.users/<hash>/`, never inside it, so an embedder that copies the
+install onwards does not carry the records along:
+
+- **A project**, recorded when its Houdini manifest is written with `hpath`
+  pointing at the copy. The record names the manifest, and counts for as long
+  as that file still points there, so a later sync that repoints the manifest
+  retires it without removing anything.
+- **A process**, recorded with its PID and the OS's start time for it (a
+  recycled PID is a different process; `process_users`). The install records
+  its own process from before the copy exists until the project's manifest
+  points at it. Embedders record what they run against a project
+  (`hold_project_dev_copies` for a run they wait on, `record_project_process`
+  for a detached one), because such a run can outlast the project's next sync.
+
+Every `sync_dependencies` ends by reclaiming the containers it installed into
+(`reclaim_dev_copies`), on a blocking thread the sync does not wait for. A copy
+is renamed to a hidden tombstone before it is deleted: on Windows a directory
+with a file open inside cannot be renamed, so a copy read by a process nobody
+recorded stays whole. On macOS and Linux nothing blocks the rename, which is
+why the records, not the OS, are the rule. Anything that cannot be judged (an
+unreadable record, a process the OS cannot be asked about) keeps the copy.
+
+Copies made before records existed have none, and that means unknown, not
+unused. The pass after a sync knows one project only and leaves them
+(`Unrecorded::Keep`). `hpm clean` (`cleanup_unused_dev_installs`) first records
+the copies every discovered project's manifests point at, then removes the
+unrecorded rest, and removes the container of a version no project depends on
+once no copy in it is in use. It keeps the copy matching the current source,
+so an unchanged relaunch does not recopy.
 
 Both install replacement (`clear_existing_install`) and orphan cleanup
 (`remove_package`) are symlink-safe: each checks `symlink_metadata` (plus

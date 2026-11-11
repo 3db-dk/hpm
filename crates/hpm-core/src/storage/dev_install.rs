@@ -418,34 +418,6 @@ pub(super) fn commit_staged_copy(staged: &Path, target: &Path) -> Result<(), Sto
     }
 }
 
-/// Best-effort reclamation of superseded content copies under a dev container,
-/// keeping only `keep` (the hash of the current source). Returns the number of
-/// hash directories actually removed.
-///
-/// Intended for `hpm clean`, run when Houdini sessions are closed. A copy still
-/// mapped by a live process is skipped rather than force-removed: on Windows the
-/// OS lock fails the removal and the error is swallowed; on other platforms this
-/// carries the same "don't clean mid-session" expectation the CAS package
-/// cleanup already relies on. The current install is never touched.
-pub(super) fn prune_stale_dev_hashes(container: &Path, keep: &str) -> usize {
-    let entries = match std::fs::read_dir(container) {
-        Ok(e) => e,
-        Err(_) => return 0,
-    };
-    let mut removed = 0;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !is_hash_dir_name(&name) || name == keep {
-            continue;
-        }
-        if std::fs::remove_dir_all(entry.path()).is_ok() {
-            removed += 1;
-        }
-    }
-    removed
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,31 +538,6 @@ mod tests {
             std::fs::read_to_string(target.join("hpm.toml")).unwrap(),
             "name = 'winner'",
             "the winner's content is preserved",
-        );
-    }
-
-    /// GC reclaims superseded hashes, keeping the current one.
-    #[test]
-    fn prune_stale_dev_hashes_keeps_current() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let container = tmp.path().join("slug@1.0.0");
-        let keep = "d".repeat(64);
-        let stale_a = "e".repeat(64);
-        let stale_b = "f".repeat(64);
-        for h in [&keep, &stale_a, &stale_b] {
-            write(&container.join(h).join("hpm.toml"), "name = 'x'");
-        }
-        // A non-hash entry must be ignored, not counted or removed.
-        write(&container.join(".stage-1-0").join("hpm.toml"), "name = 'x'");
-
-        let removed = prune_stale_dev_hashes(&container, &keep);
-        assert_eq!(removed, 2, "both stale hashes reclaimed");
-        assert!(container.join(&keep).exists(), "current hash kept");
-        assert!(!container.join(&stale_a).exists());
-        assert!(!container.join(&stale_b).exists());
-        assert!(
-            container.join(".stage-1-0").exists(),
-            "non-hash entry untouched"
         );
     }
 

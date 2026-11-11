@@ -16,6 +16,7 @@ use tracing::{debug, info, warn};
 
 pub mod cleanup;
 pub mod dev_install;
+pub mod dev_users;
 pub mod error;
 pub mod types;
 
@@ -535,6 +536,14 @@ impl StorageManager {
                 // this coordinate; a directory of live hashes is left in place.
                 clear_container_link(&dev_container)?;
 
+                // Claim the copy before it exists, so a reclaim running
+                // anywhere (another sync, another process) never sees it
+                // without a user. The project's sync settles this once its
+                // manifest points here; see `dev_users`. After the link check:
+                // the records live in the container, which until then may be
+                // a link into the user's workspace.
+                dev_users::hold_until_settled(&target_dir);
+
                 if dev_copy_is_complete(&target_dir) {
                     // Identical source already installed (an unchanged relaunch,
                     // or another session materialized this exact build): reuse it
@@ -545,8 +554,10 @@ impl StorageManager {
                         name, version, hash
                     );
                 } else {
-                    std::fs::create_dir_all(&dev_container)
-                        .map_err(|e| IoOp::wrap("create dev container", &dev_container, e))?;
+                    if let Err(e) = std::fs::create_dir_all(&dev_container) {
+                        dev_users::settle(&target_dir);
+                        return Err(IoOp::wrap("create dev container", &dev_container, e).into());
+                    }
                     // Copy into a hidden staging dir, then commit with an atomic
                     // rename so a crash mid-copy never leaves a half-populated
                     // hash directory that a later launch would trust as complete.
@@ -567,9 +578,13 @@ impl StorageManager {
                     };
                     if let Err(e) = copied {
                         let _ = std::fs::remove_dir_all(&staged);
+                        dev_users::settle(&target_dir);
                         return Err(e);
                     }
-                    commit_staged_copy(&staged, &target_dir)?;
+                    if let Err(e) = commit_staged_copy(&staged, &target_dir) {
+                        dev_users::settle(&target_dir);
+                        return Err(e);
+                    }
                     info!(
                         "Successfully installed {kind}{}@{} ({} files)",
                         name, version, file_count

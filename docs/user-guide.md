@@ -873,10 +873,13 @@ are considered:
   Entries are listed as `_dev/<slug>@<version>` so the source of each is
   obvious. Link installs are unlinked safely — never followed. A copy is
   content-addressed as `_dev/<slug>@<version>/<source-hash>/`, so each
-  rebuild leaves a new directory behind; `clean` reclaims the superseded
-  ones for a still-used package, keeping only the current build. Run it
-  with your Houdini sessions closed — a copy still in use is skipped rather
-  than removed.
+  rebuild makes a new directory. `hpm install` removes the copies it
+  supersedes once no project's packages point at them; `clean` does the
+  same for every package, including copies made by an earlier hpm, and
+  keeps the current build. A copy a project still points at, or that a
+  process recorded as using it still runs from, is kept. hpm does not know
+  about a Houdini you started yourself against a project you have since
+  re-installed, so close such sessions before `clean`.
 - **Python venvs** under `~/.hpm/venvs/`: preserved if any kept package
   declares matching `[python_dependencies]`. Removed only when
   `--python-only` or `--comprehensive` is set.

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dev copies no longer pile up.** A path dependency that is installed as a
+  copy (any package with `[compat].platforms`, or `link = false`) gets a new
+  copy under `~/.hpm/packages/_dev/` each time one of its shipped files
+  changes, and only `hpm clean` ever removed the old ones. One machine
+  collected about 490 copies and 500 GB. Every `hpm install` / sync now
+  removes the copies it supersedes, once no project's packages point at them
+  and no process recorded as using them is still running. Copies made by an
+  earlier hpm are removed by `hpm clean`, which now checks what every project
+  points at first.
+- `hpm clean` no longer leaves a half-deleted dev copy behind when a running
+  Houdini has files open in it on Windows, and can delete read-only files
+  (older dev copies carried a `.git` directory).
+
+### Added
+
+- For embedders: `hpm_core::process_users` (a process record and the rule for
+  whether it still runs), and `hold_project_dev_copies`,
+  `record_project_process`, `record_process_user` / `release_process_user` to
+  name a process as a user of the dev copies it reads.
+
 ## [0.36.1] - 2026-11-08
 
 ### Added

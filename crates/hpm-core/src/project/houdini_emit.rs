@@ -114,6 +114,24 @@ impl ProjectManager {
         })?;
         hpm_package::atomic_write(&manifest_path, content)?;
 
+        // The manifest now points `hpath` at this install. For a dev copy,
+        // record that this project uses it, then release the hold the install
+        // took until this moment (see `storage::dev_users`).
+        if installed_package.is_dev {
+            if let Err(e) = crate::storage::dev_users::record_project_user(
+                &installed_package.install_path,
+                &manifest_path,
+            ) {
+                warn!(
+                    "Could not record {} as a user of dev copy {}: {}",
+                    manifest_path.display(),
+                    installed_package.install_path.display(),
+                    e
+                );
+            }
+            crate::storage::dev_users::settle(&installed_package.install_path);
+        }
+
         debug!(
             "Generated Houdini manifest for {}",
             installed_package.manifest.package.slug()

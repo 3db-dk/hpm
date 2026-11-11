@@ -374,6 +374,8 @@ impl ProjectManager {
         // though hpm.toml no longer asks for it.
         self.sweep_stale_houdini_manifests(&installed)?;
 
+        reclaim_superseded_dev_copies(&installed);
+
         info!("Successfully synced project dependencies");
         Ok(outcomes)
     }
@@ -959,3 +961,37 @@ mod houdini_emission_model_tests;
 #[cfg(test)]
 #[path = "houdini_conformance_tests.rs"]
 mod houdini_conformance_tests;
+
+/// Reclaim the superseded copies in the dev containers this sync installed
+/// into, now that this project's manifests point at the current ones. Each
+/// dev launch after a rebuild used to add a full copy that nothing removed.
+///
+/// Off the sync, on a blocking thread nobody waits for: the first reclaim on
+/// a machine that collected hundreds of copies deletes hundreds of gigabytes,
+/// and no caller should wait on that. A deletion cut short leaves a hidden
+/// tombstone that the next reclaim retries.
+fn reclaim_superseded_dev_copies(installed: &[InstalledPackage]) {
+    let containers: std::collections::BTreeSet<PathBuf> = installed
+        .iter()
+        .filter(|p| p.is_dev)
+        .filter_map(|p| {
+            crate::storage::dev_users::container_of(&p.install_path).map(Path::to_path_buf)
+        })
+        .collect();
+    if containers.is_empty() {
+        return;
+    }
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    runtime.spawn_blocking(move || {
+        for container in containers {
+            crate::storage::dev_users::reclaim_dev_copies(
+                &container,
+                None,
+                crate::storage::dev_users::Unrecorded::Keep,
+                crate::process_users::process_state,
+            );
+        }
+    });
+}

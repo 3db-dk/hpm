@@ -45,6 +45,7 @@ petgraph.workspace = true
 # implement the trait against anyhow; hpm-core's own errors are thiserror.
 anyhow.workspace = true
 tempfile.workspace = true
+sysinfo.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # NTFS junctions for dev-link installs. Junctions work without Developer

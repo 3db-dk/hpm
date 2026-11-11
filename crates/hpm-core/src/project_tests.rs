@@ -1507,3 +1507,106 @@ fn list_dependencies_ignores_non_package_manifests() {
     let deps = project_manager.list_dependencies().unwrap();
     assert!(deps.is_empty(), "expected no dependencies, got {deps:?}");
 }
+
+/// Hash directories in a dev container, sorted.
+fn dev_hashes(container: &Path) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(container)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.len() == 64)
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+/// The reclaim after a sync runs detached; wait for the container to hold
+/// `want` copies.
+async fn wait_for_dev_hashes(container: &Path, want: usize) -> Vec<String> {
+    for _ in 0..200 {
+        let got = dev_hashes(container);
+        if got.len() == want {
+            return got;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    dev_hashes(container)
+}
+
+/// A dev copy lives exactly as long as a project's manifest points at it.
+/// Each sync after a workspace change used to add a full copy that nothing
+/// removed (~490 copies, ~500 GB on one machine). Now the sync that moves a
+/// project to a new copy reclaims the one it left, and keeps a copy another
+/// project still points at.
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_reclaims_the_dev_copy_it_supersedes_and_no_other() {
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let workspace = temp_dir.path().join("workspace");
+    std::fs::create_dir_all(workspace.join("otls")).unwrap();
+    std::fs::write(
+        workspace.join("hpm.toml"),
+        "[package]\npath = \"acme/rig\"\nname = \"Rig\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(workspace.join("otls/rig.hda"), "v1").unwrap();
+
+    let project = |name: &str| {
+        let root = temp_dir.path().join(name);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("hpm.toml"),
+            format!(
+                "[package]\npath = \"acme/{name}\"\nname = \"P\"\nversion = \"0.1.0\"\n\n\
+                 [dependencies]\n\"acme/rig\" = {{ path = \"{}\" }}\n",
+                workspace.to_string_lossy().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        ProjectManager::new(root, storage_manager.clone(), config.clone()).unwrap()
+    };
+    let a = project("a");
+    let b = project("b");
+    let container = config.storage.packages_dir.join("_dev").join("rig@1.0.0");
+    let hpath_of = |pm: &ProjectManager| {
+        let json: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(pm.project_paths.packages_dir.join("acme.rig.json")).unwrap(),
+        )
+        .unwrap();
+        PathBuf::from(json["hpath"][0].as_str().unwrap())
+    };
+
+    a.sync_dependencies().await.unwrap();
+    b.sync_dependencies().await.unwrap();
+    let first = wait_for_dev_hashes(&container, 1).await;
+    assert_eq!(first.len(), 1, "both projects share the one copy");
+
+    // The workspace changes; only A syncs. B still points at the old copy.
+    std::fs::write(workspace.join("otls/rig.hda"), "version two").unwrap();
+    a.sync_dependencies().await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let both = dev_hashes(&container);
+    assert_eq!(
+        both.len(),
+        2,
+        "B's copy is kept while B points at it: {both:?}"
+    );
+    assert!(hpath_of(&b).is_dir());
+    assert_ne!(hpath_of(&a), hpath_of(&b));
+
+    // B syncs too: nothing points at the first copy any more.
+    b.sync_dependencies().await.unwrap();
+    let last = wait_for_dev_hashes(&container, 1).await;
+    assert_eq!(last.len(), 1, "the superseded copy is reclaimed: {last:?}");
+    assert_eq!(hpath_of(&a), container.join(&last[0]));
+    assert_eq!(hpath_of(&b), container.join(&last[0]));
+    assert!(container.join(&last[0]).join("otls/rig.hda").is_file());
+
+    // An unchanged sync reuses the copy and reclaims nothing.
+    a.sync_dependencies().await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(dev_hashes(&container), last);
+}

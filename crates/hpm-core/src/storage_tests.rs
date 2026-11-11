@@ -955,6 +955,14 @@ fn write_project_with_path_dep(
     .unwrap();
 }
 
+/// Install a dev copy as an earlier process would have left it: the hold the
+/// install takes for its own process (until a project's manifest points at
+/// the copy) is released, since that process is long gone.
+async fn dev_copy_from_an_earlier_run(storage: &StorageManager, source: &std::path::Path) {
+    let installed = storage.install_as_dev_copy(source).await.unwrap();
+    dev_users::settle(&installed.install_path);
+}
+
 fn projects_config_with(paths: Vec<std::path::PathBuf>) -> ProjectsConfig {
     ProjectsConfig {
         explicit_paths: paths,
@@ -980,7 +988,7 @@ async fn unreferenced_dev_install_is_orphan() {
     // Plant a dev install for `studio/orphan@1.0.0`.
     let source = temp_dir.path().join("orphan-source");
     write_source_package(&source, "studio/orphan", "1.0.0", "orphan-marker");
-    storage_manager.install_as_dev_copy(&source).await.unwrap();
+    dev_copy_from_an_earlier_run(&storage_manager, &source).await;
     let dev_path = temp_dir
         .path()
         .join("packages")
@@ -1133,16 +1141,10 @@ async fn unresolvable_path_dep_does_not_block_cleanup() {
     // Plant two dev installs.
     let alpha_src = temp_dir.path().join("alpha-src");
     write_source_package(&alpha_src, "studio/alpha", "1.0.0", "alpha");
-    storage_manager
-        .install_as_dev_copy(&alpha_src)
-        .await
-        .unwrap();
+    dev_copy_from_an_earlier_run(&storage_manager, &alpha_src).await;
     let beta_src = temp_dir.path().join("beta-src");
     write_source_package(&beta_src, "studio/beta", "1.0.0", "beta");
-    storage_manager
-        .install_as_dev_copy(&beta_src)
-        .await
-        .unwrap();
+    dev_copy_from_an_earlier_run(&storage_manager, &beta_src).await;
 
     // Project references `alpha` correctly, but `beta`'s path points at
     // a directory that doesn't have an hpm.toml — `from_path` errors.
@@ -1232,10 +1234,7 @@ async fn cleanup_comprehensive_reports_dev_orphans() {
 
     let orphan_src = temp_dir.path().join("orphan-src");
     write_source_package(&orphan_src, "studio/orphan", "1.0.0", "orphan");
-    storage_manager
-        .install_as_dev_copy(&orphan_src)
-        .await
-        .unwrap();
+    dev_copy_from_an_earlier_run(&storage_manager, &orphan_src).await;
 
     // Non-empty project list, none claiming `orphan`.
     let project_dir = temp_dir.path().join("project");

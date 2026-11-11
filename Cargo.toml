@@ -39,6 +39,9 @@ walkdir = "2.5"
 ignore = "0.4"
 tempfile = "3.27"
 
+# Process liveness (who still uses a dev copy)
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
+
 # Crypto and validation
 sha2 = "0.11"
 ed25519-dalek = { version = "3.0", features = ["rand_core", "pem"] }

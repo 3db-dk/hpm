@@ -55,6 +55,7 @@ pub mod install_manifest;
 pub mod lock;
 pub mod package_source;
 pub mod packer;
+pub mod process_users;
 pub(crate) mod process_util;
 pub mod project;
 pub mod python;
@@ -87,6 +88,10 @@ pub use script_run::{
 pub use hpm_config::{Config, ProjectsConfig, RegistrySourceConfig, RegistryType};
 
 // Storage / CAS layer.
+pub use storage::dev_users::{
+    DevCopyHold, hold_project_dev_copies, record_process_user, record_project_process,
+    release_process_user,
+};
 pub use storage::{StorageError, StorageManager};
 
 // Registry: prefer `RegistrySet::from_config(&Config)` as the entry point.

@@ -13,8 +13,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use super::dev_install::{prune_stale_dev_hashes, remove_install_entry, source_hash};
+use super::dev_install::{is_link_entry, remove_install_entry, source_hash};
+use super::dev_users::{
+    Unrecorded, container_is_empty, reclaim_dev_copies, record_project_manifests,
+};
 use super::{DevInstall, StorageError, StorageManager};
+use crate::process_users::process_state;
 
 /// Result of comprehensive cleanup including both packages and Python environments
 #[derive(Debug)]
@@ -256,6 +260,10 @@ impl StorageManager {
 
         let mut needed: HashMap<(String, String), PathBuf> = HashMap::new();
         for project in &projects {
+            // Make this project's dev copies known before anything is
+            // reclaimed: one last synced before copies recorded their users
+            // has none on file, and unrecorded would read as unused.
+            record_project_manifests(&project.path.join(".hpm").join("packages"));
             for (dep_name, spec) in &project.manifest.dependencies {
                 let hpm_package::DependencySpec::Path { path, .. } = spec else {
                     continue;
@@ -315,12 +323,13 @@ impl StorageManager {
     /// reclaim superseded content copies of the installs that remain.
     /// Returns identifiers of the entries actually removed.
     ///
-    /// Reclamation prunes every `<container>/<hash>` directory except the one
-    /// matching the current source, so the accumulated builds from a dev
-    /// iteration loop don't grow `_dev/` without bound. It is best-effort and
-    /// carries the same "run when Houdini sessions are closed" expectation as
-    /// the CAS package cleanup: a copy still mapped by a live process is skipped
-    /// (on Windows the OS lock fails the removal) rather than force-removed.
+    /// Reclamation removes every `<container>/<hash>` copy nothing uses,
+    /// except the one matching the current source (kept so an unchanged
+    /// relaunch does not recopy). "Uses" is the rule in
+    /// [`dev_users`](super::dev_users): a project whose manifest points at the
+    /// copy, or a recorded process that still runs. Every sync already
+    /// reclaims the containers it installs into; this pass also reaches the
+    /// packages no sync touches any more.
     pub async fn cleanup_unused_dev_installs(
         &self,
         projects_config: &ProjectsConfig,
@@ -347,8 +356,11 @@ impl StorageManager {
             for dev in orphans {
                 // symlink_metadata + remove_install_entry is the same defensive
                 // removal we use in `clear_existing_install` and `remove_package`:
-                // a link install must be unlinked, never followed. Removing a
-                // whole container reclaims all of its hash copies at once.
+                // a link install must be unlinked, never followed. A copy
+                // container goes copy by copy under the users rule, so a copy a
+                // running process still reads is kept even though no project
+                // asks for its version any more; the container itself goes
+                // once nothing is left in it.
                 let meta = match std::fs::symlink_metadata(&dev.install_path) {
                     Ok(m) => m,
                     Err(e) => {
@@ -361,6 +373,17 @@ impl StorageManager {
                         continue;
                     }
                 };
+                let is_link = matches!(is_link_entry(&meta, &dev.install_path), Ok(true));
+                if !is_link && meta.is_dir() {
+                    reclaim_dev_copies(&dev.install_path, None, Unrecorded::Remove, process_state);
+                    if !container_is_empty(&dev.install_path) {
+                        info!(
+                            "Kept dev install {}: a copy in it is still in use",
+                            dev.identifier()
+                        );
+                        continue;
+                    }
+                }
                 match remove_install_entry(&dev.install_path, &meta, &dev.slug, &dev.version) {
                     Ok(()) => {
                         info!("Removed orphaned dev install: {}", dev.identifier());
@@ -387,15 +410,12 @@ impl StorageManager {
             }
             match source_hash(source) {
                 Ok(hash) => {
-                    let n = prune_stale_dev_hashes(&dev.install_path, &hash);
-                    if n > 0 {
-                        info!(
-                            "Reclaimed {} superseded dev {} for {}",
-                            n,
-                            if n == 1 { "copy" } else { "copies" },
-                            dev.identifier()
-                        );
-                    }
+                    reclaim_dev_copies(
+                        &dev.install_path,
+                        Some(&hash),
+                        Unrecorded::Remove,
+                        process_state,
+                    );
                 }
                 Err(e) => warn!(
                     "Could not fingerprint source for {} at {}; skipping copy reclamation: {}",
