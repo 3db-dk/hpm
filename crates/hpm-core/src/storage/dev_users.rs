@@ -1339,6 +1339,40 @@ mod tests {
             }
         }
 
+        proptest! {
+            /// The sweep reads a staging directory's owner from its name, so
+            /// the reader must read back exactly what the writer
+            /// (`dev_install::stage_dir`) produces, for any container. Any
+            /// other name a container holds (a copy, a tombstone, the
+            /// records directory, a look-alike) owns nothing: a misread
+            /// would let the sweep delete a stranger's install or keep a
+            /// crashed one forever.
+            #[test]
+            fn prop_stage_names_round_trip(
+                parts in prop::collection::vec("[a-z0-9@.]{1,8}", 1..4),
+                other in prop_oneof![
+                    "[0-9a-f]{64}",
+                    "\\.reclaim-[0-9a-f]{8}-[0-9]{1,5}-[0-9]{1,3}",
+                    Just(USERS_DIR.to_string()),
+                    "\\.stage-[a-z]{1,4}-[0-9]{1,3}",
+                    "\\.stage-[0-9]{1,5}",
+                    "\\.stage-[0-9]{1,5}-",
+                    "stage-[0-9]{1,5}-[0-9]{1,3}",
+                    "[a-z]{0,8}",
+                ],
+            ) {
+                let container = parts.iter().fold(PathBuf::from("/tmp"), |p, s| p.join(s));
+                for _ in 0..3 {
+                    let staged = crate::storage::dev_install::stage_dir(&container);
+                    prop_assert_eq!(staged.parent(), Some(container.as_path()));
+                    let name = staged.file_name().unwrap().to_str().unwrap();
+                    prop_assert_eq!(stage_owner(name), Some(std::process::id()));
+                    prop_assert!(!is_hash_dir_name(name), "a stage is never taken for a copy");
+                }
+                prop_assert_eq!(stage_owner(&other), None, "{}", other);
+            }
+        }
+
         #[derive(Debug, Clone, Copy)]
         enum Op {
             Acquire(usize),
