@@ -22,7 +22,7 @@ cargo fmt --check    # check formatting
 | Crate | Purpose |
 |-------|---------|
 | `hpm-cli` | CLI frontend (clap) |
-| `hpm-core` | Core orchestration logic, including the `python` submodule (bundled uv, venv management, Houdini→Python ABI mapping), `global` (installs into Houdini's user prefs, with the ledger that also serves as a `hpm clean` GC root), and `houdini_prefs` (per-platform Houdini preferences-directory resolution) |
+| `hpm-core` | Core orchestration logic, including the `python` submodule (bundled uv, venv management, Houdini→Python ABI mapping), `global` (installs into Houdini's user prefs, with the ledger that also serves as a `hpm clean` GC root), `houdini_prefs` (per-platform Houdini preferences-directory resolution), `storage::dev_users` (who uses a `_dev` copy, and reclaiming the copies nobody does) and `process_users` (the PID-plus-start-time rule for whether a recorded process still runs, shared with TumbleTrove Desktop) |
 | `hpm-config` | Configuration loading/saving |
 | `hpm-package` | Package format and metadata |
 | `hpm-assets` | Operator asset-index model emitted by `hpm pack` |

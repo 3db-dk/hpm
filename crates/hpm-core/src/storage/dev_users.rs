@@ -257,10 +257,6 @@ impl DevCopyHold {
         })
     }
 
-    pub fn install_path(&self) -> &Path {
-        &self.install_path
-    }
-
     /// Whether this process holds `install_path` right now.
     pub(crate) fn is_held(install_path: &Path) -> bool {
         let guard = HOLDS
@@ -335,7 +331,7 @@ static TOMBSTONE_SEQ: AtomicU64 = AtomicU64::new(0);
 /// What a reclaim does with a copy that has never had a user recorded: one
 /// made before records existed. Its users are unknown, not absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Unrecorded {
+pub(crate) enum Unrecorded {
     /// Leave it. For a reclaim that knows one project only (the pass after a
     /// sync): another project, not synced since records began, may point at it.
     Keep,
@@ -390,7 +386,7 @@ fn project_dev_copies(packages_dir: &Path) -> Vec<(PathBuf, PathBuf)> {
 /// Record every dev copy the Houdini manifests in `packages_dir` point at,
 /// as that project's. This is how projects last synced before records
 /// existed come to be known; it changes nothing for a project synced since.
-pub fn record_project_manifests(packages_dir: &Path) {
+pub(crate) fn record_project_manifests(packages_dir: &Path) {
     for (manifest, copy) in project_dev_copies(packages_dir) {
         let _ = record_project_user(&copy, &manifest);
     }
@@ -434,7 +430,7 @@ pub fn record_project_process(packages_dir: &Path, user: ProcessRecord) {
 /// is kept whole. Tombstones a failed deletion left behind are retried here,
 /// and record directories whose copy is gone are dropped. Staging
 /// directories of installs in flight (`.stage-*`) are never touched.
-pub fn reclaim_dev_copies(
+pub(crate) fn reclaim_dev_copies(
     container: &Path,
     keep: Option<&str>,
     unrecorded: Unrecorded,
