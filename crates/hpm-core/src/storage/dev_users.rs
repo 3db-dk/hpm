@@ -328,6 +328,9 @@ pub(crate) fn settle(install_path: &Path) {
 
 static TOMBSTONE_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// Serializes [`reclaim_dev_copies`] within this process.
+static RECLAIMING: Mutex<()> = Mutex::new(());
+
 /// What a reclaim does with a copy that has never had a user recorded: one
 /// made before records existed. Its users are unknown, not absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -451,11 +454,18 @@ fn reclaim_with(
     state_of: impl Fn(u32) -> ProcessState,
     after_decision: &dyn Fn(&Path),
 ) -> usize {
+    // One reclaim at a time in this process. Two at once in one container
+    // (back-to-back syncs, a sync's sweep of a sibling) both tried to delete
+    // the same tombstone, each failed when the other removed files under it,
+    // and the half-deleted tombstone waited for the next reclaim. Holds are
+    // not taken under this lock, so an install never waits on a deletion.
+    let _reclaiming = RECLAIMING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // A container that is a link (a `DevLink` install) points into the
     // user's workspace: never walk it, let alone delete from it.
-    match std::fs::symlink_metadata(container) {
-        Ok(meta) if meta.is_dir() && matches!(is_link_entry(&meta, container), Ok(false)) => {}
-        _ => return 0,
+    if !is_copy_container(container) {
+        return 0;
     }
     let Ok(entries) = std::fs::read_dir(container) else {
         return 0;
@@ -579,11 +589,63 @@ fn drop_orphan_records(container: &Path, state_of: &impl Fn(u32) -> ProcessState
     let _ = std::fs::remove_dir(&users);
 }
 
-/// Whether `container` holds nothing but records: no copy, no install in
-/// flight, no tombstone. Such a container can go with its package.
-pub(crate) fn container_is_empty(container: &Path) -> bool {
-    std::fs::read_dir(container)
-        .is_ok_and(|entries| entries.flatten().all(|e| e.file_name() == USERS_DIR))
+/// Whether `path` is a real directory, judged without following a link: a
+/// `DevLink` install is a symlink or junction into the user's workspace, and
+/// `Path::is_dir` would answer for the workspace instead.
+pub(crate) fn is_copy_container(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|meta| meta.is_dir() && matches!(is_link_entry(&meta, path), Ok(false)))
+}
+
+/// The other version containers of the same package beside `container`
+/// (`_dev/<slug>@<other version>`), copy containers only. When a project
+/// moves to a new version, the copies of the old one are left in a container
+/// no sync installs into again.
+pub(crate) fn sibling_containers(container: &Path) -> Vec<PathBuf> {
+    let (Some(root), Some(slug)) = (
+        container.parent(),
+        container
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.rsplit_once('@'))
+            .map(|(slug, _)| slug.to_string()),
+    ) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p != container)
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.rsplit_once('@'))
+                .is_some_and(|(s, v)| s == slug && !v.is_empty())
+        })
+        .filter(|p| is_copy_container(p))
+        .collect()
+}
+
+/// Remove `container` if nothing is left in it: no copy, no install in
+/// flight, no live record. Every delete is non-recursive, so whatever appears
+/// meanwhile (an install starting, which records its hold before it creates
+/// anything else) keeps the container. Run after [`reclaim_dev_copies`],
+/// which has already dropped the dead records. Returns whether it went.
+pub(crate) fn remove_empty_container(container: &Path) -> bool {
+    if !is_copy_container(container) {
+        return false;
+    }
+    let users = container.join(USERS_DIR);
+    if let Ok(entries) = std::fs::read_dir(&users) {
+        for entry in entries.flatten() {
+            let _ = std::fs::remove_dir(entry.path());
+        }
+    }
+    let _ = std::fs::remove_dir(&users);
+    std::fs::remove_dir(container).is_ok()
 }
 
 /// `remove_dir_all`, retried once with every entry made writable. Windows
@@ -593,6 +655,8 @@ pub(crate) fn remove_tree(path: &Path) -> io::Result<()> {
     match std::fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        // Something else (another process's reclaim) finished it meanwhile.
+        Err(_) if std::fs::symlink_metadata(path).is_err() => Ok(()),
         Err(first) => {
             for entry in walkdir::WalkDir::new(path)
                 .follow_links(false)
@@ -608,7 +672,11 @@ pub(crate) fn remove_tree(path: &Path) -> io::Result<()> {
                     }
                 }
             }
-            std::fs::remove_dir_all(path).map_err(|_| first)
+            match std::fs::remove_dir_all(path) {
+                Ok(()) => Ok(()),
+                Err(_) if std::fs::symlink_metadata(path).is_err() => Ok(()),
+                Err(_) => Err(first),
+            }
         }
     }
 }
@@ -971,14 +1039,96 @@ mod tests {
         assert!(!dir.exists());
     }
 
+    /// A container goes only when truly empty: an install in flight, a copy,
+    /// or a live record for a copy not yet committed each keep it; records
+    /// that died with their copy do not.
     #[test]
-    fn empty_container_means_records_only() {
+    fn remove_empty_container_keeps_anything_still_starting() {
         let tmp = TempDir::new().unwrap();
         let c = tmp.path().join("_dev/rig@1.0.0");
-        std::fs::create_dir_all(c.join(USERS_DIR)).unwrap();
-        assert!(container_is_empty(&c));
+
         std::fs::create_dir_all(c.join(".stage-1-0")).unwrap();
-        assert!(!container_is_empty(&c));
+        assert!(!remove_empty_container(&c), "an install in flight");
+        std::fs::remove_dir(c.join(".stage-1-0")).unwrap();
+
+        let hold = DevCopyHold::acquire(&c.join(hash('a'))).unwrap();
+        assert!(
+            !remove_empty_container(&c),
+            "a hold taken before the copy exists"
+        );
+        drop(hold);
+
+        assert!(remove_empty_container(&c), "only empty record dirs left");
+        assert!(!c.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remove_empty_container_never_follows_a_link() {
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(workspace.join(USERS_DIR)).unwrap();
+        std::fs::create_dir_all(tmp.path().join("_dev")).unwrap();
+        let link = tmp.path().join("_dev/rig@1.0.0");
+        std::os::unix::fs::symlink(&workspace, &link).unwrap();
+        assert!(!remove_empty_container(&link));
+        assert!(
+            workspace.join(USERS_DIR).is_dir(),
+            "the workspace is untouched"
+        );
+        assert!(sibling_containers(&tmp.path().join("_dev/rig@2.0.0")).is_empty());
+    }
+
+    #[test]
+    fn siblings_are_the_same_package_only() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("_dev");
+        for name in [
+            "rig@1.0.0",
+            "rig@1.1.0",
+            "rigger@1.0.0",
+            "other@1.0.0",
+            "rig@",
+        ] {
+            std::fs::create_dir_all(root.join(name)).unwrap();
+        }
+        let mut got: Vec<String> = sibling_containers(&root.join("rig@1.1.0"))
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        got.sort();
+        assert_eq!(got, vec!["rig@1.0.0"]);
+    }
+
+    /// The Windows half of the rename-aside guard (from hpm PR #12): a copy
+    /// with a file open in it cannot be renamed, so even a copy no record
+    /// protects is left whole rather than half deleted.
+    #[cfg(windows)]
+    #[test]
+    fn reclaim_leaves_a_copy_with_an_open_file_whole() {
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('a'));
+        std::fs::create_dir_all(copy.join("dso")).unwrap();
+        std::fs::write(copy.join("dso/plugin.dll"), "BINARY").unwrap();
+        let open = std::fs::File::open(copy.join("dso/plugin.dll")).unwrap();
+
+        let removed = reclaim_dev_copies(&c, None, Unrecorded::Remove, process_state);
+        assert_eq!(removed, 0);
+        assert!(copy.join("hpm.toml").is_file(), "left whole");
+        assert!(copy.join("otls/a.hda").is_file());
+        assert!(copy.join("dso/plugin.dll").is_file());
+        let tombstones = std::fs::read_dir(&c)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(TOMBSTONE_PREFIX)
+            })
+            .count();
+        assert_eq!(tombstones, 0);
+        drop(open);
     }
 
     mod props {

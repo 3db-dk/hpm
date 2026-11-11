@@ -985,13 +985,23 @@ fn reclaim_superseded_dev_copies(installed: &[InstalledPackage]) {
         return;
     };
     runtime.spawn_blocking(move || {
-        for container in containers {
-            crate::storage::dev_users::reclaim_dev_copies(
-                &container,
-                None,
-                crate::storage::dev_users::Unrecorded::Keep,
-                crate::process_users::process_state,
-            );
+        use crate::storage::dev_users::{
+            Unrecorded, reclaim_dev_copies, remove_empty_container, sibling_containers,
+        };
+        let state_of = crate::process_users::process_state;
+        for container in &containers {
+            reclaim_dev_copies(container, None, Unrecorded::Keep, state_of);
+            // The same package's other versions: a project that moved to a
+            // new version leaves the old container's copies unused, and no
+            // sync installs into it again. The users rule decides there too,
+            // so a version another project still points at keeps its copy.
+            for sibling in sibling_containers(container) {
+                if containers.contains(&sibling) {
+                    continue;
+                }
+                reclaim_dev_copies(&sibling, None, Unrecorded::Keep, state_of);
+                remove_empty_container(&sibling);
+            }
         }
     });
 }

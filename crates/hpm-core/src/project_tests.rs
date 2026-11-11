@@ -1625,6 +1625,9 @@ mod dev_copy_props {
         Hold(usize),
         /// Every run ends.
         Release,
+        /// The package's version goes up: its next sync installs into a new
+        /// container, leaving the old one to the same-package sweep.
+        Bump,
     }
 
     fn step() -> impl Strategy<Value = Step> {
@@ -1633,6 +1636,7 @@ mod dev_copy_props {
             4 => (0usize..2).prop_map(Step::Sync),
             1 => (0usize..2).prop_map(Step::Hold),
             1 => Just(Step::Release),
+            1 => Just(Step::Bump),
         ]
     }
 
@@ -1665,11 +1669,17 @@ mod dev_copy_props {
                 let (config, storage_manager) = test_setup(temp_dir.path());
                 let workspace = temp_dir.path().join("workspace");
                 std::fs::create_dir_all(workspace.join("otls")).unwrap();
-                std::fs::write(
-                    workspace.join("hpm.toml"),
-                    "[package]\npath = \"acme/rig\"\nname = \"Rig\"\nversion = \"1.0.0\"\n",
-                )
-                .unwrap();
+                let write_version = |minor: usize| {
+                    std::fs::write(
+                        workspace.join("hpm.toml"),
+                        format!(
+                            "[package]\npath = \"acme/rig\"\nname = \"Rig\"\nversion = \"1.{minor}.0\"\n"
+                        ),
+                    )
+                    .unwrap();
+                };
+                let mut minor = 0usize;
+                write_version(minor);
                 std::fs::write(workspace.join("otls/rig.hda"), "x").unwrap();
                 let projects: Vec<ProjectManager> = (0..2)
                     .map(|i| {
@@ -1687,7 +1697,7 @@ mod dev_copy_props {
                         ProjectManager::new(root, storage_manager.clone(), config.clone()).unwrap()
                     })
                     .collect();
-                let container = config.storage.packages_dir.join("_dev").join("rig@1.0.0");
+                let dev_root = config.storage.packages_dir.join("_dev");
                 let mut edits = 1usize;
                 // What the runs hold, by the model (the copy the project
                 // points at when the run starts), kept apart from the holds
@@ -1716,6 +1726,10 @@ mod dev_copy_props {
                             holds.clear();
                             held.clear();
                         }
+                        Step::Bump => {
+                            minor += 1;
+                            write_version(minor);
+                        }
                     }
                     let in_use: BTreeSet<PathBuf> = projects
                         .iter()
@@ -1735,24 +1749,96 @@ mod dev_copy_props {
                     .filter_map(hpath_of)
                     .chain(held.iter().cloned())
                     .collect();
-                crate::storage::dev_users::reclaim_dev_copies(
-                    &container,
-                    None,
-                    crate::storage::dev_users::Unrecorded::Keep,
-                    crate::process_users::process_state,
-                );
-                let left: BTreeSet<PathBuf> = std::fs::read_dir(&container)
-                    .map(|entries| {
-                        entries
-                            .flatten()
-                            .filter(|e| e.file_name().len() == 64)
-                            .map(|e| e.path())
-                            .collect()
-                    })
+                // A final pass over every version's container, as the
+                // same-package sweep after a sync would make it.
+                let containers: Vec<PathBuf> = std::fs::read_dir(&dev_root)
+                    .map(|entries| entries.flatten().map(|e| e.path()).collect())
                     .unwrap_or_default();
+                for container in &containers {
+                    crate::storage::dev_users::reclaim_dev_copies(
+                        container,
+                        None,
+                        crate::storage::dev_users::Unrecorded::Keep,
+                        crate::process_users::process_state,
+                    );
+                    crate::storage::dev_users::remove_empty_container(container);
+                }
+                let mut left: BTreeSet<PathBuf> = BTreeSet::new();
+                let mut containers_left: BTreeSet<PathBuf> = BTreeSet::new();
+                for container in std::fs::read_dir(&dev_root)
+                    .map(|entries| entries.flatten().map(|e| e.path()).collect::<Vec<_>>())
+                    .unwrap_or_default()
+                {
+                    containers_left.insert(container.clone());
+                    for entry in std::fs::read_dir(&container).unwrap().flatten() {
+                        if entry.file_name().len() == 64 {
+                            left.insert(entry.path());
+                        }
+                    }
+                }
+                let containers_in_use: BTreeSet<PathBuf> =
+                    in_use.iter().filter_map(|p| p.parent().map(Path::to_path_buf)).collect();
+                prop_assert_eq!(containers_left, containers_in_use);
                 prop_assert_eq!(left, in_use);
                 Ok(())
             })?;
         }
     }
+}
+
+/// When a project moves to a new version of a dev package, the old version's
+/// container is reclaimed by the same-package sweep, but only once no project
+/// points at it: unlike an age or version-order rule, another project still
+/// on the old version keeps its copy.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_version_reclaims_the_old_container_once_nothing_points_at_it() {
+    let temp_dir = TempDir::new().unwrap();
+    let (config, storage_manager) = test_setup(temp_dir.path());
+    let workspace = temp_dir.path().join("workspace");
+    std::fs::create_dir_all(workspace.join("otls")).unwrap();
+    let version = |v: &str| {
+        std::fs::write(
+            workspace.join("hpm.toml"),
+            format!("[package]\npath = \"acme/rig\"\nname = \"Rig\"\nversion = \"{v}\"\n"),
+        )
+        .unwrap();
+    };
+    version("1.0.0");
+    std::fs::write(workspace.join("otls/rig.hda"), "v1").unwrap();
+    let project = |name: &str| {
+        let root = temp_dir.path().join(name);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("hpm.toml"),
+            format!(
+                "[package]\npath = \"acme/{name}\"\nname = \"P\"\nversion = \"0.1.0\"\n\n\
+                 [dependencies]\n\"acme/rig\" = {{ path = \"{}\" }}\n",
+                workspace.to_string_lossy().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        ProjectManager::new(root, storage_manager.clone(), config.clone()).unwrap()
+    };
+    let a = project("a");
+    let b = project("b");
+    a.sync_dependencies().await.unwrap();
+    b.sync_dependencies().await.unwrap();
+    let old = config.storage.packages_dir.join("_dev").join("rig@1.0.0");
+    assert_eq!(wait_for_dev_hashes(&old, 1).await.len(), 1);
+
+    version("1.1.0");
+    a.sync_dependencies().await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(dev_hashes(&old).len(), 1, "B still points at 1.0.0");
+
+    b.sync_dependencies().await.unwrap();
+    for _ in 0..200 {
+        if !old.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(!old.exists(), "1.0.0 is gone once nothing points at it");
+    let new = config.storage.packages_dir.join("_dev").join("rig@1.1.0");
+    assert_eq!(dev_hashes(&new).len(), 1);
 }

@@ -617,7 +617,11 @@ install onwards does not carry the records along:
   for a detached one), because such a run can outlast the project's next sync.
 
 Every `sync_dependencies` ends by reclaiming the containers it installed into
-(`reclaim_dev_copies`), on a blocking thread the sync does not wait for. A copy
+(`reclaim_dev_copies`), and the same package's other version containers
+(`sibling_containers`), removing a version's container once nothing is left in
+it (`remove_empty_container`, non-recursive deletes only, so an install that
+has just started keeps it). This runs on a blocking thread the sync does not
+wait for, one reclaim at a time per process. A copy
 is renamed to a hidden tombstone before it is deleted: on Windows a directory
 with a file open inside cannot be renamed, so a copy read by a process nobody
 recorded stays whole. On macOS and Linux nothing blocks the rename, which is

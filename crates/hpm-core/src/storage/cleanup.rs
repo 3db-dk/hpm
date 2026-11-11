@@ -13,9 +13,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-use super::dev_install::{is_link_entry, remove_install_entry, source_hash};
+use super::dev_install::{remove_install_entry, source_hash};
 use super::dev_users::{
-    Unrecorded, container_is_empty, reclaim_dev_copies, record_project_manifests,
+    Unrecorded, is_copy_container, reclaim_dev_copies, record_project_manifests,
+    remove_empty_container,
 };
 use super::{DevInstall, StorageError, StorageManager};
 use crate::process_users::process_state;
@@ -373,16 +374,18 @@ impl StorageManager {
                         continue;
                     }
                 };
-                let is_link = matches!(is_link_entry(&meta, &dev.install_path), Ok(true));
-                if !is_link && meta.is_dir() {
+                if is_copy_container(&dev.install_path) {
                     reclaim_dev_copies(&dev.install_path, None, Unrecorded::Remove, process_state);
-                    if !container_is_empty(&dev.install_path) {
+                    if remove_empty_container(&dev.install_path) {
+                        info!("Removed orphaned dev install: {}", dev.identifier());
+                        removed.push(dev.identifier());
+                    } else {
                         info!(
                             "Kept dev install {}: a copy in it is still in use",
                             dev.identifier()
                         );
-                        continue;
                     }
+                    continue;
                 }
                 match remove_install_entry(&dev.install_path, &meta, &dev.slug, &dev.version) {
                     Ok(()) => {
@@ -403,9 +406,10 @@ impl StorageManager {
             let Some(source) = needed.get(&(dev.slug.clone(), dev.version.clone())) else {
                 continue;
             };
-            // Only copy containers (real directories) carry hash subdirs; a link
-            // install has no superseded copies to reclaim.
-            if !dev.install_path.is_dir() {
+            // Only copy containers carry hash subdirs; a link install has no
+            // superseded copies to reclaim. Judged without following the
+            // link, which `is_dir` would do into the workspace.
+            if !is_copy_container(&dev.install_path) {
                 continue;
             }
             match source_hash(source) {

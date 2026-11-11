@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removes the copies it supersedes, once no project's packages point at them
   and no process recorded as using them is still running. Copies made by an
   earlier hpm are removed by `hpm clean`, which now checks what every project
-  points at first.
+  points at first. When a project moves to a new version of a dev package, the
+  old version's copies go too, once no other project still uses that version.
 - A dev copy cut short (hpm crashed or was killed mid-copy) no longer leaves
   its unfinished staging directory behind for good: it is removed once the
   process that was copying is gone.
