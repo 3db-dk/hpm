@@ -428,8 +428,10 @@ pub fn record_project_process(packages_dir: &Path, user: ProcessRecord) {
 /// Each removal renames the copy to a hidden tombstone and deletes that; a
 /// copy that cannot be renamed (on Windows: something has a file open in it)
 /// is kept whole. Tombstones a failed deletion left behind are retried here,
-/// and record directories whose copy is gone are dropped. Staging
-/// directories of installs in flight (`.stage-*`) are never touched.
+/// and record directories whose copy is gone are dropped. A staging
+/// directory (`.stage-<pid>-<seq>`) is an install in flight while the process
+/// its name records runs, and is left alone; once that process is gone it is
+/// what a crashed or killed copy left behind, and is removed.
 pub(crate) fn reclaim_dev_copies(
     container: &Path,
     keep: Option<&str>,
@@ -465,6 +467,25 @@ fn reclaim_with(
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with(TOMBSTONE_PREFIX) {
             let _ = remove_tree(&path);
+            continue;
+        }
+        if let Some(pid) = stage_owner(&name) {
+            // Only "gone" removes: a PID the OS could not be asked about, or
+            // one recycled by an unrelated process, keeps the directory,
+            // which costs disk until that process exits and never an install.
+            if state_of(pid) == ProcessState::Gone {
+                match remove_tree(&path) {
+                    Ok(()) => info!(
+                        "Removed {} left by a copy that did not finish",
+                        path.display()
+                    ),
+                    Err(e) => warn!(
+                        "Failed to remove {} (retried on the next reclaim): {}",
+                        path.display(),
+                        e
+                    ),
+                }
+            }
             continue;
         }
         if !is_hash_dir_name(&name) || Some(name.as_str()) == keep {
@@ -529,6 +550,15 @@ fn reclaim_with(
         );
     }
     removed
+}
+
+/// The PID that made the staging directory `name`, when `name` is one
+/// (`.stage-<pid>-<seq>`, see `dev_install::stage_dir`).
+fn stage_owner(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix(".stage-")?;
+    let (pid, seq) = rest.split_once('-')?;
+    seq.parse::<u64>().ok()?;
+    pid.parse().ok()
 }
 
 /// Remove record directories whose copy no longer exists and that hold no
@@ -676,7 +706,8 @@ mod tests {
 
         let unused = make_copy(&c, &hash('7'));
         let kept_by_caller = make_copy(&c, &hash('8'));
-        std::fs::create_dir_all(c.join(".stage-1-0/otls")).unwrap();
+        std::fs::create_dir_all(c.join(format!(".stage-{LIVE}-0/otls"))).unwrap();
+        std::fs::create_dir_all(c.join(format!(".stage-{DEAD}-0/otls"))).unwrap();
         std::fs::create_dir_all(c.join(".reclaim-old-1-0/otls")).unwrap();
 
         let removed = reclaim_dev_copies(&c, Some(&hash('8')), Unrecorded::Remove, state_of);
@@ -691,8 +722,12 @@ mod tests {
         assert!(kept_by_caller.is_dir());
         assert_eq!(removed, 5);
         assert!(
-            c.join(".stage-1-0").is_dir(),
+            c.join(format!(".stage-{LIVE}-0")).is_dir(),
             "an install in flight is never touched"
+        );
+        assert!(
+            !c.join(format!(".stage-{DEAD}-0")).exists(),
+            "a crashed copy's staging dir is removed"
         );
         assert!(
             !c.join(".reclaim-old-1-0").exists(),
@@ -983,6 +1018,9 @@ mod tests {
             keep: Option<usize>,
             unrecorded: bool,
             hash_named_file: bool,
+            /// PID recorded in a staging dir's name, from the same pool as
+            /// the process records so live and dead owners both occur.
+            stage_pid: u32,
         }
 
         const T: u64 = 1_758_000_000;
@@ -1016,17 +1054,21 @@ mod tests {
                 any::<Option<prop::sample::Index>>(),
                 any::<bool>(),
                 any::<bool>(),
+                1u32..5,
             )
-                .prop_map(|(copies, pids, keep, unrecorded, hash_named_file)| {
-                    let keep = keep.map(|i| i.index(copies.len()));
-                    Case {
-                        copies,
-                        pids,
-                        keep,
-                        unrecorded,
-                        hash_named_file,
-                    }
-                })
+                .prop_map(
+                    |(copies, pids, keep, unrecorded, hash_named_file, stage_pid)| {
+                        let keep = keep.map(|i| i.index(copies.len()));
+                        Case {
+                            copies,
+                            pids,
+                            keep,
+                            unrecorded,
+                            hash_named_file,
+                            stage_pid,
+                        }
+                    },
+                )
         }
 
         fn copy_hash(i: usize) -> String {
@@ -1060,7 +1102,8 @@ mod tests {
 
             /// Reclaim removes exactly the copies the rule says nobody uses,
             /// and changes nothing else: kept copies keep their content, an
-            /// install in flight and a hash-named file are untouched, nothing
+            /// install in flight is kept exactly while its process runs, a
+            /// hash-named file is untouched, nothing
             /// outside the container is touched, no tombstone is left, and
             /// no removed copy leaves records behind.
             #[test]
@@ -1095,7 +1138,8 @@ mod tests {
                         }
                     }
                 }
-                std::fs::create_dir_all(c_dir.join(".stage-9-9/otls")).unwrap();
+                let stage = c_dir.join(format!(".stage-{}-0/otls", c.stage_pid));
+                std::fs::create_dir_all(&stage).unwrap();
                 let file_hash = format!("{:064x}", 0xfeedu32);
                 if c.hash_named_file {
                     std::fs::write(c_dir.join(&file_hash), "not a copy").unwrap();
@@ -1125,7 +1169,13 @@ mod tests {
                 for i in (0..c.copies.len()).filter(|i| !got.contains(i)) {
                     prop_assert!(!records_dir(&c_dir, &copy_hash(i)).exists());
                 }
-                prop_assert!(c_dir.join(".stage-9-9/otls").is_dir());
+                // A staging dir goes exactly when the PID its name records
+                // is gone.
+                let stage_gone = matches!(
+                    c.pids.get(&c.stage_pid).copied().unwrap_or(Os::Gone),
+                    Os::Gone
+                );
+                prop_assert_eq!(stage.is_dir(), !stage_gone);
                 if c.hash_named_file {
                     prop_assert_eq!(std::fs::read_to_string(c_dir.join(&file_hash)).unwrap(), "not a copy");
                 }

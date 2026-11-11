@@ -622,7 +622,9 @@ is renamed to a hidden tombstone before it is deleted: on Windows a directory
 with a file open inside cannot be renamed, so a copy read by a process nobody
 recorded stays whole. On macOS and Linux nothing blocks the rename, which is
 why the records, not the OS, are the rule. Anything that cannot be judged (an
-unreadable record, a process the OS cannot be asked about) keeps the copy.
+unreadable record, a process the OS cannot be asked about) keeps the copy. The
+same pass removes the `.stage-<pid>-<seq>` directory a crashed or killed copy
+left behind, once the process its name records is gone.
 
 Copies made before records existed have none, and that means unknown, not
 unused. The pass after a sync knows one project only and leaves them

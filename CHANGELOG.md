@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and no process recorded as using them is still running. Copies made by an
   earlier hpm are removed by `hpm clean`, which now checks what every project
   points at first.
+- A dev copy cut short (hpm crashed or was killed mid-copy) no longer leaves
+  its unfinished staging directory behind for good: it is removed once the
+  process that was copying is gone.
 - `hpm clean` no longer leaves a half-deleted dev copy behind when a running
   Houdini has files open in it on Windows, and can delete read-only files
   (older dev copies carried a `.git` directory).
