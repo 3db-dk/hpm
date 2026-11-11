@@ -1610,3 +1610,149 @@ async fn sync_reclaims_the_dev_copy_it_supersedes_and_no_other() {
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     assert_eq!(dev_hashes(&container), last);
 }
+
+mod dev_copy_props {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[derive(Debug, Clone, Copy)]
+    enum Step {
+        /// A shipped file changes (a rebuilt DSO, a saved HDA).
+        Edit,
+        /// Project 0 or 1 syncs (a dev launch, a hython run's pre-sync).
+        Sync(usize),
+        /// A run against project 0 or 1 starts and holds its copies.
+        Hold(usize),
+        /// Every run ends.
+        Release,
+    }
+
+    fn step() -> impl Strategy<Value = Step> {
+        prop_oneof![
+            2 => Just(Step::Edit),
+            4 => (0usize..2).prop_map(Step::Sync),
+            1 => (0usize..2).prop_map(Step::Hold),
+            1 => Just(Step::Release),
+        ]
+    }
+
+    fn hpath_of(pm: &ProjectManager) -> Option<PathBuf> {
+        let bytes = std::fs::read(pm.project_paths.packages_dir.join("acme.rig.json")).ok()?;
+        let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        Some(PathBuf::from(json["hpath"][0].as_str()?))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+
+        /// Over any interleaving of workspace edits, syncs of two projects
+        /// sharing a dev package, and runs holding a project's copies, with
+        /// each sync's reclaim running in the background against the steps
+        /// after it:
+        ///
+        /// - **after every step**, every copy a project points at and every
+        ///   copy a run holds exists, complete: no reclaim ever takes a copy
+        ///   from under a user;
+        /// - **at the end**, a reclaim leaves exactly those copies: disk use
+        ///   is bounded by projects and runs, not by launches.
+        #[test]
+        fn prop_copies_live_exactly_as_long_as_they_are_used(
+            steps in prop::collection::vec(step(), 1..12),
+        ) {
+            let temp_dir = TempDir::new().unwrap();
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+            rt.block_on(async {
+                let (config, storage_manager) = test_setup(temp_dir.path());
+                let workspace = temp_dir.path().join("workspace");
+                std::fs::create_dir_all(workspace.join("otls")).unwrap();
+                std::fs::write(
+                    workspace.join("hpm.toml"),
+                    "[package]\npath = \"acme/rig\"\nname = \"Rig\"\nversion = \"1.0.0\"\n",
+                )
+                .unwrap();
+                std::fs::write(workspace.join("otls/rig.hda"), "x").unwrap();
+                let projects: Vec<ProjectManager> = (0..2)
+                    .map(|i| {
+                        let root = temp_dir.path().join(format!("p{i}"));
+                        std::fs::create_dir_all(&root).unwrap();
+                        std::fs::write(
+                            root.join("hpm.toml"),
+                            format!(
+                                "[package]\npath = \"acme/p{i}\"\nname = \"P\"\nversion = \"0.1.0\"\n\n\
+                                 [dependencies]\n\"acme/rig\" = {{ path = \"{}\" }}\n",
+                                workspace.to_string_lossy().replace('\\', "/")
+                            ),
+                        )
+                        .unwrap();
+                        ProjectManager::new(root, storage_manager.clone(), config.clone()).unwrap()
+                    })
+                    .collect();
+                let container = config.storage.packages_dir.join("_dev").join("rig@1.0.0");
+                let mut edits = 1usize;
+                // What the runs hold, by the model (the copy the project
+                // points at when the run starts), kept apart from the holds
+                // themselves so a hold that protects nothing cannot also
+                // shrink what the property checks.
+                let mut held: Vec<PathBuf> = Vec::new();
+                let mut holds: Vec<crate::storage::dev_users::DevCopyHold> = Vec::new();
+
+                for step in &steps {
+                    match *step {
+                        Step::Edit => {
+                            edits += 1;
+                            // A new size, so the hash moves whatever the
+                            // filesystem's mtime resolution.
+                            std::fs::write(workspace.join("otls/rig.hda"), "x".repeat(edits)).unwrap();
+                        }
+                        Step::Sync(i) => {
+                            projects[i].sync_dependencies().await.unwrap();
+                        }
+                        Step::Hold(i) => {
+                            let packages = &projects[i].project_paths.packages_dir;
+                            holds.extend(crate::storage::dev_users::hold_project_dev_copies(packages));
+                            held.extend(hpath_of(&projects[i]));
+                        }
+                        Step::Release => {
+                            holds.clear();
+                            held.clear();
+                        }
+                    }
+                    let in_use: BTreeSet<PathBuf> = projects
+                        .iter()
+                        .filter_map(hpath_of)
+                        .chain(held.iter().cloned())
+                        .collect();
+                    for copy in &in_use {
+                        prop_assert!(
+                            copy.join("hpm.toml").is_file() && copy.join("otls/rig.hda").is_file(),
+                            "{} is in use but gone after {:?}", copy.display(), step
+                        );
+                    }
+                }
+
+                let in_use: BTreeSet<PathBuf> = projects
+                    .iter()
+                    .filter_map(hpath_of)
+                    .chain(held.iter().cloned())
+                    .collect();
+                crate::storage::dev_users::reclaim_dev_copies(
+                    &container,
+                    None,
+                    crate::storage::dev_users::Unrecorded::Keep,
+                    crate::process_users::process_state,
+                );
+                let left: BTreeSet<PathBuf> = std::fs::read_dir(&container)
+                    .map(|entries| {
+                        entries
+                            .flatten()
+                            .filter(|e| e.file_name().len() == 64)
+                            .map(|e| e.path())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                prop_assert_eq!(left, in_use);
+                Ok(())
+            })?;
+        }
+    }
+}

@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c0ed7f6106c3bc9d790b0c0f1b04fdff40d981e1e3452865ca32c5dea8715a0c # shrinks to c = Case { copies: [[], [Project { points_here: true, manifest_exists: true }]], pids: {}, keep: None, unrecorded: false, hash_named_file: false }
+cc eb4478e7d837ed656ef8dd52585271610a09079f256e093e3743688fa3fcbbb3 # shrinks to ops = [Acquire(0), HoldUntilSettled(0), Settle(0)]
+cc 7234c7e8ea81b71dbb50773f5ef91bfa9c24f1743e4ecc26f92b692ed0380ccd # shrinks to c = Case { copies: [[]], pids: {}, keep: None, unrecorded: false, hash_named_file: true }
+cc 485149f97c548546afb7ccb1ecfbd2eac9fd6d420f20ae42e184e686ba76a93c # shrinks to c = Case { copies: [[], []], pids: {}, keep: None, unrecorded: true, hash_named_file: false }

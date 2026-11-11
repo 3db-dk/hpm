@@ -169,4 +169,42 @@ mod tests {
             }
         );
     }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn state() -> impl Strategy<Value = ProcessState> {
+            prop_oneof![
+                Just(ProcessState::Gone),
+                Just(ProcessState::Unknown),
+                any::<Option<u64>>().prop_map(|started_at| ProcessState::Alive { started_at }),
+                // Start times near a recorded one, where the tolerance decides.
+                (0u64..8).prop_map(|d| ProcessState::Alive {
+                    started_at: Some(T + d)
+                }),
+            ]
+        }
+
+        proptest! {
+            /// Liveness over arbitrary start times, the extremes of `u64`
+            /// included: dead exactly when the PID is gone, or alive with a
+            /// start time further from the recorded one than the tolerance.
+            #[test]
+            fn prop_is_live_matches_the_rule(
+                started_at in prop_oneof![any::<Option<u64>>(), Just(Some(T)), Just(Some(u64::MAX)), Just(Some(0))],
+                answer in state(),
+            ) {
+                let rec = ProcessRecord { pid: 1, started_at };
+                let dead = match (answer, started_at) {
+                    (ProcessState::Gone, _) => true,
+                    (ProcessState::Alive { started_at: Some(now) }, Some(r)) => {
+                        now.abs_diff(r) > START_TIME_TOLERANCE_SECS
+                    }
+                    _ => false,
+                };
+                prop_assert_eq!(rec.is_live(|_| answer), !dead);
+            }
+        }
+    }
 }

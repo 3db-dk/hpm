@@ -37,6 +37,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
 
+#[cfg(test)]
+use super::dev_install::dev_copy_is_complete;
 use super::dev_install::{is_hash_dir_name, is_link_entry};
 
 /// Directory under a dev container holding one record directory per hash.
@@ -438,6 +440,19 @@ pub fn reclaim_dev_copies(
     unrecorded: Unrecorded,
     state_of: impl Fn(u32) -> ProcessState,
 ) -> usize {
+    reclaim_with(container, keep, unrecorded, state_of, &|_| {})
+}
+
+/// [`reclaim_dev_copies`], with `after_decision` called for each copy judged
+/// unused, before it is moved aside: the window in which an install may
+/// claim it. Tests put a claim there; production passes nothing.
+fn reclaim_with(
+    container: &Path,
+    keep: Option<&str>,
+    unrecorded: Unrecorded,
+    state_of: impl Fn(u32) -> ProcessState,
+    after_decision: &dyn Fn(&Path),
+) -> usize {
     // A container that is a link (a `DevLink` install) points into the
     // user's workspace: never walk it, let alone delete from it.
     match std::fs::symlink_metadata(container) {
@@ -459,18 +474,39 @@ pub fn reclaim_dev_copies(
         if !is_hash_dir_name(&name) || Some(name.as_str()) == keep {
             continue;
         }
+        // Copies are directories; anything else with a hash-shaped name is
+        // not ours to judge.
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
         if unrecorded == Unrecorded::Keep && !records_dir(container, &name).is_dir() {
             continue;
         }
         if DevCopyHold::is_held(&path) || hash_in_use(container, &name, &state_of) {
             continue;
         }
+        after_decision(&path);
         let seq = TOMBSTONE_SEQ.fetch_add(1, Ordering::Relaxed);
         let tombstone = container.join(format!("{TOMBSTONE_PREFIX}{name}-{pid}-{seq}"));
         if let Err(e) = std::fs::rename(&path, &tombstone) {
             if e.kind() != io::ErrorKind::NotFound {
                 warn!(
                     "Kept dev copy {}: it could not be moved aside, so something still has it open: {}",
+                    path.display(),
+                    e
+                );
+            }
+            continue;
+        }
+        // Deciding and moving aside are two steps, and an install may claim
+        // the copy between them: it takes its hold, then checks the copy is
+        // complete, and reuses it. Its hold is in place before that check,
+        // so asking again now sees every claim made before the copy moved;
+        // a claimed copy goes back where the install found it.
+        if DevCopyHold::is_held(&path) || hash_in_use(container, &name, &state_of) {
+            if let Err(e) = std::fs::rename(&tombstone, &path) {
+                warn!(
+                    "Dev copy {} was claimed while being reclaimed and could not be put back: {}",
                     path.display(),
                     e
                 );
@@ -796,6 +832,55 @@ mod tests {
         assert!(new.is_dir());
     }
 
+    /// An install that reuses a copy takes its hold and then checks the copy
+    /// is complete; a reclaim decides a copy is unused and then moves it
+    /// aside. Interleaved (decide, hold, check, move) the install points a
+    /// project at a copy that is then deleted. The reclaim must notice the
+    /// claim that arrived after its decision and leave the copy in place.
+    #[test]
+    fn a_copy_claimed_after_the_decision_is_not_removed() {
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('e'));
+        let claimed = std::cell::RefCell::new(Vec::new());
+        let removed = reclaim_with(&c, None, Unrecorded::Remove, process_state, &|p| {
+            // The install, between the reclaim's decision and its rename.
+            claimed.borrow_mut().push(DevCopyHold::acquire(p).unwrap());
+            assert!(dev_copy_is_complete(p));
+        });
+        assert_eq!(removed, 0);
+        assert!(
+            copy.join("otls/a.hda").is_file(),
+            "the claimed copy is intact"
+        );
+        assert!(!claimed.borrow().is_empty());
+    }
+
+    /// The same window, with the claim made by another process: only its
+    /// record shows, no in-process hold.
+    #[test]
+    fn a_copy_claimed_by_another_process_after_the_decision_is_not_removed() {
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('f'));
+        const OTHER: u32 = 77;
+        let state_of = |pid: u32| match pid {
+            OTHER => ProcessState::Alive { started_at: None },
+            _ => ProcessState::Gone,
+        };
+        reclaim_with(&c, None, Unrecorded::Remove, state_of, &|p| {
+            record_process_user(
+                p,
+                ProcessRecord {
+                    pid: OTHER,
+                    started_at: None,
+                },
+            )
+            .unwrap();
+        });
+        assert!(copy.join("otls/a.hda").is_file());
+    }
+
     #[test]
     fn non_copy_paths_are_not_recorded() {
         let tmp = TempDir::new().unwrap();
@@ -863,5 +948,260 @@ mod tests {
         assert!(container_is_empty(&c));
         std::fs::create_dir_all(c.join(".stage-1-0")).unwrap();
         assert!(!container_is_empty(&c));
+    }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        /// What the OS says about a recorded PID.
+        #[derive(Debug, Clone, Copy)]
+        enum Os {
+            Gone,
+            Unknown,
+            Same,
+            Recycled,
+        }
+
+        /// One user of one copy.
+        #[derive(Debug, Clone)]
+        enum User {
+            /// A recorded process, judged through the shared PID table.
+            Process(u32),
+            /// A project record; its manifest may point here or elsewhere,
+            /// or be gone.
+            Project {
+                points_here: bool,
+                manifest_exists: bool,
+            },
+            /// A record nobody can parse: judged live.
+            Garbage,
+        }
+
+        #[derive(Debug, Clone)]
+        struct Case {
+            /// Per copy, its users (empty: never recorded).
+            copies: Vec<Vec<User>>,
+            pids: BTreeMap<u32, Os>,
+            keep: Option<usize>,
+            unrecorded: bool,
+            hash_named_file: bool,
+        }
+
+        const T: u64 = 1_758_000_000;
+
+        fn user() -> impl Strategy<Value = User> {
+            prop_oneof![
+                (1u32..5).prop_map(User::Process),
+                (any::<bool>(), any::<bool>()).prop_map(|(points_here, manifest_exists)| {
+                    User::Project {
+                        points_here,
+                        manifest_exists,
+                    }
+                }),
+                Just(User::Garbage),
+            ]
+        }
+
+        fn case() -> impl Strategy<Value = Case> {
+            (
+                prop::collection::vec(prop::collection::vec(user(), 0..4), 1..7),
+                prop::collection::btree_map(
+                    1u32..5,
+                    prop_oneof![
+                        Just(Os::Gone),
+                        Just(Os::Unknown),
+                        Just(Os::Same),
+                        Just(Os::Recycled)
+                    ],
+                    0..5,
+                ),
+                any::<Option<prop::sample::Index>>(),
+                any::<bool>(),
+                any::<bool>(),
+            )
+                .prop_map(|(copies, pids, keep, unrecorded, hash_named_file)| {
+                    let keep = keep.map(|i| i.index(copies.len()));
+                    Case {
+                        copies,
+                        pids,
+                        keep,
+                        unrecorded,
+                        hash_named_file,
+                    }
+                })
+        }
+
+        fn copy_hash(i: usize) -> String {
+            format!("{:064x}", i + 1)
+        }
+
+        /// The rule, stated independently of the code: a copy is kept when it
+        /// is `keep`, or never recorded under `Unrecorded::Keep`, or has a
+        /// live user.
+        fn kept_by_model(c: &Case) -> BTreeSet<usize> {
+            let os = |pid: u32| c.pids.get(&pid).copied().unwrap_or(Os::Gone);
+            (0..c.copies.len())
+                .filter(|&i| {
+                    let users = &c.copies[i];
+                    Some(i) == c.keep
+                        || (c.unrecorded && users.is_empty())
+                        || users.iter().any(|u| match u {
+                            User::Process(pid) => matches!(os(*pid), Os::Unknown | Os::Same),
+                            User::Project {
+                                points_here,
+                                manifest_exists,
+                            } => *points_here && *manifest_exists,
+                            User::Garbage => true,
+                        })
+                })
+                .collect()
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(128))]
+
+            /// Reclaim removes exactly the copies the rule says nobody uses,
+            /// and changes nothing else: kept copies keep their content, an
+            /// install in flight and a hash-named file are untouched, nothing
+            /// outside the container is touched, no tombstone is left, and
+            /// no removed copy leaves records behind.
+            #[test]
+            fn prop_reclaim_removes_exactly_the_unused_copies(c in case()) {
+                let tmp = TempDir::new().unwrap();
+                let c_dir = tmp.path().join("_dev/rig@1.0.0");
+                let outside = tmp.path().join("outside.txt");
+                std::fs::write(&outside, "mine").unwrap();
+                let elsewhere = tmp.path().join("elsewhere");
+                for (i, users) in c.copies.iter().enumerate() {
+                    let copy = make_copy(&c_dir, &copy_hash(i));
+                    std::fs::write(copy.join("id"), i.to_string()).unwrap();
+                    for (n, u) in users.iter().enumerate() {
+                        match u {
+                            User::Process(pid) => {
+                                record_process_user(&copy, ProcessRecord { pid: *pid, started_at: Some(T) })
+                                    .unwrap();
+                            }
+                            User::Project { points_here, manifest_exists } => {
+                                let m = tmp.path().join(format!("p{i}-{n}/.hpm/packages/s.rig.json"));
+                                write_manifest(&m, if *points_here { &copy } else { &elsewhere });
+                                record_project_user(&copy, &m).unwrap();
+                                if !manifest_exists {
+                                    std::fs::remove_file(&m).unwrap();
+                                }
+                            }
+                            User::Garbage => {
+                                let dir = records_dir(&c_dir, &copy_hash(i));
+                                std::fs::create_dir_all(&dir).unwrap();
+                                std::fs::write(dir.join(format!("process-garbage{n}.json")), "{").unwrap();
+                            }
+                        }
+                    }
+                }
+                std::fs::create_dir_all(c_dir.join(".stage-9-9/otls")).unwrap();
+                let file_hash = format!("{:064x}", 0xfeedu32);
+                if c.hash_named_file {
+                    std::fs::write(c_dir.join(&file_hash), "not a copy").unwrap();
+                }
+                let pids = c.pids.clone();
+                let state_of = move |pid: u32| match pids.get(&pid).copied().unwrap_or(Os::Gone) {
+                    Os::Gone => ProcessState::Gone,
+                    Os::Unknown => ProcessState::Unknown,
+                    Os::Same => ProcessState::Alive { started_at: Some(T) },
+                    Os::Recycled => ProcessState::Alive { started_at: Some(T + 60) },
+                };
+                let keep_hash = c.keep.map(copy_hash);
+                let mode = if c.unrecorded { Unrecorded::Keep } else { Unrecorded::Remove };
+
+                let removed = reclaim_dev_copies(&c_dir, keep_hash.as_deref(), mode, state_of);
+
+                let want = kept_by_model(&c);
+                let got: BTreeSet<usize> =
+                    (0..c.copies.len()).filter(|&i| c_dir.join(copy_hash(i)).exists()).collect();
+                prop_assert_eq!(&got, &want);
+                prop_assert_eq!(removed, c.copies.len() - want.len());
+                for i in &got {
+                    let copy = c_dir.join(copy_hash(*i));
+                    prop_assert_eq!(std::fs::read_to_string(copy.join("id")).unwrap(), i.to_string());
+                    prop_assert!(copy.join("otls/a.hda").is_file());
+                }
+                for i in (0..c.copies.len()).filter(|i| !got.contains(i)) {
+                    prop_assert!(!records_dir(&c_dir, &copy_hash(i)).exists());
+                }
+                prop_assert!(c_dir.join(".stage-9-9/otls").is_dir());
+                if c.hash_named_file {
+                    prop_assert_eq!(std::fs::read_to_string(c_dir.join(&file_hash)).unwrap(), "not a copy");
+                }
+                prop_assert_eq!(std::fs::read_to_string(&outside).unwrap(), "mine");
+                let tombstones = std::fs::read_dir(&c_dir)
+                    .unwrap()
+                    .flatten()
+                    .filter(|e| e.file_name().to_string_lossy().starts_with(TOMBSTONE_PREFIX))
+                    .count();
+                prop_assert_eq!(tombstones, 0);
+            }
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        enum Op {
+            Acquire(usize),
+            DropOne(usize),
+            HoldUntilSettled(usize),
+            Settle(usize),
+        }
+
+        fn op() -> impl Strategy<Value = Op> {
+            prop_oneof![
+                (0usize..3).prop_map(Op::Acquire),
+                (0usize..3).prop_map(Op::DropOne),
+                (0usize..3).prop_map(Op::HoldUntilSettled),
+                (0usize..3).prop_map(Op::Settle),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(128))]
+
+            /// Over any sequence of holds and releases on a few copies, a
+            /// copy's record names this process exactly while some hold on
+            /// it is outstanding, direct or pending: one release never frees
+            /// another holder's protection, and the last release always does.
+            #[test]
+            fn prop_record_exists_exactly_while_held(ops in prop::collection::vec(op(), 0..40)) {
+                let tmp = TempDir::new().unwrap();
+                let c = tmp.path().join("_dev/rig@1.0.0");
+                let copies: Vec<PathBuf> = (0..3).map(|i| make_copy(&c, &copy_hash(i))).collect();
+                let mut direct: Vec<Vec<DevCopyHold>> = vec![Vec::new(), Vec::new(), Vec::new()];
+                let mut pending = [0usize; 3];
+                let record = |i: usize| {
+                    records_dir(&c, &copy_hash(i)).join(format!("{PROCESS_PREFIX}{}.json", std::process::id()))
+                };
+                for op in ops {
+                    match op {
+                        Op::Acquire(i) => direct[i].push(DevCopyHold::acquire(&copies[i]).unwrap()),
+                        Op::DropOne(i) => drop(direct[i].pop()),
+                        Op::HoldUntilSettled(i) => {
+                            hold_until_settled(&copies[i]);
+                            pending[i] += 1;
+                        }
+                        Op::Settle(i) => {
+                            settle(&copies[i]);
+                            pending[i] = 0;
+                        }
+                    }
+                    for i in 0..3 {
+                        let held = !direct[i].is_empty() || pending[i] > 0;
+                        prop_assert_eq!(record(i).is_file(), held, "copy {} after {:?}", i, op);
+                        prop_assert_eq!(DevCopyHold::is_held(&copies[i]), held);
+                    }
+                }
+                for (i, p) in copies.iter().enumerate() {
+                    if pending[i] > 0 {
+                        settle(p);
+                    }
+                }
+            }
+        }
     }
 }
