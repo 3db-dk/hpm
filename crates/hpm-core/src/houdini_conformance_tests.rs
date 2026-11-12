@@ -21,6 +21,7 @@ use super::*;
 use hpm_package::{EnvMethod, ManifestEnvEntry, PackagePath};
 use indexmap::IndexMap;
 use std::collections::HashMap as StdHashMap;
+use std::path::Path;
 use tempfile::TempDir;
 
 fn hconfig_path(hfs: &Path) -> PathBuf {

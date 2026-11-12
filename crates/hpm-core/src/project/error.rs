@@ -85,7 +85,7 @@ pub enum ProjectError {
     /// erased behind a trait object so this enum has no structural
     /// dependence on the python subsystem's error type.
     #[error("Python dependency resolution failed")]
-    PythonResolution(#[source] Box<dyn std::error::Error + Send + Sync>),
+    PythonResolution(#[source] Box<crate::python::PythonError>),
 
     #[error(
         "Required env var '{var}' for package '{package}' has no value. \
@@ -100,12 +100,32 @@ pub enum ProjectError {
         message: String,
     },
 
-    /// A `package-env` script was run but the project's dependency
-    /// environment isn't ready: the lockfile is missing, or a locked
-    /// dependency isn't present in the global package store. The message
-    /// points the user at `hpm install`.
-    #[error("{0}")]
-    PackageEnvNotReady(String),
+    /// A `package-env` script was run in a directory with no `hpm.toml`.
+    #[error(
+        "No hpm.toml found at {} — a package environment needs a project manifest.",
+        manifest.display()
+    )]
+    PackageEnvNoManifest { manifest: PathBuf },
+
+    /// A `package-env` script was run but `hpm.lock` cannot be read: the
+    /// project's dependencies have not been installed and locked yet.
+    #[error(
+        "Could not read {} ({source}). Run 'hpm install' to resolve and lock this \
+         project's dependencies before running a package-env script.",
+        lock.display()
+    )]
+    PackageEnvNoLock {
+        lock: PathBuf,
+        source: Box<crate::lock::LockError>,
+    },
+
+    /// A `package-env` script was run but a locked dependency is not in the
+    /// store.
+    #[error(
+        "Dependency {name}@{version} is locked but not installed. Run 'hpm install' to \
+         populate the package environment."
+    )]
+    PackageEnvNotInstalled { name: String, version: String },
 }
 
 // Hand-written so call sites can `?` from the unboxed source error types.

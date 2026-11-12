@@ -2,6 +2,7 @@ use super::houdini_emit::build_houdini_package;
 use super::*;
 use hpm_package::{ManifestEnvEntry, PackagePath};
 use indexmap::IndexMap;
+use std::path::Path;
 use tempfile::TempDir;
 
 /// Build the `(Config, StorageManager)` pair every `ProjectManager` test
@@ -1915,8 +1916,12 @@ mod package_env_not_ready {
 
     async fn message(manager: &ProjectManager) -> String {
         match manager.resolve_package_env(&[]).await {
-            Err(e @ ProjectError::PackageEnvNotReady(_)) => e.to_string(),
-            other => panic!("expected PackageEnvNotReady, got {other:?}"),
+            Err(
+                e @ (ProjectError::PackageEnvNoManifest { .. }
+                | ProjectError::PackageEnvNoLock { .. }
+                | ProjectError::PackageEnvNotInstalled { .. }),
+            ) => e.to_string(),
+            other => panic!("expected a not-ready error, got {other:?}"),
         }
     }
 
@@ -1963,5 +1968,48 @@ mod package_env_not_ready {
             message(&manager).await,
             "Dependency acme/tools@1.0.0 is locked but not installed. Run 'hpm install' to populate the package environment."
         );
+    }
+
+    /// With nothing declaring Python dependencies, the environment is the
+    /// project's own `python/` first, then each locked dependency's, and no
+    /// venv (uv is not even fetched).
+    #[tokio::test]
+    async fn the_package_env_puts_the_project_python_first_and_builds_no_empty_venv() {
+        let temp = TempDir::new().unwrap();
+        let manager = manager_at(&temp, Some(WITH_DEP));
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join("python")).unwrap();
+        let source = temp.path().join("tools-src");
+        std::fs::create_dir_all(source.join("python")).unwrap();
+        std::fs::write(
+            source.join("hpm.toml"),
+            "[package]\npath = \"acme/tools\"\nname = \"t\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        let installed = manager
+            .storage_manager
+            .install_into_cas(&source)
+            .await
+            .unwrap();
+        let mut lock = crate::lock::LockFile::new("proj".into(), "0.1.0".into());
+        lock.add_dependency(
+            "acme/tools".into(),
+            crate::lock::LockedDependency {
+                version: "1.0.0".into(),
+                checksum: None,
+                source: crate::lock::LockedSource::url("https://r/t.zip", "1.0.0"),
+            },
+        );
+        lock.save(&project.join("hpm.lock")).unwrap();
+
+        let env = manager.resolve_package_env(&[]).await.unwrap();
+        assert_eq!(
+            env.python_paths,
+            vec![
+                project.join("python"),
+                installed.install_path.join("python")
+            ]
+        );
+        assert_eq!((env.venv_bin, env.virtual_env), (None, None));
     }
 }
