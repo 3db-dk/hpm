@@ -168,9 +168,16 @@ impl DependencyResolver {
 
         info!("Building dependency graph from {} projects", projects.len());
 
-        // Process each project
+        // A package's edges depend only on its own manifest, so each is
+        // walked once across all projects; this also stops cycles.
+        let mut walked = HashSet::new();
         for project in projects {
-            self.process_project_dependencies(project, &installed_packages, &mut graph)?;
+            self.process_project_dependencies(
+                project,
+                &installed_packages,
+                &mut graph,
+                &mut walked,
+            )?;
         }
 
         // Detect and warn about cycles
@@ -199,13 +206,14 @@ impl DependencyResolver {
         project: &'a DiscoveredProject,
         installed_map: &'a [InstalledPackage],
         graph: &mut DependencyGraph,
+        walked: &mut HashSet<PackageId>,
     ) -> Result<(), DependencyError> {
         // Every dependency, direct or transitive, is walked whatever the
         // order: the graph decides what `hpm clean` keeps, and keeping a
         // version a package depends on is the safe answer even when the
-        // project pins another version of the same name. (A shared "seen"
-        // set used to let a direct pin hide a transitive dependency's other
-        // version, or not, depending on which was listed first.)
+        // project pins another version of the same name. `walked` is keyed
+        // by name and version, so another version of a package already
+        // walked is still walked.
         for (dep_name, dep_spec) in &project.manifest.dependencies {
             let (package_id, installed_package) =
                 self.resolve_dependency(dep_name, dep_spec, installed_map);
@@ -228,17 +236,15 @@ impl DependencyResolver {
                 continue;
             }
 
-            // Walk its dependencies; `path` guards against cycles along
-            // one chain only, by name and version, so another version of a
-            // package already on the chain is still walked.
-            let mut path = HashSet::from([package_id.clone()]);
-            self.process_transitive_dependencies(
-                installed_package.expect("checked above"),
-                installed_map,
-                graph,
-                &mut path,
-                &package_id,
-            )?;
+            if walked.insert(package_id.clone()) {
+                self.process_transitive_dependencies(
+                    installed_package.expect("checked above"),
+                    installed_map,
+                    graph,
+                    walked,
+                    &package_id,
+                )?;
+            }
         }
 
         Ok(())
@@ -249,14 +255,11 @@ impl DependencyResolver {
         package: &'a InstalledPackage,
         installed_map: &'a [InstalledPackage],
         graph: &mut DependencyGraph,
-        path: &mut HashSet<PackageId>,
+        walked: &mut HashSet<PackageId>,
         parent_id: &PackageId,
     ) -> Result<(), DependencyError> {
         for (dep_name, dep_spec) in &package.manifest.dependencies {
             let (dep_id, dep_package) = self.resolve_dependency(dep_name, dep_spec, installed_map);
-            if path.contains(&dep_id) {
-                continue;
-            }
 
             // Add node if not exists (transitive deps are not roots). Node
             // must exist before add_dependency, which silently skips edges
@@ -271,10 +274,18 @@ impl DependencyResolver {
             graph.add_dependency(parent_id, &dep_id);
 
             if let Some(dep_pkg) = dep_package {
-                // Recursively process with cycle prevention
-                path.insert(dep_id.clone());
-                self.process_transitive_dependencies(dep_pkg, installed_map, graph, path, &dep_id)?;
-                path.remove(&dep_id);
+                // Walk each package's own dependencies once; an edge to an
+                // already-walked package (a diamond, or a cycle) is still
+                // added above.
+                if walked.insert(dep_id.clone()) {
+                    self.process_transitive_dependencies(
+                        dep_pkg,
+                        installed_map,
+                        graph,
+                        walked,
+                        &dep_id,
+                    )?;
+                }
             } else {
                 debug!(
                     "Package {} requires {} but it's not installed",
@@ -488,6 +499,62 @@ mod tests {
         graph.add_dependency(&a, &b);
         graph.add_dependency(&b, &c);
         assert!(graph.has_cycles().is_empty());
+    }
+
+    /// A chain of diamonds (each layer's two packages both depend on both
+    /// of the next layer's) has 2^depth paths but 2*depth packages; the
+    /// walk must visit each package once, not once per path.
+    #[tokio::test]
+    async fn a_chain_of_diamonds_is_walked_once_per_package() {
+        const DEPTH: usize = 26;
+        let temp = TempDir::new().unwrap();
+        let storage = std::sync::Arc::new(
+            StorageManager::new(StorageConfig {
+                home_dir: temp.path().to_path_buf(),
+                cache_dir: temp.path().join("cache"),
+                packages_dir: temp.path().join("packages"),
+                registry_cache_dir: temp.path().join("registry"),
+            })
+            .unwrap(),
+        );
+        let deps_on = |layer: usize| -> String {
+            if layer + 1 == DEPTH {
+                String::new()
+            } else {
+                format!(
+                    "\n[dependencies]\n\"acme/l{n}a\" = \"1.0.0\"\n\"acme/l{n}b\" = \"1.0.0\"\n",
+                    n = layer + 1
+                )
+            }
+        };
+        for layer in 0..DEPTH {
+            for side in ["a", "b"] {
+                let dir = temp.path().join(format!("packages/l{layer}{side}@1.0.0"));
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(
+                    dir.join("hpm.toml"),
+                    format!(
+                        "[package]\npath = \"acme/l{layer}{side}\"\nname = \"l{layer}{side}\"\nversion = \"1.0.0\"\n{}",
+                        deps_on(layer)
+                    ),
+                )
+                .unwrap();
+            }
+        }
+        let project = DiscoveredProject {
+            path: temp.path().join("project"),
+            manifest: hpm_package::parse_manifest_str(&format!(
+                "[package]\npath = \"acme/app\"\nname = \"app\"\nversion = \"0.1.0\"\n{}",
+                "\n[dependencies]\n\"acme/l0a\" = \"1.0.0\"\n\"acme/l0b\" = \"1.0.0\"\n"
+            ))
+            .unwrap(),
+        };
+
+        let graph = DependencyResolver::new(storage)
+            .build_dependency_graph(std::slice::from_ref(&project))
+            .await
+            .unwrap();
+        assert_eq!(graph.node_count(), 2 * DEPTH);
     }
 
     #[tokio::test]
