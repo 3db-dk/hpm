@@ -1,0 +1,13 @@
+---
+source: crates/hpm-cli/tests/exit_codes.rs
+expression: "env.run(env.work.path(), &[\"registry\", \"update\"])"
+---
+args: registry update
+exit: 1
+--- stdout
+[~] Updating 1 registries...
+  * broken... FAILED Git operation failed: Git clone failed: fatal: repository '[WORK]/no-such-repo.git' does not exist
+
+
+--- stderr
+error: Network error: 1 of 1 registries could not be updated

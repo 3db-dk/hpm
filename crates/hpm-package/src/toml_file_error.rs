@@ -1,11 +1,8 @@
 //! Shared error type for loading and saving TOML-on-disk files.
 //!
-//! Both `hpm_config::ConfigError` and `hpm_core::lock::LockError` carried
-//! the same four variants — Read / Parse / Serialize / Write — with
-//! identical `{ path, source }` shapes. Any TOML file we read or write
-//! has the same three failure modes (IO at read/write time, parse failure,
-//! serialize failure), so consolidating into one type lets us fix any
-//! bug across all consumers in one place.
+//! Any TOML file hpm reads or writes has the same three failure modes (IO at
+//! read/write time, parse failure, serialize failure), so every crate uses
+//! this one type for them.
 
 use crate::IoOp;
 use std::path::PathBuf;

@@ -33,13 +33,13 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
 use tracing::{debug, info, warn};
 
 #[cfg(test)]
 use super::dev_install::dev_copy_is_complete;
-use super::dev_install::{is_hash_dir_name, is_link_entry};
+use super::dev_install::{is_hash_dir_name, is_link};
 
 /// Directory under a dev container holding one record directory per hash.
 /// Hidden and not hash-shaped, so nothing that walks hash copies sees it.
@@ -117,16 +117,8 @@ pub(crate) fn record_project_user(install_path: &Path, manifest_path: &Path) -> 
         return Ok(false);
     };
     let manifest = std::path::absolute(manifest_path)?;
-    let key = {
-        let digest = Sha256::digest(manifest.to_string_lossy().as_bytes());
-        digest
-            .iter()
-            .take(8)
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    };
-    let json = serde_json::to_vec(&serde_json::json!({ "manifest": manifest }))
-        .map_err(io::Error::other)?;
+    let key = crate::digest::to_hex(&Sha256::digest(manifest.to_string_lossy().as_bytes())[..8]);
+    let json = serde_json::to_vec(&ProjectRecord { manifest }).map_err(io::Error::other)?;
     write_record(
         &records_dir(container, hash),
         &format!("{PROJECT_PREFIX}{key}.json"),
@@ -135,28 +127,22 @@ pub(crate) fn record_project_user(install_path: &Path, manifest_path: &Path) -> 
     Ok(true)
 }
 
+/// A project's claim on a dev copy: the Houdini package file that points
+/// `hpath` at it. Stored as `.users/<hash>/project-<key>.json`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ProjectRecord {
+    manifest: PathBuf,
+}
+
 /// Whether the manifest a project record names still points `hpath` at
 /// `copy`. A manifest that is gone (the project or the package was removed)
 /// uses nothing; one that cannot be read or parsed is kept, since a copy kept
 /// too long costs disk and one removed too early costs a project.
-fn project_record_is_live(record: &serde_json::Value, copy: &Path) -> bool {
-    let Some(manifest) = record.get("manifest").and_then(|m| m.as_str()) else {
-        return true;
-    };
-    let text = match std::fs::read_to_string(manifest) {
-        Ok(t) => t,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return false,
-        Err(_) => return true,
-    };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return true;
-    };
-    let points_here =
-        |v: &serde_json::Value| v.as_str().is_some_and(|s| same_path(Path::new(s), copy));
-    match json.get("hpath") {
-        Some(serde_json::Value::Array(items)) => items.iter().any(points_here),
-        Some(v) => points_here(v),
-        None => false,
+fn project_record_is_live(record: &ProjectRecord, copy: &Path) -> bool {
+    match crate::project::houdini_emit::hpaths(&record.manifest) {
+        Ok(paths) => paths.iter().any(|p| same_path(p, copy)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        Err(_) => true,
     }
 }
 
@@ -176,13 +162,43 @@ pub(crate) fn hash_in_use(
     hash: &str,
     state_of: &impl Fn(u32) -> ProcessState,
 ) -> bool {
+    judge_records(container, hash, state_of, true)
+}
+
+/// [`hash_in_use`] without removing dead records: for a dry run, which
+/// must write nothing.
+fn hash_in_use_read_only(
+    container: &Path,
+    hash: &str,
+    state_of: &impl Fn(u32) -> ProcessState,
+) -> bool {
+    judge_records(container, hash, state_of, false)
+}
+
+/// Whether any record of `<container>/<hash>` is live, removing the dead
+/// ones when `prune`.
+fn judge_records(
+    container: &Path,
+    hash: &str,
+    state_of: &impl Fn(u32) -> ProcessState,
+    prune: bool,
+) -> bool {
     let dir = records_dir(container, hash);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return false;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        // No records: nothing has claimed the copy.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return false,
+        // Records that cannot be listed cannot be judged: keep.
+        Err(_) => return true,
     };
     let copy = container.join(hash);
     let mut in_use = false;
-    for entry in entries.flatten() {
+    for entry in entries {
+        let Ok(entry) = entry else {
+            // An entry that cannot be read cannot be judged: keep.
+            in_use = true;
+            continue;
+        };
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         let live = match std::fs::read(&path) {
@@ -192,7 +208,7 @@ pub(crate) fn hash_in_use(
                         .map(|rec| rec.is_live(state_of))
                         .unwrap_or(true)
                 } else if name.starts_with(PROJECT_PREFIX) {
-                    serde_json::from_slice::<serde_json::Value>(&bytes)
+                    serde_json::from_slice::<ProjectRecord>(&bytes)
                         .map(|rec| project_record_is_live(&rec, &copy))
                         .unwrap_or(true)
                 } else {
@@ -205,7 +221,7 @@ pub(crate) fn hash_in_use(
         };
         if live {
             in_use = true;
-        } else {
+        } else if prune {
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -215,7 +231,7 @@ pub(crate) fn hash_in_use(
 /// In-process count of holds per dev copy, so two installs of the same copy
 /// in one process share one process record and the first to finish does not
 /// release the other's protection.
-static HOLDS: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+static HOLDS: LazyLock<Mutex<HashMap<PathBuf, usize>>> = LazyLock::new(Default::default);
 
 /// This process's claim on a dev copy it has just installed or reused, from
 /// the moment the install commits (or finds) the copy until the project's
@@ -238,10 +254,7 @@ impl DevCopyHold {
         let mut guard = HOLDS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let count = guard
-            .get_or_insert_with(HashMap::new)
-            .entry(install_path.to_path_buf())
-            .or_insert(0);
+        let count = guard.entry(install_path.to_path_buf()).or_insert(0);
         *count += 1;
         if *count == 1
             && let Err(e) = record_process_user(install_path, ProcessRecord::current())
@@ -262,7 +275,7 @@ impl DevCopyHold {
         let guard = HOLDS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.as_ref().is_some_and(|m| m.contains_key(install_path))
+        guard.contains_key(install_path)
     }
 }
 
@@ -271,13 +284,12 @@ impl Drop for DevCopyHold {
         let mut guard = HOLDS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(map) = guard.as_mut() else { return };
-        let Some(count) = map.get_mut(&self.install_path) else {
+        let Some(count) = guard.get_mut(&self.install_path) else {
             return;
         };
         *count -= 1;
         if *count == 0 {
-            map.remove(&self.install_path);
+            guard.remove(&self.install_path);
             if let Err(e) = release_process_user(&self.install_path, std::process::id()) {
                 debug!("Could not release {}: {}", self.install_path.display(), e);
             }
@@ -347,7 +359,7 @@ pub(crate) enum Unrecorded {
 /// The dev copies the Houdini manifests in `packages_dir` (a project's
 /// `.hpm/packages`) point at, each with the manifest that names it. Only
 /// copies that exist, directly inside a `_dev/<slug>@<version>/` container.
-fn project_dev_copies(packages_dir: &Path) -> Vec<(PathBuf, PathBuf)> {
+pub(crate) fn project_dev_copies(packages_dir: &Path) -> Vec<(PathBuf, PathBuf)> {
     let Ok(entries) = std::fs::read_dir(packages_dir) else {
         return Vec::new();
     };
@@ -357,29 +369,18 @@ fn project_dev_copies(packages_dir: &Path) -> Vec<(PathBuf, PathBuf)> {
         if manifest.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&manifest) else {
+        let Ok(hpaths) = crate::project::houdini_emit::hpaths(&manifest) else {
             continue;
         };
-        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
-        };
-        let hpaths: Vec<&str> = match json.get("hpath") {
-            Some(serde_json::Value::Array(items)) => {
-                items.iter().filter_map(|v| v.as_str()).collect()
-            }
-            Some(v) => v.as_str().into_iter().collect(),
-            None => Vec::new(),
-        };
-        for hpath in hpaths {
-            let copy = Path::new(hpath);
-            let in_dev = split(copy).is_some()
+        for copy in hpaths {
+            let in_dev = split(&copy).is_some()
                 && copy
                     .parent()
                     .and_then(Path::parent)
                     .and_then(Path::file_name)
                     .is_some_and(|n| n == super::dev_install::DEV_INSTALL_DIR);
             if in_dev && copy.is_dir() {
-                out.push((manifest.clone(), copy.to_path_buf()));
+                out.push((manifest.clone(), copy));
             }
         }
     }
@@ -564,7 +565,7 @@ fn reclaim_with(
 
 /// The PID that made the staging directory `name`, when `name` is one
 /// (`.stage-<pid>-<seq>`, see `dev_install::stage_dir`).
-fn stage_owner(name: &str) -> Option<u32> {
+pub(super) fn stage_owner(name: &str) -> Option<u32> {
     let rest = name.strip_prefix(".stage-")?;
     let (pid, seq) = rest.split_once('-')?;
     seq.parse::<u64>().ok()?;
@@ -593,8 +594,55 @@ fn drop_orphan_records(container: &Path, state_of: &impl Fn(u32) -> ProcessState
 /// `DevLink` install is a symlink or junction into the user's workspace, and
 /// `Path::is_dir` would answer for the workspace instead.
 pub(crate) fn is_copy_container(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .is_ok_and(|meta| meta.is_dir() && matches!(is_link_entry(&meta, path), Ok(false)))
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir() && !is_link(&meta))
+}
+
+/// Whether reclaiming `container` with nothing kept (as an orphan cleanup
+/// does, with [`Unrecorded::Remove`]) would empty it so that
+/// [`remove_empty_container`] removes it, judged without changing anything.
+///
+/// `project_copies` are the copies the discovered projects' manifests point
+/// at: the real run records those first ([`record_project_manifests`]), so
+/// they count as in use here even before a record exists. A copy this
+/// process holds, a live user record, or a staging directory of a process
+/// that is not gone keeps the container; so does any entry that is not a
+/// copy, a tombstone or the records directory.
+pub(crate) fn container_would_empty(
+    container: &Path,
+    state_of: impl Fn(u32) -> ProcessState,
+    project_copies: &std::collections::HashSet<PathBuf>,
+) -> bool {
+    if !is_copy_container(container) {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(container) else {
+        return false;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == USERS_DIR || name.starts_with(TOMBSTONE_PREFIX) {
+            continue;
+        }
+        if let Some(pid) = stage_owner(&name) {
+            if state_of(pid) == ProcessState::Gone {
+                continue;
+            }
+            return false;
+        }
+        let is_copy = is_hash_dir_name(&name) && entry.file_type().is_ok_and(|t| t.is_dir());
+        if !is_copy
+            || project_copies.contains(&path)
+            || DevCopyHold::is_held(&path)
+            || hash_in_use_read_only(container, &name, &state_of)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// The other version containers of the same package beside `container`
@@ -607,7 +655,7 @@ pub(crate) fn sibling_containers(container: &Path) -> Vec<PathBuf> {
         container
             .file_name()
             .and_then(|n| n.to_str())
-            .and_then(|n| n.rsplit_once('@'))
+            .and_then(super::layout::parse_coordinate)
             .map(|(slug, _)| slug.to_string()),
     ) else {
         return Vec::new();
@@ -622,8 +670,8 @@ pub(crate) fn sibling_containers(container: &Path) -> Vec<PathBuf> {
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .and_then(|n| n.rsplit_once('@'))
-                .is_some_and(|(s, v)| s == slug && !v.is_empty())
+                .and_then(super::layout::parse_coordinate)
+                .is_some_and(|(s, _)| s == slug)
         })
         .filter(|p| is_copy_container(p))
         .collect()
@@ -1433,5 +1481,118 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The project-record file name is keyed by the first 8 bytes of the
+    /// SHA-256 of the absolute manifest path; records already on disk carry
+    /// it, so it is pinned for a fixed path.
+    #[cfg(unix)]
+    #[test]
+    fn project_record_key_golden() {
+        let tmp = TempDir::new().unwrap();
+        let copy = make_copy(&tmp.path().join("_dev/rig@1.0.0"), &hash('a'));
+        assert!(record_project_user(&copy, Path::new("/studio/show/hpm.toml")).unwrap());
+        let names: Vec<String> = std::fs::read_dir(records_dir(copy.parent().unwrap(), &hash('a')))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["project-4f1ff7863d043dc6.json".to_string()]);
+    }
+
+    /// Records that cannot be listed cannot be judged, so the copy is kept:
+    /// an unreadable `.users/<hash>` used to read as "no users" and the copy
+    /// was deleted under whoever recorded it.
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_whose_records_cannot_be_read_is_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('a'));
+        let records = records_dir(&c, &hash('a'));
+        std::fs::create_dir_all(&records).unwrap();
+        std::fs::write(records.join("project-0011223344556677.json"), b"{}").unwrap();
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let in_use = hash_in_use(&c, &hash('a'), &|_| ProcessState::Gone);
+        let removed = reclaim_dev_copies(&c, None, Unrecorded::Remove, |_| ProcessState::Gone);
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(in_use);
+        assert_eq!(removed, 0);
+        assert!(copy.is_dir());
+    }
+
+    /// A project record is `{"manifest": "<absolute manifest path>"}`, the
+    /// shape records already on disk have.
+    #[test]
+    fn a_project_record_names_its_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('a'));
+        let manifest = tmp.path().join("proj/.hpm/packages/acme.rig.json");
+        record_project_user(&copy, &manifest).unwrap();
+        let dir = records_dir(&c, &hash('a'));
+        let files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(files.len(), 1);
+        let expected = serde_json::to_vec(
+            &serde_json::json!({ "manifest": std::path::absolute(&manifest).unwrap() }),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&files[0]).unwrap(), expected);
+    }
+
+    /// A project record keeps its copy exactly while the manifest it names
+    /// points `hpath` at the copy, in either the string or the array form.
+    /// A manifest that is gone uses nothing; one that cannot be parsed, or a
+    /// record that names no manifest, is kept.
+    #[test]
+    fn project_record_liveness_reads_every_hpath_form() {
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('a'));
+        let other = tmp.path().join("elsewhere");
+        let manifest = tmp.path().join("proj/acme.rig.json");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        let record = |m: &Path| {
+            let dir = records_dir(&c, &hash('a'));
+            let _ = std::fs::remove_dir_all(&dir);
+            record_project_user(&copy, m).unwrap();
+        };
+        let live = || hash_in_use(&c, &hash('a'), &|_| ProcessState::Gone);
+        let cases: Vec<(serde_json::Value, bool)> = vec![
+            (serde_json::json!({ "hpath": copy.to_string_lossy() }), true),
+            (
+                serde_json::json!({ "hpath": [other.to_string_lossy(), copy.to_string_lossy()] }),
+                true,
+            ),
+            (
+                serde_json::json!({ "hpath": [other.to_string_lossy()] }),
+                false,
+            ),
+            (
+                serde_json::json!({ "hpath": other.to_string_lossy() }),
+                false,
+            ),
+            (serde_json::json!({ "env": [] }), false),
+        ];
+        for (json, expected) in cases {
+            std::fs::write(&manifest, serde_json::to_vec(&json).unwrap()).unwrap();
+            record(&manifest);
+            assert_eq!(live(), expected, "{json}");
+        }
+        std::fs::write(&manifest, b"not json").unwrap();
+        record(&manifest);
+        assert!(live(), "an unparseable manifest is kept");
+        std::fs::remove_file(&manifest).unwrap();
+        record(&manifest);
+        assert!(!live(), "a manifest that is gone uses nothing");
+
+        let dir = records_dir(&c, &hash('a'));
+        std::fs::write(dir.join("project-ffffffffffffffff.json"), b"{\"other\": 1}").unwrap();
+        assert!(live(), "a record naming no manifest is kept");
     }
 }

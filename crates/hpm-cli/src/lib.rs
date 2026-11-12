@@ -18,8 +18,9 @@
 //!   `update`, `search`, and `pack`; every other command rejects it with an
 //!   error instead of silently ignoring it.
 //!
-//! Exit codes: 0 success, 1 user error (config/package/network/io),
-//! 2 internal error, N for a forwarded external command exit code.
+//! Exit codes: 0 success, 1 user error (config/package/network), 2 a
+//! command-line usage error (from clap), N for a forwarded external
+//! command exit code.
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 use std::process::ExitCode;
@@ -30,7 +31,6 @@ pub mod commands;
 pub mod console;
 pub mod error;
 pub mod output;
-pub mod progress;
 pub mod script_sink;
 pub use console::{ColorChoice, Console, Verbosity};
 use error::{CliError, CliResult, CliResultExt, ExitStatus};
@@ -40,23 +40,24 @@ pub use output::OutputFormat;
 #[command(name = "hpm", version, about = "HPM - Houdini Package Manager")]
 pub struct Cli {
     /// Verbosity level
-    #[arg(short, long, action = clap::ArgAction::Count)]
+    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
 
     /// Suppress output
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     quiet: bool,
 
     /// Force colors
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, global = true)]
     color: Option<ColorChoice>,
 
-    /// Output format
+    /// Output format. Given before the subcommand: `build` and `pack` have
+    /// their own `--output <dir>`.
     #[arg(long, value_enum)]
     output: Option<OutputFormat>,
 
-    /// Directory to run command in (defaults to current directory)
-    #[arg(short = 'C', long)]
+    /// Run as if hpm was started in this directory
+    #[arg(short = 'C', long, global = true)]
     directory: Option<std::path::PathBuf>,
 
     #[command(subcommand)]
@@ -95,9 +96,9 @@ pub enum Commands {
         #[arg(long)]
         bare: bool,
 
-        /// Initialize version control (git, none)
-        #[arg(long, default_value = "git")]
-        vcs: String,
+        /// Initialize version control
+        #[arg(long, value_enum, default_value_t = commands::init::Vcs::Git)]
+        vcs: commands::init::Vcs,
     },
     /// Add package dependencies
     Add {
@@ -173,6 +174,9 @@ pub enum Commands {
     },
     /// Execute a package script defined in `[scripts]`
     Run {
+        /// Path to directory containing hpm.toml or direct path to hpm.toml file
+        #[arg(short, long)]
+        manifest: Option<std::path::PathBuf>,
         /// Script name to execute
         script: String,
         /// Additional arguments forwarded to the script
@@ -190,7 +194,11 @@ pub enum Commands {
         frozen_lockfile: bool,
     },
     /// Validate package configuration
-    Check,
+    Check {
+        /// Path to directory containing hpm.toml or direct path to hpm.toml file
+        #[arg(short, long)]
+        manifest: Option<std::path::PathBuf>,
+    },
     /// Materialise the install image into a directory (defaults to
     /// `[stage].output_dir`, typically `dist/`).
     ///
@@ -208,7 +216,7 @@ pub enum Commands {
         /// Target platform; defaults to the host platform when
         /// `[compat].platforms` is declared.
         #[arg(long)]
-        platform: Option<String>,
+        platform: Option<hpm_package::Platform>,
         /// Build profile to apply. Selects the matching `[stage.profile.<name>]`
         /// table (if any) and is exposed to prepack scripts as
         /// `HPM_BUILD_PROFILE`. The target platform is exposed as `HPM_PLATFORM`.
@@ -233,6 +241,9 @@ pub enum Commands {
     },
     /// Create a distributable package archive
     Pack {
+        /// Path to directory containing hpm.toml or direct path to hpm.toml file
+        #[arg(short, long)]
+        manifest: Option<std::path::PathBuf>,
         /// Path to Ed25519 signing key (PKCS#8 PEM). Overrides HPM_SIGNING_KEY env var.
         #[arg(long)]
         key: Option<std::path::PathBuf>,
@@ -245,7 +256,7 @@ pub enum Commands {
         json: bool,
         /// Target platform (defaults to host platform when `[compat].platforms` is declared)
         #[arg(long)]
-        platform: Option<String>,
+        platform: Option<hpm_package::Platform>,
         /// Fail the pack if any `[[operators]]` `source` is missing from the
         /// produced archive (default: warn only).
         #[arg(long)]
@@ -295,7 +306,7 @@ pub enum RegistryAction {
         name: Option<String>,
         /// Registry type: "api" or "git" (auto-detected if not specified)
         #[arg(long = "type")]
-        registry_type: Option<String>,
+        registry_type: Option<hpm_package::RegistryType>,
         /// Succeed silently if a registry with the same name already exists,
         /// instead of erroring. Eases idempotent/automated provisioning.
         #[arg(long)]
@@ -328,7 +339,7 @@ pub enum GlobalAction {
 
         /// Houdini version to install for, e.g. `21.0`
         #[arg(long, value_name = "X.Y")]
-        houdini: String,
+        houdini: hpm_core::houdini_prefs::HoudiniVersion,
 
         /// Resolve from this configured registry only
         #[arg(long)]
@@ -338,7 +349,7 @@ pub enum GlobalAction {
     List {
         /// Houdini version to list, e.g. `21.0`
         #[arg(long, value_name = "X.Y")]
-        houdini: String,
+        houdini: hpm_core::houdini_prefs::HoudiniVersion,
     },
     /// Remove a package from Houdini's user preferences
     Remove {
@@ -348,7 +359,7 @@ pub enum GlobalAction {
 
         /// Houdini version to remove from, e.g. `21.0`
         #[arg(long, value_name = "X.Y")]
-        houdini: String,
+        houdini: hpm_core::houdini_prefs::HoudiniVersion,
     },
 }
 
@@ -379,8 +390,14 @@ pub async fn run() -> ExitCode {
     // Initialize logging based on verbosity
     init_logging(verbosity);
 
-    // Execute command and handle errors
-    let result = match run_command(cli.command, &mut console, output_format, cli.directory).await {
+    // `-C` changes the working directory before anything resolves a path,
+    // so every command (and every relative path argument) sees it, as with
+    // `git -C` and `cargo -C`.
+    let outcome = match enter_directory(cli.directory.as_deref()) {
+        Ok(()) => run_command(cli.command, &mut console, output_format).await,
+        Err(error) => Err(error),
+    };
+    let result = match outcome {
         Ok(status) => status,
         Err(error) => {
             // Print the error using our structured error system
@@ -401,17 +418,29 @@ pub async fn run() -> ExitCode {
                         CliError::Config { .. } => "config",
                         CliError::Package { .. } => "package",
                         CliError::Network { .. } => "network",
-                        CliError::Io { .. } => "io",
                     },
                     "elapsed_ms": start_time.elapsed().as_millis()
                 });
-                eprintln!("{}", serde_json::to_string_pretty(&error_json).unwrap());
+                eprintln!("{}", output_format.render_json(&error_json));
             }
             ExitStatus::from(&error)
         }
     };
 
     result.into()
+}
+
+/// Make `directory` (from `-C`) the working directory.
+fn enter_directory(directory: Option<&std::path::Path>) -> CliResult<()> {
+    let Some(directory) = directory else {
+        return Ok(());
+    };
+    std::env::set_current_dir(directory).map_err(|e| {
+        CliError::config(
+            anyhow::anyhow!("Cannot run in {}: {e}", directory.display()),
+            None,
+        )
+    })
 }
 
 /// Fail fast when a command has no machine-readable form: silently ignoring
@@ -433,7 +462,6 @@ async fn run_command(
     command: Commands,
     console: &mut Console,
     output: OutputFormat,
-    directory: Option<std::path::PathBuf>,
 ) -> CliResult<ExitStatus> {
     match command {
         Commands::Init {
@@ -456,7 +484,7 @@ async fn run_command(
                 houdini,
                 bare,
                 vcs,
-                base_dir: directory,
+                base_dir: None,
             };
             commands::init::init_package(options, console)
                 .await
@@ -521,9 +549,13 @@ async fn run_command(
                 .await
                 .cli_network("search")?;
         }
-        Commands::Run { script, args } => {
+        Commands::Run {
+            manifest,
+            script,
+            args,
+        } => {
             require_human("run", output)?;
-            let exit_code = commands::run::run_script(&script, &args, directory, console)
+            let exit_code = commands::run::run_script(&script, &args, manifest, console)
                 .await
                 .cli_package("run")?;
             return Ok(if exit_code == 0 {
@@ -543,10 +575,8 @@ async fn run_command(
                 .await
                 .cli_package("install")?;
         }
-        Commands::Check => {
-            commands::check::check_package(directory, console, output)
-                .await
-                .cli_package("check")?;
+        Commands::Check { manifest } => {
+            commands::check::check_package(manifest, console, output).cli_package("check")?;
         }
         Commands::Build {
             manifest,
@@ -559,7 +589,7 @@ async fn run_command(
         } => {
             require_human("build", output)?;
             let options = commands::build::BuildOptions {
-                manifest: manifest.or(directory),
+                manifest,
                 output: build_output,
                 platform,
                 profile,
@@ -572,6 +602,7 @@ async fn run_command(
                 .cli_package("build")?;
         }
         Commands::Pack {
+            manifest,
             key,
             output: pack_output,
             json,
@@ -586,7 +617,7 @@ async fn run_command(
             commands::pack::execute(
                 &config,
                 commands::pack::PackOptions {
-                    directory,
+                    manifest,
                     key,
                     output: pack_output,
                     json,
@@ -662,7 +693,7 @@ async fn run_command(
                     commands::global::add_package(
                         &config,
                         &package,
-                        &houdini,
+                        houdini,
                         registry.as_deref(),
                         console,
                     )
@@ -670,12 +701,12 @@ async fn run_command(
                     .cli_package("global add")?;
                 }
                 GlobalAction::List { houdini } => {
-                    commands::global::list_packages(&config, &houdini, console)
+                    commands::global::list_packages(&config, houdini, console)
                         .await
                         .cli_package("global list")?;
                 }
                 GlobalAction::Remove { package, houdini } => {
-                    commands::global::remove_package(&config, &package, &houdini, console)
+                    commands::global::remove_package(&config, &package, houdini, console)
                         .await
                         .cli_package("global remove")?;
                 }
@@ -711,7 +742,7 @@ fn load_cli_config() -> CliResult<hpm_config::Config> {
 fn init_logging(verbosity: Verbosity) {
     let log_level = match verbosity {
         Verbosity::Quiet => "hpm=warn",
-        Verbosity::Normal => "hpm=info",
+        Verbosity::Normal => "hpm=warn",
         Verbosity::Verbose => "hpm=debug",
     };
 

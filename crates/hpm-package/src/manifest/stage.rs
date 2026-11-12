@@ -8,8 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Staging configuration: how the install image is derived from the workspace.
 ///
 /// `[stage]` is the single source of truth for what ends up in a published
-/// archive and in a path-dependency install image. It replaces the prior
-/// `[native]`-only filter model with a more general "where does each file
+/// archive and in a path-dependency install image: a "where does each file
 /// go" model — useful for HDK plugins whose `.dylib` lives at
 /// `build/Release/foo.dylib` in the workspace but should be installed at
 /// `dso/macos-aarch64/foo.dylib`.
@@ -33,7 +32,7 @@ use serde::{Deserialize, Serialize};
 ///   base `[stage]`. Orthogonal to platform: `hpm build --profile debug`
 ///   merges the `debug` profile onto the base config. See
 ///   [`StageConfig::resolved_for_profile`].
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StageConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,11 +115,12 @@ impl StageConfig {
 }
 
 /// `[stage.platform.*]` table. Each entry is a list of place rules for a
-/// single platform key (`"linux-x86_64"`, `"macos-aarch64"`, etc.).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// single platform (`linux-x86_64`, `macos-aarch64`, ...); an unknown
+/// platform key fails the parse.
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 pub struct PlatformStaging {
     #[serde(flatten)]
-    pub entries: IndexMap<String, StagePlatformRules>,
+    pub entries: IndexMap<crate::Platform, StagePlatformRules>,
 }
 
 impl PlatformStaging {
@@ -130,7 +130,7 @@ impl PlatformStaging {
 }
 
 /// Place rules for a single platform.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StagePlatformRules {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -141,7 +141,7 @@ pub struct StagePlatformRules {
 /// glob into the install image at `to`. If `to` ends with `/`, files keep
 /// their original basename; otherwise `to` is the literal archive path
 /// (use when relocating a single file).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlaceRule {
     pub from: String,
@@ -152,7 +152,7 @@ pub struct PlaceRule {
 /// named build profile (`"debug"`, `"release"`, etc.). Profiles are
 /// orthogonal to platforms — a profile may carry its own per-platform place
 /// rules under `[stage.profile.<name>.platform.<plat>]`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 pub struct ProfileStaging {
     #[serde(flatten)]
     pub entries: IndexMap<String, StageProfileRules>,
@@ -167,7 +167,7 @@ impl ProfileStaging {
 /// Overrides for a single build profile, layered onto the base `[stage]` by
 /// [`StageConfig::resolved_for_profile`]. All fields are optional; an absent
 /// field leaves the base value untouched.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StageProfileRules {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -201,7 +201,7 @@ mod tests {
             ..Default::default()
         };
         stage.platform.entries.insert(
-            "windows-x86_64".to_string(),
+            crate::Platform::WindowsX86_64,
             StagePlatformRules {
                 place: vec![place("build/Release/*.dll", "dso/")],
             },
@@ -269,7 +269,7 @@ mod tests {
     fn profile_place_rules_append_to_existing_platform() {
         let mut profile_platform = PlatformStaging::default();
         profile_platform.entries.insert(
-            "windows-x86_64".to_string(),
+            crate::Platform::WindowsX86_64,
             StagePlatformRules {
                 place: vec![place("build/Debug/*.pdb", "dso/")],
             },
@@ -282,7 +282,7 @@ mod tests {
             },
         );
         let resolved = stage.resolved_for_profile("debug");
-        let win = &resolved.platform.entries["windows-x86_64"].place;
+        let win = &resolved.platform.entries[&crate::Platform::WindowsX86_64].place;
         assert_eq!(win.len(), 2);
         assert_eq!(win[0].from, "build/Release/*.dll");
         assert_eq!(win[1].from, "build/Debug/*.pdb");
@@ -292,7 +292,7 @@ mod tests {
     fn profile_place_rules_create_new_platform_key() {
         let mut profile_platform = PlatformStaging::default();
         profile_platform.entries.insert(
-            "linux-x86_64".to_string(),
+            crate::Platform::LinuxX86_64,
             StagePlatformRules {
                 place: vec![place("build/debug/*.so", "dso/")],
             },
@@ -305,7 +305,17 @@ mod tests {
             },
         );
         let resolved = stage.resolved_for_profile("debug");
-        assert!(resolved.platform.entries.contains_key("linux-x86_64"));
-        assert!(resolved.platform.entries.contains_key("windows-x86_64"));
+        assert!(
+            resolved
+                .platform
+                .entries
+                .contains_key(&crate::Platform::LinuxX86_64)
+        );
+        assert!(
+            resolved
+                .platform
+                .entries
+                .contains_key(&crate::Platform::WindowsX86_64)
+        );
     }
 }

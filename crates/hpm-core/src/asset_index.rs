@@ -185,7 +185,10 @@ mod tests {
     fn per_platform_op(type_name: &str, pairs: &[(&str, &str)]) -> OperatorDecl {
         let mut map = IndexMap::new();
         for (plat, path) in pairs {
-            map.insert(plat.to_string(), path.to_string());
+            map.insert(
+                plat.parse::<hpm_package::Platform>().unwrap(),
+                path.to_string(),
+            );
         }
         OperatorDecl {
             kind: OperatorKind::Dso,

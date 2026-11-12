@@ -7,8 +7,20 @@ use serde::{Deserialize, Serialize};
 // `[[registries]]` and the config's registry list describe the same concept.
 pub use hpm_package::RegistryType;
 
+impl From<&hpm_package::RegistryConfig> for RegistrySourceConfig {
+    /// A manifest's `[[registries]]` entry as a registry source.
+    fn from(manifest: &hpm_package::RegistryConfig) -> Self {
+        Self {
+            name: manifest.name.clone(),
+            url: manifest.url.clone(),
+            registry_type: manifest.registry_type.clone(),
+        }
+    }
+}
+
 /// Configuration for a single package registry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegistrySourceConfig {
     /// Display name / alias for this registry
     pub name: String,

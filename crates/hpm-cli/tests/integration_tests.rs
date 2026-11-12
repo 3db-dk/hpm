@@ -84,7 +84,7 @@ fn test_init_workflow() {
     let package_path = temp_dir.path().join("test-integration-package");
     assert!(package_path.exists());
     assert!(package_path.join("hpm.toml").exists());
-    assert!(package_path.join("package.json").exists());
+    assert!(!package_path.join("package.json").exists());
     assert!(package_path.join("README.md").exists());
     assert!(package_path.join("python").is_dir());
     assert!(package_path.join("otls").is_dir());
@@ -153,7 +153,8 @@ fn test_deprecated_commands() {
 fn test_list_nonexistent_manifest() {
     let temp_dir = TempDir::new().unwrap();
 
-    let output = hpm_binary()
+    let (mut cmd, _home) = hpm_binary_isolated();
+    let output = cmd
         .args(["list", "--manifest", temp_dir.path().to_str().unwrap()])
         .output()
         .expect("Failed to execute hpm list");
@@ -163,13 +164,13 @@ fn test_list_nonexistent_manifest() {
     assert!(stderr.contains("No hpm.toml found"));
 }
 
-/// Test add/remove workflow with manifest creation
+/// Add a path dependency (no registry needed), then remove it: each step
+/// edits hpm.toml.
 #[test]
 fn test_add_remove_workflow() {
     let temp_dir = TempDir::new().unwrap();
-
-    // First create a package
-    let _init_output = hpm_binary()
+    let (mut init, home) = hpm_binary_isolated();
+    let init_output = init
         .args([
             "--directory",
             temp_dir.path().to_str().unwrap(),
@@ -179,29 +180,44 @@ fn test_add_remove_workflow() {
             "none",
         ])
         .output()
-        .expect("Failed to create test package");
-
+        .unwrap();
+    assert!(
+        init_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init_output.stderr)
+    );
     let package_dir = temp_dir.path().join("test-deps-package");
 
-    // Test add command
-    let add_output = hpm_binary()
-        .args([
-            "--directory",
-            package_dir.to_str().unwrap(),
-            "add",
-            "test-package",
-            "--version",
-            "^1.0.0",
-        ])
-        .output()
-        .expect("Failed to execute hpm add");
+    let dep_dir = temp_dir.path().join("dep");
+    fs::create_dir_all(&dep_dir).unwrap();
+    fs::write(
+        dep_dir.join("hpm.toml"),
+        "[package]\npath = \"local/dep\"\nname = \"dep\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
 
-    // Add should succeed (even though package doesn't exist in registry)
-    // This tests manifest modification logic
-    if add_output.status.success() {
-        let hpm_toml = fs::read_to_string(package_dir.join("hpm.toml")).unwrap();
-        assert!(hpm_toml.contains("test-package"));
-    }
+    let run = |args: &[&str]| {
+        let output = hpm_binary()
+            .args(args)
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .current_dir(&package_dir)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    run(&["add", "local/dep", "--path", dep_dir.to_str().unwrap()]);
+    let hpm_toml = fs::read_to_string(package_dir.join("hpm.toml")).unwrap();
+    assert!(hpm_toml.contains("\"local/dep\""), "{hpm_toml}");
+
+    run(&["remove", "local/dep"]);
+    let hpm_toml = fs::read_to_string(package_dir.join("hpm.toml")).unwrap();
+    assert!(!hpm_toml.contains("local/dep"), "{hpm_toml}");
 }
 
 /// Test error handling for directory that already exists
@@ -233,39 +249,50 @@ fn test_init_directory_exists_error() {
 /// Test clean command basic functionality
 #[test]
 fn test_clean_command() {
-    let output = hpm_binary()
+    let (mut cmd, _home) = hpm_binary_isolated();
+    let output = cmd
         .args(["clean", "--dry-run"])
         .output()
         .expect("Failed to execute hpm clean --dry-run");
 
-    // Should succeed (even with no packages to clean)
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("cleanup") || stdout.contains("packages"));
+    assert!(stdout.contains("No orphaned packages found"), "{stdout}");
 }
 
-/// Test check command functionality  
+/// `hpm check` on a valid package succeeds and says so; on a package missing
+/// its required `path` it fails and names the problem.
 #[test]
 fn test_check_command() {
     let temp_dir = TempDir::new().unwrap();
+    let write = |manifest: &str| fs::write(temp_dir.path().join("hpm.toml"), manifest).unwrap();
+    let check = || {
+        let (mut cmd, home) = hpm_binary_isolated();
+        let output = cmd
+            .args(["--directory", temp_dir.path().to_str().unwrap(), "check"])
+            .output()
+            .expect("Failed to execute hpm check");
+        drop(home);
+        output
+    };
 
-    // Create a simple hpm.toml to check
-    let manifest_content = r#"
-[package]
-name = "test-check-package"
-version = "1.0.0"
-description = "Test package for check command"
+    write(
+        "[package]\npath = \"studio/test-check-package\"\nname = \"test-check-package\"\nversion = \"1.0.0\"\ndescription = \"Test package for check command\"\n\n[compat]\nhoudini = \">=20.5\"\n",
+    );
+    let output = check();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Package validation completed"));
 
-[compat]
-houdini = ">=20.5"
-"#;
-    fs::write(temp_dir.path().join("hpm.toml"), manifest_content).unwrap();
-
-    let output = hpm_binary()
-        .args(["--directory", temp_dir.path().to_str().unwrap(), "check"])
-        .output()
-        .expect("Failed to execute hpm check");
-
-    // Check command should process the manifest
-    assert!(output.status.success() || !output.stderr.is_empty());
+    write("[package]\nname = \"test-check-package\"\nversion = \"1.0.0\"\n");
+    let output = check();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Invalid TOML syntax in hpm.toml"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

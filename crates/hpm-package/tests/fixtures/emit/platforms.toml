@@ -1,0 +1,24 @@
+[package]
+path = "acme/native"
+name = "Native"
+version = "0.9.0"
+
+[compat]
+houdini = "^21"
+platforms = ["linux-x86_64", "windows-x86_64", "macos-aarch64"]
+
+[stage.platform.linux-x86_64]
+place = [{ from = "build/linux/*.so", to = "dso/" }]
+
+[[operators]]
+kind = "dso"
+type_name = "acme::scatter::1.0"
+category = "Sop"
+source = { linux-x86_64 = "dso/scatter.so", windows-x86_64 = "dso/scatter.dll", macos-aarch64 = "dso/scatter.dylib" }
+
+[runtime.HOUDINI_DSO_PATH]
+method = "prepend"
+value = [
+  { when = { os = "windows" }, set = "$HPM_PACKAGE_ROOT/dso/win" },
+  { set = "$HPM_PACKAGE_ROOT/dso" },
+]

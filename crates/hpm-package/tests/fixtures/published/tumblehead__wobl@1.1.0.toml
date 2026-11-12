@@ -1,0 +1,117 @@
+[package]
+path = "tumblehead/wobl"
+name = "Wobl"
+version = "1.1.0"
+description = "Soft bodies, cloth, ropes and strands for Houdini on the GPU: flesh in rigs, jelly, cloth on colliders and itself, tails that drive their joints"
+authors = ["Tumblehead <info@tumblehead.com>"]
+license = "LicenseRef-Proprietary"
+readme = "README.md"
+keywords = ["houdini", "simulation", "soft body", "cloth", "flesh", "jiggle", "cuda", "apex", "kinefx", "vbd"]
+
+[compat]
+# Bounded: Wobl ships native binaries for the major.minor it builds
+# (bin/22.0/), and [runtime] routes HOUDINI_DSO_PATH at
+# bin/$HOUDINI_MAJOR_RELEASE.$HOUDINI_MINOR_RELEASE/dso. The cap is the first
+# unsupported major.
+houdini = ">=22.0, <23"
+# CUDA only: Windows and Linux. macOS waits for the OpenCL port.
+platforms = ["windows-x86_64", "linux-x86_64"]
+
+# No [dependencies]: TumbleRig is optional. Everything but the Wobl rig node
+# (th::apex_wobl, an APEX node built from TumbleRig's pieces) works without
+# it; that node checks for TumbleRig 1.17 or later itself (wobl.startup).
+
+[runtime]
+WOBL = { method = "set", value = "$HPM_PACKAGE_ROOT" }
+HOUDINI_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/bin/$HOUDINI_MAJOR_RELEASE.$HOUDINI_MINOR_RELEASE" }
+HOUDINI_DSO_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/bin/$HOUDINI_MAJOR_RELEASE.$HOUDINI_MINOR_RELEASE/dso" }
+
+[stage]
+# `hpm build` (local dev) builds the solver DSO into package/bin/. `hpm pack`
+# does not run prepack; CI runs build-sops itself (.ci/build_platform.py).
+prepack = ["build-sops"]
+
+[stage.profile.debug]
+
+[scripts.build-sops]
+cmd = [
+    { when = { os = "windows" }, set = "python ../.ci/build_sops.py --platform windows-x86_64" },
+    { when = { os = "linux" }, set = "python ../.ci/build_sops.py --platform linux-x86_64" },
+]
+python = "3.11"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_wobl::1.0"
+category = "Sop"
+label = "Wobl"
+tab_submenu = "Wobl"
+icon = "th-apex_wobl"
+source = "otls/sop_th--apex_wobl-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::wobl_configure::1.0"
+category = "Sop"
+label = "Wobl Configure"
+tab_submenu = "Wobl"
+icon = "th-wobl_configure"
+source = "otls/sop_th--wobl_configure-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::wobl_follow_joints::1.0"
+category = "Sop"
+label = "Wobl Follow Joints"
+tab_submenu = "Wobl"
+icon = "th-wobl_follow_joints"
+source = "otls/sop_th--wobl_follow_joints-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::wobl_kinefx::1.0"
+category = "Sop"
+label = "Wobl (KineFX)"
+tab_submenu = "Wobl"
+icon = "th-wobl_kinefx"
+source = "otls/sop_th--wobl_kinefx-1.0.hda"
+
+[[operators]]
+kind = "dso"
+type_name = "th::wobl_solver::1.0"
+category = "Sop"
+label = "Wobl Solver"
+tab_submenu = "Wobl"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_AVBDSolver.so", windows-x86_64 = "bin/22.0/dso/SOP_AVBDSolver.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::wobl_constraints::1.0"
+category = "Sop"
+label = "Wobl Constraints"
+tab_submenu = "Wobl"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_AVBDSolver.so", windows-x86_64 = "bin/22.0/dso/SOP_AVBDSolver.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::wobl_drive_joints::1.0"
+category = "Sop"
+label = "Wobl Drive Joints"
+tab_submenu = "Wobl"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_AVBDSolver.so", windows-x86_64 = "bin/22.0/dso/SOP_AVBDSolver.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::wobl_bone_colliders::1.0"
+category = "Sop"
+label = "Wobl Bone Colliders"
+tab_submenu = "Wobl"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_AVBDSolver.so", windows-x86_64 = "bin/22.0/dso/SOP_AVBDSolver.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::wobl_collision_viz::1.0"
+category = "Sop"
+label = "Wobl Collision Viz"
+tab_submenu = "Wobl"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_AVBDSolver.so", windows-x86_64 = "bin/22.0/dso/SOP_AVBDSolver.dll" }

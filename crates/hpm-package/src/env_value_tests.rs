@@ -1,89 +1,90 @@
 use super::*;
 
+// The derivations as functions of the range text, for terse tables.
+fn enable_of(req: &str) -> Result<String, ExpressionError> {
+    HoudiniRange::parse(req).map(|r| r.to_enable_expression())
+}
+
+fn has_upper_bound_of(req: &str) -> bool {
+    HoudiniRange::parse(req).is_ok_and(|r| r.has_upper_bound())
+}
+
+fn lower_bound_of(req: &str) -> Option<String> {
+    HoudiniRange::parse(req).ok()?.lower_bound()
+}
+
 #[test]
 fn caret_major_only_expands_to_major_range() {
-    let s = compile_houdini_req("^21").unwrap();
+    let s = enable_of("^21").unwrap();
     assert_eq!(s, "houdini_version >= '21' and houdini_version < '22'");
 }
 
 #[test]
 fn bare_major_aliases_caret() {
-    let s = compile_houdini_req("21").unwrap();
+    let s = enable_of("21").unwrap();
     assert_eq!(s, "houdini_version >= '21' and houdini_version < '22'");
 }
 
 #[test]
 fn tilde_major_minor_expands_to_minor_range() {
-    let s = compile_houdini_req("~21.5").unwrap();
+    let s = enable_of("~21.5").unwrap();
     assert_eq!(s, "houdini_version >= '21.5' and houdini_version < '21.6'");
 }
 
 #[test]
 fn comma_separated_comparators_combine_with_and() {
-    let s = compile_houdini_req(">=21, <22.5").unwrap();
+    let s = enable_of(">=21, <22.5").unwrap();
     assert_eq!(s, "(houdini_version >= '21' and houdini_version < '22.5')");
 }
 
 #[test]
 fn houdini_upper_bound_detection() {
     // Lower-only forms — no upper bound.
-    assert!(!houdini_req_has_upper_bound(">=20.5"));
-    assert!(!houdini_req_has_upper_bound(">21"));
-    assert!(!houdini_req_has_upper_bound(">=20.5, >=21"));
+    assert!(!has_upper_bound_of(">=20.5"));
+    assert!(!has_upper_bound_of(">21"));
+    assert!(!has_upper_bound_of(">=20.5, >=21"));
     // Everything else has an upper bound.
-    assert!(houdini_req_has_upper_bound("^21"));
-    assert!(houdini_req_has_upper_bound("~21.5"));
-    assert!(houdini_req_has_upper_bound("21"));
-    assert!(houdini_req_has_upper_bound("=21"));
-    assert!(houdini_req_has_upper_bound("==21"));
-    assert!(houdini_req_has_upper_bound("<22"));
-    assert!(houdini_req_has_upper_bound("<=21.5"));
+    assert!(has_upper_bound_of("^21"));
+    assert!(has_upper_bound_of("~21.5"));
+    assert!(has_upper_bound_of("21"));
+    assert!(has_upper_bound_of("=21"));
+    assert!(has_upper_bound_of("==21"));
+    assert!(has_upper_bound_of("<22"));
+    assert!(has_upper_bound_of("<=21.5"));
     // Mixed — any upper-bounding clause is enough.
-    assert!(houdini_req_has_upper_bound(">=20.5, <22"));
-    assert!(houdini_req_has_upper_bound(">=20.5, ^21"));
+    assert!(has_upper_bound_of(">=20.5, <22"));
+    assert!(has_upper_bound_of(">=20.5, ^21"));
     // Empty / unparseable — no upper bound.
-    assert!(!houdini_req_has_upper_bound(""));
+    assert!(!has_upper_bound_of(""));
 }
 
 #[test]
 fn houdini_lower_bound_extraction() {
-    assert_eq!(houdini_req_lower_bound("20.5"), Some("20.5".to_string()));
-    assert_eq!(houdini_req_lower_bound("^21"), Some("21".to_string()));
-    assert_eq!(houdini_req_lower_bound("~21.5"), Some("21.5".to_string()));
-    assert_eq!(houdini_req_lower_bound(">=20.5"), Some("20.5".to_string()));
-    assert_eq!(
-        houdini_req_lower_bound(">=20.5, <22"),
-        Some("20.5".to_string())
-    );
-    assert_eq!(
-        houdini_req_lower_bound("<22, >=20.5"),
-        Some("20.5".to_string())
-    );
-    assert_eq!(houdini_req_lower_bound("<22"), None);
-    assert_eq!(houdini_req_lower_bound("<=21"), None);
-    assert_eq!(houdini_req_lower_bound(""), None);
-    assert_eq!(houdini_req_lower_bound("garbage"), None);
+    assert_eq!(lower_bound_of("20.5"), Some("20.5".to_string()));
+    assert_eq!(lower_bound_of("^21"), Some("21".to_string()));
+    assert_eq!(lower_bound_of("~21.5"), Some("21.5".to_string()));
+    assert_eq!(lower_bound_of(">=20.5"), Some("20.5".to_string()));
+    assert_eq!(lower_bound_of(">=20.5, <22"), Some("20.5".to_string()));
+    assert_eq!(lower_bound_of("<22, >=20.5"), Some("20.5".to_string()));
+    assert_eq!(lower_bound_of("<22"), None);
+    assert_eq!(lower_bound_of("<=21"), None);
+    assert_eq!(lower_bound_of(""), None);
+    assert_eq!(lower_bound_of("garbage"), None);
 }
 
 #[test]
 fn invalid_houdini_req_rejected() {
-    assert!(compile_houdini_req("not-a-version").is_err());
-    assert!(compile_houdini_req("").is_err());
-    assert!(compile_houdini_req(">=").is_err());
+    assert!(enable_of("not-a-version").is_err());
+    assert!(enable_of("").is_err());
+    assert!(enable_of(">=").is_err());
 }
 
 /// `=` is documented as an exact-version alias of `==`; it used to fall
 /// through to the bare-version (caret) parser and error out.
 #[test]
 fn single_equals_aliases_exact_version() {
-    assert_eq!(
-        compile_houdini_req("=21").unwrap(),
-        "houdini_version == '21'"
-    );
-    assert_eq!(
-        compile_houdini_req("==21").unwrap(),
-        "houdini_version == '21'"
-    );
+    assert_eq!(enable_of("=21").unwrap(), "houdini_version == '21'");
+    assert_eq!(enable_of("==21").unwrap(), "houdini_version == '21'");
 }
 
 #[test]
@@ -134,7 +135,7 @@ fn os_serialized_form_unchanged() {
 fn python_translates_with_or_without_python_prefix() {
     assert_eq!(
         compile_condition(&Condition {
-            python: Some("3.11".to_string()),
+            python: Some(PythonTag::parse("3.11").unwrap()),
             ..Default::default()
         })
         .unwrap()
@@ -143,7 +144,7 @@ fn python_translates_with_or_without_python_prefix() {
     );
     assert_eq!(
         compile_condition(&Condition {
-            python: Some("python3.10".to_string()),
+            python: Some(PythonTag::parse("python3.10").unwrap()),
             ..Default::default()
         })
         .unwrap()
@@ -198,7 +199,12 @@ fn lower_conditional_substitutes_pkg_root_per_branch() {
         houdini_branch("^22", "$HPM_PACKAGE_ROOT/h22/x"),
     ];
     let lowered = branches(
-        lower_conditional(&variants, &[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false).unwrap(),
+        lower_conditional(
+            &variants,
+            &[("$HPM_PACKAGE_ROOT", "/abs/pkg")],
+            InstallSource::Registry,
+        )
+        .unwrap(),
     );
     assert_eq!(lowered.len(), 2);
     let key = lowered[0].keys().next().unwrap();
@@ -220,7 +226,7 @@ fn lower_conditional_compiles_branches_mutually_exclusive() {
             set: "fallback".to_string(),
         },
     ];
-    let lowered = branches(lower_conditional(&variants, &[], false).unwrap());
+    let lowered = branches(lower_conditional(&variants, &[], InstallSource::Registry).unwrap());
     assert_eq!(lowered.len(), 3);
     assert_eq!(
         lowered[0].keys().next().unwrap(),
@@ -251,7 +257,7 @@ fn empty_when_lowers_unconditional() {
         set: "default".to_string(),
     }];
     assert_eq!(
-        lower_conditional(&variants, &[], false).unwrap(),
+        lower_conditional(&variants, &[], InstallSource::Registry).unwrap(),
         LoweredConditional::Unconditional("default".to_string())
     );
 }
@@ -268,7 +274,7 @@ fn branches_after_unconditional_are_pruned() {
         houdini_branch("^21", "unreachable"),
     ];
     assert_eq!(
-        lower_conditional(&variants, &[], false).unwrap(),
+        lower_conditional(&variants, &[], InstallSource::Registry).unwrap(),
         LoweredConditional::Unconditional("wins".to_string())
     );
 
@@ -282,7 +288,7 @@ fn branches_after_unconditional_are_pruned() {
         },
         houdini_branch("^22", "unreachable"),
     ];
-    let lowered = branches(lower_conditional(&variants, &[], false).unwrap());
+    let lowered = branches(lower_conditional(&variants, &[], InstallSource::Registry).unwrap());
     assert_eq!(lowered.len(), 2);
     assert_eq!(lowered[1].values().next().unwrap(), "fallback");
 }
@@ -305,14 +311,14 @@ fn install_source_dev_filters_out_for_registry_install() {
     ];
     // Registry install: dev variant drops, fallback is unconditional.
     assert_eq!(
-        lower_conditional(&variants, &[], false).unwrap(),
+        lower_conditional(&variants, &[], InstallSource::Registry).unwrap(),
         LoweredConditional::Unconditional("dso".to_string())
     );
     // Dev install: the dev branch is unconditional at runtime and wins;
     // the dso fallback is unreachable and must NOT also fire (it used to,
     // shadowing the dev build under `prepend`).
     assert_eq!(
-        lower_conditional(&variants, &[], true).unwrap(),
+        lower_conditional(&variants, &[], InstallSource::Dev).unwrap(),
         LoweredConditional::Unconditional("build/Release".to_string())
     );
 }
@@ -330,7 +336,7 @@ fn install_source_strips_from_runtime_expression() {
         },
         set: "x".to_string(),
     }];
-    let lowered = branches(lower_conditional(&variants, &[], true).unwrap());
+    let lowered = branches(lower_conditional(&variants, &[], InstallSource::Dev).unwrap());
     assert_eq!(lowered.len(), 1);
     let key = lowered[0].keys().next().unwrap();
     assert!(key.contains("houdini_version"));
@@ -347,11 +353,11 @@ fn install_source_registry_filters_out_for_dev_install() {
         set: "dso".to_string(),
     }];
     assert_eq!(
-        lower_conditional(&variants, &[], true).unwrap(),
+        lower_conditional(&variants, &[], InstallSource::Dev).unwrap(),
         LoweredConditional::Branches(Vec::new())
     );
     assert_eq!(
-        lower_conditional(&variants, &[], false).unwrap(),
+        lower_conditional(&variants, &[], InstallSource::Registry).unwrap(),
         LoweredConditional::Unconditional("dso".to_string())
     );
 }
@@ -465,17 +471,19 @@ fn matches_version_handles_plain_major_ranges() {
 /// warning rather than repaired.
 #[test]
 fn hpackage_operands_follow_the_upstream_version_rule() {
+    let hpackage = |req: &str| {
+        HoudiniRange::parse(req)
+            .unwrap()
+            .to_enable_expression_hpackage()
+    };
     // One segment: padded, since hpackage rejects a one-part version.
-    assert_eq!(normalize_hpackage_houdini_req(">=21").unwrap(), ">=21.0");
+    assert_eq!(hpackage(">=21").unwrap(), "houdini_version >= '21.0'");
     // Two segments: already the accepted shape.
-    assert_eq!(normalize_hpackage_houdini_req(">=21.0").unwrap(), ">=21.0");
+    assert_eq!(hpackage(">=21.0").unwrap(), "houdini_version >= '21.0'");
     // Three segments with a zero build: trims back to the same range.
-    assert_eq!(
-        normalize_hpackage_houdini_req(">=21.0.0").unwrap(),
-        ">=21.0"
-    );
+    assert_eq!(hpackage(">=21.0.0").unwrap(), "houdini_version >= '21.0'");
     // Three segments with a real build: no representation, so no rewrite.
-    let err = normalize_hpackage_houdini_req(">=20.5.445").unwrap_err();
+    let err = hpackage(">=20.5.445").unwrap_err();
     assert!(
         matches!(&err, ExpressionError::HpackageOperand { operand, .. } if operand == "20.5.445"),
         "expected the operand to be named, got {err}"

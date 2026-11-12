@@ -60,12 +60,12 @@ but folded into `hpm-core` since it had no consumers other than
 `hpm-core` and `hpm-cli`.
 
 `hpm-package` and `hpm-assets` are the workspace leaves — neither depends on
-another HPM crate. `hpm-config` depends on `hpm-package` (it reuses the
-manifest's registry and dependency types), so it is not a leaf despite
+another HPM crate. `hpm-config` depends on `hpm-package` (for the registry
+types and the shared TOML-file error and atomic-write helpers), so it is not a leaf despite
 sitting alongside them in the diagram above.
 
-Each crate defines its own error type (e.g. `StorageError`, `ConfigError`)
-via `thiserror`. Errors surface to the user through `CliError` in `hpm-cli`,
+Each crate defines its own error type (e.g. `StorageError`, `LockError`)
+via `thiserror`; `hpm-config` has none and returns `hpm_package::TomlFileError`. Errors surface to the user through `CliError` in `hpm-cli`,
 which converts them to exit codes and help hints.
 
 Key non-functional properties:
@@ -87,7 +87,7 @@ Key non-functional properties:
 
 Dependencies flow downward: `hpm-cli` depends on everything else, `hpm-core`
 depends on package, assets, and config, and so on. No crate depends upward.
-Domain errors (`StorageError`, `ConfigError`, ...) live in the crate that
+Domain errors (`StorageError`, `LockError`, ...) live in the crate that
 produces them.
 
 ## Core types
@@ -183,7 +183,7 @@ pub struct LockFile {
 
 pub struct LockedDependency {
     pub version: String,
-    pub checksum: Option<String>,    // "sha256:<hex>"
+    pub checksum: Option<String>,    // hex SHA-256 of the installed tree (tree_hash), no prefix
     pub source: LockedSource,        // Url { url, version } | Path { path }
 }
 
@@ -391,9 +391,10 @@ impl DependencyGraph {
 
 `DependencyGraph` wraps a `petgraph` graph; its fields are private and it
 exposes no `orphans()` of its own. Taking the set difference against what is
-actually installed on disk is `StorageManager::find_orphaned_packages`
-(`crates/hpm-core/src/storage/cleanup.rs`), which calls
-`mark_reachable_from_roots` and subtracts the result from the installed set.
+actually installed on disk is the cleanup plan's `orphan_packages`
+(`crates/hpm-core/src/storage/cleanup.rs`, reached through `cleanup_unused`
+and `cleanup_unused_dry_run`), which calls `mark_reachable_from_roots`, adds
+the global ledger's roots and subtracts the result from the installed set.
 
 Project discovery scans `explicit_paths` plus recursive walks of
 `search_roots`, respecting `max_search_depth` and skipping directory names
@@ -509,7 +510,7 @@ them. So global installs are tracked in a ledger at
 `list` reads it, `remove` deletes exactly the filename it records, and
 nothing ever scans the directory to decide what to delete.
 
-The ledger is also a **GC root**. `find_orphaned_packages` marks reachability
+The ledger is also a **GC root**. The cleanup plan marks reachability
 from discovered projects, and a globally installed package belongs to no
 project; without its ledger entry it is unreferenced by construction, so
 cleanup would delete the store directory while the manifest in Houdini's
@@ -531,16 +532,15 @@ resolution at the same coordinate from a different project.
 
 `_dev/` entries are garbage-collected by a parallel cleanup pass driven
 directly off project path-dependencies (since the CAS-orphan logic
-deliberately can't see them). For each discovered project,
-`find_orphaned_dev_installs` parses the manifest, resolves every
-`{ path = "..." }` dep's source manifest to its `(slug, version)`, and
-unions those into the "needed" set. Anything in `_dev/` whose dir-name
-encoding falls outside that set is orphan. A project with an unreadable
-path-dep source logs a warning and skips that dep — a broken project
-doesn't bypass cleanup of *other* dev installs; re-running `hpm install`
-re-creates whatever the project still needs. Removal goes through the
-same `remove_install_entry` primitive used by `clear_existing_install`
-and `remove_package`, so link installs are unlinked without traversal.
+deliberately can't see them). For each discovered project, `dev_needs`
+resolves every `{ path = "..." }` dep's source manifest to its
+`(slug, version)` and unions those into the "needed" set. An entry outside
+it is collected: a link install is unlinked through `remove_install_entry`
+(without traversal); a copy container is reclaimed copy by copy under the
+users rule (`reclaim_dev_copies`: a copy a running process or recorded
+project still uses is kept), and the container itself goes only once empty
+(`remove_empty_container`). A still-needed container loses only its
+superseded copies.
 
 Path deps come in two install styles, selected by the `link` field on
 the manifest's `{ path = "...", link = ? }` spec:
@@ -639,15 +639,15 @@ once no copy in it is in use. It keeps the copy matching the current source,
 so an unchanged relaunch does not recopy.
 
 Both install replacement (`clear_existing_install`) and orphan cleanup
-(`remove_package`) are symlink-safe: each checks `symlink_metadata` (plus
-`junction::exists` on Windows) before deciding between `remove_dir_all`
-(real dir) and `remove_file` / `junction::delete` (link entry), via a
-shared `remove_install_entry` primitive. Without this, a `remove_dir_all`
+(`remove_package`) are symlink-safe: each checks `symlink_metadata`
+(`is_link`) before choosing between `remove_dir_all` (real dir) and
+`remove_dev_link` (`remove_file` on Unix; `junction::delete` plus
+`remove_dir` on Windows), via a shared `remove_install_entry` primitive. Without this, a `remove_dir_all`
 on a Windows junction would recurse into and delete the user's workspace
 on the next sync or orphan sweep.
 
 Both styles set `InstalledPackage::is_dev = true`. That flag flows
-through to `create_houdini_package_with_python`, which forwards it to
+through to `build_houdini_package`, which forwards it to
 `ManifestEnvEntry::lower(.., is_dev)`. The `install_source` axis on each
 conditional `[runtime]` variant is filtered there: variants gated to
 `"dev"` only survive for path-installed packages, variants gated to
@@ -681,7 +681,7 @@ package contribution.
 The Python layer runs on four ideas, in descending order of importance:
 
 1. **Content-addressable venvs.** Hash the resolved dependency set, use it as the venv directory name. Same hash → same venv → shared across packages.
-2. **Bundled uv.** A copy of `uv` ships with HPM and lives at `~/.hpm/tools/uv`. Its cache (`~/.hpm/uv-cache/`), config (`~/.hpm/uv-config/`), and managed CPython installs (`~/.hpm/uv-python/`, pinned via `UV_PYTHON_INSTALL_DIR`) are isolated from any system `uv` so HPM never perturbs your other Python work.
+2. **Bundled uv.** A copy of `uv` ships with HPM and lives at `~/.hpm/tools/uv`. Its cache (`~/.hpm/uv-cache/`), config (`~/.hpm/uv-config/`), and managed CPython installs (`~/.hpm/uv-python/`, pinned via `UV_PYTHON_INSTALL_DIR`) are isolated from any system `uv` so HPM never perturbs your other Python work. These paths, and the venvs, are under the configured `[storage] home_dir` (`~/.hpm` by default); in code the Python subsystem takes it as a `python::PythonHome`.
 3. **Self-bootstrapping Python.** `uv pip compile` and `uv venv` need an interpreter. Before invoking either, HPM runs `uv python install <ver>` to ensure a managed CPython matching the project's Houdini ABI exists. This is what makes a clean Windows install (no system Python anywhere) Just Work — without it `pip compile` errors with `No interpreter found in virtual environments, managed installations, search path, or registry`. The ensure step is process-cached, so it costs one fast filesystem probe per resolution.
 4. **Houdini manifest generation.** For each HPM package that declares Python dependencies, HPM writes `<project>/.hpm/packages/{creator}.{slug}.json` with `PYTHONPATH` prepended at the shared venv's `site-packages`.
 
@@ -760,7 +760,7 @@ manifests.
 ### Security
 
 - **Transport**: TLS through rustls (pure Rust, no OpenSSL). Certificate verification against the platform trust store.
-- **Integrity**: SHA-256 over every installed archive, recorded in `hpm.lock`, verified before every install.
+- **Integrity**: the archive is checked against the registry's SHA-256 when it is downloaded (a missing checksum only warns); the SHA-256 of the installed tree is recorded in `hpm.lock` and verified before every install.
 - **Signing**: `hpm pack --key` signs archives with Ed25519 over PKCS#8 PEM private keys. `keyId` = first 8 bytes of public key, hex-encoded. See [Security](security.md#package-signing) for the wire format.
 - **Isolation**: bundled `uv` runs out-of-process with its own cache and config, never touching system state.
 
@@ -788,7 +788,7 @@ config.add_registry(RegistrySourceConfig {
     url: "https://api.tumbletrove.com/v1/registry".into(),
     registry_type: RegistryType::Api,
 });
-config.install.path = "packages/hpm".into();
+config.install.parallel_downloads = std::num::NonZeroUsize::new(4).unwrap();
 ```
 
 ### Registry trait
@@ -809,9 +809,8 @@ mutating one in place. Git registries currently ignore the token.
 `ProjectManager` mirrors that contract via
 `ProjectManager::new_with_auth(.., Option<String>)`. The token is
 stashed on the manager and forwarded to every `RegistrySet` it builds
-internally — `sync_dependencies` for registry-form deps and
-`add_dependency`'s registry-resolved path both go through
-`from_configs_with_auth` with the stashed token. `ProjectManager::new`
+internally (`RegistrySet::for_project`, used by sync and by lock
+resolution), which constructs them through `from_configs_with_auth`. `ProjectManager::new`
 delegates with `None`, so anonymous use is unchanged. As with the
 `RegistrySet` variant, refreshing tokens are handled by rebuilding the
 `ProjectManager` per operation.

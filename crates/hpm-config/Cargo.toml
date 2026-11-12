@@ -19,5 +19,6 @@ tracing.workspace = true
 hpm-package = { path = "../hpm-package" }
 
 [dev-dependencies]
+proptest.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

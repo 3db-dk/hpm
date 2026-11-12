@@ -12,6 +12,10 @@
 //! 5. **Installed Files**: Compares each locked package's files with the
 //!    record its install wrote (missing, truncated or changed files)
 //!
+//! Checks 4 and 5 (and an unreadable lock file) are integrity checks: a
+//! failure there means the installed packages are not what was locked, and
+//! fails the command. The others are advisories and only warn.
+//!
 //! ## Usage
 //!
 //! ```bash
@@ -30,6 +34,21 @@ use hpm_config::Config;
 use std::path::PathBuf;
 use tracing::info;
 
+/// How an audit check came out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Pass,
+    /// Advisory: worth fixing, does not fail the audit.
+    Warn,
+    /// Integrity: installed packages differ from what was locked.
+    Fail,
+}
+
+struct Finding {
+    outcome: Outcome,
+    message: String,
+}
+
 /// Run security audit on a package and its dependencies
 pub async fn audit_packages(
     config: &Config,
@@ -47,12 +66,12 @@ pub async fn audit_packages(
     console.stdout(format!("\n{}", style("HPM Security Audit").bold().cyan()));
     console.stdout(format!("{}\n", "=".repeat(40)));
 
-    let mut warnings: Vec<String> = Vec::new();
-    let mut passed: Vec<&str> = Vec::new();
+    let mut findings: Vec<Finding> = Vec::new();
+    let mut add = |outcome, message: String| findings.push(Finding { outcome, message });
 
     // Check 1: HTTP URLs
     if manifest.dependencies.is_empty() {
-        passed.push("No dependencies to check");
+        add(Outcome::Pass, "No dependencies to check".into());
     } else {
         let http_deps: Vec<_> = manifest
             .dependencies
@@ -69,10 +88,10 @@ pub async fn audit_packages(
             .collect();
 
         if http_deps.is_empty() {
-            passed.push("All URLs use HTTPS");
+            add(Outcome::Pass, "All URLs use HTTPS".into());
         } else {
             for name in http_deps {
-                warnings.push(format!("{}: Uses insecure HTTP URL", name));
+                add(Outcome::Warn, format!("{}: Uses insecure HTTP URL", name));
             }
         }
     }
@@ -80,59 +99,77 @@ pub async fn audit_packages(
     // Check 2: Lock file exists
     let lock_path = project_dir.join("hpm.lock");
     if lock_path.exists() {
-        passed.push("Lock file exists (hpm.lock)");
+        add(Outcome::Pass, "Lock file exists (hpm.lock)".into());
 
         // Load lock file for further checks
         match hpm_core::LockFile::load(&lock_path) {
             Ok(lock) => {
                 // Check 3: Lock file staleness
                 if let Some(ref metadata) = lock.metadata
-                    && let Some(days) = metadata.days_since_generated()
+                    && metadata.days_since_generated().is_some()
                 {
-                    if days > 90 {
-                        warnings.push(format!("Lock file is {} days old", days));
-                    } else {
-                        passed.push("Lock file is recent");
+                    match metadata.stale_days() {
+                        Some(days) => add(Outcome::Warn, format!("Lock file is {} days old", days)),
+                        None => add(Outcome::Pass, "Lock file is recent".into()),
                     }
                 }
 
                 // Check 4: Checksum verification
                 match lock.verify_checksums(&config.storage.packages_dir) {
-                    Ok(()) => passed.push("Package checksums verified"),
-                    Err(e) => warnings.push(format!("Checksum verification failed: {e}")),
+                    Ok(()) => add(Outcome::Pass, "Package checksums verified".into()),
+                    Err(e) => add(Outcome::Fail, format!("Checksum verification failed: {e}")),
                 }
 
                 // Check 5: Installed files against their install records
                 let (checked, unrecorded, problems) =
                     audit_installed_files(&lock, &config.storage.packages_dir);
                 if problems.is_empty() && checked > 0 {
-                    passed.push("Installed files match their install records");
-                }
-                warnings.extend(problems);
-                if unrecorded > 0 {
-                    info!(
-                        "{unrecorded} installed package(s) predate install records and were not checked"
+                    add(
+                        Outcome::Pass,
+                        "Installed files match their install records".into(),
                     );
+                }
+                for problem in problems {
+                    add(Outcome::Fail, problem);
+                }
+                if unrecorded > 0 {
+                    console.info(format!(
+                        "{unrecorded} installed package(s) predate install records and were not checked"
+                    ));
                 }
             }
             Err(e) => {
-                warnings.push(format!("Failed to load lock file: {}", e));
+                add(Outcome::Fail, format!("Failed to load lock file: {}", e));
             }
         }
     } else {
-        warnings.push("No lock file found - run 'hpm install' for reproducible builds".into());
+        add(
+            Outcome::Warn,
+            "No lock file found - run 'hpm install' for reproducible builds".into(),
+        );
     }
 
-    // Print results
-    for msg in &passed {
-        console.stdout(format!("  {} {}", style("PASS").green().bold(), msg));
-    }
-    for msg in &warnings {
-        console.stdout(format!("  {} {}", style("WARN").yellow().bold(), msg));
+    // Print results: passes, then warnings, then failures.
+    let count = |outcome| findings.iter().filter(|f| f.outcome == outcome).count();
+    for (outcome, label) in [
+        (Outcome::Pass, style("PASS").green().bold()),
+        (Outcome::Warn, style("WARN").yellow().bold()),
+        (Outcome::Fail, style("FAIL").red().bold()),
+    ] {
+        for finding in findings.iter().filter(|f| f.outcome == outcome) {
+            console.stdout(format!("  {} {}", label, finding.message));
+        }
     }
 
     console.stdout("");
-    if warnings.is_empty() {
+    let (warnings, failures) = (count(Outcome::Warn), count(Outcome::Fail));
+    if failures > 0 {
+        anyhow::bail!(
+            "Audit found {failures} integrity failure(s) and {warnings} warning(s): \
+             installed packages differ from hpm.lock"
+        );
+    }
+    if warnings == 0 {
         console.stdout(
             style("No security issues found.")
                 .green()
@@ -141,7 +178,7 @@ pub async fn audit_packages(
         );
     } else {
         console.stdout(
-            style(format!("Found {} warning(s).", warnings.len()))
+            style(format!("Found {} warning(s).", warnings))
                 .yellow()
                 .bold()
                 .to_string(),
@@ -164,7 +201,7 @@ fn audit_installed_files(
     let mut unrecorded = 0;
     let mut warnings = Vec::new();
     for (name, dep) in &lock.dependencies {
-        let dir = hpm_core::archive_fetcher::cas_install_dir(packages_dir, name, &dep.version);
+        let dir = hpm_core::storage::layout::cas_dir(packages_dir, name, &dep.version);
         if !dir.is_dir() {
             continue;
         }

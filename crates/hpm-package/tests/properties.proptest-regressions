@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e6c98430c09bc082edfac98df664b3d4b9bc6df00a6de7b3550d029023142974 # shrinks to manifest = PackageManifest { package: PackageInfo { path: PackagePath { full: "aa/a0", sep: 2 }, name: "Aa", version: "0.0.0", description: None, authors: [], license: None, readme: None, homepage: None, repository: None, documentation: None, keywords: [], categories: [] }, compat: CompatConfig { houdini: None, platforms: [] }, stage: StageConfig { output_dir: None, prepack: [], include: [], exclude: [], platform: PlatformStaging { entries: {} }, profile: ProfileStaging { entries: {} } }, registries: [], dependencies: {}, python_dependencies: {}, runtime: {"PATH": ManifestEnvEntry { method: Set, value: None, required: true }}, scripts: PackageScripts { commands: {} }, operators: [] }

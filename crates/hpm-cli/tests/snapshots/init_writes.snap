@@ -1,0 +1,138 @@
+---
+source: crates/hpm-cli/tests/cli_snapshots.rs
+expression: env.mask(&report)
+---
+stdout:
+SUCCESS: Successfully created Houdini package 'demo-pkg'
+
+Package structure:
+├── .gitignore
+├── README.md
+├── config
+├── hpm.toml
+├── otls
+├── presets
+├── python
+│   └── __init__.py
+├── scripts
+└── tests
+
+Next steps:
+  cd demo-pkg
+  hpm add # Add dependencies
+
+paths:
+.gitignore
+README.md
+config
+config/.gitkeep
+hpm.toml
+otls
+otls/.gitkeep
+presets
+presets/.gitkeep
+python
+python/__init__.py
+scripts
+scripts/.gitkeep
+tests
+tests/.gitkeep
+
+--- hpm.toml
+[package]
+path = "local/demo-pkg"
+name = "demo-pkg"
+version = "0.1.0"
+license = "MIT"
+readme = "README.md"
+keywords = ["houdini"]
+
+[compat]
+houdini = "^21"
+
+--- README.md
+# demo-pkg
+
+A Houdini package
+
+## Installation
+
+Install using HPM:
+
+```bash
+hpm add local/demo-pkg
+```
+
+## Usage
+
+This package provides Houdini assets and tools for enhanced workflow capabilities.
+
+## Development
+
+### Building
+
+```bash
+hpm run build
+```
+
+### Testing
+
+```bash
+hpm run test
+```
+
+## License
+
+MIT
+
+--- .gitignore
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Houdini
+*.hip.bak
+*.hipnc.bak
+*.hiplc.bak
+backup/
+*.log
+
+# HPM
+.hpm/
+*.hpm-lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+--- python/__init__.py
+"""
+Houdini package Python module.
+"""
+
+__version__ = "1.0.0"

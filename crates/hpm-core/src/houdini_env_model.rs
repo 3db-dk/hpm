@@ -63,8 +63,7 @@ pub fn apply_package_files(files: &[(String, serde_json::Value)]) -> HashMap<Str
     for (file, json) in ordered {
         let Some(env) = json.get("env") else { continue };
         if env.is_null() {
-            // HoudiniPackage serializes an absent env as `"env": null`,
-            // which Houdini tolerates.
+            // Houdini tolerates `"env": null`; hpm omits an absent env.
             continue;
         }
         let entries = env

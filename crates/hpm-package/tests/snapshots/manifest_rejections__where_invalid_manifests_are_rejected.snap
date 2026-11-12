@@ -1,0 +1,22 @@
+---
+source: crates/hpm-package/tests/manifest_rejections.rs
+expression: out
+---
+prerelease version: ok
+two-part version: parse error: package version `1.0` is not a semantic version (MAJOR.MINOR.PATCH): unexpected end of input while parsing minor version number
+word version: parse error: package version `latest` is not a semantic version (MAJOR.MINOR.PATCH): unexpected character 'l' while parsing major version number
+runtime python ok: ok
+runtime python bad: parse error: invalid python identifier: 3.x
+runtime python empty: parse error: invalid python identifier: 
+script python bad: parse error: invalid python identifier: three
+stage platform undeclared: validate error: [stage.platform.linux-x86_64] declared but 'linux-x86_64' not listed in [compat].platforms
+stage platform unknown: parse error: unknown platform 'beos-x86'; expected one of: linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64, windows-x86_64, windows-aarch64, universal
+profile platform undeclared: validate error: [stage.profile.dev.platform.macos-aarch64] declared but 'macos-aarch64' not listed in [compat].platforms
+operator platform undeclared: validate error: [[operators]][0].source: platform 'windows-x86_64' not listed in [compat].platforms
+operator platform unknown: parse error: unknown platform 'amiga'; expected one of: linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64, windows-x86_64, windows-aarch64, universal
+operator platform ok: ok
+script when houdini: parse error: unknown field `houdini`, expected `os`
+script when install_source: parse error: unknown field `install_source`, expected `os`
+script when unknown os: parse error: unknown variant `beos`, expected one of `linux`, `macos`, `windows`
+script empty cmd list: parse error: a conditional `cmd` needs at least one `{ when, set }` variant
+script when os ok: ok

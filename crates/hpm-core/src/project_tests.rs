@@ -1,6 +1,8 @@
+use super::houdini_emit::build_houdini_package;
 use super::*;
 use hpm_package::{ManifestEnvEntry, PackagePath};
 use indexmap::IndexMap;
+use std::path::Path;
 use tempfile::TempDir;
 
 /// Build the `(Config, StorageManager)` pair every `ProjectManager` test
@@ -81,13 +83,8 @@ fn list_dependencies_empty_project() {
 }
 
 #[test]
-fn create_houdini_package_basic() {
+fn build_houdini_package_basic() {
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     let manifest = hpm_package::PackageManifest::new(
         PackagePath::new("studio/test-package").unwrap(),
@@ -109,9 +106,8 @@ fn create_houdini_package_basic() {
         is_dev: false,
     };
 
-    let houdini_package = project_manager
-        .create_houdini_package(&installed_package)
-        .unwrap();
+    let houdini_package =
+        build_houdini_package(&installed_package, None, &IndexMap::new()).unwrap();
     assert_eq!(
         houdini_package.hpath,
         Some(vec![package_path.to_string_lossy().to_string()])
@@ -120,13 +116,8 @@ fn create_houdini_package_basic() {
 }
 
 #[test]
-fn create_houdini_package_with_project_env_overrides() {
+fn build_houdini_package_with_project_env_overrides() {
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     // Create a manifest with an env var
     let mut manifest = hpm_package::PackageManifest::new(
@@ -159,9 +150,8 @@ fn create_houdini_package_with_project_env_overrides() {
     };
 
     // Without override: should use package default
-    let houdini_package = project_manager
-        .create_houdini_package(&installed_package)
-        .unwrap();
+    let houdini_package =
+        build_houdini_package(&installed_package, None, &IndexMap::new()).unwrap();
     assert_eq!(
         houdini_package.hpath,
         Some(vec![package_path.to_string_lossy().to_string()])
@@ -193,9 +183,8 @@ fn create_houdini_package_with_project_env_overrides() {
         },
     );
 
-    let houdini_package = project_manager
-        .create_houdini_package_with_python(&installed_package, None, &project_overrides)
-        .unwrap();
+    let houdini_package =
+        build_houdini_package(&installed_package, None, &project_overrides).unwrap();
     assert!(
         find_env_entry(&houdini_package, "MY_CONFIG").is_none(),
         "a `set` override must suppress the package's own entry"
@@ -213,12 +202,8 @@ fn create_houdini_package_with_project_env_overrides() {
 }
 
 #[tokio::test]
-async fn create_houdini_package_required_env_without_override_errors() {
+async fn build_houdini_package_required_env_without_override_errors() {
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     let mut manifest = hpm_package::PackageManifest::new(
         PackagePath::new("studio/needs-config").unwrap(),
@@ -250,9 +235,7 @@ async fn create_houdini_package_required_env_without_override_errors() {
     };
 
     // No project override: required placeholder must trigger MissingRequiredEnv.
-    let err = project_manager
-        .create_houdini_package(&installed_package)
-        .unwrap_err();
+    let err = build_houdini_package(&installed_package, None, &IndexMap::new()).unwrap_err();
     match err {
         ProjectError::MissingRequiredEnv { var, package } => {
             assert_eq!(var, "PROJECT_ROOT");
@@ -273,9 +256,7 @@ async fn create_houdini_package_required_env_without_override_errors() {
             required: false,
         },
     );
-    let pkg = project_manager
-        .create_houdini_package_with_python(&installed_package, None, &overrides)
-        .unwrap();
+    let pkg = build_houdini_package(&installed_package, None, &overrides).unwrap();
     assert!(
         find_env_entry(&pkg, "PROJECT_ROOT").is_none(),
         "a valueless placeholder has nothing to emit in the package file"
@@ -320,10 +301,6 @@ fn dev_only_runtime_entry(value: &str) -> ManifestEnvEntry {
 #[test]
 fn runtime_install_source_dev_gates_emission() {
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     let mut manifest = hpm_package::PackageManifest::new(
         PackagePath::new("studio/hdk-plugin").unwrap(),
@@ -351,7 +328,7 @@ fn runtime_install_source_dev_gates_emission() {
         install_path: package_path.clone(),
         is_dev: false,
     };
-    let pkg = project_manager.create_houdini_package(&non_dev).unwrap();
+    let pkg = build_houdini_package(&non_dev, None, &IndexMap::new()).unwrap();
     assert!(
         find_env_entry(&pkg, "HOUDINI_DSO_PATH").is_none(),
         "install_source = 'dev' must not be emitted for non-dev installs"
@@ -364,7 +341,7 @@ fn runtime_install_source_dev_gates_emission() {
         install_path: package_path.clone(),
         is_dev: true,
     };
-    let pkg = project_manager.create_houdini_package(&dev).unwrap();
+    let pkg = build_houdini_package(&dev, None, &IndexMap::new()).unwrap();
     let entry = find_env_entry(&pkg, "HOUDINI_DSO_PATH")
         .expect("dev-gated variant must be emitted for dev installs");
     // An install-source-only gate is unconditional at runtime (the axis is
@@ -399,10 +376,6 @@ fn collect_env_entries<'a>(
 #[test]
 fn project_prepend_override_combines_with_dev_variant() {
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     let mut manifest = hpm_package::PackageManifest::new(
         PackagePath::new("studio/overridable").unwrap(),
@@ -438,9 +411,7 @@ fn project_prepend_override_combines_with_dev_variant() {
             required: false,
         },
     );
-    let pkg = project_manager
-        .create_houdini_package_with_python(&installed, None, &overrides)
-        .unwrap();
+    let pkg = build_houdini_package(&installed, None, &overrides).unwrap();
 
     // A `prepend` override combines: the package's own (dev-gated)
     // contribution stays in the package file; the project's prepend is
@@ -480,10 +451,6 @@ fn project_append_override_combines_with_package_value() {
     // package-provided env var must extend it, emitting both the package's
     // value and the project's, not replace the package's contribution.
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     let mut manifest = hpm_package::PackageManifest::new(
         PackagePath::new("studio/lib").unwrap(),
@@ -523,9 +490,7 @@ fn project_append_override_combines_with_package_value() {
             required: false,
         },
     );
-    let pkg = project_manager
-        .create_houdini_package_with_python(&installed, None, &overrides)
-        .unwrap();
+    let pkg = build_houdini_package(&installed, None, &overrides).unwrap();
 
     let entries = collect_env_entries(&pkg, "PYTHONPATH");
     assert_eq!(
@@ -557,10 +522,6 @@ fn project_append_override_combines_with_package_value() {
 fn project_set_override_still_replaces_package_value() {
     // `set` keeps replace semantics: only the project's value is emitted.
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     let mut manifest = hpm_package::PackageManifest::new(
         PackagePath::new("studio/lib").unwrap(),
@@ -600,9 +561,7 @@ fn project_set_override_still_replaces_package_value() {
             required: false,
         },
     );
-    let pkg = project_manager
-        .create_houdini_package_with_python(&installed, None, &overrides)
-        .unwrap();
+    let pkg = build_houdini_package(&installed, None, &overrides).unwrap();
 
     let entries = collect_env_entries(&pkg, "MY_CONFIG");
     assert_eq!(
@@ -760,8 +719,7 @@ async fn install_one_dep_repairs_a_lost_executable_bit_on_reuse() {
 /// short-circuit, with no registries configured, must fail as
 /// `NoRegistriesConfigured` (pointing the user at `hpm registry add`) rather
 /// than resolving against the empty set and surfacing a misleading
-/// `VersionNotFound`. This is the `hpm install` analogue of the
-/// single-package `resolve_and_install_from_registry` check.
+/// `VersionNotFound`.
 #[tokio::test]
 async fn install_one_dep_no_registries_reports_not_configured() {
     let temp_dir = TempDir::new().unwrap();
@@ -1047,10 +1005,6 @@ proptest! {
         ),
     ) {
         let temp_dir = TempDir::new().unwrap();
-        let (config, storage_manager) = test_setup(temp_dir.path());
-        let project_root = temp_dir.path().join("project");
-        std::fs::create_dir_all(&project_root).unwrap();
-        let pm = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
         let mut with_dev = hpm_package::PackageManifest::new(
             PackagePath::new("studio/inertness").unwrap(),
@@ -1069,18 +1023,18 @@ proptest! {
         let pkg_path = temp_dir.path().join("inertness@1.0.0");
         std::fs::create_dir_all(&pkg_path).unwrap();
 
-        let a = pm.create_houdini_package(&InstalledPackage {
+        let a = build_houdini_package(&InstalledPackage {
             version: "1.0.0".to_string(),
             manifest: with_dev,
             install_path: pkg_path.clone(),
             is_dev: false,
-        });
-        let b = pm.create_houdini_package(&InstalledPackage {
+        }, None, &IndexMap::new());
+        let b = build_houdini_package(&InstalledPackage {
             version: "1.0.0".to_string(),
             manifest: without,
             install_path: pkg_path,
             is_dev: false,
-        });
+        }, None, &IndexMap::new());
 
         // Compare via Debug — HoudiniPackage / HoudiniEnvValue don't
         // implement PartialEq, and a regression that fires the dev
@@ -1096,7 +1050,7 @@ proptest! {
 /// It previously trimmed `.json` and compared the result against the bare
 /// slug, which after the rename can never match — every dependency came back
 /// with `installed_package: None` and a dotted name, silently turning
-/// `generate_houdini_manifests` into a no-op.
+/// every consumer of the listing into a no-op.
 #[test]
 fn list_dependencies_resolves_creator_scoped_manifests() {
     let temp_dir = TempDir::new().unwrap();
@@ -1105,7 +1059,7 @@ fn list_dependencies_resolves_creator_scoped_manifests() {
     std::fs::create_dir_all(&project_root).unwrap();
 
     // Put a real package in the store so the lookup has something to find.
-    let store_dir = config.storage.packages_dir.join("acme").join("tools@1.0.0");
+    let store_dir = config.storage.packages_dir.join("tools@1.0.0");
     std::fs::create_dir_all(&store_dir).unwrap();
     std::fs::write(
         store_dir.join("hpm.toml"),
@@ -1142,11 +1096,7 @@ fn list_dependencies_reports_the_version_the_project_installs() {
         let project_root = temp_dir.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
         for version in ["1.0.0", "0.9.0", "1.2.0"] {
-            let dir = config
-                .storage
-                .packages_dir
-                .join("acme")
-                .join(format!("tools@{version}"));
+            let dir = config.storage.packages_dir.join(format!("tools@{version}"));
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join("hpm.toml"),
@@ -1197,11 +1147,7 @@ fn list_dependencies_reports_a_path_dependencys_dev_install() {
         let manifest = |version: &str| {
             format!("[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"{version}\"\n")
         };
-        let registry = config
-            .storage
-            .packages_dir
-            .join("acme")
-            .join("tools@1.88.1");
+        let registry = config.storage.packages_dir.join("tools@1.88.1");
         std::fs::create_dir_all(&registry).unwrap();
         std::fs::write(registry.join("hpm.toml"), manifest("1.88.1")).unwrap();
         let dev = config
@@ -1254,11 +1200,7 @@ fn list_dependencies_follows_the_emitted_hpath() {
             format!("[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"{version}\"\n")
         };
         for version in ["1.0.0", "1.2.0"] {
-            let dir = config
-                .storage
-                .packages_dir
-                .join("acme")
-                .join(format!("tools@{version}"));
+            let dir = config.storage.packages_dir.join(format!("tools@{version}"));
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("hpm.toml"), manifest(version)).unwrap();
         }
@@ -1274,11 +1216,7 @@ fn list_dependencies_follows_the_emitted_hpath() {
         let hpath = if target == "outside" {
             outside.clone()
         } else {
-            config
-                .storage
-                .packages_dir
-                .join("acme")
-                .join(format!("tools@{target}"))
+            config.storage.packages_dir.join(format!("tools@{target}"))
         };
         let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
         let pkg_dir = &project_manager.project_paths.packages_dir;
@@ -1376,7 +1314,7 @@ proptest! {
         let manifest = |path: &str, version: &str| {
             format!("[package]\npath = \"{path}\"\nname = \"T\"\nversion = \"{version}\"\n")
         };
-        let registry_dir = |v: &str| store.join("acme").join(format!("tools@{v}"));
+        let registry_dir = |v: &str| store.join(format!("tools@{v}"));
         for (v, present) in VERSIONS.iter().zip(&installed) {
             if *present {
                 std::fs::create_dir_all(registry_dir(v)).unwrap();
@@ -1388,7 +1326,7 @@ proptest! {
             std::fs::create_dir_all(&dev_dir).unwrap();
             std::fs::write(dev_dir.join("hpm.toml"), manifest("acme/tools", "1.89.0")).unwrap();
         }
-        let foreign_dir = store.join("acme").join("other@1.0.0");
+        let foreign_dir = store.join("other@1.0.0");
         std::fs::create_dir_all(&foreign_dir).unwrap();
         std::fs::write(foreign_dir.join("hpm.toml"), manifest("acme/other", "1.0.0")).unwrap();
         let outside_dir = temp_dir.path().join("elsewhere").join("tools@1.0.0");
@@ -1462,7 +1400,7 @@ fn list_dependencies_never_substitutes_another_version() {
     let (config, storage_manager) = test_setup(temp_dir.path());
     let project_root = temp_dir.path().join("project");
     std::fs::create_dir_all(&project_root).unwrap();
-    let dir = config.storage.packages_dir.join("acme").join("tools@1.0.0");
+    let dir = config.storage.packages_dir.join("tools@1.0.0");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("hpm.toml"),
@@ -1841,4 +1779,237 @@ async fn a_new_version_reclaims_the_old_container_once_nothing_points_at_it() {
     assert!(!old.exists(), "1.0.0 is gone once nothing points at it");
     let new = config.storage.packages_dir.join("_dev").join("rig@1.1.0");
     assert_eq!(dev_hashes(&new).len(), 1);
+}
+
+mod lock_building {
+    use super::*;
+    use crate::lock::{LockFile, LockedDependency, LockedSource};
+
+    fn outcome(
+        name: &str,
+        version: &str,
+        checksum: Option<&str>,
+        source: Option<LockedSource>,
+    ) -> (String, InstallOutcome) {
+        let manifest = hpm_package::parse_manifest_str(&format!(
+            "[package]\npath = \"{name}\"\nname = \"x\"\nversion = \"{version}\"\n"
+        ))
+        .unwrap();
+        (
+            name.to_string(),
+            InstallOutcome {
+                package: InstalledPackage {
+                    version: version.to_string(),
+                    manifest,
+                    install_path: PathBuf::from("/store").join(version),
+                    is_dev: false,
+                },
+                checksum: checksum.map(str::to_string),
+                source,
+            },
+        )
+    }
+
+    fn project() -> hpm_package::PackageManifest {
+        hpm_package::parse_manifest_str(
+            "[package]\npath = \"studio/proj\"\nname = \"proj\"\nversion = \"0.1.0\"\n\n\
+             [dependencies]\n\"acme/cached\" = \"2.0.0\"\n\n\
+             [python_dependencies]\nnumpy = \">=1.24\"\nrequests = { extras = [\"socks\"] }\n",
+        )
+        .unwrap()
+    }
+
+    fn manager(temp: &TempDir) -> ProjectManager {
+        let (config, storage) = test_setup(temp.path());
+        let root = temp.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        ProjectManager::new(root, storage, config).unwrap()
+    }
+
+    fn prior_with(source: LockedSource) -> LockFile {
+        let mut prior = LockFile::new("proj".into(), "0.1.0".into());
+        prior.add_dependency(
+            "acme/cached".into(),
+            LockedDependency {
+                version: "2.0.0".into(),
+                checksum: Some("bb".into()),
+                source,
+            },
+        );
+        prior
+    }
+
+    /// A fresh fetch records what it fetched; an install found in the store
+    /// keeps the previous lock entry's checksum and source; a path
+    /// dependency records its path; Python dependencies record their
+    /// requirement (`*` when none).
+    #[tokio::test]
+    async fn the_lock_records_each_install_and_keeps_what_a_store_hit_cannot_know() {
+        let temp = TempDir::new().unwrap();
+        let fetched = LockedSource::url("https://r/tools-1.0.0.zip", "1.0.0");
+        let path = LockedSource::path("../rig");
+        let outcomes = vec![
+            outcome("acme/tools", "1.0.0", Some("aa"), Some(fetched.clone())),
+            outcome("acme/cached", "2.0.0", None, None),
+            outcome("acme/rig", "0.1.0", None, Some(path.clone())),
+        ];
+        let prior_source = LockedSource::url("https://r/cached-2.0.0.zip", "2.0.0");
+        let lock = manager(&temp)
+            .lock_file(
+                &project(),
+                &outcomes,
+                Some(&prior_with(prior_source.clone())),
+            )
+            .await
+            .unwrap();
+        let dep = |n: &str| lock.get_dependency(n).unwrap().clone();
+        assert_eq!(dep("acme/tools").source, fetched);
+        assert_eq!(dep("acme/tools").checksum.as_deref(), Some("aa"));
+        assert_eq!(dep("acme/cached").source, prior_source);
+        assert_eq!(dep("acme/cached").checksum.as_deref(), Some("bb"));
+        assert_eq!(dep("acme/rig").source, path);
+        assert_eq!(lock.python_dependencies["numpy"].version, ">=1.24");
+        assert_eq!(lock.python_dependencies["requests"].version, "*");
+        assert_eq!(lock.package.name, "proj");
+    }
+
+    /// A store hit with no usable previous entry (none, or an older hpm's
+    /// `"unresolved"` placeholder) has its source looked up in the
+    /// project's registries; it is never written as a URL nobody can fetch.
+    /// With no registry to ask, building the lock fails and says why.
+    #[tokio::test]
+    async fn a_store_hit_without_a_known_source_is_resolved_never_invented() {
+        let temp = TempDir::new().unwrap();
+        let manager = manager(&temp);
+        let outcomes = vec![outcome("acme/cached", "2.0.0", None, None)];
+        let placeholder = prior_with(LockedSource::url("unresolved", "2.0.0"));
+        for prior in [None, Some(&placeholder)] {
+            match manager.lock_file(&project(), &outcomes, prior).await {
+                Err(ProjectError::RegistryResolution {
+                    name, version_req, ..
+                }) => {
+                    assert_eq!(
+                        (name.as_str(), version_req.as_str()),
+                        ("acme/cached", "2.0.0")
+                    );
+                }
+                other => panic!("expected a resolution error, got {other:?}"),
+            }
+        }
+    }
+}
+
+mod package_env_not_ready {
+    use super::*;
+
+    fn manager_at(temp: &TempDir, manifest: Option<&str>) -> ProjectManager {
+        let (config, storage) = test_setup(temp.path());
+        let root = temp.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        if let Some(m) = manifest {
+            std::fs::write(root.join("hpm.toml"), m).unwrap();
+        }
+        ProjectManager::new(root, storage, config).unwrap()
+    }
+
+    const WITH_DEP: &str = "[package]\npath = \"studio/proj\"\nname = \"proj\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"acme/tools\" = \"1.0.0\"\n";
+
+    async fn message(manager: &ProjectManager) -> String {
+        match manager.resolve_package_env(&[]).await {
+            Err(
+                e @ (ProjectError::PackageEnvNoManifest { .. }
+                | ProjectError::PackageEnvNoLock { .. }
+                | ProjectError::PackageEnvNotInstalled { .. }),
+            ) => e.to_string(),
+            other => panic!("expected a not-ready error, got {other:?}"),
+        }
+    }
+
+    /// Each way a package environment is not ready yet is reported before
+    /// anything is resolved, with a message that says what to do. The text
+    /// is shown to users (by TumbleTrove Desktop too).
+    #[tokio::test]
+    async fn each_not_ready_case_says_what_to_do() {
+        let temp = TempDir::new().unwrap();
+        let no_manifest = message(&manager_at(&temp, None)).await;
+        assert!(
+            no_manifest.starts_with("No hpm.toml found at "),
+            "{no_manifest}"
+        );
+        assert!(
+            no_manifest.ends_with(" — a package environment needs a project manifest."),
+            "{no_manifest}"
+        );
+
+        let temp = TempDir::new().unwrap();
+        let no_lock = message(&manager_at(&temp, Some(WITH_DEP))).await;
+        assert!(no_lock.starts_with("Could not read "), "{no_lock}");
+        assert!(
+            no_lock.ends_with(
+                "Run 'hpm install' to resolve and lock this project's dependencies before running a package-env script."
+            ),
+            "{no_lock}"
+        );
+
+        let temp = TempDir::new().unwrap();
+        let manager = manager_at(&temp, Some(WITH_DEP));
+        let mut lock = crate::lock::LockFile::new("proj".into(), "0.1.0".into());
+        lock.add_dependency(
+            "acme/tools".into(),
+            crate::lock::LockedDependency {
+                version: "1.0.0".into(),
+                checksum: None,
+                source: crate::lock::LockedSource::url("https://r/t.zip", "1.0.0"),
+            },
+        );
+        lock.save(&temp.path().join("project").join("hpm.lock"))
+            .unwrap();
+        assert_eq!(
+            message(&manager).await,
+            "Dependency acme/tools@1.0.0 is locked but not installed. Run 'hpm install' to populate the package environment."
+        );
+    }
+
+    /// With nothing declaring Python dependencies, the environment is the
+    /// project's own `python/` first, then each locked dependency's, and no
+    /// venv (uv is not even fetched).
+    #[tokio::test]
+    async fn the_package_env_puts_the_project_python_first_and_builds_no_empty_venv() {
+        let temp = TempDir::new().unwrap();
+        let manager = manager_at(&temp, Some(WITH_DEP));
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(project.join("python")).unwrap();
+        let source = temp.path().join("tools-src");
+        std::fs::create_dir_all(source.join("python")).unwrap();
+        std::fs::write(
+            source.join("hpm.toml"),
+            "[package]\npath = \"acme/tools\"\nname = \"t\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        let installed = manager
+            .storage_manager
+            .install_into_cas(&source)
+            .await
+            .unwrap();
+        let mut lock = crate::lock::LockFile::new("proj".into(), "0.1.0".into());
+        lock.add_dependency(
+            "acme/tools".into(),
+            crate::lock::LockedDependency {
+                version: "1.0.0".into(),
+                checksum: None,
+                source: crate::lock::LockedSource::url("https://r/t.zip", "1.0.0"),
+            },
+        );
+        lock.save(&project.join("hpm.lock")).unwrap();
+
+        let env = manager.resolve_package_env(&[]).await.unwrap();
+        assert_eq!(
+            env.python_paths,
+            vec![
+                project.join("python"),
+                installed.install_path.join("python")
+            ]
+        );
+        assert_eq!((env.venv_bin, env.virtual_env), (None, None));
+    }
 }

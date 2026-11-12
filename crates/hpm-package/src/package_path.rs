@@ -21,7 +21,7 @@ use std::str::FromStr;
 ///
 /// Stored as a single string with the `/` index cached so `creator()` and
 /// `slug()` are O(1) substring slices.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PackagePath {
     full: String,
     /// Index of the `/` separator inside `full`. Cached at construction.
@@ -179,8 +179,44 @@ impl<'de> Deserialize<'de> for PackagePath {
     }
 }
 
+/// Split a `name@version` package argument at its last `@`.
+///
+/// Returns the version only when both sides are non-empty: `acme/tools`
+/// and `acme/tools@` have none, and `a@b@1.0` names `a@b` at `1.0`.
+pub fn split_name_version(spec: &str) -> (&str, Option<&str>) {
+    match spec.rsplit_once('@') {
+        Some((name, version)) if !name.is_empty() && !version.is_empty() => (name, Some(version)),
+        _ => (spec, None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    proptest::proptest! {
+        /// `name@version` splits back into its parts for any name (scoped,
+        /// or holding `@` itself) and any version without `@`.
+        #[test]
+        fn split_name_version_round_trips(
+            name in "[a-z@/._-]{0,12}[a-z]",
+            version in "[0-9a-z.^*<>=-]{1,8}",
+        ) {
+            let spec = format!("{name}@{version}");
+            proptest::prop_assert_eq!(split_name_version(&spec), (name.as_str(), Some(version.as_str())));
+        }
+    }
+
+    #[test]
+    fn split_name_version_examples() {
+        assert_eq!(split_name_version("acme/tools"), ("acme/tools", None));
+        assert_eq!(
+            split_name_version("acme/tools@1.0.0"),
+            ("acme/tools", Some("1.0.0"))
+        );
+        assert_eq!(split_name_version("acme/tools@"), ("acme/tools@", None));
+        assert_eq!(split_name_version("@1.0"), ("@1.0", None));
+        assert_eq!(split_name_version("a@b@1.0"), ("a@b", Some("1.0")));
+    }
     use super::*;
 
     #[test]

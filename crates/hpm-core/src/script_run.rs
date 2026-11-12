@@ -32,6 +32,7 @@
 
 use crate::project::{PackageRunEnv, ProjectError};
 use crate::python::PythonError;
+use crate::python::script_env::prepend_env_paths;
 use crate::storage::StorageError;
 use async_trait::async_trait;
 use hpm_package::{PackageManifest, Platform, ScriptEntry};
@@ -177,7 +178,7 @@ pub async fn prepare_script(
     extra_env: &HashMap<String, String>,
     sink: &mut dyn ScriptSink,
 ) -> Result<PreparedScript, ScriptRunError> {
-    let host_os = Platform::current().and_then(|p| p.os_key().map(str::to_string));
+    let host_os = Platform::current().and_then(|p| p.os_key().map(|os| os.as_str().to_string()));
     let resolved_cmd =
         entry
             .resolve_cmd(host_os.as_deref())
@@ -336,8 +337,9 @@ async fn resolve_package_env(
 
 /// Fold a [`PackageRunEnv`] into the subprocess env map: `VIRTUAL_ENV`,
 /// `PATH` (venv bin prepended), and `PYTHONPATH` (package python/ dirs +
-/// venv site-packages prepended). Mirrors `ScriptEnvHandle::apply_to`'s
-/// prepend semantics so an existing `PATH`/`PYTHONPATH` is preserved.
+/// venv site-packages prepended), with the same prepend as
+/// `ScriptEnvHandle::apply_to`, so an existing `PATH`/`PYTHONPATH` is
+/// preserved.
 fn apply_package_env(run_env: &PackageRunEnv, env_vars: &mut HashMap<String, String>) {
     if let Some(virtual_env) = &run_env.virtual_env {
         env_vars.insert(
@@ -349,33 +351,6 @@ fn apply_package_env(run_env: &PackageRunEnv, env_vars: &mut HashMap<String, Str
         prepend_env_paths(env_vars, "PATH", std::slice::from_ref(bin));
     }
     prepend_env_paths(env_vars, "PYTHONPATH", &run_env.python_paths);
-}
-
-/// Prepend `prefixes` to the path-list env var `key` (in `env_vars`, falling
-/// back to the process env), joined by the platform separator. No-op when
-/// `prefixes` is empty.
-fn prepend_env_paths(env_vars: &mut HashMap<String, String>, key: &str, prefixes: &[PathBuf]) {
-    if prefixes.is_empty() {
-        return;
-    }
-    let separator = if cfg!(target_os = "windows") {
-        ";"
-    } else {
-        ":"
-    };
-    let mut parts: Vec<String> = prefixes
-        .iter()
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect();
-    let existing = env_vars
-        .get(key)
-        .cloned()
-        .or_else(|| std::env::var(key).ok())
-        .unwrap_or_default();
-    if !existing.is_empty() {
-        parts.push(existing);
-    }
-    env_vars.insert(key.to_string(), parts.join(separator));
 }
 
 /// Build the command line: the base `cmd` with each forwarded arg quoted and
@@ -486,34 +461,6 @@ mod tests {
     fn build_command_no_args_is_passthrough() {
         let out = build_command_string("ruff .", &[]);
         assert_eq!(out, "ruff .");
-    }
-
-    #[test]
-    fn prepend_env_paths_is_noop_when_empty() {
-        let mut env = HashMap::new();
-        env.insert("PYTHONPATH".to_string(), "/existing".to_string());
-        prepend_env_paths(&mut env, "PYTHONPATH", &[]);
-        assert_eq!(env.get("PYTHONPATH").map(String::as_str), Some("/existing"));
-    }
-
-    #[test]
-    fn prepend_env_paths_prepends_in_order_preserving_existing() {
-        let sep = if cfg!(target_os = "windows") {
-            ";"
-        } else {
-            ":"
-        };
-        let mut env = HashMap::new();
-        env.insert("PYTHONPATH".to_string(), "/existing".to_string());
-        prepend_env_paths(
-            &mut env,
-            "PYTHONPATH",
-            &[PathBuf::from("/pkg/python"), PathBuf::from("/dep/python")],
-        );
-        assert_eq!(
-            env.get("PYTHONPATH").unwrap(),
-            &format!("/pkg/python{sep}/dep/python{sep}/existing")
-        );
     }
 
     #[test]

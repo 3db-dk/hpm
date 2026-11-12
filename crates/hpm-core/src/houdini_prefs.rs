@@ -49,6 +49,14 @@ pub enum HoudiniPrefsError {
     Io(#[from] IoOp),
 }
 
+impl std::str::FromStr for HoudiniVersion {
+    type Err = HoudiniPrefsError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
 impl HoudiniVersion {
     /// Parse `major.minor` or `major.minor.build`, keeping the first two
     /// components. A bare major (`"21"`) is accepted as `21.0` — Houdini's

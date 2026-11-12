@@ -1,0 +1,26 @@
+[package]
+path = "tumbletrove/nodepilot"
+name = "NodePilot"
+version = "2.2.0"
+description = "Node graph productivity tools for Houdini — wire drag suggestions, ghost preview, and recipe-based node placement."
+readme = "README.md"
+keywords = ["houdini", "node-graph", "productivity"]
+
+[compat]
+# Manifest 2.0 schema (hpm 0.16+). Cargo-style version requirement. Replaces
+# the pre-2.0 `[houdini] min_version` section, which hpm 0.28+ rejects outright
+# as an unknown field — the manifest would not parse at all.
+#
+# The bound is open-ended on the upper end: this is pure Python (no native
+# resolver, no per-major build artifact), so it runs on any Houdini >= 21.
+#
+# NB: hpm upper bounds are EXCLUSIVE and name the first UNSUPPORTED major, so
+# never write `<21` thinking it means "21 and below" — that would compile to
+# `houdini_version < '21'` and silently disable the entire package.
+houdini = ">=21"
+
+# No [compat].platforms / [runtime] / [stage]: NodePilot ships a single
+# universal archive of pure Python (staged by scripts/_nodepilot_build.py),
+# registers no env edits, and is added to HOUDINI_PATH directly by the
+# installer / package manager. scripts/python/pythonrc.py is the
+# H22-compatible startup bootstrap.

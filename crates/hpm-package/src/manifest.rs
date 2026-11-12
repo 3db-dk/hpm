@@ -26,13 +26,15 @@ pub mod scripts;
 pub mod stage;
 pub mod validation;
 
-pub use compat::CompatConfig;
+pub use compat::{CompatConfig, DeclaredPlatforms, TargetPlatformError};
 pub use env::{EnvMethod, ManifestEnvEntry};
 pub use error::ManifestLoadError;
 pub use info::PackageInfo;
 pub use operators::{OperatorDecl, OperatorKind, OperatorSource, SourceResolution};
 pub use registry::{RegistryConfig, RegistryType};
-pub use scripts::{PackageScripts, ScriptEntry, ScriptEnv};
+pub use scripts::{
+    PackageScripts, ScriptCommand, ScriptCondition, ScriptEntry, ScriptEnv, ScriptVariant,
+};
 pub use stage::{PlaceRule, PlatformStaging, StageConfig, StagePlatformRules};
 pub use validation::{ValidationLevel, ValidationReport};
 
@@ -42,13 +44,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::dependency::DependencySpec;
-use crate::env_value::{EnvValue, ExpressionError, HoudiniRange};
+use crate::env_value::{HoudiniRange, InstallSource};
 use crate::houdini::{
-    HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata, NativePackageTarget,
+    HoudiniEnvValue, HoudiniNativePackage, HpackageMetadata, NativePackageTarget,
     normalize_hpackage_version,
 };
 use crate::package_path::PackagePath;
-use crate::platform::Platform;
 use crate::python::PythonDependencySpec;
 
 use env::validate_env_table;
@@ -59,7 +60,7 @@ use env::validate_env_table;
 /// insertion order during serialization, ensuring deterministic TOML output.
 // No `Default` impl: a manifest without a `package.path` is meaningless.
 // Construct via `PackageManifest::new` or full struct literal.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageManifest {
     pub package: PackageInfo,
@@ -74,9 +75,8 @@ pub struct PackageManifest {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub python_dependencies: IndexMap<String, PythonDependencySpec>,
     /// `[runtime]` — env-var contributions to the generated Houdini
-    /// `package.json`. Replaces the prior `[env]` + `[dev.env]` pair; the
-    /// dev/registry distinction now lives in the `when.install_source` axis
-    /// on individual conditional variants.
+    /// package file. Dev-only and registry-only values are expressed with
+    /// the `when.install_source` axis on individual conditional variants.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub runtime: IndexMap<String, ManifestEnvEntry>,
     #[serde(default, skip_serializing_if = "PackageScripts::is_empty")]
@@ -124,8 +124,7 @@ impl PackageManifest {
     /// `PackagePath::new("creator/slug").unwrap()` for static identifiers
     /// in tests, or propagate the parse error in production code.
     ///
-    /// Pass an empty `Vec` for `authors` when unknown — empty vec encodes
-    /// "no authors declared" exactly like the prior `None`.
+    /// Pass an empty `Vec` for `authors` when no authors are declared.
     pub fn new(
         path: PackagePath,
         name: String,
@@ -283,54 +282,13 @@ impl PackageManifest {
                 ));
             }
             if let Some(OperatorSource::PerPlatform(map)) = &op.source {
-                for key in map.keys() {
-                    match key.parse::<Platform>() {
-                        Ok(platform) => {
-                            if !self.compat.platforms.contains(&platform) {
-                                report.errors.push(format!(
-                                    "[[operators]][{}].source: platform '{}' not listed in [compat].platforms",
-                                    i, key
-                                ));
-                            }
-                        }
-                        Err(e) => report
-                            .errors
-                            .push(format!("[[operators]][{}].source.{}: {}", i, key, e)),
+                for platform in map.keys() {
+                    if !self.compat.platforms.contains(platform) {
+                        report.errors.push(format!(
+                            "[[operators]][{}].source: platform '{}' not listed in [compat].platforms",
+                            i, platform
+                        ));
                     }
-                }
-            }
-        }
-
-        // Validate [scripts] entries: a conditional `cmd` may only gate on
-        // the `os` axis. Other axes (`houdini`, `python`, `install_source`)
-        // require runtime context HPM doesn't have at `hpm run` time, so we
-        // reject them up front rather than silently dropping variants.
-        for (name, entry) in &self.scripts.commands {
-            let ScriptEntry::WithEnv(env) = entry else {
-                continue;
-            };
-            let EnvValue::Conditional(variants) = &env.cmd else {
-                continue;
-            };
-            if variants.is_empty() {
-                report.errors.push(format!(
-                    "script '{}': conditional cmd list must not be empty",
-                    name
-                ));
-                continue;
-            }
-            for variant in variants {
-                // The `os` axis itself is typed (`OsKey`), so an unknown
-                // keyword already failed at manifest load.
-                if variant.when.houdini.is_some()
-                    || variant.when.python.is_some()
-                    || variant.when.install_source.is_some()
-                {
-                    report.errors.push(format!(
-                        "script '{}': only the `os` axis is supported in script `when` selectors; \
-                         `houdini`, `python`, and `install_source` axes have no meaning at `hpm run` time",
-                        name
-                    ));
                 }
             }
         }
@@ -346,33 +304,24 @@ impl PackageManifest {
         staging: &PlatformStaging,
         report: &mut ValidationReport,
     ) {
-        for (platform_str, rules) in &staging.entries {
-            let platform = match platform_str.parse::<Platform>() {
-                Ok(p) => p,
-                Err(e) => {
-                    report
-                        .errors
-                        .push(format!("[{}.{}]: {}", label, platform_str, e));
-                    continue;
-                }
-            };
-            if !self.compat.platforms.contains(&platform) {
+        for (platform, rules) in &staging.entries {
+            if !self.compat.platforms.contains(platform) {
                 report.errors.push(format!(
                     "[{}.{}] declared but '{}' not listed in [compat].platforms",
-                    label, platform_str, platform_str
+                    label, platform, platform
                 ));
             }
             for (i, rule) in rules.place.iter().enumerate() {
                 if rule.from.trim().is_empty() {
                     report.errors.push(format!(
                         "[{}.{}].place[{}]: `from` must not be empty",
-                        label, platform_str, i
+                        label, platform, i
                     ));
                 }
                 if rule.to.trim().is_empty() {
                     report.errors.push(format!(
                         "[{}.{}].place[{}]: `to` must not be empty (use \"./\" for the archive root)",
-                        label, platform_str, i
+                        label, platform, i
                     ));
                 }
             }
@@ -403,62 +352,6 @@ impl PackageManifest {
                     .to_string(),
             );
         }
-    }
-
-    /// Generate Houdini package.json from manifest
-    pub fn generate_houdini_package(&self) -> Result<HoudiniPackage, ExpressionError> {
-        let mut hpath = vec![];
-        let mut env = vec![];
-
-        // Point hpath at the package root so Houdini auto-discovers convention
-        // subdirs (otls/, desktop/, toolbar/, python_panels/, viewer_states/,
-        // python3.11libs/, etc.). See sidefx.com/docs/houdini/ref/plugins.html.
-        hpath.push("$HPM_PACKAGE_ROOT".to_string());
-
-        // Python path environment
-        let mut python_env = HashMap::new();
-        python_env.insert(
-            "PYTHONPATH".to_string(),
-            HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"),
-        );
-        env.push(python_env);
-
-        // Scripts path environment
-        let mut scripts_env = HashMap::new();
-        scripts_env.insert(
-            "HOUDINI_SCRIPT_PATH".to_string(),
-            HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/scripts"),
-        );
-        env.push(scripts_env);
-
-        // Append user-defined env vars from [runtime]. The standalone
-        // generator has no install context, so it filters as a published
-        // (non-dev) consumer would: `install_source = "dev"` branches drop
-        // out, the rest go through. Required-but-unsupplied placeholders
-        // are skipped — project sync supplies them via `[runtime]`
-        // overrides and errors if any remain unsupplied.
-        for (key, entry) in &self.runtime {
-            let Some(houdini_value) = entry.to_houdini_env_value()? else {
-                continue;
-            };
-            let mut env_map = HashMap::new();
-            env_map.insert(key.clone(), houdini_value);
-            env.push(env_map);
-        }
-
-        let enable = self
-            .compat
-            .houdini
-            .as_ref()
-            .map(HoudiniRange::to_enable_expression);
-
-        Ok(HoudiniPackage {
-            hpath: Some(hpath),
-            env: Some(env),
-            enable,
-            requires: None,
-            recommends: None,
-        })
     }
 
     /// Generate a Houdini-native package.json for direct use by Houdini's package system.
@@ -506,13 +399,13 @@ impl PackageManifest {
         // User-defined env vars with $HPM_PACKAGE_ROOT replaced. This
         // generator emits the bundled `{slug}.json` shipped inside a packed
         // archive, so it filters as a published consumer would (is_dev=false).
-        // Required-but-unsupplied placeholders are skipped (see
-        // generate_houdini_package). Conditional value branches each get the
+        // Required-but-unsupplied placeholders are skipped: project sync
+        // supplies them via `[runtime]` overrides. Conditional value branches each get the
         // same substitution applied before the conditional-object array is
         // emitted.
         for (key, entry) in &self.runtime {
             let Some(houdini_value) = entry
-                .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)], false)
+                .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)], InstallSource::Registry)
                 .map_err(|e| e.to_string())?
             else {
                 continue;
@@ -561,7 +454,7 @@ impl PackageManifest {
         // `recommends` keeps the information and the diagnostic — Houdini
         // warns, naming the missing package — while letting whatever the
         // package does ship actually load. HPM-managed installs are unaffected
-        // either way: `generate_houdini_package` emits neither field, because
+        // either way: `build_houdini_package` (hpm-core) emits neither field, because
         // HPM guarantees the dependency is installed before Houdini starts.
         // Verified against Houdini 21.0.729 with hconfig.
         let recommends = if self.dependencies.is_empty() {
@@ -604,9 +497,8 @@ impl PackageManifest {
     }
 
     fn is_valid_semver(&self, version: &str) -> bool {
-        // Delegate to the semver crate so we accept pre-release and build
-        // metadata (`1.0.0-alpha.1`, `1.0.0+build.5`) — the prior hand-
-        // rolled `major.minor.patch` u32 split rejected both.
+        // Full semver: pre-release and build metadata (`1.0.0-alpha.1`,
+        // `1.0.0+build.5`) are valid.
         semver::Version::parse(version).is_ok()
     }
 }

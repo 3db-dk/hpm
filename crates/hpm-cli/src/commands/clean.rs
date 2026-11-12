@@ -1,5 +1,5 @@
 use crate::console::Console;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::Args;
 use hpm_config::Config;
 use hpm_core::StorageManager;
@@ -16,7 +16,7 @@ pub struct CleanArgs {
     pub yes: bool,
 
     /// Clean only Python virtual environments
-    #[arg(long)]
+    #[arg(long, conflicts_with = "comprehensive")]
     pub python_only: bool,
 
     /// Enable comprehensive cleanup including Python virtual environments
@@ -60,11 +60,13 @@ pub async fn execute_clean(config: &Config, args: &CleanArgs, console: &mut Cons
 
     let storage = StorageManager::new(config.storage.clone())?;
     let mode = Mode::from_flags(args.dry_run, args.yes);
-    let scope = match (args.python_only, args.comprehensive) {
-        (true, true) => bail!("Cannot specify both --python-only and --comprehensive options"),
-        (true, false) => Scope::Python,
-        (false, true) => Scope::Comprehensive,
-        (false, false) => Scope::Packages,
+    // clap refuses --python-only together with --comprehensive.
+    let scope = if args.python_only {
+        Scope::Python
+    } else if args.comprehensive {
+        Scope::Comprehensive
+    } else {
+        Scope::Packages
     };
 
     match scope {
@@ -89,24 +91,18 @@ async fn cleanup_packages(
         return Ok(());
     }
 
-    if !would_remove_cas.is_empty() {
-        console.stdout(format!(
-            "Found {} orphaned packages:",
-            would_remove_cas.len()
-        ));
-        for package in &would_remove_cas {
-            console.stdout(format!("  - {package}"));
-        }
-    }
-    if !would_remove_dev.is_empty() {
-        console.stdout(format!(
-            "Found {} orphaned dev installs:",
-            would_remove_dev.len()
-        ));
-        for entry in &would_remove_dev {
-            console.stdout(format!("  - {entry}"));
-        }
-    }
+    list_group(
+        console,
+        "Found",
+        "orphaned packages",
+        would_remove_cas.iter(),
+    );
+    list_group(
+        console,
+        "Found",
+        "orphaned dev installs",
+        would_remove_dev.iter(),
+    );
 
     match mode {
         Mode::DryRun => {
@@ -124,24 +120,18 @@ async fn cleanup_packages(
             let removed_dev = storage
                 .cleanup_unused_dev_installs(&config.projects)
                 .await?;
-            if !removed_cas.is_empty() {
-                console.stdout(format!(
-                    "Successfully removed {} orphaned packages:",
-                    removed_cas.len()
-                ));
-                for package in &removed_cas {
-                    console.stdout(format!("  - {package}"));
-                }
-            }
-            if !removed_dev.is_empty() {
-                console.stdout(format!(
-                    "Successfully removed {} orphaned dev installs:",
-                    removed_dev.len()
-                ));
-                for entry in &removed_dev {
-                    console.stdout(format!("  - {entry}"));
-                }
-            }
+            list_group(
+                console,
+                "Successfully removed",
+                "orphaned packages",
+                removed_cas.iter(),
+            );
+            list_group(
+                console,
+                "Successfully removed",
+                "orphaned dev installs",
+                removed_dev.iter(),
+            );
             Ok(())
         }
     }
@@ -154,13 +144,12 @@ async fn cleanup_python(storage: &StorageManager, mode: Mode, console: &mut Cons
         return Ok(());
     }
 
-    console.stdout(format!(
-        "Found {} orphaned virtual environments:",
-        analysis.items_that_would_be_cleaned()
-    ));
-    for venv in &analysis.would_remove {
-        console.stdout(format!("  - {}", venv.display()));
-    }
+    list_group(
+        console,
+        "Found",
+        "orphaned virtual environments",
+        analysis.would_remove.iter().map(|p| p.display()),
+    );
     console.stdout(format!(
         "Would free approximately: {}",
         analysis.format_space_that_would_be_freed()
@@ -179,13 +168,12 @@ async fn cleanup_python(storage: &StorageManager, mode: Mode, console: &mut Cons
         }
         Mode::Automated | Mode::Interactive => {
             let result = storage.cleanup_python_only(false).await?;
-            console.stdout(format!(
-                "Successfully removed {} virtual environments:",
-                result.items_cleaned()
-            ));
-            for venv in &result.removed {
-                console.stdout(format!("  - {}", venv.display()));
-            }
+            list_group(
+                console,
+                "Successfully removed",
+                "virtual environments",
+                result.removed.iter().map(|p| p.display()),
+            );
             console.stdout(format!("Disk space freed: {}", result.format_space_freed()));
             Ok(())
         }
@@ -206,33 +194,28 @@ async fn cleanup_comprehensive(
         return Ok(());
     }
 
-    if !analysis.removed_packages.is_empty() {
-        console.stdout(format!(
-            "Found {} orphaned packages:",
-            analysis.removed_packages.len()
-        ));
-        for package in &analysis.removed_packages {
-            console.stdout(format!("  - {package}"));
-        }
-    }
-    if !analysis.removed_dev_installs.is_empty() {
-        console.stdout(format!(
-            "Found {} orphaned dev installs:",
-            analysis.removed_dev_installs.len()
-        ));
-        for entry in &analysis.removed_dev_installs {
-            console.stdout(format!("  - {entry}"));
-        }
-    }
-    if analysis.python_cleanup.items_that_would_be_cleaned() > 0 {
-        console.stdout(format!(
-            "Found {} orphaned virtual environments:",
-            analysis.python_cleanup.items_that_would_be_cleaned()
-        ));
-        for venv in &analysis.python_cleanup.would_remove {
-            console.stdout(format!("  - {}", venv.display()));
-        }
-    }
+    list_group(
+        console,
+        "Found",
+        "orphaned packages",
+        analysis.removed_packages.iter(),
+    );
+    list_group(
+        console,
+        "Found",
+        "orphaned dev installs",
+        analysis.removed_dev_installs.iter(),
+    );
+    list_group(
+        console,
+        "Found",
+        "orphaned virtual environments",
+        analysis
+            .python_cleanup
+            .would_remove
+            .iter()
+            .map(|p| p.display()),
+    );
 
     match mode {
         Mode::DryRun => {
@@ -249,32 +232,25 @@ async fn cleanup_comprehensive(
             let result = storage
                 .cleanup_comprehensive(&config.projects, false)
                 .await?;
-            if !result.removed_packages.is_empty() {
-                console.stdout(format!(
-                    "Successfully removed {} orphaned packages:",
-                    result.removed_packages.len()
-                ));
-                for package in &result.removed_packages {
-                    console.stdout(format!("  - {package}"));
-                }
-            }
-            if !result.removed_dev_installs.is_empty() {
-                console.stdout(format!(
-                    "Successfully removed {} orphaned dev installs:",
-                    result.removed_dev_installs.len()
-                ));
-                for entry in &result.removed_dev_installs {
-                    console.stdout(format!("  - {entry}"));
-                }
-            }
+            list_group(
+                console,
+                "Successfully removed",
+                "orphaned packages",
+                result.removed_packages.iter(),
+            );
+            list_group(
+                console,
+                "Successfully removed",
+                "orphaned dev installs",
+                result.removed_dev_installs.iter(),
+            );
             if result.python_cleanup.items_cleaned() > 0 {
-                console.stdout(format!(
-                    "Successfully removed {} orphaned virtual environments:",
-                    result.python_cleanup.items_cleaned()
-                ));
-                for venv in &result.python_cleanup.removed {
-                    console.stdout(format!("  - {}", venv.display()));
-                }
+                list_group(
+                    console,
+                    "Successfully removed",
+                    "orphaned virtual environments",
+                    result.python_cleanup.removed.iter().map(|p| p.display()),
+                );
                 console.stdout(format!(
                     "Disk space freed: {}",
                     result.python_cleanup.format_space_freed()
@@ -282,6 +258,23 @@ async fn cleanup_comprehensive(
             }
             Ok(())
         }
+    }
+}
+
+/// Print `<verb> <n> <noun>:` and one `  - <item>` line per item; nothing
+/// when there are no items.
+fn list_group(
+    console: &mut Console,
+    verb: &str,
+    noun: &str,
+    items: impl ExactSizeIterator<Item = impl std::fmt::Display>,
+) {
+    if items.len() == 0 {
+        return;
+    }
+    console.stdout(format!("{verb} {} {noun}:", items.len()));
+    for item in items {
+        console.stdout(format!("  - {item}"));
     }
 }
 

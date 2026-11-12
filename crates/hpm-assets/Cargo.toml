@@ -14,3 +14,7 @@ description = "Houdini package asset index model for HPM"
 
 [dependencies]
 serde.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true

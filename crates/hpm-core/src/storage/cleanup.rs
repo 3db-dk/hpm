@@ -4,6 +4,7 @@
 
 use crate::discovery::ProjectDiscovery;
 use crate::graph::{DependencyResolver, PackageId};
+use crate::python::PythonHome;
 use crate::python::cleanup::{CleanupResult, PythonCleanupAnalyzer};
 use crate::storage::InstalledPackage;
 use hpm_config::ProjectsConfig;
@@ -15,8 +16,8 @@ use tracing::{info, warn};
 
 use super::dev_install::{remove_install_entry, source_hash};
 use super::dev_users::{
-    Unrecorded, is_copy_container, reclaim_dev_copies, record_project_manifests,
-    remove_empty_container,
+    Unrecorded, container_would_empty, is_copy_container, project_dev_copies, reclaim_dev_copies,
+    record_project_manifests, remove_empty_container,
 };
 use super::{DevInstall, StorageError, StorageManager};
 use crate::process_users::process_state;
@@ -31,6 +32,33 @@ pub struct ComprehensiveCleanupResult {
     pub python_cleanup: CleanupResult,
 }
 
+/// Everything one cleanup decides, from a single look at the store and the
+/// projects. The dry run reports it; the real run executes it, so the two
+/// cannot disagree about what is unused.
+#[derive(Debug, Default)]
+struct CleanupPlan {
+    /// Registry packages no project and no global install reaches.
+    orphan_packages: Vec<PackageId>,
+    /// `None` when there was nothing to judge against: no dev installs, or
+    /// no projects discovered (with no projects every install would look
+    /// unused, so cleanup is skipped).
+    dev: Option<DevPlan>,
+}
+
+#[derive(Debug)]
+struct DevPlan {
+    /// The `(slug, version)` coordinates projects' path dependencies claim,
+    /// each with the source workspace it installs from.
+    needed: HashMap<(String, String), PathBuf>,
+    /// Dev installs no project claims.
+    orphans: Vec<DevInstall>,
+    /// Dev installs some project claims.
+    referenced: Vec<DevInstall>,
+    /// Each discovered project's `.hpm/packages`, whose manifests name the
+    /// dev copies the project uses.
+    project_packages_dirs: Vec<PathBuf>,
+}
+
 impl ComprehensiveCleanupResult {
     /// Total number of items that would be cleaned (packages + dev installs + venvs)
     pub fn total_items_that_would_be_cleaned(&self) -> usize {
@@ -41,88 +69,89 @@ impl ComprehensiveCleanupResult {
 }
 
 impl StorageManager {
-    /// Find orphaned packages that are not needed by any active project.
-    ///
-    /// Returns the list of orphaned package IDs along with all installed package identifiers.
-    async fn find_orphaned_packages(
+    /// Look at the store and the projects once and decide everything a
+    /// cleanup removes. Writes nothing.
+    async fn plan_cleanup(
         &self,
         projects_config: &ProjectsConfig,
-    ) -> Result<Vec<PackageId>, StorageError> {
-        // 1. Get all installed packages
-        let all_installed = self.list_installed()?;
-
-        if all_installed.is_empty() {
+    ) -> Result<CleanupPlan, StorageError> {
+        let installed = self.list_installed()?;
+        let dev_installs = self.list_dev_installs()?;
+        if installed.is_empty() && dev_installs.is_empty() {
             info!("No packages installed - cleanup not needed");
-            return Ok(vec![]);
+            return Ok(CleanupPlan::default());
         }
 
-        info!(
-            "Found {} installed packages to analyze",
-            all_installed.len()
-        );
-
-        // 2. Discover projects using project configuration
-        let project_discovery = ProjectDiscovery::new(projects_config.clone());
-        let projects = project_discovery.find_projects()?;
-
+        let projects = ProjectDiscovery::new(projects_config.clone()).find_projects()?;
         if projects.is_empty() {
             warn!(
                 "No HPM-managed projects found - skipping cleanup to prevent removing all packages"
             );
-            return Ok(vec![]);
+            return Ok(CleanupPlan::default());
         }
-
         info!(
             "Found {} HPM-managed projects for cleanup analysis",
             projects.len()
         );
 
-        // 3. Build dependency graph from discovered projects
-        let resolver = DependencyResolver::new(Arc::new(self.clone()));
-        let dependency_graph = resolver.build_dependency_graph(&projects).await?;
+        let orphan_packages = if installed.is_empty() {
+            Vec::new()
+        } else {
+            self.orphan_packages(&installed, &projects).await?
+        };
 
-        // 4. Collect root packages (directly required by projects)
-        let root_packages: Vec<PackageId> = dependency_graph
+        let dev = if dev_installs.is_empty() {
+            None
+        } else {
+            let needed = dev_needs(&projects);
+            let (orphans, referenced) = dev_installs
+                .into_iter()
+                .partition(|d| !needed.contains_key(&(d.slug.clone(), d.version.clone())));
+            Some(DevPlan {
+                needed,
+                orphans,
+                referenced,
+                project_packages_dirs: projects
+                    .iter()
+                    .map(|p| p.path.join(".hpm").join("packages"))
+                    .collect(),
+            })
+        };
+
+        Ok(CleanupPlan {
+            orphan_packages,
+            dev,
+        })
+    }
+
+    /// Registry packages that neither a project (directly or transitively)
+    /// nor a global install needs.
+    async fn orphan_packages(
+        &self,
+        installed: &[InstalledPackage],
+        projects: &[crate::discovery::DiscoveredProject],
+    ) -> Result<Vec<PackageId>, StorageError> {
+        let resolver = DependencyResolver::new(Arc::new(self.clone()));
+        let dependency_graph = resolver.build_dependency_graph(projects).await?;
+        let roots: Vec<PackageId> = dependency_graph
             .nodes()
             .filter(|node| node.is_root)
             .map(|node| node.id.clone())
             .collect();
-
+        let mut needed = dependency_graph.mark_reachable_from_roots(&roots);
+        // Globally installed packages are roots too. They belong to no
+        // project, so the project-driven marking cannot reach them: without
+        // this, every `hpm global` install is classified as unreferenced and
+        // its store directory deleted, leaving a manifest in Houdini's
+        // packages directory pointing at a path that no longer exists.
+        needed.extend(self.global_roots()?);
         info!(
-            "Found {} root packages required by active projects",
-            root_packages.len()
+            "{} of {} installed packages are needed (projects, their dependencies, global installs)",
+            needed.len(),
+            installed.len()
         );
-
-        // 5. Mark all packages reachable from roots
-        let mut needed_packages = dependency_graph.mark_reachable_from_roots(&root_packages);
-        info!(
-            "Marked {} packages as needed (including transitive dependencies)",
-            needed_packages.len()
-        );
-
-        // 5b. Globally installed packages are roots too. They belong to no
-        //     project, so the project-driven marking above cannot reach them:
-        //     without this, every `hpm global` install is classified as
-        //     unreferenced and its store directory deleted, leaving a manifest
-        //     in Houdini's packages directory pointing at a path that no
-        //     longer exists — Houdini then loads nothing, silently.
-        let global_roots = self.global_roots()?;
-        info!(
-            "Marked {} packages as needed by global installs",
-            global_roots.len()
-        );
-        needed_packages.extend(global_roots);
-
-        // 6. Find orphaned packages by comparing all installed packages to needed packages
-        let all_package_ids: HashSet<PackageId> =
-            all_installed.iter().map(PackageId::from).collect();
-
-        let orphaned_packages: Vec<PackageId> = all_package_ids
-            .difference(&needed_packages)
-            .cloned()
-            .collect();
-
-        Ok(orphaned_packages)
+        let all: HashSet<PackageId> = installed.iter().map(PackageId::from).collect();
+        Ok(all.difference(&needed).cloned().collect())
     }
 
     /// GC roots contributed by `hpm global` installs, across every Houdini
@@ -139,34 +168,20 @@ impl StorageManager {
     /// from another creator at the same version. Over-protection is the safe
     /// direction for a collector; under-protection deletes live files.
     fn global_roots(&self) -> Result<HashSet<PackageId>, StorageError> {
-        let (entries, failures) = crate::global::ledger::all_global_entries(&self.config.home_dir);
-
-        if let Some((_path, error)) = failures.into_iter().next() {
-            // LedgerError::Parse already names the file.
-            return Err(StorageError::GlobalLedger {
-                message: error.to_string(),
-            });
-        }
-
-        // The ledger keys installs by scoped `creator/slug`; the graph keys by
-        // bare slug, so derive the slug from the ledger key rather than by
-        // parsing the install path — a path whose shape we fail to recognise
-        // would otherwise drop a root silently and delete a live package.
-        let mut roots = HashSet::new();
-        for (name, entry) in entries {
-            let slug = match hpm_package::PackagePath::new(name.clone()) {
-                Ok(path) => path.slug().to_string(),
-                Err(e) => {
-                    // Same reasoning as an unreadable ledger: a root we cannot
-                    // interpret must stop the collector, not vanish from it.
-                    return Err(StorageError::GlobalLedger {
-                        message: format!("global ledger entry '{name}' is not a package path: {e}"),
-                    });
+        // LedgerError names the file or directory it could not read.
+        let entries =
+            crate::global::ledger::all_global_entries(&self.config.home_dir).map_err(|error| {
+                StorageError::GlobalLedger {
+                    message: error.to_string(),
                 }
-            };
-            roots.insert(PackageId::new(slug, entry.version.clone()));
-        }
-        Ok(roots)
+            })?;
+
+        // The ledger keys installs by package (a key that is not one fails
+        // the load above); the graph keys by bare slug.
+        Ok(entries
+            .into_iter()
+            .map(|(package, entry)| PackageId::new(package.slug().to_string(), entry.version))
+            .collect())
     }
 
     /// Remove orphaned packages. Returns identifiers of the packages actually removed.
@@ -175,149 +190,51 @@ impl StorageManager {
         projects_config: &ProjectsConfig,
     ) -> Result<Vec<String>, StorageError> {
         info!("Starting project-aware package cleanup");
+        let plan = self.plan_cleanup(projects_config).await?;
+        Ok(self.remove_orphan_packages(&plan).await)
+    }
 
-        let orphaned_packages = self.find_orphaned_packages(projects_config).await?;
+    /// Plan — but don't execute — an orphan cleanup: the identifiers
+    /// [`Self::cleanup_unused`] would remove. Writes nothing.
+    pub async fn cleanup_unused_dry_run(
+        &self,
+        projects_config: &ProjectsConfig,
+    ) -> Result<Vec<String>, StorageError> {
+        let plan = self.plan_cleanup(projects_config).await?;
+        Ok(orphan_package_ids(&plan))
+    }
 
-        if orphaned_packages.is_empty() {
+    async fn remove_orphan_packages(&self, plan: &CleanupPlan) -> Vec<String> {
+        if plan.orphan_packages.is_empty() {
             info!("No orphaned packages found - cleanup not needed");
-            return Ok(vec![]);
+            return Vec::new();
         }
-
         info!(
             "Found {} orphaned packages to remove",
-            orphaned_packages.len()
+            plan.orphan_packages.len()
         );
-
-        let mut removed_packages = Vec::new();
-        for package_id in orphaned_packages {
+        let mut removed = Vec::new();
+        for package_id in &plan.orphan_packages {
             match self
                 .remove_package(&package_id.name, &package_id.version)
                 .await
             {
                 Ok(()) => {
-                    removed_packages.push(package_id.identifier());
                     info!("Removed orphaned package: {}", package_id.identifier());
+                    removed.push(package_id.identifier());
                 }
-                Err(e) => {
-                    warn!(
-                        "Failed to remove package {}: {}",
-                        package_id.identifier(),
-                        e
-                    );
-                }
+                Err(e) => warn!(
+                    "Failed to remove package {}: {}",
+                    package_id.identifier(),
+                    e
+                ),
             }
         }
-
         info!(
             "Cleanup completed: removed {} orphaned packages",
-            removed_packages.len()
+            removed.len()
         );
-        Ok(removed_packages)
-    }
-
-    /// Plan — but don't execute — an orphan cleanup.
-    ///
-    /// Returns the list of package identifiers that `cleanup_unused` *would*
-    /// remove if called. Safe to call repeatedly.
-    pub async fn cleanup_unused_dry_run(
-        &self,
-        projects_config: &ProjectsConfig,
-    ) -> Result<Vec<String>, StorageError> {
-        let orphaned = self.find_orphaned_packages(projects_config).await?;
-        let ids: Vec<String> = orphaned.iter().map(|id| id.identifier()).collect();
-        info!("Dry run: would remove {} orphaned packages", ids.len());
-        for id in &ids {
-            info!("Would remove: {id}");
-        }
-        Ok(ids)
-    }
-
-    /// Resolve which `(slug, version)` dev coordinates the discovered projects
-    /// still need, mapped to the source workspace each is installed from.
-    ///
-    /// Walks every discovered project, parses its `hpm.toml`, and for each
-    /// `DependencySpec::Path` resolves the source manifest to extract
-    /// `(slug, version)` and the source path. Source reads that fail (missing
-    /// path, malformed manifest) log a warning and skip the dep — a broken
-    /// project doesn't bypass cleanup, since re-running `hpm install` re-creates
-    /// whatever it needs.
-    ///
-    /// Returns `None` when no HPM-managed projects are discovered at all: with
-    /// nothing to compare against, cleanup is skipped rather than treating every
-    /// dev install as an orphan.
-    async fn resolve_dev_needs(
-        &self,
-        projects_config: &ProjectsConfig,
-    ) -> Result<Option<HashMap<(String, String), PathBuf>>, StorageError> {
-        let project_discovery = ProjectDiscovery::new(projects_config.clone());
-        let projects = project_discovery.find_projects()?;
-
-        if projects.is_empty() {
-            warn!(
-                "No HPM-managed projects found - skipping dev cleanup to prevent removing dev installs"
-            );
-            return Ok(None);
-        }
-
-        let mut needed: HashMap<(String, String), PathBuf> = HashMap::new();
-        for project in &projects {
-            // Make this project's dev copies known before anything is
-            // reclaimed: one last synced before copies recorded their users
-            // has none on file, and unrecorded would read as unused.
-            record_project_manifests(&project.path.join(".hpm").join("packages"));
-            for (dep_name, spec) in &project.manifest.dependencies {
-                let hpm_package::DependencySpec::Path { path, .. } = spec else {
-                    continue;
-                };
-                // Resolve relative to the project directory, just like
-                // `install_one_dep` does at install time.
-                let source = project.path.join(path);
-                let manifest_path = source.join("hpm.toml");
-                match PackageManifest::from_path(&manifest_path) {
-                    Ok(m) => {
-                        needed.insert(
-                            (m.package.slug().to_string(), m.package.version.clone()),
-                            source,
-                        );
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Project {} has path dep {} pointing at {}, but its manifest is unreadable ({}); \
-                             dev install from this dep will not be protected from cleanup",
-                            project.path.display(),
-                            dep_name,
-                            source.display(),
-                            e
-                        );
-                    }
-                }
-            }
-        }
-
-        Ok(Some(needed))
-    }
-
-    /// Find dev installs that no known project's path-dependency claims.
-    /// The union of needed `(slug, version)` tuples is the "needed" set; dev
-    /// installs outside it are orphans.
-    async fn find_orphaned_dev_installs(
-        &self,
-        projects_config: &ProjectsConfig,
-    ) -> Result<Vec<DevInstall>, StorageError> {
-        let dev_installs = self.list_dev_installs()?;
-        if dev_installs.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let Some(needed) = self.resolve_dev_needs(projects_config).await? else {
-            return Ok(Vec::new());
-        };
-
-        let orphans: Vec<DevInstall> = dev_installs
-            .into_iter()
-            .filter(|d| !needed.contains_key(&(d.slug.clone(), d.version.clone())))
-            .collect();
-        Ok(orphans)
+        removed
     }
 
     /// Remove dev installs that no project's path-dependency claims, then
@@ -328,94 +245,113 @@ impl StorageManager {
     /// except the one matching the current source (kept so an unchanged
     /// relaunch does not recopy). "Uses" is the rule in
     /// [`dev_users`](super::dev_users): a project whose manifest points at the
-    /// copy, or a recorded process that still runs. Every sync already
-    /// reclaims the containers it installs into; this pass also reaches the
-    /// packages no sync touches any more.
+    /// copy, or a recorded process that still runs. An orphaned container
+    /// whose copies are all unused goes; one with a copy in use stays.
     pub async fn cleanup_unused_dev_installs(
         &self,
         projects_config: &ProjectsConfig,
     ) -> Result<Vec<String>, StorageError> {
-        let dev_installs = self.list_dev_installs()?;
-        if dev_installs.is_empty() {
-            info!("No dev installs found");
-            return Ok(Vec::new());
+        let plan = self.plan_cleanup(projects_config).await?;
+        Ok(self.remove_orphan_dev_installs(&plan))
+    }
+
+    /// Plan — but don't execute — a dev cleanup: the identifiers
+    /// [`Self::cleanup_unused_dev_installs`] would remove. Writes nothing.
+    pub async fn cleanup_unused_dev_installs_dry_run(
+        &self,
+        projects_config: &ProjectsConfig,
+    ) -> Result<Vec<String>, StorageError> {
+        let plan = self.plan_cleanup(projects_config).await?;
+        Ok(orphan_dev_ids(&plan))
+    }
+
+    fn remove_orphan_dev_installs(&self, plan: &CleanupPlan) -> Vec<String> {
+        let Some(dev) = &plan.dev else {
+            return Vec::new();
+        };
+        // Make every project's dev copies known before anything is
+        // reclaimed: a project last synced before copies recorded their
+        // users has none on file, and unrecorded would read as unused. This
+        // is a data migration; the dry run simulates it.
+        for dir in &dev.project_packages_dirs {
+            record_project_manifests(dir);
         }
 
-        let Some(needed) = self.resolve_dev_needs(projects_config).await? else {
-            return Ok(Vec::new());
-        };
-
-        let (orphans, referenced): (Vec<DevInstall>, Vec<DevInstall>) = dev_installs
-            .into_iter()
-            .partition(|d| !needed.contains_key(&(d.slug.clone(), d.version.clone())));
-
         let mut removed = Vec::new();
-        if orphans.is_empty() {
+        if dev.orphans.is_empty() {
             info!("No orphaned dev installs found");
-        } else {
-            info!("Found {} orphaned dev installs to remove", orphans.len());
-            for dev in orphans {
-                // symlink_metadata + remove_install_entry is the same defensive
-                // removal we use in `clear_existing_install` and `remove_package`:
-                // a link install must be unlinked, never followed. A copy
-                // container goes copy by copy under the users rule, so a copy a
-                // running process still reads is kept even though no project
-                // asks for its version any more; the container itself goes
-                // once nothing is left in it.
-                let meta = match std::fs::symlink_metadata(&dev.install_path) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        warn!(
-                            "Failed to stat dev install {} at {}: {}",
-                            dev.identifier(),
-                            dev.install_path.display(),
-                            e
-                        );
-                        continue;
-                    }
-                };
-                if is_copy_container(&dev.install_path) {
-                    reclaim_dev_copies(&dev.install_path, None, Unrecorded::Remove, process_state);
-                    if remove_empty_container(&dev.install_path) {
-                        info!("Removed orphaned dev install: {}", dev.identifier());
-                        removed.push(dev.identifier());
-                    } else {
-                        info!(
-                            "Kept dev install {}: a copy in it is still in use",
-                            dev.identifier()
-                        );
-                    }
+        }
+        for install in &dev.orphans {
+            // A link install is unlinked, never followed. A copy container
+            // goes copy by copy under the users rule, so a copy a running
+            // process still reads is kept even though no project asks for its
+            // version any more; the container goes once nothing is left.
+            if is_copy_container(&install.install_path) {
+                reclaim_dev_copies(
+                    &install.install_path,
+                    None,
+                    Unrecorded::Remove,
+                    process_state,
+                );
+                if remove_empty_container(&install.install_path) {
+                    info!("Removed orphaned dev install: {}", install.identifier());
+                    removed.push(install.identifier());
+                } else {
+                    info!(
+                        "Kept dev install {}: a copy in it is still in use",
+                        install.identifier()
+                    );
+                }
+                continue;
+            }
+            let meta = match std::fs::symlink_metadata(&install.install_path) {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!(
+                        "Failed to stat dev install {} at {}: {}",
+                        install.identifier(),
+                        install.install_path.display(),
+                        e
+                    );
                     continue;
                 }
-                match remove_install_entry(&dev.install_path, &meta, &dev.slug, &dev.version) {
-                    Ok(()) => {
-                        info!("Removed orphaned dev install: {}", dev.identifier());
-                        removed.push(dev.identifier());
-                    }
-                    Err(e) => {
-                        warn!("Failed to remove dev install {}: {}", dev.identifier(), e);
-                    }
+            };
+            match remove_install_entry(
+                &install.install_path,
+                &meta,
+                &install.slug,
+                &install.version,
+            ) {
+                Ok(()) => {
+                    info!("Removed orphaned dev install: {}", install.identifier());
+                    removed.push(install.identifier());
                 }
+                Err(e) => warn!(
+                    "Failed to remove dev install {}: {}",
+                    install.identifier(),
+                    e
+                ),
             }
         }
 
-        // Reclaim superseded content copies of the installs that are still
-        // referenced by a project. The current hash is computed from the same
-        // source path the install resolves from.
-        for dev in &referenced {
-            let Some(source) = needed.get(&(dev.slug.clone(), dev.version.clone())) else {
+        // Reclaim superseded content copies of the installs still claimed,
+        // keeping the copy of the current source.
+        for install in &dev.referenced {
+            let Some(source) = dev
+                .needed
+                .get(&(install.slug.clone(), install.version.clone()))
+            else {
                 continue;
             };
-            // Only copy containers carry hash subdirs; a link install has no
-            // superseded copies to reclaim. Judged without following the
-            // link, which `is_dir` would do into the workspace.
-            if !is_copy_container(&dev.install_path) {
+            // Only copy containers carry hash subdirs; judged without
+            // following a link, which `is_dir` would do into the workspace.
+            if !is_copy_container(&install.install_path) {
                 continue;
             }
             match source_hash(source) {
                 Ok(hash) => {
                     reclaim_dev_copies(
-                        &dev.install_path,
+                        &install.install_path,
                         Some(&hash),
                         Unrecorded::Remove,
                         process_state,
@@ -423,29 +359,13 @@ impl StorageManager {
                 }
                 Err(e) => warn!(
                     "Could not fingerprint source for {} at {}; skipping copy reclamation: {}",
-                    dev.identifier(),
+                    install.identifier(),
                     source.display(),
                     e
                 ),
             }
         }
-
-        Ok(removed)
-    }
-
-    /// Plan — but don't execute — a dev cleanup. Returns identifiers that
-    /// `cleanup_unused_dev_installs` *would* remove if called.
-    pub async fn cleanup_unused_dev_installs_dry_run(
-        &self,
-        projects_config: &ProjectsConfig,
-    ) -> Result<Vec<String>, StorageError> {
-        let orphans = self.find_orphaned_dev_installs(projects_config).await?;
-        let ids: Vec<String> = orphans.iter().map(DevInstall::identifier).collect();
-        info!("Dry run: would remove {} orphaned dev installs", ids.len());
-        for id in &ids {
-            info!("Would remove: {id}");
-        }
-        Ok(ids)
+        removed
     }
 
     /// Comprehensive cleanup: orphaned packages + dev installs + orphaned
@@ -463,51 +383,38 @@ impl StorageManager {
             if dry_run { " dry run" } else { "" }
         );
 
-        // 1. Registry CAS package cleanup.
-        let removed_packages = if dry_run {
-            self.cleanup_unused_dry_run(projects_config).await?
+        let plan = self.plan_cleanup(projects_config).await?;
+
+        // 1. Registry packages, and 2. dev (path-dep) installs, which
+        //    `list_installed` does not list.
+        let (removed_packages, removed_dev_installs) = if dry_run {
+            (orphan_package_ids(&plan), orphan_dev_ids(&plan))
         } else {
-            self.cleanup_unused(projects_config).await?
+            (
+                self.remove_orphan_packages(&plan).await,
+                self.remove_orphan_dev_installs(&plan),
+            )
         };
 
-        // 2. Dev (path-dep) install cleanup. The `_dev/` subtree is filtered
-        //    out of `list_installed`, so the CAS pass above never sees it;
-        //    we need a parallel pass driven by project path-deps directly.
-        let removed_dev_installs = if dry_run {
-            self.cleanup_unused_dev_installs_dry_run(projects_config)
-                .await?
-        } else {
-            self.cleanup_unused_dev_installs(projects_config).await?
-        };
-
-        // 3. Build the set of packages that remain (or would remain) after CAS
-        //    cleanup. Two different identity formats meet here: `removed_packages`
-        //    comes from `PackageId::identifier()`, which is `slug@version`, while
-        //    venv ownership is recorded scoped as `creator/slug@version`. Filter
-        //    in the first space and emit in the second — comparing venv owners
-        //    against bare slugs matches nothing and deletes every venv in use.
-        let all_installed = self.list_installed()?;
-        let remaining_packages: Vec<String> = all_installed
+        // 3. The packages that remain (or would remain). Venv ownership is
+        //    recorded scoped (`creator/slug@version`), while package ids are
+        //    `slug@version`: filter by id, emit the venv reference.
+        let removed: HashSet<&str> = removed_packages.iter().map(String::as_str).collect();
+        let remaining_packages: Vec<String> = self
+            .list_installed()?
             .iter()
-            .filter(|p| {
-                let package_id = format!("{}@{}", p.manifest.package.slug(), p.version);
-                !removed_packages.contains(&package_id)
-            })
+            .filter(|p| !removed.contains(PackageId::from(*p).identifier().as_str()))
             .map(InstalledPackage::venv_ref)
             .collect();
 
         // 4. Python virtual environment cleanup against the remaining set.
-        let python_analyzer =
-            PythonCleanupAnalyzer::new().map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
+        let python_analyzer = PythonCleanupAnalyzer::new(&PythonHome::for_storage(&self.config));
         let orphaned_venvs = python_analyzer
             .analyze_orphaned_venvs(&remaining_packages)
-            .await
-            .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
-
+            .await?;
         let python_cleanup = python_analyzer
             .cleanup_orphaned_venvs(&orphaned_venvs, dry_run)
-            .await
-            .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
+            .await?;
 
         let result = ComprehensiveCleanupResult {
             removed_packages,
@@ -539,8 +446,7 @@ impl StorageManager {
     pub async fn cleanup_python_only(&self, dry_run: bool) -> Result<CleanupResult, StorageError> {
         info!("Starting Python-only cleanup (dry_run: {})", dry_run);
 
-        let python_analyzer =
-            PythonCleanupAnalyzer::new().map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
+        let python_analyzer = PythonCleanupAnalyzer::new(&PythonHome::for_storage(&self.config));
 
         // Get list of all active packages
         let active_packages = self.list_installed()?;
@@ -552,14 +458,12 @@ impl StorageManager {
         // Find orphaned virtual environments
         let orphaned_venvs = python_analyzer
             .analyze_orphaned_venvs(&active_package_names)
-            .await
-            .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
+            .await?;
 
         // Clean up (or dry run)
         let result = python_analyzer
             .cleanup_orphaned_venvs(&orphaned_venvs, dry_run)
-            .await
-            .map_err(|e| StorageError::PythonCleanup(e.to_string()))?;
+            .await?;
 
         if dry_run {
             info!(
@@ -576,4 +480,84 @@ impl StorageManager {
 
         Ok(result)
     }
+}
+
+/// The identifiers a plan's registry-package removal would produce.
+fn orphan_package_ids(plan: &CleanupPlan) -> Vec<String> {
+    let ids: Vec<String> = plan
+        .orphan_packages
+        .iter()
+        .map(PackageId::identifier)
+        .collect();
+    info!("Dry run: would remove {} orphaned packages", ids.len());
+    for id in &ids {
+        info!("Would remove: {id}");
+    }
+    ids
+}
+
+/// The identifiers a plan's dev removal would produce, judged without
+/// changing anything: every orphaned link install, and every orphaned copy
+/// container whose copies are all unused, counting the copies the projects'
+/// manifests point at as used (the real run records those first).
+fn orphan_dev_ids(plan: &CleanupPlan) -> Vec<String> {
+    let Some(dev) = &plan.dev else {
+        return Vec::new();
+    };
+    let project_copies: HashSet<PathBuf> = dev
+        .project_packages_dirs
+        .iter()
+        .flat_map(|dir| project_dev_copies(dir))
+        .map(|(_, copy)| copy)
+        .collect();
+    let ids: Vec<String> = dev
+        .orphans
+        .iter()
+        .filter(|install| {
+            !is_copy_container(&install.install_path)
+                || container_would_empty(&install.install_path, process_state, &project_copies)
+        })
+        .map(DevInstall::identifier)
+        .collect();
+    info!("Dry run: would remove {} orphaned dev installs", ids.len());
+    for id in &ids {
+        info!("Would remove: {id}");
+    }
+    ids
+}
+
+/// The `(slug, version)` coordinates the projects' path dependencies claim,
+/// each with its source workspace. A dependency whose source manifest cannot
+/// be read is skipped with a warning: a broken project does not block
+/// cleanup, and re-running `hpm install` re-creates what it needs.
+fn dev_needs(
+    projects: &[crate::discovery::DiscoveredProject],
+) -> HashMap<(String, String), PathBuf> {
+    let mut needed = HashMap::new();
+    for project in projects {
+        for (dep_name, spec) in &project.manifest.dependencies {
+            let hpm_package::DependencySpec::Path { path, .. } = spec else {
+                continue;
+            };
+            // Resolved against the project directory, as install does.
+            let source = project.path.join(path);
+            match PackageManifest::from_path(&source.join("hpm.toml")) {
+                Ok(m) => {
+                    needed.insert(
+                        (m.package.slug().to_string(), m.package.version.clone()),
+                        source,
+                    );
+                }
+                Err(e) => warn!(
+                    "Project {} has path dep {} pointing at {}, but its manifest is unreadable ({}); \
+                     dev install from this dep will not be protected from cleanup",
+                    project.path.display(),
+                    dep_name,
+                    source.display(),
+                    e
+                ),
+            }
+        }
+    }
+    needed
 }

@@ -246,9 +246,9 @@ async fn remove_package_unlinks_symlink_entries() {
     write_source_package(&external, "creator/foo", "1.0.0", "external-marker");
 
     // Manually plant a symlink/junction at the registry CAS path that
-    // `remove_package` resolves to. `package_dir(name, version)` uses the
+    // `remove_package` resolves to. `get_package_path(name, version)` uses the
     // bare-slug layout, so the link lives at `<packages_dir>/<slug>@<v>/`.
-    let cas_path = storage_manager.config.package_dir("foo", "1.0.0");
+    let cas_path = storage_manager.get_package_path("foo", "1.0.0");
     std::fs::create_dir_all(cas_path.parent().unwrap()).unwrap();
     create_dev_link(&external, &cas_path).unwrap();
     assert!(cas_path.join("MARKER").exists());
@@ -340,65 +340,6 @@ fn list_packages_skips_directories_without_manifest() {
     // Should not error, just skip directories without manifest
     let packages = storage_manager.list_installed().unwrap();
     assert!(packages.is_empty());
-}
-
-#[test]
-fn list_installed_scoped_packages() {
-    let temp_dir = TempDir::new().unwrap();
-    let storage_config = StorageConfig {
-        home_dir: temp_dir.path().to_path_buf(),
-        cache_dir: temp_dir.path().join("cache"),
-        packages_dir: temp_dir.path().join("packages"),
-        registry_cache_dir: temp_dir.path().join("registry"),
-    };
-
-    let storage_manager = StorageManager::new(storage_config).unwrap();
-
-    // Create a scoped package at packages/tumblehead/fire-fx@1.0.0/
-    let package_dir = temp_dir
-        .path()
-        .join("packages")
-        .join("tumblehead")
-        .join("fire-fx@1.0.0");
-    std::fs::create_dir_all(&package_dir).unwrap();
-
-    let manifest_content = r#"
-[package]
-path = "tumblehead/fire-fx"
-name = "Fire FX"
-version = "1.0.0"
-description = "A fire effects package"
-
-[compat]
-houdini = ">=20.5"
-"#;
-    std::fs::write(package_dir.join("hpm.toml"), manifest_content).unwrap();
-
-    // Also create a non-scoped package at packages/old-pkg@2.0.0/
-    let old_pkg_dir = temp_dir.path().join("packages").join("old-pkg@2.0.0");
-    std::fs::create_dir_all(&old_pkg_dir).unwrap();
-    std::fs::write(
-        old_pkg_dir.join("hpm.toml"),
-        "[package]\npath = \"studio/old-pkg\"\nname = \"Old Package\"\nversion = \"2.0.0\"",
-    )
-    .unwrap();
-
-    let packages = storage_manager.list_installed().unwrap();
-    assert_eq!(packages.len(), 2);
-
-    // Find the scoped package
-    let fire_fx = packages
-        .iter()
-        .find(|p| p.manifest.package.slug() == "fire-fx")
-        .unwrap();
-    assert_eq!(fire_fx.version, "1.0.0");
-
-    // Find the non-scoped package
-    let old_pkg = packages
-        .iter()
-        .find(|p| p.manifest.package.slug() == "old-pkg")
-        .unwrap();
-    assert_eq!(old_pkg.version, "2.0.0");
 }
 
 #[tokio::test]
@@ -1277,11 +1218,8 @@ async fn cleanup_comprehensive_reports_dev_orphans() {
 /// Plant an installed registry package at `packages/<creator>/<slug>@<version>/`,
 /// declaring `deps` (name, requirement) as its own registry dependencies.
 fn plant_installed(home: &std::path::Path, path: &str, version: &str, deps: &[(&str, &str)]) {
-    let (creator, slug) = path.split_once('/').unwrap();
-    let dir = home
-        .join("packages")
-        .join(creator)
-        .join(format!("{slug}@{version}"));
+    let slug = path.split_once('/').unwrap().1;
+    let dir = home.join("packages").join(format!("{slug}@{version}"));
     std::fs::create_dir_all(&dir).unwrap();
     let mut manifest =
         format!("[package]\npath = \"{path}\"\nname = \"{slug}\"\nversion = \"{version}\"\n");
@@ -1632,7 +1570,24 @@ async fn store_installs_carry_an_install_record_through_their_lifecycle() {
         }
     );
 
-    // A reinstall rewrites the tree and its record together.
+    // An install never replaces a committed copy (a running Houdini may
+    // have it loaded): it keeps the existing one, damage and all.
+    let kept = storage.install_into_cas(&source).await.unwrap();
+    assert_eq!(kept.install_path, installed.install_path);
+    let Verification::Checked(report) = storage.verify_installed(&kept).unwrap() else {
+        panic!("still recorded");
+    };
+    assert_eq!(
+        report.problems.len(),
+        1,
+        "the existing copy is kept as it is"
+    );
+
+    // A repair moves the copy and its record aside first, as TumbleTrove
+    // Desktop does; the reinstall then writes the tree and record together.
+    let aside = temp.path().join("aside");
+    std::fs::rename(&installed.install_path, &aside).unwrap();
+    std::fs::rename(&record, temp.path().join("aside.files.json")).unwrap();
     let reinstalled = storage.install_into_cas(&source).await.unwrap();
     let Verification::Checked(report) = storage.verify_installed(&reinstalled).unwrap() else {
         panic!("a reinstall is recorded");
@@ -1650,4 +1605,478 @@ async fn store_installs_carry_an_install_record_through_their_lifecycle() {
 
     storage.remove_package("bar", "2.0.0").await.unwrap();
     assert!(!record.exists(), "removal takes the record with the tree");
+}
+
+// ------------------------------------------------------------------
+// Store layout: one directory per (slug, version)
+// ------------------------------------------------------------------
+
+mod store_layout {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn slug() -> impl Strategy<Value = String> {
+        "[a-z][a-z0-9-]{0,10}[a-z0-9]"
+    }
+
+    fn version() -> impl Strategy<Value = String> {
+        (0u32..20, 0u32..20, 0u32..20).prop_map(|(a, b, c)| format!("{a}.{b}.{c}"))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+
+        /// Every lookup by slug or scoped name finds the directory `install_into_cas`
+        /// wrote: `get_package_path`, `package_exists`, `list_installed` and
+        /// the lockfile's `layout::cas_dir`, for the bare and the scoped name.
+        #[test]
+        fn lookups_by_slug_agree_with_the_installed_directory(
+            creator in slug(), slug in slug(), version in version()
+        ) {
+            let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+            let temp = TempDir::new().unwrap();
+            let storage = test_storage(&temp);
+            let source = temp.path().join("src");
+            std::fs::create_dir_all(&source).unwrap();
+            std::fs::write(
+                source.join("hpm.toml"),
+                format!("[package]\npath = \"{creator}/{slug}\"\nname = \"x\"\nversion = \"{version}\"\n"),
+            )
+            .unwrap();
+            let installed = rt.block_on(storage.install_into_cas(&source)).unwrap();
+
+            prop_assert_eq!(&storage.get_package_path(&slug, &version), &installed.install_path);
+            prop_assert!(storage.package_exists(&slug, &version));
+            let scoped = format!("{creator}/{slug}");
+            prop_assert_eq!(&storage.get_package_path(&scoped, &version), &installed.install_path);
+            prop_assert!(storage.package_exists(&scoped, &version));
+            prop_assert_eq!(
+                crate::storage::layout::cas_dir(
+                    &storage.config.packages_dir,
+                    &format!("{creator}/{slug}"),
+                    &version
+                ),
+                installed.install_path.clone()
+            );
+            let listed: Vec<_> = storage
+                .list_installed()
+                .unwrap()
+                .into_iter()
+                .map(|p| p.install_path)
+                .collect();
+            prop_assert_eq!(listed, vec![installed.install_path]);
+        }
+    }
+}
+
+/// With `packages_dir` and `cache_dir` moved out of `home_dir`, staging stays
+/// under `home_dir/fetch`, archives go to `cache_dir`, and what older hpm
+/// versions left at `<packages_dir>/../fetch` and `<home_dir>/cache` is still
+/// swept and evicted.
+#[test]
+fn moved_store_keeps_one_staging_root_and_reclaims_the_old_ones() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let storage = StorageManager::new(StorageConfig {
+        home_dir: home.clone(),
+        packages_dir: temp.path().join("disk/packages"),
+        cache_dir: temp.path().join("fast/cache"),
+        registry_cache_dir: home.join("registry"),
+    })
+    .unwrap();
+    let layout = storage.layout();
+    assert_eq!(layout.fetch_dir(), home.join("fetch"));
+    assert_eq!(layout.cache_dir(), temp.path().join("fast/cache"));
+    let fetcher = crate::archive_fetcher::ArchiveFetcher::for_storage(&storage.config).unwrap();
+    drop(fetcher);
+    assert!(
+        home.join("fetch").is_dir(),
+        "the fetcher stages under home_dir"
+    );
+
+    let old_staging = temp.path().join("disk/fetch/studio-tool-1.0.0");
+    std::fs::create_dir_all(&old_staging).unwrap();
+    assert_eq!(storage.sweep_fetch_staging(std::time::Duration::ZERO).0, 1);
+    assert!(!old_staging.exists());
+
+    let old_cache = home.join("cache");
+    std::fs::create_dir_all(&old_cache).unwrap();
+    std::fs::write(old_cache.join("studio-tool-1.0.0"), b"zip").unwrap();
+    std::fs::write(temp.path().join("fast/cache/studio-tool-1.0.0"), b"zip").unwrap();
+    assert_eq!(storage.evict_download("studio/tool", "1.0.0"), 2);
+}
+
+/// A store copy staged by an install whose process is gone is swept; one
+/// staged by a live process (this one) is an install in flight and stays.
+/// Neither is ever listed as a package.
+#[test]
+fn store_stages_of_gone_installs_are_swept_and_never_listed() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    let packages = temp.path().join("packages");
+    // PIDs this high are not handed out on any supported OS.
+    let gone = packages.join(format!(".stage-{}-0", 0x7fff_fff0u32));
+    let live = packages.join(format!(".stage-{}-0", std::process::id()));
+    for stage in [&gone, &live] {
+        std::fs::create_dir_all(stage.join("tool@1.0.0")).unwrap();
+        std::fs::write(
+            stage.join("tool@1.0.0").join("hpm.toml"),
+            "[package]\npath = \"studio/tool\"\nname = \"t\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+    }
+    assert!(storage.list_installed().unwrap().is_empty());
+
+    let (removed, _) = storage.sweep_fetch_staging(std::time::Duration::from_secs(3600));
+    assert_eq!(removed, 1);
+    assert!(!gone.exists());
+    assert!(live.exists());
+}
+
+// ------------------------------------------------------------------
+// Cleanup plan: dry run equals real run
+// ------------------------------------------------------------------
+
+mod cleanup_plan {
+    use super::*;
+    use proptest::prelude::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    const SLUGS: [&str; 4] = ["a", "b", "c", "d"];
+    const VERSIONS: [&str; 2] = ["1.0.0", "2.0.0"];
+
+    /// A package coordinate: indices into `SLUGS` and `VERSIONS`.
+    type Coord = (usize, usize);
+
+    /// A store (each installed coordinate with at most one dependency) and
+    /// the project's direct dependencies.
+    #[derive(Debug)]
+    struct Fixture {
+        installed: BTreeMap<Coord, Option<Coord>>,
+        roots: BTreeMap<usize, usize>,
+    }
+
+    /// Plant an installed package where installs put it,
+    /// `<packages>/<slug>@<version>`.
+    fn plant_in_store(home: &std::path::Path, (s, v): Coord, dep: Option<Coord>) {
+        let (slug, version) = (SLUGS[s], VERSIONS[v]);
+        let dir = home.join("packages").join(format!("{slug}@{version}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut manifest = format!(
+            "[package]\npath = \"studio/{slug}\"\nname = \"{slug}\"\nversion = \"{version}\"\n"
+        );
+        if let Some((ds, dv)) = dep {
+            manifest.push_str(&format!(
+                "\n[dependencies]\n\"studio/{}\" = \"{}\"\n",
+                SLUGS[ds], VERSIONS[dv]
+            ));
+        }
+        std::fs::write(dir.join("hpm.toml"), manifest).unwrap();
+    }
+
+    /// Run the dry and the real cleanup on `fixture`, returning both id sets
+    /// and the model's: installed minus everything reachable from the roots.
+    fn run(fixture: &Fixture) -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let temp = TempDir::new().unwrap();
+        let storage = test_storage(&temp);
+        for (coord, dep) in &fixture.installed {
+            plant_in_store(temp.path(), *coord, *dep);
+        }
+        let project = temp.path().join("project");
+        let names: Vec<(String, &str)> = fixture
+            .roots
+            .iter()
+            .map(|(s, v)| (format!("studio/{}", SLUGS[*s]), VERSIONS[*v]))
+            .collect();
+        let refs: Vec<(&str, &str)> = names.iter().map(|(n, v)| (n.as_str(), *v)).collect();
+        write_project(&project, &refs);
+        let config = projects_config_with(vec![project]);
+
+        let mut reachable = BTreeSet::new();
+        let mut stack: Vec<Coord> = fixture.roots.iter().map(|(s, v)| (*s, *v)).collect();
+        while let Some(c) = stack.pop() {
+            if let Some(dep) = fixture.installed.get(&c)
+                && reachable.insert(c)
+            {
+                stack.extend(*dep);
+            }
+        }
+        let model = fixture
+            .installed
+            .keys()
+            .filter(|c| !reachable.contains(c))
+            .map(|(s, v)| format!("{}@{}", SLUGS[*s], VERSIONS[*v]))
+            .collect();
+
+        let dry = rt
+            .block_on(storage.cleanup_unused_dry_run(&config))
+            .unwrap();
+        let real = rt.block_on(storage.cleanup_unused(&config)).unwrap();
+        (dry.into_iter().collect(), real.into_iter().collect(), model)
+    }
+
+    /// One version per package: every coordinate of slug `s` is at
+    /// `version_of[s]`, so the graph's one-version-per-name rule never bites.
+    fn single_version_fixture() -> impl Strategy<Value = Fixture> {
+        (
+            prop::collection::vec(0..VERSIONS.len(), SLUGS.len()),
+            prop::collection::vec((0..SLUGS.len(), prop::option::of(0..SLUGS.len())), 1..6),
+            prop::collection::btree_set(0..SLUGS.len(), 0..3),
+        )
+            .prop_map(|(version_of, store, roots)| Fixture {
+                installed: store
+                    .into_iter()
+                    .map(|(s, dep)| ((s, version_of[s]), dep.map(|d| (d, version_of[d]))))
+                    .collect(),
+                roots: roots.into_iter().map(|s| (s, version_of[s])).collect(),
+            })
+    }
+
+    /// Any versions, including one package named at two versions.
+    fn mixed_version_fixture() -> impl Strategy<Value = Fixture> {
+        let coord = (0..SLUGS.len(), 0..VERSIONS.len());
+        (
+            prop::collection::vec((coord.clone(), prop::option::of(coord.clone())), 1..8),
+            prop::collection::vec(coord, 0..3),
+        )
+            .prop_map(|(store, roots)| Fixture {
+                installed: store.into_iter().collect(),
+                roots: roots.into_iter().collect(),
+            })
+    }
+
+    /// The project pins `a@2.0.0` and also uses `d@1.0.0`, which depends
+    /// on `a@1.0.0`: both versions of `a` are kept, in either listing order.
+    /// The graph used to keep `a@1.0.0` only when `d` was listed first.
+    #[test]
+    fn a_direct_pin_does_not_hide_a_dependency_on_another_version() {
+        let fixture = Fixture {
+            installed: [((0, 0), None), ((3, 0), Some((0, 0)))]
+                .into_iter()
+                .collect(),
+            roots: [(3, 0), (0, 1)].into_iter().collect(),
+        };
+        let (dry, real, model) = run(&fixture);
+        assert!(model.is_empty());
+        assert_eq!((dry, real), (model.clone(), model));
+    }
+
+    /// `b@1.0.0` depending on `b@2.0.0` keeps `b@2.0.0`: the cycle guard is
+    /// by name and version, not by name.
+    #[test]
+    fn a_dependency_on_another_version_of_itself_is_kept() {
+        let fixture = Fixture {
+            installed: [
+                ((0, 1), Some((1, 0))),
+                ((1, 0), Some((1, 1))),
+                ((1, 1), None),
+            ]
+            .into_iter()
+            .collect(),
+            roots: [(0, 1)].into_iter().collect(),
+        };
+        let (dry, real, model) = run(&fixture);
+        assert!(model.is_empty());
+        assert_eq!((dry, real), (model.clone(), model));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        /// With one version per package, the dry run names exactly what the
+        /// real run removes, and both are installed minus reachable.
+        #[test]
+        fn dry_and_real_run_both_equal_the_model(fixture in single_version_fixture()) {
+            let (dry, real, model) = run(&fixture);
+            prop_assert_eq!(&dry, &model);
+            prop_assert_eq!(&real, &model);
+        }
+
+        /// With any versions, including a project pinning one version of a
+        /// package that another package depends on at a different version,
+        /// both runs still equal the model: every version reachable from the
+        /// project is kept, whatever order the dependencies are listed in.
+        #[test]
+        fn dry_and_real_run_equal_the_model_with_any_versions(fixture in mixed_version_fixture()) {
+            let (dry, real, model) = run(&fixture);
+            prop_assert_eq!(&dry, &model);
+            prop_assert_eq!(&real, &model);
+        }
+    }
+}
+
+/// Every path under `root` with its file bytes: equal before and after an
+/// operation that must write nothing.
+fn tree_snapshot(root: &std::path::Path) -> Vec<(std::path::PathBuf, Option<Vec<u8>>)> {
+    let mut entries: Vec<_> = walkdir::WalkDir::new(root)
+        .into_iter()
+        .map(|e| {
+            let e = e.unwrap();
+            let bytes = e
+                .file_type()
+                .is_file()
+                .then(|| std::fs::read(e.path()).unwrap());
+            (e.path().strip_prefix(root).unwrap().to_path_buf(), bytes)
+        })
+        .collect();
+    entries.sort();
+    entries
+}
+
+/// An orphaned dev install whose copy something still uses is not offered
+/// by the dry run and is kept by the real run, and the dry run writes
+/// nothing. Users: a project whose emitted manifest still points at the
+/// copy though its hpm.toml no longer claims it (synced before records
+/// existed, so only the real run's backfill records it), and this process's
+/// hold. With no user, both runs agree on removing it.
+#[tokio::test]
+async fn dev_dry_run_agrees_with_the_real_run_and_writes_nothing() {
+    for user in ["project manifest", "process hold", "none"] {
+        let temp = TempDir::new().unwrap();
+        let storage = test_storage(&temp);
+        let source = temp.path().join("orphan-src");
+        write_source_package(&source, "studio/orphan", "1.0.0", "m");
+        let copy = storage
+            .install_as_dev_copy(&source)
+            .await
+            .unwrap()
+            .install_path;
+        dev_users::settle(&copy);
+
+        let project = temp.path().join("project");
+        write_project_with_path_dep(
+            &project,
+            "consumer",
+            "1.0.0",
+            "studio/other",
+            "../other",
+            false,
+        );
+        let packages = project.join(".hpm/packages");
+        std::fs::create_dir_all(&packages).unwrap();
+        let _hold = match user {
+            "project manifest" => {
+                let hpath = serde_json::json!({ "hpath": [copy.to_string_lossy()] });
+                std::fs::write(packages.join("studio.orphan.json"), hpath.to_string()).unwrap();
+                None
+            }
+            "process hold" => dev_users::DevCopyHold::acquire(&copy),
+            _ => None,
+        };
+        let config = projects_config_with(vec![project]);
+
+        let before = tree_snapshot(temp.path());
+        let dry = storage
+            .cleanup_unused_dev_installs_dry_run(&config)
+            .await
+            .unwrap();
+        assert_eq!(
+            tree_snapshot(temp.path()),
+            before,
+            "{user}: the dry run wrote something"
+        );
+        let real = storage.cleanup_unused_dev_installs(&config).await.unwrap();
+        assert_eq!(
+            dry, real,
+            "{user}: the dry run must name exactly what the real run removes"
+        );
+        let expected: Vec<String> = if user == "none" {
+            vec!["_dev/orphan@1.0.0".to_string()]
+        } else {
+            vec![]
+        };
+        assert_eq!(real, expected, "{user}");
+        assert_eq!(copy.is_dir(), user != "none", "{user}");
+    }
+}
+
+/// What counts as an installed package in the store: a `<slug>@<version>`
+/// directory directly in it, holding `hpm.toml`. The install record and
+/// exec-mode stamp beside it, `_dev`, staging and tombstone directories, a
+/// directory without a manifest, and a directory without `@` (or anything
+/// under one) are not packages.
+#[test]
+fn only_slug_at_version_directories_are_packages() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    let packages = temp.path().join("packages");
+    let manifest = |slug: &str, v: &str| {
+        format!("[package]\npath = \"studio/{slug}\"\nname = \"{slug}\"\nversion = \"{v}\"\n")
+    };
+    for (slug, v) in [("tool", "1.0.0"), ("tool", "2.0.0"), ("rig", "0.1.0")] {
+        let dir = packages.join(format!("{slug}@{v}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("hpm.toml"), manifest(slug, v)).unwrap();
+    }
+    std::fs::write(packages.join("tool@1.0.0.files.json"), b"{}").unwrap();
+    std::fs::write(packages.join("tool@1.0.0.exec-modes"), b"1").unwrap();
+    std::fs::create_dir_all(packages.join("empty@1.0.0")).unwrap();
+    // A directory without `@`, even one holding a manifest, is not a store
+    // copy; nor is anything under it (no hpm writes `<creator>/<slug>@<v>`).
+    std::fs::create_dir_all(packages.join("notes")).unwrap();
+    std::fs::write(
+        packages.join("notes").join("hpm.toml"),
+        manifest("notes", "1.0.0"),
+    )
+    .unwrap();
+    let scoped = packages.join("studio").join("scoped@1.0.0");
+    std::fs::create_dir_all(&scoped).unwrap();
+    std::fs::write(scoped.join("hpm.toml"), manifest("scoped", "1.0.0")).unwrap();
+    for hidden in [".stage-1-0", ".reclaim-x"] {
+        let dir = packages.join(hidden).join("x@1.0.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("hpm.toml"), manifest("x", "1.0.0")).unwrap();
+    }
+    let dev = packages.join("_dev").join("dev@1.0.0");
+    std::fs::create_dir_all(&dev).unwrap();
+    std::fs::write(dev.join("hpm.toml"), manifest("dev", "1.0.0")).unwrap();
+
+    let mut listed: Vec<String> = storage
+        .list_installed()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            p.install_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    listed.sort();
+    assert_eq!(listed, ["rig@0.1.0", "tool@1.0.0", "tool@2.0.0"]);
+}
+
+/// A copy already in the store whose `hpm.toml` this hpm refuses (written
+/// under looser rules) is kept, as every committed copy is, and the install
+/// reports the manifest error, naming the file, rather than "not found".
+#[tokio::test]
+async fn reinstalling_over_a_copy_whose_manifest_no_longer_parses_names_the_manifest() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    let source = temp.path().join("reg-source");
+    write_source_package(&source, "creator/bar", "2.0.0", "registry");
+    let installed = storage.install_into_cas(&source).await.unwrap();
+
+    let manifest = installed.install_path.join("hpm.toml");
+    let mut perms = std::fs::metadata(&manifest).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(&manifest, perms).unwrap();
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        format!("{text}\n[dependencies]\n\"creator/x\" = {{ version = \"1\", registy = \"r\" }}\n"),
+    )
+    .unwrap();
+
+    let err = storage.install_into_cas(&source).await.unwrap_err();
+    assert!(
+        matches!(err, StorageError::Manifest(_)),
+        "expected the manifest error, got {err}"
+    );
+    assert!(err.to_string().contains("hpm.toml"), "{err}");
 }

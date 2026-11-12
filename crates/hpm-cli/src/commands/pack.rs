@@ -1,15 +1,15 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use hpm_config::Config;
-use hpm_core::packer;
-use hpm_package::{NativePackageTarget, PackageManifest, Platform, validate_hpackage_descriptor};
+use hpm_core::packer::{self, PackRequest};
+use hpm_package::{NativePackageTarget, Platform};
 use std::path::{Path, PathBuf};
 
 use crate::console::Console;
 
 /// Inputs to one `hpm pack` run.
 pub struct PackOptions {
-    /// Package directory (the one holding `hpm.toml`). None = cwd.
-    pub directory: Option<PathBuf>,
+    /// The package's `hpm.toml`, or the directory holding it. None = cwd.
+    pub manifest: Option<PathBuf>,
     /// Ed25519 signing key (PKCS#8 PEM), overriding config and
     /// `HPM_SIGNING_KEY`. None falls back to those.
     pub key: Option<PathBuf>,
@@ -18,7 +18,7 @@ pub struct PackOptions {
     /// Emit the single-line JSON payload CI consumes instead of prose.
     pub json: bool,
     /// Target platform; defaults to host when `[compat].platforms` is declared.
-    pub platform: Option<String>,
+    pub platform: Option<Platform>,
     /// Treat a declared `[[operators]]` `source` missing from the archive as
     /// fatal rather than a warning.
     pub verify_assets: bool,
@@ -29,117 +29,22 @@ pub struct PackOptions {
     pub sidefx: bool,
 }
 
-/// How a directory's entries match a filename we need by exact spelling.
-enum NameMatch {
-    /// An entry is spelled exactly as asked.
-    Exact,
-    /// No exact entry, but one differs only by case. Carries its real name.
-    CaseDiffers(String),
-    /// Nothing resembling the name is there.
-    Missing,
-}
-
-/// Look `name` up among `dir`'s entries by exact spelling.
-///
-/// `Path::exists` asks the filesystem, and APFS and NTFS answer
-/// case-insensitively: a repo holding `FLOPs.json` reports `flops.json` as
-/// present, while the same tree on Linux reports it absent. Anything keyed
-/// off that answer produces a different archive depending on who built it.
-/// Houdini looks the descriptor up by exact name and the archive entry is
-/// written under the exact name, so a case-folded match is a different file.
-/// Comparing directory entries gives the same answer everywhere.
-fn find_exact_entry(dir: &Path, name: &str) -> NameMatch {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return NameMatch::Missing;
-    };
-    let mut case_differs = None;
-    for entry in entries.flatten() {
-        let file_name = entry.file_name();
-        let Some(found) = file_name.to_str() else {
-            continue;
-        };
-        if found == name {
-            return NameMatch::Exact;
-        }
-        if case_differs.is_none() && found.eq_ignore_ascii_case(name) {
-            case_differs = Some(found.to_string());
-        }
-    }
-    match case_differs {
-        Some(found) => NameMatch::CaseDiffers(found),
-        None => NameMatch::Missing,
-    }
-}
-
+/// CLI entry for `hpm pack`: resolve the signing key, run
+/// [`packer::pack_package`], and report the archive.
 pub async fn execute(config: &Config, options: PackOptions, console: &mut Console) -> Result<()> {
     let PackOptions {
-        directory,
+        manifest,
         key,
         output,
         json,
-        platform: platform_arg,
+        platform,
         verify_assets,
         sidefx,
     } = options;
 
-    let package_dir = match directory {
-        Some(dir) => dir,
-        None => std::env::current_dir().context("Failed to get current directory")?,
-    };
+    let package_dir = super::manifest_utils::package_dir(manifest)?;
 
-    // Validate package first, keeping stdout clean for --json: warnings go
-    // to stderr via the console, errors fail the pack.
-    let validation = super::check::validate_package(Some(package_dir.clone())).await?;
-    for warning in &validation.warnings {
-        console.warn(warning);
-    }
-    if !validation.is_valid {
-        bail!(
-            "Package validation failed with {} error(s):\n  - {}",
-            validation.errors.len(),
-            validation.errors.join("\n  - ")
-        );
-    }
-
-    // Read manifest to get name and version
-    let manifest_path = package_dir.join("hpm.toml");
-    let manifest = PackageManifest::from_path(&manifest_path)?;
-
-    let name = &manifest.package.name;
-    let version = &manifest.package.version;
-
-    // Resolve target platform. A package targets per-platform builds when
-    // it declares `[compat].platforms`; pure-data / pure-Python packages
-    // omit that and produce a single common archive.
-    let declared_platforms = &manifest.compat.platforms;
-    let has_platforms = !declared_platforms.is_empty();
-
-    let platform = match (&platform_arg, has_platforms) {
-        (Some(_), false) => {
-            bail!("--platform was specified but package has no [compat].platforms");
-        }
-        (Some(p), true) => Some(p.parse::<Platform>().map_err(|e| anyhow::anyhow!(e))?),
-        (None, true) => {
-            // Auto-detect host platform
-            let detected = Platform::current()
-                .context("Could not detect host platform; use --platform to specify explicitly")?;
-            Some(detected)
-        }
-        (None, false) => None,
-    };
-
-    // Validate platform is declared in [compat].platforms
-    if let Some(p) = &platform
-        && !declared_platforms.contains(p)
-    {
-        bail!(
-            "Platform '{}' is not declared in [compat].platforms: {:?}",
-            p,
-            declared_platforms
-        );
-    }
-
-    // Resolve signing key: CLI flag → HPM_SIGNING_KEY env (PEM content or path) → config
+    // CLI flag, then HPM_SIGNING_KEY (PEM content or a path), then config.
     let signing_key = if let Some(path) = key {
         Some(packer::load_signing_key(&path)?)
     } else if let Ok(value) = std::env::var("HPM_SIGNING_KEY") {
@@ -157,216 +62,45 @@ pub async fn execute(config: &Config, options: PackOptions, console: &mut Consol
             .transpose()?
     };
 
-    let output_dir = output.unwrap_or_else(|| package_dir.clone());
-
-    // Generate Houdini-native package.json (or take the user's hand-written
-    // one). A generation failure fails the pack: shipping an archive without
-    // the package.json Houdini needs would produce a broken install.
-    //
-    // The json is always injected so it lands at the ARCHIVE ROOT, next to
-    // the `{slug}/` content folder (Houdini's hpackage layout): the json's
-    // paths are `$HOUDINI_PACKAGE_PATH/{slug}/...`, so extracting the archive
-    // straight into a packages directory must yield `packages/{slug}.json` +
-    // `packages/{slug}/...` for them to resolve. A hand-written file is
-    // injected by content (create_archive skips the staged copy).
-    //
-    // `--sidefx` additionally shapes the generated json to what SideFX's
-    // hpackage repository accepts on upload, so the publisher can ship the
-    // archive `pack` produced rather than rewriting the json and re-zipping —
-    // a repack invalidates both the checksum and the signature reported
-    // below. The normalization is confined to this file, which hpm's own
-    // installer skips, and refuses any rewrite that would change what the
-    // manifest declared.
-    let target = if sidefx {
-        // hpackage's uploader reads `{package_dir}/README.md` and sends its
-        // text as the package description; a missing file raises rather than
-        // warning, and the name is literal. hpm's own README check accepts
-        // `README.txt` and a bare `README` and only warns, so a package can
-        // satisfy `hpm check` and still be refused on upload.
-        match find_exact_entry(&package_dir, "README.md") {
-            NameMatch::Exact => {}
-            NameMatch::CaseDiffers(found) => bail!(
-                "SideFX's hpackage uploader reads `README.md` by that exact name and this \
-                 package has {found}. Rename it to README.md."
-            ),
-            NameMatch::Missing => bail!(
-                "SideFX's hpackage uploader requires a README.md in the package directory and \
-                 sends its text as the published description; it refuses the upload when the \
-                 file is absent. Add {}.",
-                package_dir.join("README.md").display()
-            ),
-        }
-        // The uploader also refuses a README still holding the placeholder
-        // its own scaffold writes.
-        let readme = std::fs::read_to_string(package_dir.join("README.md"))
-            .context("Failed to read README.md")?;
-        if readme.contains("<enter a one-line description") {
-            bail!(
-                "README.md still contains the placeholder line hpackage's scaffold writes \
-                 (`<enter a one-line description`), and its uploader refuses that. Write the \
-                 package description there."
-            );
-        }
-        NativePackageTarget::SideFxHpackage
-    } else {
-        NativePackageTarget::Generic
+    let request = PackRequest {
+        output_dir: output.unwrap_or_else(|| package_dir.clone()),
+        dir: package_dir,
+        key: signing_key,
+        platform,
+        target: if sidefx {
+            NativePackageTarget::SideFxHpackage
+        } else {
+            NativePackageTarget::Generic
+        },
+        verify_assets,
     };
-    let (native_filename, native_pkg) = manifest
-        .generate_houdini_native_package_for(target)
-        .map_err(|e| anyhow::anyhow!(e))
-        .context("Failed to generate the Houdini package.json for the archive")?;
-    let hand_written = package_dir.join(&native_filename);
-    let (json_bytes, authored) = match find_exact_entry(&package_dir, &native_filename) {
-        // User has a hand-written file; ship it verbatim, don't overwrite
-        NameMatch::Exact => (
-            std::fs::read(&hand_written).with_context(|| {
-                format!(
-                    "Failed to read hand-written Houdini package json {}",
-                    hand_written.display()
-                )
-            })?,
-            true,
-        ),
-        // A file whose name differs only by case is not the descriptor
-        // Houdini will look for, so it cannot be shipped as one — but the
-        // author plainly meant it to be used, and silently generating over
-        // it would drop whatever it declares without saying so.
-        NameMatch::CaseDiffers(found) => {
-            console.warn(format!(
-                "Ignoring {found}: the bundled Houdini descriptor must be named exactly \
-                 {native_filename} (after the package slug), so {found} is a different file. \
-                 Generating the descriptor from hpm.toml instead — rename it to {native_filename} \
-                 to ship it verbatim."
-            ));
-            (
-                serde_json::to_vec_pretty(&native_pkg)
-                    .context("Failed to serialize Houdini native package JSON")?,
-                false,
-            )
-        }
-        NameMatch::Missing => (
-            serde_json::to_vec_pretty(&native_pkg)
-                .context("Failed to serialize Houdini native package JSON")?,
-            false,
-        ),
-    };
-    // Check the descriptor that will actually ship, not the one hpm would
-    // have generated. A hand-written `{slug}.json` is shipped verbatim, so
-    // without this the generated path is the checked one and the authored
-    // path is not — which made `--sidefx` silently do nothing on exactly the
-    // packages whose author cared enough to write the file by hand, and left
-    // the constraint to be discovered at upload time by whatever tool
-    // publishes, in a message that does not name it.
-    //
-    // Generated descriptors are checked too. The generator and the check
-    // encode the same hpackage rules from opposite ends, so running both is
-    // what catches them drifting apart.
-    if sidefx {
-        let descriptor: serde_json::Value =
-            serde_json::from_slice(&json_bytes).with_context(|| {
-                format!("The Houdini descriptor {native_filename} is not valid JSON")
-            })?;
-        let stored_version =
-            validate_hpackage_descriptor(&descriptor, &native_filename).map_err(|why| {
-                // The messages name what an author should change, which is
-                // wrong for a descriptor hpm wrote: there is no file to edit,
-                // and the generator and this check encode the same rules from
-                // opposite ends, so disagreeing means one of them is wrong.
-                if authored {
-                    anyhow::anyhow!(why)
-                } else {
-                    anyhow::anyhow!(
-                        "hpm generated this descriptor from hpm.toml and then refused it, which \
-                         is a bug in hpm rather than something to fix in the package — please \
-                         report it. The check said: {why}"
-                    )
+    // Zip I/O; keep it off the async runtime.
+    let outcome = match tokio::task::spawn_blocking(move || packer::pack_package(request))
+        .await
+        .context("Pack task panicked")?
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            // A refused pack shows its validation warnings, then fails.
+            if let packer::PackError::Validation { warnings, .. } = &error {
+                for warning in warnings {
+                    console.warn(warning);
                 }
-            })?;
-        // hpackage stores the trimmed version and builds the served archive's
-        // URL from it, so a hand-written `0.1.0` publishes at `0.1`. The
-        // generator already trims, so this only fires on an authored file.
-        let declared = descriptor
-            .get("hpackage")
-            .and_then(|hpackage| hpackage.get("version"))
-            .and_then(|version| version.as_str())
-            .unwrap_or_default();
-        if declared != stored_version {
-            console.warn(format!(
-                "{native_filename} declares hpackage.version {declared}, which SideFX's \
-                 hpackage repository stores as {stored_version} — the published version and \
-                 the served archive's URL will both read {stored_version}."
-            ));
+            }
+            return Err(error.into());
         }
+    };
+
+    // Warnings go to stderr, keeping stdout clean for --json.
+    for warning in &outcome.warnings {
+        console.warn(warning);
     }
-
-    let inject_files: Vec<(String, Vec<u8>)> = vec![(native_filename, json_bytes)];
-    let content_prefix = manifest.package.slug().to_string();
-
-    // Run pack on blocking thread (zip I/O)
-    let stage_config = manifest.stage.clone();
-    let result = tokio::task::spawn_blocking({
-        let package_dir = package_dir.clone();
-        let name = name.clone();
-        let version = version.clone();
-        let output_dir = output_dir.clone();
-        let content_prefix = content_prefix.clone();
-        move || {
-            packer::pack(
-                &package_dir,
-                &name,
-                &version,
-                &output_dir,
-                signing_key.as_ref(),
-                platform.as_ref(),
-                &stage_config,
-                packer::ArchiveLayout {
-                    inject_files: &inject_files,
-                    content_prefix: Some(&content_prefix),
-                },
-            )
-        }
-    })
-    .await
-    .context("Pack task panicked")??;
-
-    // Build the searchable asset index from the manifest's [[operators]]
-    // declarations, resolving each operator's source for the target platform
-    // and checking it against the produced archive. An indexing failure
-    // fails the pack — emitting an archive whose advertised index silently
-    // dropped is a packaging bug, not a shippable artifact.
-    let asset_index = hpm_core::collect_assets(
-        &result.archive_path,
-        &manifest.operators,
-        platform.as_ref(),
-        Some(&content_prefix),
-    )
-    .inspect_err(|_| {
-        // Don't leave a half-vetted archive behind for CI to publish.
-        let _ = std::fs::remove_file(&result.archive_path);
-    })
-    .context("Failed to build the asset index for the packed archive")?;
-
-    // A declared operator source that isn't in the produced archive means the
-    // index would advertise a file the package doesn't ship. With
-    // `--verify-assets` this is fatal (and the invalid archive is removed so CI
-    // can't publish it); otherwise it's a warning.
-    if !asset_index.missing_sources.is_empty() {
-        if verify_assets {
-            let _ = std::fs::remove_file(&result.archive_path);
-            let list = asset_index.missing_sources.join("\n  - ");
-            bail!(
-                "operator source(s) declared in [[operators]] but missing from the packed archive:\n  - {list}\n\n\
-                 `source` must name the file's path inside the package (after [stage] placement). \
-                 Build the package first if these are compiled artifacts, fix the path, or declare a \
-                 per-platform `source` table. The archive was removed."
-            );
-        }
-        for missing in &asset_index.missing_sources {
-            console.warn(format!(
-                "Declared operator source not found in archive: {missing} (pass --verify-assets to fail the pack)"
-            ));
-        }
-    }
+    let result = &outcome.result;
+    let asset_index = &outcome.asset_index;
+    let (name, version) = (
+        &outcome.manifest.package.name,
+        &outcome.manifest.package.version,
+    );
 
     if json {
         // Machine-readable JSON output for CI. Single-line payload; the
@@ -415,50 +149,4 @@ pub async fn execute(config: &Config, options: PackOptions, console: &mut Consol
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Regression: the bundled descriptor was chosen with `Path::exists`,
-    /// which APFS and NTFS answer case-insensitively. A repo holding
-    /// `FLOPs.json` shipped that file as the root `flops.json` — hardcoded
-    /// author paths and all — when packed on macOS or Windows, and shipped
-    /// the generated descriptor when packed on Linux. It also bypassed
-    /// `--sidefx`, since a hand-written file is shipped without
-    /// normalization, so the flag silently did nothing on exactly the
-    /// machines most authors publish from.
-    #[test]
-    fn exact_entry_lookup_does_not_fold_case() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("FLOPs.json"), "{}").unwrap();
-
-        // The filesystem under this test may well answer `exists` for the
-        // lowercase spelling; the lookup must not.
-        match find_exact_entry(dir.path(), "flops.json") {
-            NameMatch::CaseDiffers(found) => assert_eq!(found, "FLOPs.json"),
-            NameMatch::Exact => panic!("case-folded match reported as exact"),
-            NameMatch::Missing => panic!("the case-differing file should be reported"),
-        }
-
-        assert!(matches!(
-            find_exact_entry(dir.path(), "FLOPs.json"),
-            NameMatch::Exact
-        ));
-        assert!(matches!(
-            find_exact_entry(dir.path(), "README.md"),
-            NameMatch::Missing
-        ));
-    }
-
-    #[test]
-    fn exact_entry_lookup_handles_a_missing_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let absent = dir.path().join("nope");
-        assert!(matches!(
-            find_exact_entry(&absent, "README.md"),
-            NameMatch::Missing
-        ));
-    }
 }

@@ -435,7 +435,7 @@ fn test_stage_config() -> hpm_package::manifest::StageConfig {
     let mut entries = indexmap::IndexMap::new();
     for plat in ["linux-x86_64", "macos-aarch64", "windows-x86_64"] {
         entries.insert(
-            plat.to_string(),
+            plat.parse::<hpm_package::Platform>().unwrap(),
             StagePlatformRules {
                 place: vec![PlaceRule {
                     from: format!("lib/{}/*", plat),
@@ -475,7 +475,7 @@ fn platform_archive_name_includes_platform() {
         result.archive_path.file_name().unwrap(),
         "test-pkg-1.0.0-linux-x86_64.zip"
     );
-    assert_eq!(result.platform.as_deref(), Some("linux-x86_64"));
+    assert_eq!(result.platform, Some(Platform::LinuxX86_64));
 }
 
 #[test]
@@ -536,7 +536,7 @@ fn shared_glob_across_platforms_rides_through_each_archive() {
     let mut entries = indexmap::IndexMap::new();
     for plat in ["linux-x86_64", "macos-aarch64", "windows-x86_64"] {
         entries.insert(
-            plat.to_string(),
+            plat.parse::<hpm_package::Platform>().unwrap(),
             hpm_package::manifest::StagePlatformRules {
                 place: vec![hpm_package::manifest::PlaceRule {
                     from: "resolver/houdini*/**/*".to_string(),
@@ -598,7 +598,7 @@ fn target_glob_overrides_other_platform_match() {
     // isn't dropped just because macOS also lists `shared/*`.
     let mut entries = indexmap::IndexMap::new();
     entries.insert(
-        "linux-x86_64".to_string(),
+        hpm_package::Platform::LinuxX86_64,
         hpm_package::manifest::StagePlatformRules {
             place: vec![hpm_package::manifest::PlaceRule {
                 from: "shared/*".to_string(),
@@ -607,7 +607,7 @@ fn target_glob_overrides_other_platform_match() {
         },
     );
     entries.insert(
-        "macos-aarch64".to_string(),
+        hpm_package::Platform::MacosAarch64,
         hpm_package::manifest::StagePlatformRules {
             place: vec![
                 hpm_package::manifest::PlaceRule {
@@ -918,4 +918,26 @@ mod properties {
             prop_assert_eq!(walked, reference_files(dir.path(), &ignore));
         }
     }
+}
+
+/// The `key_id` (hex of the first 8 public-key bytes) and the signature go
+/// into `hpm pack --json` and the registry; pinned for a fixed key and input.
+#[test]
+fn signing_key_id_and_signature_golden() {
+    let key = signing::SigningKey::from_bytes(&[7u8; 32]);
+    let (signature, key_id) = signing::sign_bytes(b"archive bytes", &key);
+    assert_eq!(key_id, "ea4a6c63e29c520a");
+    assert_eq!(
+        signature,
+        "SqowQmqYEcTqZBcktGIoZWsQ9XngmoHlUopyLYUCi7pb5dqFrRereRSjQvT7n5969/ctERqcoJVvtD4tgHvkCw=="
+    );
+}
+
+#[test]
+fn compute_archive_checksum_meets_the_digest_spec() {
+    crate::digest_spec::check_file_hasher(|p| compute_archive_checksum(p).unwrap());
+    assert_eq!(
+        compute_bytes_checksum(b"abc"),
+        crate::digest_spec::reference_hex(b"abc")
+    );
 }

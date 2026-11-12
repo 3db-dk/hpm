@@ -4,7 +4,8 @@
 //! and the cleanup pipeline. The supporting types live in submodules:
 //!
 //! - [`error`] — [`StorageError`]
-//! - [`types`] — [`InstalledPackage`], [`PackageSpec`], [`VersionReq`]
+//! - [`types`] — [`InstalledPackage`]
+//! - [`layout`] — [`StoreLayout`], where every store and download path lives
 //! - [`dev_install`] — `_dev/` path-install primitives (link, copy, remove)
 //! - [`cleanup`] — the project-aware GC pipeline and
 //!   [`ComprehensiveCleanupResult`] aggregate
@@ -18,18 +19,41 @@ pub mod cleanup;
 pub mod dev_install;
 pub mod dev_users;
 pub mod error;
+pub mod layout;
 pub mod types;
 
 pub use cleanup::ComprehensiveCleanupResult;
 pub use dev_install::DevInstall;
 pub use error::StorageError;
-pub use types::{InstalledPackage, PackageSpec, VersionReq};
+pub use layout::StoreLayout;
+pub use types::InstalledPackage;
 
 use dev_install::{
     DEV_INSTALL_DIR, InstallStyle, clear_container_link, clear_existing_install,
     commit_staged_copy, copy_dev_image, create_dev_link, dev_copy_image, dev_copy_is_complete,
     dev_copy_target, remove_install_entry, stage_dir,
 };
+/// Whether `dir` holds a store copy an install committed: a real directory
+/// (not a link) with its `hpm.toml`.
+fn is_committed_copy(dir: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir() && !dev_install::is_link(&m))
+        && dir.join("hpm.toml").is_file()
+}
+
+/// Remove a staging directory this process made and no longer needs. A
+/// failure is logged; the leftover is reclaimed by
+/// [`StorageManager::sweep_fetch_staging`] once this process is gone.
+fn remove_stage(staged: &std::path::Path) {
+    if let Err(e) = std::fs::remove_dir_all(staged)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(
+            "Could not remove staging directory {}: {e}",
+            staged.display()
+        );
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StorageManager {
     pub config: StorageConfig,
@@ -50,13 +74,23 @@ impl StorageManager {
         Ok(())
     }
 
-    pub fn package_exists(&self, name: &str, version: &str) -> bool {
-        let package_dir = self.config.package_dir(name, version);
-        package_dir.exists() && package_dir.join("hpm.toml").exists()
+    /// The layout of this store: where packages, dev containers and
+    /// downloads live.
+    pub fn layout(&self) -> StoreLayout {
+        StoreLayout::new(&self.config)
     }
 
+    /// Whether the store holds `name@version`. `name` is a dependency key
+    /// (`creator/slug`) or a bare slug; the store keys by slug.
+    pub fn package_exists(&self, name: &str, version: &str) -> bool {
+        self.get_package_path(name, version)
+            .join("hpm.toml")
+            .exists()
+    }
+
+    /// The store directory for `name@version` (see [`StoreLayout::cas_dir`]).
     pub fn get_package_path(&self, name: &str, version: &str) -> PathBuf {
-        self.config.package_dir(name, version)
+        self.layout().cas_dir(name, version)
     }
 
     /// Sweep every installed package for programs that lost their executable
@@ -99,31 +133,26 @@ impl StorageManager {
     }
 
     /// The directories downloads are extracted into before they are copied
-    /// into the store: `<home>/fetch`, where [`crate::ProjectManager`] puts
-    /// it, and `<packages_dir>/../fetch`, where `fetch_manifest` does. They are
-    /// the same directory unless `packages_dir` was moved out of `home_dir`.
+    /// into the store: the current one, and the one older hpm versions used
+    /// when it differs (see [`StoreLayout::legacy_fetch_dir`]).
     fn fetch_staging_dirs(&self) -> Vec<PathBuf> {
-        let mut dirs = vec![self.config.home_dir.join("fetch")];
-        if let Some(parent) = self.config.packages_dir.parent() {
-            let other = parent.join("fetch");
-            if !dirs.contains(&other) {
-                dirs.push(other);
-            }
-        }
+        let layout = self.layout();
+        let mut dirs = vec![layout.fetch_dir().to_path_buf()];
+        dirs.extend(layout.legacy_fetch_dir());
         dirs
     }
 
-    /// Remove extracted downloads left in the fetch staging directory,
-    /// returning `(entries_removed, bytes_freed)`.
+    /// Remove what interrupted or older installs left behind, returning
+    /// `(entries_removed, bytes_freed)`: extracted downloads in fetch staging
+    /// (current and legacy locations) older than `min_age`, and store copies
+    /// staged in `packages_dir` (`.stage-<pid>-<seq>`) by an install whose
+    /// process is gone.
     ///
-    /// Every download used to stay there after it was copied into the store,
-    /// so each installed version was on disk twice, and the copy in staging
-    /// outlived the store's own when the version was removed. Installs now
-    /// remove their staging copy ([`crate::archive_fetcher`]); this clears
-    /// what earlier installs left. An entry younger than `min_age` is skipped:
-    /// it may be an extraction another process has in flight. Nothing in
-    /// staging is referenced once its install finished, and anything missing
-    /// is downloaded again.
+    /// Every fetch extracts into a directory of its own and removes it once
+    /// the store holds the package, so staging only holds a fetch in flight
+    /// or a leftover. An entry younger than `min_age` may be a fetch another
+    /// process has in flight and is skipped. Nothing in staging is ever
+    /// reused, so anything removed is simply downloaded again.
     pub fn sweep_fetch_staging(&self, min_age: std::time::Duration) -> (usize, u64) {
         let mut removed = 0;
         let mut freed = 0;
@@ -162,44 +191,68 @@ impl StorageManager {
                 }
             }
         }
+        // Store copies staged by an install whose process is gone (crashed
+        // or killed between copy and commit).
+        if let Ok(entries) = std::fs::read_dir(&self.config.packages_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let Some(pid) = dev_users::stage_owner(&name) else {
+                    continue;
+                };
+                if !matches!(
+                    crate::process_users::process_state(pid),
+                    crate::process_users::ProcessState::Gone
+                ) {
+                    continue;
+                }
+                let path = entry.path();
+                let size = crate::storage::dir_size(&path);
+                match std::fs::remove_dir_all(&path) {
+                    Ok(()) => {
+                        removed += 1;
+                        freed += size;
+                    }
+                    Err(e) => warn!("Could not remove store staging {}: {e}", path.display()),
+                }
+            }
+        }
         if removed > 0 {
             info!("Removed {removed} leftover download(s) from fetch staging ({freed} bytes)");
         }
         (removed, freed)
     }
 
-    /// Forget everything downloaded for `name@version`: its cached archive and
-    /// any extracted copy still in fetch staging. Returns how many entries
-    /// were removed.
+    /// Forget everything downloaded for `name@version`: its cached archive,
+    /// any partial download, and any extracted copy still in fetch staging
+    /// (see [`layout::is_download_of`]). Returns how many entries were
+    /// removed.
     ///
     /// For an embedder that has found an installed copy damaged and is about
-    /// to reinstall it. A reinstall that finds either of these reuses it: an
-    /// extracted staging copy is copied into the store as it stands, without
-    /// any check, and a cached archive is only checked when the registry
-    /// supplied a checksum. Either could be the source of the damage, so the
-    /// reinstall would reproduce it. Evicting both first makes the next
-    /// install download and verify the archive again.
+    /// to reinstall it. A cached archive is reused by the next install and is
+    /// only checked when the registry supplied a checksum, so it could be the
+    /// source of the damage; evicting it makes the reinstall download and
+    /// verify the archive again.
     ///
     /// `name` is the dependency name the fetch was keyed by (`creator/slug`
-    /// for a registry package). The store's own copy is not touched; removing
-    /// that is the caller's decision.
+    /// for a registry package). The store's own copy is not touched; moving
+    /// it aside is the caller's decision, and an install never replaces a
+    /// committed copy.
     pub fn evict_download(&self, name: &str, version: &str) -> usize {
-        let key =
-            crate::archive_fetcher::fetcher_install_dir(std::path::Path::new(""), name, version);
-        let mut entries: Vec<PathBuf> = self
-            .fetch_staging_dirs()
-            .into_iter()
-            .map(|dir| dir.join(&key))
-            .collect();
-        let mut cache_dirs = vec![self.config.home_dir.join("cache")];
-        if !cache_dirs.contains(&self.config.cache_dir) {
-            cache_dirs.push(self.config.cache_dir.clone());
-        }
-        for dir in cache_dirs {
-            entries.push(dir.join(&key));
-            let mut part = key.clone().into_os_string();
-            part.push(".part");
-            entries.push(dir.join(part));
+        let key = layout::download_key(name, version);
+        let layout = self.layout();
+        let mut dirs = self.fetch_staging_dirs();
+        dirs.push(layout.cache_dir().to_path_buf());
+        dirs.extend(layout.legacy_cache_dir());
+        let mut entries = Vec::new();
+        for dir in dirs {
+            let Ok(listing) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in listing.flatten() {
+                if layout::is_download_of(&entry.file_name().to_string_lossy(), &key) {
+                    entries.push(entry.path());
+                }
+            }
         }
 
         let mut removed = 0;
@@ -249,19 +302,15 @@ impl StorageManager {
         if !dir.starts_with(&self.config.packages_dir) {
             return None;
         }
-        let is_dev = dir.starts_with(self.config.packages_dir.join(DEV_INSTALL_DIR));
+        let is_dev = dir.starts_with(self.layout().dev_root());
         match self.parse_installed_package(dir.to_path_buf()) {
             Ok(Some(pkg)) => Some(InstalledPackage { is_dev, ..pkg }),
             _ => None,
         }
     }
 
-    /// Recursively collect installed packages from a directory.
-    ///
-    /// With scoped package paths (e.g. `creator/slug`), packages live at
-    /// `~/.hpm/packages/creator/slug@version/`. Directories without `@` in
-    /// their name are treated as scope directories and are walked one level
-    /// deeper. Directories with `@` are treated as package directories.
+    /// Collect the store's packages: the `<slug>@<version>` directories
+    /// directly in `dir` (see [`StoreLayout`]).
     ///
     /// The `_dev` subtree is reserved for path-installed packages
     /// (`install_as_dev_copy`) and is intentionally invisible to
@@ -275,33 +324,47 @@ impl StorageManager {
     ) -> Result<(), StorageError> {
         let entries = std::fs::read_dir(dir).map_err(|e| IoOp::wrap("read directory", dir, e))?;
 
-        for entry in entries.flatten() {
-            let path = entry.path();
+        for entry in entries {
+            let path = entry
+                .map_err(|e| IoOp::wrap("read directory", dir, e))?
+                .path();
+            let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            // `_dev` holds path installs; hidden entries are staging
+            // directories and tombstones; names without `@` are not store
+            // copies. None of them is a package.
+            if dir_name == DEV_INSTALL_DIR || dir_name.starts_with('.') || !dir_name.contains('@') {
+                continue;
+            }
             if !path.is_dir() {
                 continue;
             }
-
-            let dir_name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name.to_string(),
-                None => continue,
-            };
-
-            if dir_name == DEV_INSTALL_DIR {
-                continue;
-            }
-
-            if dir_name.contains('@') {
-                // This is a package directory (e.g. `slug@1.0.0` or `fire-fx@2.0.0`)
-                if let Some(installed_package) = self.parse_installed_package(path)? {
-                    packages.push(installed_package);
-                }
-            } else {
-                // This is a scope directory (e.g. `creator`), walk into it
-                self.collect_installed_packages(&entry.path(), packages)?;
+            if let Some(installed_package) = self.parse_installed_package(path)? {
+                packages.push(installed_package);
             }
         }
 
         Ok(())
+    }
+
+    /// Another install committed `name@version` while this one was copying:
+    /// drop this one's stage and report the committed copy.
+    fn keep_concurrent_install(
+        &self,
+        staged: &std::path::Path,
+        target_dir: &std::path::Path,
+        name: &str,
+        version: &str,
+    ) -> Result<InstalledPackage, StorageError> {
+        remove_stage(staged);
+        info!("{name}@{version} was installed concurrently; keeping that copy");
+        // The kept copy is what this install returns, so a manifest it
+        // cannot read (one written under looser rules, say) is the error;
+        // `parse_installed_package` would only skip it.
+        PackageManifest::from_path(&target_dir.join("hpm.toml"))?;
+        self.parse_installed_package(target_dir.to_path_buf())?
+            .ok_or_else(|| StorageError::PackageNotFound(format!("{name}@{version}")))
     }
 
     fn parse_installed_package(
@@ -454,15 +517,11 @@ impl StorageManager {
         // Dev styles share the `_dev/<slug>@<version>` container. A copy lands
         // at a content-addressed `<container>/<hash>` subdirectory; a link's
         // entry *is* the container path.
-        let dev_container = self
-            .config
-            .packages_dir
-            .join(DEV_INSTALL_DIR)
-            .join(format!("{}@{}", name, version));
+        let dev_container = self.layout().dev_container(name, version);
 
         match style {
             InstallStyle::CasCopy => {
-                let target_dir = self.config.package_dir(name, version);
+                let target_dir = self.get_package_path(name, version);
                 // Record what is being installed from the extracted archive
                 // itself, before the copy, so a copy cut short shows up as
                 // damage rather than as a smaller healthy package.
@@ -476,12 +535,39 @@ impl StorageManager {
                         IoOp::wrap("record install of", source_path, std::io::Error::other(e))
                     })??
                 };
-                // Symlink-safe replacement: never `remove_dir_all` a junction.
-                clear_existing_install(&target_dir, name, version)?;
-                // A previous install's record goes even when nothing was
-                // there to clear (a tree moved aside by an embedder's repair).
+                // Copy into a private staging directory and rename it into
+                // place, so the store never shows a half-copied tree under the
+                // package's name, and two processes installing the same
+                // version never write into one directory.
+                let staged = stage_dir(&self.config.packages_dir);
+                if let Err(e) = self.copy_directory(source_path, &staged) {
+                    remove_stage(&staged);
+                    return Err(e);
+                }
+                if is_committed_copy(&target_dir) {
+                    // Another install finished this version first (copies
+                    // only ever land whole, by rename). It may already be
+                    // loaded by a running Houdini: keep it.
+                    return self.keep_concurrent_install(&staged, &target_dir, name, version);
+                }
+                // A tree without `hpm.toml` (an older hpm's in-place copy cut
+                // short) or a stale link is replaced; never `remove_dir_all`
+                // a junction.
+                if let Err(e) = clear_existing_install(&target_dir, name, version) {
+                    remove_stage(&staged);
+                    return Err(e);
+                }
                 crate::install_manifest::forget(&target_dir);
-                self.copy_directory(source_path, &target_dir)?;
+                if let Err(e) = std::fs::rename(&staged, &target_dir) {
+                    // A rename only ever lands a whole tree, so a target that
+                    // appeared since the clear is another install's finished
+                    // copy of this version.
+                    if is_committed_copy(&target_dir) {
+                        return self.keep_concurrent_install(&staged, &target_dir, name, version);
+                    }
+                    remove_stage(&staged);
+                    return Err(IoOp::wrap("commit store copy to", &target_dir, e).into());
+                }
                 // Written last: its presence says the copy completed. A
                 // failure costs the ability to check this install, not the
                 // install, so it warns.
@@ -701,7 +787,7 @@ impl StorageManager {
     }
 
     pub async fn remove_package(&self, name: &str, version: &str) -> Result<(), StorageError> {
-        let package_dir = self.config.package_dir(name, version);
+        let package_dir = self.get_package_path(name, version);
 
         // `symlink_metadata` rather than `exists()` because `exists()` follows
         // links — a junction pointing at a missing target would falsely report
@@ -729,7 +815,7 @@ impl StorageManager {
     /// deleted workspace still surfaces here — that's exactly the case dev
     /// cleanup needs to reach.
     pub fn list_dev_installs(&self) -> Result<Vec<DevInstall>, StorageError> {
-        let dev_root = self.config.packages_dir.join(DEV_INSTALL_DIR);
+        let dev_root = self.layout().dev_root();
         if !dev_root.exists() {
             return Ok(Vec::new());
         }
@@ -754,14 +840,9 @@ impl StorageManager {
                 Some(n) => n,
                 None => continue,
             };
-            // `<slug>@<version>` — split on the *last* `@` for defensiveness
-            // even though install never produces multiple separators.
-            let Some((slug, version)) = name.rsplit_once('@') else {
+            let Some((slug, version)) = layout::parse_coordinate(name) else {
                 continue;
             };
-            if slug.is_empty() || version.is_empty() {
-                continue;
-            }
 
             out.push(DevInstall {
                 slug: slug.to_string(),

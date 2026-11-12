@@ -29,11 +29,13 @@ external consumers.
 Leaves are `hpm-package` and `hpm-assets` — neither depends on anything in
 the workspace, so they can be embedded by external tools without dragging in
 the rest of HPM. `hpm-config` is not a leaf: it depends on `hpm-package` for
-the shared registry and dependency types.
+the registry types (`RegistryType`, `RegistryConfig`) and the shared TOML-file
+error and atomic-write helpers.
 
 Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
-`ConfigError`). `hpm-cli` converts these into a single `CliError` with exit
-codes and help hints.
+`LockError`); `hpm-config` has none and returns `hpm_package::TomlFileError`.
+`hpm-cli` converts these into a single `CliError` with exit codes and help
+hints.
 
 ## Key types by crate
 
@@ -43,15 +45,15 @@ codes and help hints.
 |------|---------|
 | `StorageManager` | Global package install/remove/list. Backed by `~/.hpm/packages/`. |
 | `ProjectDiscovery` | Scans `[projects]` paths to enumerate active HPM projects. |
-| `DependencyGraph` | Dependency graph over `PackageId`s; `mark_reachable_from_roots` powers orphan detection for `hpm clean` (the set difference itself lives in `StorageManager::find_orphaned_packages`). |
+| `DependencyGraph` | Dependency graph over `PackageId`s; `mark_reachable_from_roots` powers orphan detection for `hpm clean` (the set difference against what is installed is the cleanup plan's `orphan_packages` in `storage/cleanup.rs`, reached through `cleanup_unused` / `cleanup_unused_dry_run`). |
 | `LockFile`, `LockedDependency`, `LockedPythonDependency`, `LockMetadata` | `hpm.lock` types. |
 | `LockedSource` | Origin recorded in the lockfile for each dep — `Url { url, version }` or `Path { path }`. |
-| `LockError` | `Read`/`Parse`/`Write`/`Serialize` plus `ChecksumMismatch` and `PackageMissing { package, expected_dir }`. |
+| `LockError` | `File` (a transparent `hpm_package::TomlFileError` covering read, parse, serialize and write failures), `ChecksumMismatch { package, expected, actual }` and `PackageMissing { package, expected_dir }`. |
 | `PackageSource` | URL-only struct `{ url, version }` — what `ArchiveFetcher` downloads. Path deps bypass the fetcher and use `LockedSource::Path` in the lockfile. |
-| `cas_install_dir(packages_dir, name, version)` | Canonical install path `<packages_dir>/<slug>@<version>` for a lockfile dep name. Used by `LockFile::verify_checksums` and any consumer that needs to find an installed package off the lockfile alone. |
-| `fetcher_install_dir(packages_dir, name, version)` | Staging path `<packages_dir>/<safe_name>-<version>` used by `ArchiveFetcher` while extracting; the result is then copied into the canonical CAS via `install_into_cas`. |
+| `storage::StoreLayout`, `storage::layout::{cas_dir, download_key}` | The one owner of store paths: `<packages_dir>/<slug>@<version>` for a registry install (a scoped `creator/slug` reduces to the slug), `<packages_dir>/_dev/<slug>@<version>` for a dev container, `<cache_dir>/<download key>` for an archive and `<home_dir>/fetch/<download key>` for its extracted staging copy. `StorageManager::layout()` returns it; `ArchiveFetcher::for_storage` builds a fetcher from it. |
 | `Registry` (async trait) | Registry abstraction. `ApiRegistry` and `GitRegistry` implement it. Note `get_versions` returns one entry per **build**, not per version — a version released for two platforms is two entries — because `get_version` needs the full set to pick the host's via `select_build_for_host`. Callers wanting one row per version go through `RegistrySet`, not this trait. |
 | `RegistrySet` | Composite that fans requests out to every configured registry. `*_in` variants (`resolve_in`, `get_version_in`, `get_versions_in`) restrict the lookup to one named registry, honouring a dependency's `registry` pin; an unconfigured name is `UnknownRegistry` rather than a fallback to the rest of the set. `get_versions` and `search` collapse each `(name, version)`'s per-platform builds to one entry, preferring the host's build then a universal one — so these are *version* views, unlike the `Registry` trait method underneath. A version with no build for this host still lists (ruling it uninstallable is `select_build_for_host`'s job at install time), and a live build always wins over a yanked one at the same version so `highest_matching` still sees it. `search` collapses per registry, so a package served by two registries still shows both. |
+| `registry::solve`, `HoudiniTarget`, `Root`, `Selection`, `Rejection`, `SolveError` | Picks one version per package so that every chosen version's registry `deps` on the others hold, for a target Houdini. Pins stand as written; an unpinned package takes the newest non-yanked version that supports the Houdini, with backtracking. Pure: callers pass each package's version list. TumbleTrove Desktop uses it; `hpm install` still selects each package on its own. |
 | `global`, `global::ledger` | `hpm global` installs into Houdini's user preferences. `build_houdini_package` is shared with the project emitter; `Ledger` records what was installed per Houdini version and doubles as a `hpm clean` GC root. |
 | `houdini_prefs` | Per-platform Houdini user-preferences directory resolution, including `HOUDINI_USER_PREF_DIR` and its `__HVER__` placeholder. The only hpm module that knows a Houdini *installation's* conventions. |
 | `ArchiveFetcher` | Downloads and extracts registry-hosted archives. |
@@ -60,7 +62,8 @@ codes and help hints.
 | `PackageRunEnv` | Resolved runtime environment for a `package-env` script, produced by `ProjectManager::resolve_package_env(extra_requirements)`: the merged venv (`venv_bin`, `virtual_env`) plus `python_paths` (each package's `python/` then the venv `site-packages`) for `PYTHONPATH`. Read-only — built from `hpm.lock` + the global store, mirroring what `sync_dependencies` resolves for Houdini. `hpm run` applies it for `package-env = true` scripts. |
 | `script_run` | The shared `[scripts]` runner — the single place the script-env contract (`HPM_PACKAGE_ROOT`, caller `extra_env`, and per-script-venv or `package-env` `PATH`/`VIRTUAL_ENV`/`PYTHONPATH`) is composed. Embedders implement `ScriptSink` (spawn + diagnostics) and drive `run_prepack(manifest, names, package_root, extra_env, sink)` (a `[stage].prepack` sequence, fail-fast) or `run_script(manifest, name, package_root, extra_args, extra_env, sink)` (one entry, returns the exit code). `prepare_script(...)` exposes just the env+command-line composition as a `PreparedScript { command_line, working_dir, env }` for embedders that own their spawn loop. `hpm run` and `hpm build`'s prepack both route through here, so a manifest feature picked up by one is picked up by all — no per-embedder drift. **Prefer this over re-composing `prepare_script_env` by hand:** the lower-level handle is easy to half-wire (e.g. forgetting to put the venv interpreter on `PATH`). |
 | `install_manifest` | The per-file install record and the check against it. A store install (`StorageManager::install_into_cas`) records every file of the extracted archive as `FileRecord { path, size, sha256 }` and writes `<slug>@<version>.files.json` beside the tree as its last step; removal drops it first (`forget`). `verify(package_dir)` / `StorageManager::verify_installed(&InstalledPackage)` return `Verification::Unrecorded` (installed before 0.36.0, or a dev install) or `Verification::Checked(IntegrityReport { files, problems })`, each `FileProblem` a recorded path with a `ProblemKind`: `Missing`, `Truncated { expected, actual }`, `Changed` or `Unreadable { error }`. Only recorded files are checked: what Houdini and Python write into a package as it is used (`__pycache__`, HDA backups) is never reported. A record that is garbled, names a path outside the package, or comes from a newer format is an error, not `Unrecorded`. |
-| `packer` | Produces signed/unsigned `.zip` archives for `hpm pack`. Public helpers: `pack`, `create_archive`, `compute_archive_checksum`/`compute_bytes_checksum` (SHA-256), `sign_archive`/`sign_bytes` (Ed25519, returns `(base64_signature, hex_key_id)`), `load_signing_key` / `load_signing_key_from_pem`. The byte-based variants are for tooling that mutates archive bytes after pack (e.g. third-party hosting that requires reshaping) and needs to recompute the hash + re-sign without round-tripping through disk. `SigningKey` is re-exported so callers don't need a direct `ed25519-dalek` dep. |
+| `check` | Package validation behind `hpm check` and the `hpm pack` gate: `check_package(dir) -> Report`, a list of `Finding { severity, message }` (`Severity::Error`/`Warning`/`Passed`/`Info`). `Report::is_valid()` is the absence of an error; `messages(severity)` lists one kind. Rendering is the caller's. |
+| `packer` | Produces signed/unsigned `.zip` archives for `hpm pack`. `pack_package(PackRequest { dir, output_dir, key, platform, target, verify_assets })` is the whole of `hpm pack` short of key resolution and rendering: the validation gate, target-platform resolution (`CompatConfig::resolve_target_platform`), the `--sidefx` README and descriptor checks, the exact-name `{slug}.json` (authored verbatim or generated) at the archive root, the archive and the operator index; it returns a `PackOutcome { result, manifest, asset_index, warnings }` and removes the archive when indexing fails or `verify_assets` finds a source missing. Embedders should call it rather than composing the lower-level helpers. Lower-level helpers: `pack`, `create_archive`, `compute_archive_checksum`/`compute_bytes_checksum` (SHA-256), `sign_archive`/`sign_bytes` (Ed25519, returns `(base64_signature, hex_key_id)`), `load_signing_key` / `load_signing_key_from_pem`. The byte-based variants are for tooling that mutates archive bytes after pack (e.g. third-party hosting that requires reshaping) and needs to recompute the hash + re-sign without round-tripping through disk. `SigningKey` is re-exported so callers don't need a direct `ed25519-dalek` dep. |
 | `collect_assets`, `AssetIndex`, `AssetIndexError` | Builds the `hpm pack` operator asset index from a manifest's `[[operators]]` declarations for a target platform (`asset_index` module). Maps each declaration to an `hpm_assets::Asset` (deriving namespace/version from the type name), resolving per-platform `source` tables to the target platform and dropping operators not shipped there. Verifies each resolved `source` exists in the produced archive — any that don't are returned in `AssetIndex::missing_sources` for the caller to warn on or, with `hpm pack --verify-assets`, treat as fatal. |
 
 ### hpm-package
@@ -99,15 +102,16 @@ codes and help hints.
 
 | Type | Purpose |
 |------|---------|
-| `VenvManager` | Creates and reuses content-addressable venvs. |
+| `PythonHome` | Where the Python subsystem keeps uv, its caches, the managed CPython and the venvs: the hpm home. `PythonHome::for_storage(&config.storage)` follows `[storage] home_dir`; `PythonHome::of_user()` is `~/.hpm`. `initialize`, the resolvers, `VenvManager::new` and `PythonCleanupAnalyzer::new` take one. |
+| `VenvManager` | Creates and reuses content-addressable venvs under a `PythonHome`. |
 | `PythonVersion` | Houdini-to-Python version value. |
 | `ResolvedDependencySet` | UV-resolved dependency set (`BTreeMap<name, version>` plus the Python version) with a `hash()` content hash. |
 | `PythonDependencies`, `PythonDependency`, `VersionSpec` | Declared (pre-resolution) Python dependency types. |
 | `VenvMetadata`, `OrphanedVenv` | Per-venv `metadata.json` model and the orphan-analysis result type. |
 | `PythonCleanupAnalyzer` | Detects orphan venvs for `hpm clean --python-only`. A venv that records owners is orphaned when none is still installed; one with no recorded owners (a `[scripts]` venv, or one predating owner recording) is collected only after 30 days idle. Owners are recorded by `VenvManager::ensure_virtual_environment_for`. |
-| `prepare_script_env(entry)` | Per-script-venv building block: bootstraps bundled uv, materializes the venv if needed, and returns a `ScriptEnvHandle` carrying the env-var mutations to apply before spawning. Plain string entries return a default (no-op) handle. Covers only the `python`/`requirements` venv path — not `package-env`, `HPM_PACKAGE_ROOT`, or the command line. Most embedders should reach for `hpm_core::script_run` (above), which wires this plus the rest of the contract; use `prepare_script_env` directly only when you specifically need just the venv handle. |
+| `prepare_script_env(entry)` | Per-script-venv building block: bootstraps bundled uv, materializes the venv if needed, and returns a `ScriptEnvHandle` carrying the env-var mutations to apply before spawning. Plain string entries return a default (no-op) handle. Covers only the `python`/`requirements` venv path — not `package-env`, `HPM_PACKAGE_ROOT`, or the command line. Most embedders should reach for `hpm_core::script_run` (above), which wires this plus the rest of the contract; use `prepare_script_env` directly only when you specifically need just the venv handle. The venv goes under the home of the user's configuration; `prepare_script_env_in(home, entry)` takes the home explicitly. |
 | `ScriptEnvHandle` | Spawn-strategy-agnostic env-var bundle (`path_prepend`, `env`). `apply_to(&mut HashMap<String,String>)` folds it into a caller-staged env map ready for `Command::envs` or any other spawn primitive. |
-| `ensure_script_venv(python, requirements)` | Lower-level free function: resolves raw PEP-508 requirement strings via `uv pip compile` and defers to `VenvManager`, returning the venv root. Prefer `prepare_script_env` for the full flow. |
+| `ensure_script_venv(home, python, requirements)` | Lower-level free function: resolves raw PEP-508 requirement strings via `uv pip compile` and defers to `VenvManager`, returning the venv root. Prefer `prepare_script_env` for the full flow. |
 | `venv_bin_dir(path)` | Returns the executable directory inside a uv-created venv (`bin/` on Unix, `Scripts/` on Windows). `prepare_script_env` already prepends this to `PATH`; use directly only when bypassing the handle. |
 | `DEFAULT_PYTHON_VERSION` | `"3.11"`. The Python version `ensure_script_venv` uses when a script omits `python`. |
 
@@ -115,9 +119,10 @@ codes and help hints.
 
 | Type | Purpose |
 |------|---------|
-| `Config` | Top-level config (defaults < `~/.hpm/config.toml` < project config < env < flags). |
+| `Config` | Top-level config. `Config::load` layers defaults < `~/.hpm/config.toml` < `<cwd>/.hpm/config.toml`, each parsed as a `ConfigOverlay`; a malformed file or an unknown key is an error. |
+| `ConfigOverlay` | The presence-aware partial config a file parses as (every field optional, unknown keys refused). Writing one writes only the fields that are set. The legacy `[install] path` is still accepted, with a warning. |
 | `StorageConfig` | `home_dir`, `cache_dir`, `packages_dir`, `registry_cache_dir`. |
-| `InstallConfig` | `path`, `parallel_downloads`. |
+| `InstallConfig` | `parallel_downloads` (`NonZeroUsize`): how many installs a sync runs at once. |
 | `ProjectsConfig` | `explicit_paths`, `search_roots`, `max_search_depth`, `ignore_patterns`. |
 | `RegistrySourceConfig`, `RegistryType` | Registry entries from `[[registries]]`. |
 | `SigningConfig` | `key_path` fallback for `hpm pack`. |
@@ -143,5 +148,5 @@ Exit codes used by `hpm-cli`:
 - **Minimal coupling.** Each crate owns one concern; no upward dependencies.
 - **Async by default.** Everything I/O-bound runs on Tokio.
 - **Content-addressable storage.** Both HPM packages (`<slug>@<version>` under `~/.hpm/packages/`, with path-installed packages isolated in `_dev/`) and Python venvs (SHA-256 over the resolved set) deduplicate globally.
-- **Safety by construction.** Cleanup never removes a package an active project needs; lock file checksums are verified before every install; signing is opt-in but standard when used.
+- **Safety by construction.** Cleanup never removes a package an active project needs; cached packages are verified against `hpm.lock` before every install, and downloads against the registry checksum when one is provided; signing is opt-in but standard when used.
 - **TOML-first configuration.** Every persistent config — manifest, lock file, global config — is TOML and hand-editable.

@@ -1,8 +1,8 @@
 //! Virtual environment management
 
+use super::PythonHome;
 use super::bundled::{ensure_managed_python, run_uv_command};
 use super::error::PythonError;
-use super::get_venvs_dir;
 use super::types::{OrphanedVenv, PythonVersion, ResolvedDependencySet, VenvMetadata};
 use hpm_package::IoOp;
 use std::path::{Path, PathBuf};
@@ -27,10 +27,10 @@ pub const UNOWNED_VENV_IDLE: std::time::Duration =
 /// # Example Usage
 ///
 /// ```rust,no_run
-/// use hpm_core::python::{VenvManager, ResolvedDependencySet, PythonVersion};
+/// use hpm_core::python::{PythonHome, VenvManager, ResolvedDependencySet, PythonVersion};
 ///
 /// # async fn example() -> Result<(), hpm_core::python::PythonError> {
-/// let manager = VenvManager::new()?;
+/// let manager = VenvManager::new(&PythonHome::of_user()?);
 ///
 /// // Create a resolved dependency set
 /// let mut resolved = ResolvedDependencySet::new(PythonVersion::new(3, 9, None));
@@ -44,27 +44,24 @@ pub const UNOWNED_VENV_IDLE: std::time::Duration =
 /// # }
 /// ```
 pub struct VenvManager {
+    home: PythonHome,
     venvs_dir: PathBuf,
 }
 
 impl VenvManager {
-    /// Construct a manager rooted at the default `~/.hpm/venvs/`.
-    ///
-    /// Errors when the user's home directory cannot be resolved (no
-    /// `$HOME` / `%USERPROFILE%`). Tests that want a controlled location
-    /// should use [`with_venvs_dir`](Self::with_venvs_dir) instead.
-    pub fn new() -> Result<Self, PythonError> {
-        Ok(Self {
-            venvs_dir: get_venvs_dir()?,
-        })
+    /// A manager for the venvs of `home` (`<home>/venvs/`), running the
+    /// bundled uv of the same home.
+    pub fn new(home: &PythonHome) -> Self {
+        Self::with_venvs_dir(home, home.venvs_dir())
     }
 
-    /// Create a `VenvManager` rooted at an explicit venvs directory.
-    ///
-    /// Intended for tests and any caller that needs to isolate venv state from
-    /// the default `~/.hpm/venvs/` location.
-    pub fn with_venvs_dir(venvs_dir: PathBuf) -> Self {
-        Self { venvs_dir }
+    /// A manager keeping its venvs in `venvs_dir` while running the uv of
+    /// `home`, for tests that isolate venv state but share one uv download.
+    pub fn with_venvs_dir(home: &PythonHome, venvs_dir: PathBuf) -> Self {
+        Self {
+            home: home.clone(),
+            venvs_dir,
+        }
     }
 
     /// Ensure a virtual environment exists for the given dependency set
@@ -96,10 +93,10 @@ impl VenvManager {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use hpm_core::python::{VenvManager, ResolvedDependencySet, PythonVersion};
+    /// use hpm_core::python::{PythonHome, VenvManager, ResolvedDependencySet, PythonVersion};
     ///
     /// # async fn example() -> Result<(), hpm_core::python::PythonError> {
-    /// let manager = VenvManager::new()?;
+    /// let manager = VenvManager::new(&PythonHome::of_user()?);
     /// let mut resolved = ResolvedDependencySet::new(PythonVersion::new(3, 9, None));
     /// resolved.add_package("numpy", "1.24.0");
     ///
@@ -224,13 +221,16 @@ impl VenvManager {
         // CPython, but make it explicit so a clean Windows box (no system
         // Python, no managed install) doesn't trip the same "No interpreter
         // found" failure mode that `pip compile` does.
-        ensure_managed_python(&python_version).await?;
-        run_uv_command(&[
-            "venv",
-            venv_path.to_str().unwrap(),
-            "--python",
-            &python_version,
-        ])
+        ensure_managed_python(&self.home, &python_version).await?;
+        run_uv_command(
+            &self.home,
+            &[
+                "venv",
+                venv_path.to_str().unwrap(),
+                "--python",
+                &python_version,
+            ],
+        )
         .await
         .map_err(|e| e.uv_context("Failed to create virtual environment"))?;
 
@@ -258,20 +258,23 @@ impl VenvManager {
         // arbitrary path that the venv interpreter doesn't import from — that
         // left ~/.hpm/venvs/<hash>/Lib/site-packages empty on Windows even
         // though metadata claimed the packages were installed.
-        let python_exe = venv_python_executable(venv_path);
+        let python_exe = super::venv_layout::python_executable(venv_path);
         let python_str = python_exe
             .to_str()
             .ok_or_else(|| PythonError::NonUtf8Path {
                 path: python_exe.clone(),
             })?;
-        run_uv_command(&[
-            "pip",
-            "install",
-            "-r",
-            req_file.path().to_str().unwrap(),
-            "--python",
-            python_str,
-        ])
+        run_uv_command(
+            &self.home,
+            &[
+                "pip",
+                "install",
+                "-r",
+                req_file.path().to_str().unwrap(),
+                "--python",
+                python_str,
+            ],
+        )
         .await
         .map_err(|e| e.uv_context("Failed to install packages into virtual environment"))?;
 
@@ -508,11 +511,6 @@ impl VenvManager {
     }
 }
 
-/// Absolute path to the Python interpreter inside a venv created by `uv venv`.
-fn venv_python_executable(venv_path: &Path) -> PathBuf {
-    super::venv_layout::python_executable(venv_path)
-}
-
 /// Verify that at least one resolved package has a `dist-info` directory in
 /// `site_packages`. Resolved-set keys are already PEP 503 canonical (see
 /// [`ResolvedDependencySet::add_package`]); we only need to canonicalize the
@@ -536,22 +534,26 @@ async fn any_package_present(site_packages: &Path, resolved_deps: &ResolvedDepen
         .any(|pkg| dist_info_prefixes.contains(pkg))
 }
 
-// `VenvManager::new()` is fallible (needs `$HOME` / `%USERPROFILE%`),
-// so the `Default` impl was removed — there is no sensible default.
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_venv_manager_creation() {
-        let manager = VenvManager::new().expect("home dir resolves under test env");
-        assert!(manager.venvs_dir.ends_with(".hpm/venvs"));
+    /// A manager whose venvs sit in `dir`, for tests that never run uv.
+    fn manager_in(dir: &Path) -> VenvManager {
+        VenvManager::with_venvs_dir(&PythonHome::new(dir), dir.to_path_buf())
+    }
+
+    #[test]
+    fn venvs_and_uv_follow_the_hpm_home() {
+        let home = PythonHome::new("/studio/hpm");
+        let manager = VenvManager::new(&home);
+        assert_eq!(manager.venvs_dir, PathBuf::from("/studio/hpm/venvs"));
+        assert_eq!(manager.home, home);
     }
 
     #[tokio::test]
     async fn test_python_site_packages_path() {
-        let manager = VenvManager::new().expect("home dir resolves under test env");
+        let manager = manager_in(Path::new("/unused"));
         let venv_path = PathBuf::from("/test/venv");
         let python = PythonVersion::new(3, 11, None);
         let site_packages = manager.get_python_site_packages_path(&venv_path, &python);
@@ -574,10 +576,13 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_install_populates_real_site_packages() {
-        crate::python::initialize().await.expect("uv init failed");
+        let home = PythonHome::of_user().unwrap();
+        crate::python::initialize(&home)
+            .await
+            .expect("uv init failed");
 
         let tmp = tempfile::TempDir::new().unwrap();
-        let manager = VenvManager::with_venvs_dir(tmp.path().to_path_buf());
+        let manager = VenvManager::with_venvs_dir(&home, tmp.path().to_path_buf());
 
         let python = PythonVersion::new(3, 11, None);
         let mut resolved = ResolvedDependencySet::new(python.clone());
@@ -621,10 +626,13 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_ensure_heals_half_installed_venv() {
-        crate::python::initialize().await.expect("uv init failed");
+        let home = PythonHome::of_user().unwrap();
+        crate::python::initialize(&home)
+            .await
+            .expect("uv init failed");
 
         let tmp = tempfile::TempDir::new().unwrap();
-        let manager = VenvManager::with_venvs_dir(tmp.path().to_path_buf());
+        let manager = VenvManager::with_venvs_dir(&home, tmp.path().to_path_buf());
 
         let python = PythonVersion::new(3, 11, None);
         let mut resolved = ResolvedDependencySet::new(python.clone());
@@ -675,7 +683,7 @@ mod tests {
     #[tokio::test]
     async fn test_unparseable_metadata_flagged_as_stale() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let manager = VenvManager::with_venvs_dir(tmp.path().to_path_buf());
+        let manager = manager_in(tmp.path());
 
         let python = PythonVersion::new(3, 11, None);
         let resolved = ResolvedDependencySet::new(python);

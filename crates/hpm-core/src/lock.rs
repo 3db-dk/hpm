@@ -4,7 +4,7 @@
 //! dependencies resolved during installation. This ensures reproducible builds
 //! across different machines and time.
 
-use crate::archive_fetcher::cas_install_dir;
+use crate::storage::layout::cas_dir;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -39,7 +39,9 @@ pub struct LockPackageInfo {
 /// A locked HPM dependency with exact version and verification data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockedDependency {
-    /// Exact resolved version
+    /// The version requirement from `[python_dependencies]` (`"*"` when the
+    /// manifest gives none) — not a resolved version; uv resolves at venv
+    /// creation.
     pub version: String,
 
     /// SHA256 checksum of the package contents
@@ -127,6 +129,17 @@ impl LockMetadata {
         let today = time::OffsetDateTime::now_utc().date();
         Some((today - gen_date).whole_days())
     }
+
+    /// The lock's age in days when it is older than
+    /// [`STALE_AFTER_DAYS`](Self::STALE_AFTER_DAYS), the point at which
+    /// install and audit suggest checking for updates.
+    pub fn stale_days(&self) -> Option<i64> {
+        self.days_since_generated()
+            .filter(|days| *days > Self::STALE_AFTER_DAYS)
+    }
+
+    /// How old a lock may get before it counts as stale.
+    pub const STALE_AFTER_DAYS: i64 = 90;
 }
 
 /// Errors that can occur during lock file operations
@@ -182,7 +195,7 @@ impl LockFile {
             metadata: Some(LockMetadata {
                 generated_at: Some(chrono_now()),
                 hpm_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-                platform: Some(current_platform()),
+                platform: Some(hpm_package::Platform::host_id()),
             }),
         }
     }
@@ -256,7 +269,7 @@ impl LockFile {
             let Some(expected_checksum) = &dep.checksum else {
                 continue;
             };
-            let package_dir = cas_install_dir(packages_dir, name, &dep.version);
+            let package_dir = cas_dir(packages_dir, name, &dep.version);
             if !package_dir.exists() {
                 return Err(LockError::PackageMissing {
                     package: name.clone(),
@@ -273,36 +286,6 @@ impl LockFile {
             }
         }
         Ok(())
-    }
-
-    /// Check if dependencies have changed compared to another lock file
-    pub fn has_changes(&self, other: &LockFile) -> bool {
-        if self.package.name != other.package.name || self.package.version != other.package.version
-        {
-            return true;
-        }
-
-        if self.dependencies.len() != other.dependencies.len()
-            || self.python_dependencies.len() != other.python_dependencies.len()
-        {
-            return true;
-        }
-
-        for (name, dep) in &self.dependencies {
-            match other.dependencies.get(name) {
-                Some(other_dep) if dep.version == other_dep.version => {}
-                _ => return true,
-            }
-        }
-
-        for (name, dep) in &self.python_dependencies {
-            match other.python_dependencies.get(name) {
-                Some(other_dep) if dep.version == other_dep.version => {}
-                _ => return true,
-            }
-        }
-
-        false
     }
 }
 
@@ -330,14 +313,28 @@ fn chrono_now() -> String {
         .expect("formatting a UTC timestamp with a static format description cannot fail")
 }
 
-/// Get the current platform identifier
-fn current_platform() -> String {
-    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A lock is stale only once it is older than `STALE_AFTER_DAYS`.
+    #[test]
+    fn stale_days_starts_after_the_threshold() {
+        let generated = |days_ago: i64| LockMetadata {
+            generated_at: Some(
+                (time::OffsetDateTime::now_utc() - time::Duration::days(days_ago))
+                    .date()
+                    .to_string()
+                    + "T00:00:00Z",
+            ),
+            hpm_version: None,
+            platform: None,
+        };
+        let limit = LockMetadata::STALE_AFTER_DAYS;
+        assert_eq!(generated(limit).stale_days(), None);
+        assert_eq!(generated(limit + 1).stale_days(), Some(limit + 1));
+        assert_eq!(generated(0).stale_days(), None);
+    }
     use tempfile::TempDir;
 
     // Keep only time/platform-dependent tests that can't be property-tested
@@ -350,12 +347,22 @@ mod tests {
         assert!(timestamp.ends_with('Z'));
     }
 
+    /// The lock records this host as `<os>-<arch>`, which on a supported
+    /// host is its `Platform` string.
     #[test]
-    fn test_current_platform() {
-        let platform = current_platform();
-        // Should contain OS and arch
-        assert!(platform.contains('-'));
-        assert!(!platform.is_empty());
+    fn the_lock_records_the_host_platform() {
+        let platform = LockFile::new("p".into(), "1.0.0".into())
+            .metadata
+            .unwrap()
+            .platform
+            .unwrap();
+        assert_eq!(
+            platform,
+            format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+        );
+        if let Some(host) = hpm_package::Platform::current() {
+            assert_eq!(platform, host.as_str());
+        }
     }
 
     /// Build a fake fetched package directory for verify_checksums tests:
@@ -367,7 +374,7 @@ mod tests {
         version: &str,
         content: &[u8],
     ) -> PathBuf {
-        let dir = cas_install_dir(packages_dir, name, version);
+        let dir = cas_dir(packages_dir, name, version);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("file.txt"), content).unwrap();
         dir
@@ -533,10 +540,7 @@ version = ">=1.20"
 
     /// Strategy to generate checksums
     fn checksum_strategy() -> impl Strategy<Value = Option<String>> {
-        prop_oneof![
-            Just(None),
-            "[a-f0-9]{64}".prop_map(|s| Some(format!("sha256:{}", s))),
-        ]
+        prop_oneof![Just(None), "[a-f0-9]{64}".prop_map(Some),]
     }
 
     /// Strategy to generate LockedDependency (Url or Path)
@@ -655,27 +659,6 @@ version = ">=1.20"
                 let loaded_dep = loaded_dep.unwrap();
                 prop_assert_eq!(&dep.version, &loaded_dep.version);
                 prop_assert_eq!(&dep.checksum, &loaded_dep.checksum);
-            }
-        }
-
-        /// Test has_changes correctly detects identical lock files (reflexive property)
-        #[test]
-        fn prop_has_changes_reflexive(lock in lock_file_strategy()) {
-            prop_assert!(!lock.has_changes(&lock));
-        }
-
-        /// Test has_changes detects added dependencies
-        #[test]
-        fn prop_has_changes_detects_additions(
-            lock in lock_file_strategy(),
-            new_dep_name in package_name_strategy(),
-            new_dep in locked_dependency_strategy()
-        ) {
-            let mut modified = lock.clone();
-            modified.add_dependency(new_dep_name.clone(), new_dep);
-
-            if !lock.dependencies.contains_key(&new_dep_name) {
-                prop_assert!(lock.has_changes(&modified));
             }
         }
 

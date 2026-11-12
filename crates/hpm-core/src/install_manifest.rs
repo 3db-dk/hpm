@@ -30,8 +30,6 @@
 use hpm_package::IoOp;
 use hpm_package::path_util::relative_path_to_forward_slash;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use tracing::warn;
 
@@ -146,7 +144,7 @@ pub fn record_tree(dir: &Path) -> Result<InstallManifest, IoOp> {
             continue;
         }
         let relative = entry.path().strip_prefix(dir).unwrap_or(entry.path());
-        let (size, sha256) = hash_file(entry.path())
+        let (size, sha256) = crate::digest::sha256_file_sized(entry.path())
             .map_err(|e| IoOp::wrap("read file to record", entry.path(), e))?;
         files.push(FileRecord {
             path: relative_path_to_forward_slash(relative),
@@ -173,22 +171,9 @@ pub fn write(package_dir: &Path, manifest: &InstallManifest) -> Result<(), IoOp>
     })?;
     let json = serde_json::to_vec(manifest)
         .map_err(|e| IoOp::wrap("encode install record", &path, std::io::Error::other(e)))?;
-    let mut tmp = path.clone().into_os_string();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, json).map_err(|e| IoOp::wrap("write install record", &tmp, e))?;
-    if let Err(e) = std::fs::rename(&tmp, &path) {
-        // Windows' rename refuses to replace an existing file.
-        if path.exists() {
-            let _ = std::fs::remove_file(&path);
-            if std::fs::rename(&tmp, &path).is_ok() {
-                return Ok(());
-            }
-        }
-        let _ = std::fs::remove_file(&tmp);
-        return Err(IoOp::wrap("commit install record", &path, e));
-    }
-    Ok(())
+    // `std::fs::rename` replaces an existing file on every platform
+    // (`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING` on Windows).
+    hpm_package::atomic_write(&path, json)
 }
 
 /// Read the record for `package_dir`. `Ok(None)` when there is none; an
@@ -284,7 +269,7 @@ fn check_file(dir: &Path, record: &FileRecord) -> Option<ProblemKind> {
     if actual > record.size {
         return Some(ProblemKind::Changed);
     }
-    match hash_file(&path) {
+    match crate::digest::sha256_file_sized(&path) {
         Ok((_, sha256)) if sha256 == record.sha256 => None,
         Ok(_) => Some(ProblemKind::Changed),
         Err(e) => Some(ProblemKind::Unreadable {
@@ -299,28 +284,6 @@ fn is_inside(path: &str) -> bool {
     !path.is_empty()
         && !path.contains('\\')
         && p.components().all(|c| matches!(c, Component::Normal(_)))
-}
-
-/// Size and SHA-256 of a file, streamed.
-fn hash_file(path: &Path) -> std::io::Result<(u64, String)> {
-    let mut hasher = Sha256::new();
-    let mut file = std::fs::File::open(path)?;
-    let mut buffer = [0u8; 64 * 1024];
-    let mut size = 0u64;
-    loop {
-        let n = file.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        size += n as u64;
-        hasher.update(&buffer[..n]);
-    }
-    let hex = hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    Ok((size, hex))
 }
 
 #[cfg(test)]

@@ -1,0 +1,9 @@
+---
+source: crates/hpm-cli/tests/cli_snapshots.rs
+expression: "env.run(&dir, &[\"--output\", \"json-compact\", \"check\"])"
+---
+args: --output json-compact check
+exit: 0
+--- stdout
+{"errors":[],"info":["[OK] hpm.toml found","[OK] hpm.toml has valid TOML syntax","[OK] Package manifest validation passed","[OK] Found otls directory","[OK] Found python directory","[OK] Found Houdini asset: demo.hda","[OK] Houdini compatibility: >=20.5, <22 (compiles to `(houdini_version >= '20.5' and houdini_version < '22')`)","No version control detected - consider initializing git"],"valid":true,"warnings":["Package keywords are missing - consider adding keywords for better discoverability","No README file found - consider adding documentation","License specified in manifest but no LICENSE file found"]}
+--- stderr

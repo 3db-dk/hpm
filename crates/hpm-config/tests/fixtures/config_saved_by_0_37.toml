@@ -1,0 +1,32 @@
+[install]
+path = "packages/hpm"
+parallel_downloads = 8
+
+[storage]
+home_dir = "/Users/artist/.hpm"
+cache_dir = "/Users/artist/.hpm/cache"
+packages_dir = "/Users/artist/.hpm/packages"
+registry_cache_dir = "/Users/artist/.hpm/registry"
+
+[projects]
+explicit_paths = []
+search_roots = ["/Users/artist/projects"]
+max_search_depth = 3
+ignore_patterns = [
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    "backup",
+    "archive",
+    ".cache",
+    "temp",
+    "tmp",
+]
+
+[[registries]]
+name = "tumbletrove"
+url = "https://api.tumbletrove.com/v1/registry"
+type = "api"
+
+[signing]

@@ -1,5 +1,6 @@
 //! Python dependency resolution using UV
 
+use super::PythonHome;
 use super::bundled::{ensure_managed_python, run_uv_command};
 use super::error::PythonError;
 use super::types::{PythonDependencies, PythonVersion, ResolvedDependencySet};
@@ -37,14 +38,14 @@ use tracing::{debug, info};
 /// # Example
 ///
 /// ```rust,no_run
-/// use hpm_core::python::{resolve_dependencies, PythonDependencies, PythonDependency, VersionSpec};
+/// use hpm_core::python::{resolve_dependencies, PythonDependencies, PythonDependency, PythonHome, VersionSpec};
 ///
 /// # async fn example() -> Result<(), hpm_core::python::PythonError> {
 /// let mut deps = PythonDependencies::new();
 /// deps.add_dependency(PythonDependency::new("numpy", VersionSpec::new(">=1.20.0")));
 /// deps.add_dependency(PythonDependency::new("requests", VersionSpec::new("^2.25.0")));
 ///
-/// let resolved = resolve_dependencies(&deps).await?;
+/// let resolved = resolve_dependencies(&PythonHome::of_user()?, &deps).await?;
 /// println!("Resolved {} packages", resolved.packages.len());
 ///
 /// // Now we have exact versions like "numpy==1.24.0", "requests==2.28.0"
@@ -55,6 +56,7 @@ use tracing::{debug, info};
 /// # }
 /// ```
 pub async fn resolve_dependencies(
+    home: &PythonHome,
     dependencies: &PythonDependencies,
 ) -> Result<ResolvedDependencySet, PythonError> {
     info!(
@@ -67,7 +69,7 @@ pub async fn resolve_dependencies(
         .clone()
         .unwrap_or_else(super::default_python_version);
 
-    let resolved = compile_requirements(&requirement_lines(dependencies), python_version)
+    let resolved = compile_requirements(home, &requirement_lines(dependencies), python_version)
         .await
         .map_err(|e| e.uv_context("Failed to run UV dependency resolution"))?;
 
@@ -92,6 +94,7 @@ pub async fn resolve_dependencies(
 /// CPython); absent that, it falls back to
 /// [`crate::python::DEFAULT_PYTHON_VERSION`].
 pub async fn resolve_combined(
+    home: &PythonHome,
     collected: &PythonDependencies,
     extra_requirements: &[String],
 ) -> Result<ResolvedDependencySet, PythonError> {
@@ -119,7 +122,7 @@ pub async fn resolve_combined(
     let mut lines = requirement_lines(collected);
     lines.extend(extra_requirements.iter().map(|r| r.to_string()));
 
-    let resolved = compile_requirements(&lines, python_version)
+    let resolved = compile_requirements(home, &lines, python_version)
         .await
         .map_err(|e| e.uv_context("Failed to resolve package environment dependencies"))?;
     info!(
@@ -182,20 +185,24 @@ pub(super) fn write_requirements_file(lines: &[String]) -> Result<NamedTempFile,
 /// file, make sure the managed CPython exists (on a clean machine UV won't
 /// implicitly download one for this command), compile, and parse the pins.
 pub(super) async fn compile_requirements(
+    home: &PythonHome,
     lines: &[String],
     python_version: PythonVersion,
 ) -> Result<ResolvedDependencySet, PythonError> {
     let req_file = write_requirements_file(lines)?;
     let py_str = python_version.to_string();
-    ensure_managed_python(&py_str).await?;
+    ensure_managed_python(home, &py_str).await?;
 
-    let output = run_uv_command(&[
-        "pip",
-        "compile",
-        req_file.path().to_str().unwrap(),
-        "--python-version",
-        &py_str,
-    ])
+    let output = run_uv_command(
+        home,
+        &[
+            "pip",
+            "compile",
+            req_file.path().to_str().unwrap(),
+            "--python-version",
+            &py_str,
+        ],
+    )
     .await?;
 
     Ok(ResolvedDependencySet::from_pip_compile_output(
@@ -236,9 +243,13 @@ certifi==2022.12.7";
         // No manifest deps and only-blank extra requirements: must return an
         // empty set carrying the default Python version, never shelling to uv.
         let collected = PythonDependencies::new();
-        let resolved = resolve_combined(&collected, &["   ".to_string()])
-            .await
-            .expect("empty resolution should succeed offline");
+        let resolved = resolve_combined(
+            &PythonHome::new("/unused"),
+            &collected,
+            &["   ".to_string()],
+        )
+        .await
+        .expect("empty resolution should succeed offline");
         assert!(resolved.packages.is_empty());
         assert_eq!(resolved.python_version, PythonVersion::new(3, 11, None));
     }

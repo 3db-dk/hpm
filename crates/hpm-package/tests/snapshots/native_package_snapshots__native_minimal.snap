@@ -1,0 +1,22 @@
+---
+source: crates/hpm-package/tests/native_package_snapshots.rs
+expression: render(name)
+---
+--- Generic
+file: minimal.json
+{
+  "name": "minimal",
+  "hpath": "$HOUDINI_PACKAGE_PATH/minimal",
+  "load_package_once": true,
+  "show": true,
+  "env": [
+    {
+      "PKG_MINIMAL": "$HOUDINI_PACKAGE_PATH/minimal"
+    }
+  ],
+  "hpackage": {
+    "version": "1.0.0"
+  }
+}
+--- SideFxHpackage
+error: publishing to SideFX's hpackage repository needs a declared Houdini version: it reads the package's version from the `enable` expression, and without `[compat].houdini` there is none to read

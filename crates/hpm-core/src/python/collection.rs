@@ -37,9 +37,9 @@ use hpm_package::{PackageManifest, PythonDependencySpec};
 /// use hpm_core::python::collect_python_dependencies;
 /// use hpm_package::PackageManifest;
 ///
-/// # async fn example() -> Result<(), hpm_core::python::PythonError> {
+/// # fn example() -> Result<(), hpm_core::python::PythonError> {
 /// let packages: Vec<PackageManifest> = vec![]; // Load your package manifests
-/// let dependencies = collect_python_dependencies(Some("22.0.307"), &packages).await?;
+/// let dependencies = collect_python_dependencies(Some("22.0.307"), &packages)?;
 ///
 /// println!("Found {} Python dependencies", dependencies.dependencies.len());
 /// if let Some(py_version) = dependencies.python_version {
@@ -48,7 +48,7 @@ use hpm_package::{PackageManifest, PythonDependencySpec};
 /// # Ok(())
 /// # }
 /// ```
-pub async fn collect_python_dependencies(
+pub fn collect_python_dependencies(
     project_houdini_version: Option<&str>,
     packages: &[PackageManifest],
 ) -> Result<PythonDependencies, PythonError> {
@@ -117,19 +117,15 @@ fn convert_spec_to_dependency(
             Ok(PythonDependency::new(name, VersionSpec::new(version_spec)))
         }
         PythonDependencySpec::Detailed {
-            version,
-            optional,
-            extras,
+            optional, extras, ..
         } => {
-            let version_spec = version.as_deref().unwrap_or("*");
-            let mut dep = PythonDependency::new(name, VersionSpec::new(version_spec));
+            let mut dep = PythonDependency::new(name, VersionSpec::new(spec.version_req()));
 
-            if let Some(true) = optional {
+            if *optional {
                 dep = dep.optional();
             }
-
-            if let Some(extras_list) = extras {
-                dep = dep.with_extras(extras_list.clone());
+            if !extras.is_empty() {
+                dep = dep.with_extras(extras.clone());
             }
 
             Ok(dep)
@@ -154,7 +150,14 @@ fn map_houdini_to_python_version(houdini_version: &str) -> Result<PythonVersion,
             input: houdini_version.to_string(),
         }
     })?;
-    let minor: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    // A bare major means `major.0`; a minor that is there but not a number
+    // (`21.x`) is an error, not `.0`.
+    let minor: u32 = match parts.next() {
+        None => 0,
+        Some(s) => s.parse().map_err(|_| PythonError::HoudiniVersionParse {
+            input: houdini_version.to_string(),
+        })?,
+    };
 
     match (major, minor) {
         // Houdini 20.5's main builds are built against Python 3.11; a 3.10
@@ -178,7 +181,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_dependency_collection() {
         let packages = vec![];
-        let result = collect_python_dependencies(None, &packages).await.unwrap();
+        let result = collect_python_dependencies(None, &packages).unwrap();
         assert!(result.dependencies.is_empty());
     }
 
@@ -193,8 +196,8 @@ mod tests {
             "requests".to_string(),
             PythonDependencySpec::Detailed {
                 version: Some(">=2.25.0".to_string()),
-                optional: Some(false),
-                extras: Some(vec!["security".to_string()]),
+                optional: false,
+                extras: vec!["security".to_string()],
             },
         );
 
@@ -227,7 +230,7 @@ mod tests {
         };
 
         let packages = vec![manifest];
-        let result = collect_python_dependencies(None, &packages).await.unwrap();
+        let result = collect_python_dependencies(None, &packages).unwrap();
 
         assert_eq!(result.dependencies.len(), 2);
         assert!(result.dependencies.contains_key("numpy"));
@@ -279,9 +282,7 @@ mod tests {
             operators: Vec::new(),
         };
 
-        let result = collect_python_dependencies(Some("22.0.307"), &[manifest])
-            .await
-            .unwrap();
+        let result = collect_python_dependencies(Some("22.0.307"), &[manifest]).unwrap();
 
         let py = result.python_version.expect("project version applied");
         assert_eq!((py.major, py.minor), (3, 13));
@@ -337,12 +338,10 @@ mod tests {
         ];
 
         // Without override: per-package mapping conflicts (3.11 vs 3.13).
-        assert!(collect_python_dependencies(None, &packages).await.is_err());
+        assert!(collect_python_dependencies(None, &packages).is_err());
 
         // With override: project version is authoritative.
-        let result = collect_python_dependencies(Some("22.0"), &packages)
-            .await
-            .unwrap();
+        let result = collect_python_dependencies(Some("22.0"), &packages).unwrap();
         let py = result.python_version.unwrap();
         assert_eq!((py.major, py.minor), (3, 13));
     }
@@ -404,13 +403,27 @@ mod tests {
         // Test detailed spec
         let detailed_spec = PythonDependencySpec::Detailed {
             version: Some("^2.0.0".to_string()),
-            optional: Some(true),
-            extras: Some(vec!["test".to_string(), "dev".to_string()]),
+            optional: true,
+            extras: vec!["test".to_string(), "dev".to_string()],
         };
         let dep = convert_spec_to_dependency("detailed-package", &detailed_spec).unwrap();
         assert_eq!(dep.name, "detailed-package");
         assert_eq!(dep.version.spec, "^2.0.0");
         assert!(dep.optional);
         assert_eq!(dep.extras, vec!["test", "dev"]);
+    }
+
+    /// A bare major means `major.0`; a minor that is there but not a number
+    /// is an error rather than `.0`.
+    #[test]
+    fn a_malformed_houdini_minor_is_an_error() {
+        assert_eq!(
+            map_houdini_to_python_version("21").unwrap(),
+            map_houdini_to_python_version("21.0").unwrap()
+        );
+        assert!(matches!(
+            map_houdini_to_python_version("21.x"),
+            Err(PythonError::HoudiniVersionParse { .. })
+        ));
     }
 }

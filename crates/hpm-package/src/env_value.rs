@@ -14,16 +14,49 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// The value of a `[env.<KEY>]` entry in `hpm.toml`.
+/// The value of a `[runtime.<KEY>]` entry (and of a script's `cmd`) in
+/// `hpm.toml`.
 ///
 /// `Flat` is a single string, used directly (with `$HPM_PACKAGE_ROOT`
 /// substituted). `Conditional` is an ordered list of variants — the first
 /// whose `when` matches the running Houdini wins.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum EnvValue {
     Flat(String),
     Conditional(Vec<EnvValueBranch>),
+}
+
+// Hand-written so an invalid branch reports its own error (a bad `python`,
+// an unknown `os`) instead of "did not match any variant".
+impl<'de> Deserialize<'de> for EnvValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ValueVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ValueVisitor {
+            type Value = EnvValue;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a string or a list of `{ when, set }` variants")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(EnvValue::Flat(value.to_string()))
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                Vec::<EnvValueBranch>::deserialize(serde::de::value::SeqAccessDeserializer::new(
+                    seq,
+                ))
+                .map(EnvValue::Conditional)
+            }
+        }
+
+        deserializer.deserialize_any(ValueVisitor)
+    }
 }
 
 impl EnvValue {
@@ -144,7 +177,7 @@ pub struct Condition {
     /// Houdini Python identifier: `"3.11"`, `"3.10"`, etc. Compiles to
     /// `houdini_python == 'python3.11'`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub python: Option<String>,
+    pub python: Option<PythonTag>,
     /// Install-source filter: `"dev"` (path dependency) or `"registry"`
     /// (registry/URL install). Filtered at install time and never emitted to
     /// Houdini — so a branch gated `install_source = "dev"` disappears
@@ -164,12 +197,17 @@ impl Condition {
     /// True when this selector's `install_source` axis matches the given
     /// install context. A `None` axis matches both. Other axes are ignored
     /// here — those are evaluated by Houdini, not hpm.
+    ///
+    /// Takes `is_dev` (a path-installed package) rather than an
+    /// [`InstallSource`] because TumbleTrove Desktop calls it that way.
     pub fn matches_install_source(&self, is_dev: bool) -> bool {
-        match self.install_source {
-            None => true,
-            Some(InstallSource::Dev) => is_dev,
-            Some(InstallSource::Registry) => !is_dev,
-        }
+        let source = if is_dev {
+            InstallSource::Dev
+        } else {
+            InstallSource::Registry
+        };
+        self.install_source
+            .is_none_or(|required| required == source)
     }
 }
 
@@ -184,12 +222,12 @@ impl Condition {
 #[derive(Debug, Clone)]
 struct ConditionAtom {
     lhs: &'static str,
-    op: &'static str,
+    op: Op,
     rhs: String,
 }
 
 impl ConditionAtom {
-    fn new(lhs: &'static str, op: &'static str, rhs: impl Into<String>) -> Self {
+    fn new(lhs: &'static str, op: Op, rhs: impl Into<String>) -> Self {
         Self {
             lhs,
             op,
@@ -198,20 +236,46 @@ impl ConditionAtom {
     }
 
     fn compile(&self) -> String {
-        format!("{} {} '{}'", self.lhs, self.op, self.rhs)
+        format!("{} {} '{}'", self.lhs, self.op.as_str(), self.rhs)
     }
 
     fn compile_negated(&self) -> String {
-        let flipped = match self.op {
-            ">=" => "<",
-            "<" => ">=",
-            "<=" => ">",
-            ">" => "<=",
-            "==" => "!=",
-            "!=" => "==",
-            other => unreachable!("unknown comparison operator {other}"),
-        };
-        format!("{} {} '{}'", self.lhs, flipped, self.rhs)
+        format!("{} {} '{}'", self.lhs, self.op.negated(), self.rhs)
+    }
+}
+
+/// A comparison operator of the expression grammar. Every range form
+/// reduces to these: `=` is `==`, and caret and tilde are a `>=` and a `<`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Op {
+    Ge,
+    Le,
+    Gt,
+    Lt,
+    Eq,
+}
+
+impl Op {
+    fn as_str(self) -> &'static str {
+        match self {
+            Op::Ge => ">=",
+            Op::Le => "<=",
+            Op::Gt => ">",
+            Op::Lt => "<",
+            Op::Eq => "==",
+        }
+    }
+
+    /// The operator of the negated comparison. Houdini's grammar has no
+    /// `not`, so negation flips each comparison (`==` becomes `!=`).
+    fn negated(self) -> &'static str {
+        match self {
+            Op::Ge => "<",
+            Op::Le => ">",
+            Op::Gt => "<=",
+            Op::Lt => ">=",
+            Op::Eq => "!=",
+        }
     }
 }
 
@@ -246,89 +310,280 @@ fn condition_atoms(selector: &Condition) -> Result<Vec<ConditionAtom>, Expressio
     let mut atoms: Vec<ConditionAtom> = Vec::new();
 
     if let Some(range) = &selector.houdini {
-        atoms.extend(houdini_req_atoms(range.as_str())?);
+        atoms.extend(range.atoms());
     }
     if let Some(os) = &selector.os {
-        atoms.push(ConditionAtom::new("houdini_os", "==", os.as_str()));
+        atoms.push(ConditionAtom::new("houdini_os", Op::Eq, os.as_str()));
     }
     if let Some(py) = &selector.python {
         atoms.push(ConditionAtom::new(
             "houdini_python",
-            "==",
-            python_identifier(py)?,
+            Op::Eq,
+            py.identifier(),
         ));
     }
 
     Ok(atoms)
 }
 
-/// Normalize a python axis value (`"3.11"` or `"python3.11"`) to the
-/// `python<v>` identifier Houdini compares `houdini_python` against.
-fn python_identifier(py: &str) -> Result<String, ExpressionError> {
-    if py.is_empty() {
-        return Err(ExpressionError::InvalidPython(py.to_string()));
+/// A Python version as `hpm.toml` names one: `"3.11"`, or `"python3.11"`
+/// (Houdini's `houdini_python` spelling). Checked when the manifest is
+/// parsed; kept as written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct PythonTag(String);
+
+impl PythonTag {
+    pub fn parse(tag: impl Into<String>) -> Result<Self, ExpressionError> {
+        let tag = tag.into();
+        let version = tag.strip_prefix("python").unwrap_or(&tag);
+        if version.is_empty() || !version.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return Err(ExpressionError::InvalidPython(tag));
+        }
+        Ok(Self(tag))
     }
-    let trimmed = py.strip_prefix("python").unwrap_or(py);
-    if !trimmed.chars().all(|c| c.is_ascii_digit() || c == '.') {
-        return Err(ExpressionError::InvalidPython(py.to_string()));
+
+    /// The tag as written.
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
-    Ok(format!("python{}", trimmed))
+
+    /// The `python<v>` identifier Houdini compares `houdini_python` against.
+    fn identifier(&self) -> String {
+        format!("python{}", self.0.strip_prefix("python").unwrap_or(&self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for PythonTag {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        Self::parse(String::deserialize(de)?).map_err(serde::de::Error::custom)
+    }
 }
 
 /// A validated Cargo-style Houdini version range, e.g. `"^21"`,
 /// `">=20.5, <22"`, or `"20.5"` (bare = caret).
 ///
-/// Construction goes through [`Self::parse`], which compiles the range
-/// via [`compile_houdini_req`] to confirm it is syntactically valid. By
-/// the time you hold a `HoudiniRange`, you know:
-///
-/// - The range parses under the supported grammar.
-/// - [`Self::to_enable_expression`] and [`Self::lower_bound`] are
-///   infallible.
-///
-/// Stored as a String for cheap round-trips through TOML and so the
-/// human-authored form survives in error messages and round-trip
-/// serialization.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-pub struct HoudiniRange(String);
+/// Parsed once into comparators, from which everything else derives: the
+/// `enable` expression Houdini evaluates, its SideFX-hpackage form, the
+/// lower bound, whether it bounds above, and whether a concrete Houdini
+/// satisfies it. The authored text is kept for serialization and messages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoudiniRange {
+    text: String,
+    /// One entry per comma-separated clause, each the comparators that
+    /// clause stands for (caret and tilde stand for two).
+    clauses: Vec<Vec<Comparator>>,
+}
+
+/// A version operand: one to three numeric components, with the text it
+/// is written as. Houdini compares numerically and only over the operand's
+/// components (measured with hconfig on 22.0.368: 22.0.368 equals `'22'`
+/// and `'22.00'`, and is less than `'22.1'`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SimpleVersion {
+    text: String,
+    parts: Vec<u64>,
+}
+
+impl SimpleVersion {
+    fn parse(text: &str) -> Option<Self> {
+        let parts = text
+            .split('.')
+            .map(|seg| seg.parse::<u64>().ok())
+            .collect::<Option<Vec<_>>>()?;
+        (1..=3).contains(&parts.len()).then(|| Self {
+            text: text.to_string(),
+            parts,
+        })
+    }
+
+    /// The version with these components, written canonically.
+    fn from_parts(parts: Vec<u64>) -> Self {
+        let text = parts
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(".");
+        Self { text, parts }
+    }
+
+    /// Compare `version` with this operand over the operand's components.
+    fn compare(&self, version: [u64; 3]) -> std::cmp::Ordering {
+        version[..self.parts.len()].cmp(&self.parts)
+    }
+
+    /// This operand as the `major.minor` SideFX's hpackage repository
+    /// reads: a major alone is padded (`21` → `21.0`), and a build segment is
+    /// dropped only when it is zero, since `21.0.0` trims back to `21.0`. A
+    /// non-zero build names a point inside the line, so dropping it would
+    /// widen the range for hpm installs too (the same `enable` ships there).
+    fn hpackage(&self, req: &str) -> Result<Self, ExpressionError> {
+        match self.parts.as_slice() {
+            [major] => Ok(Self::from_parts(vec![*major, 0])),
+            [major, minor] => Ok(Self::from_parts(vec![*major, *minor])),
+            [major, minor, 0] => Ok(Self::from_parts(vec![*major, *minor])),
+            _ => Err(ExpressionError::HpackageOperand {
+                req: req.to_string(),
+                operand: self.text.clone(),
+            }),
+        }
+    }
+}
+
+/// One comparison of `houdini_version` against an operand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Comparator {
+    op: Op,
+    version: SimpleVersion,
+}
+
+impl Comparator {
+    fn atom(&self) -> ConditionAtom {
+        ConditionAtom::new("houdini_version", self.op, self.version.text.clone())
+    }
+
+    fn matches(&self, version: [u64; 3]) -> bool {
+        use std::cmp::Ordering::*;
+        let o = self.version.compare(version);
+        match self.op {
+            Op::Ge => o != Less,
+            Op::Le => o != Greater,
+            Op::Gt => o == Greater,
+            Op::Lt => o == Less,
+            Op::Eq => o == Equal,
+        }
+    }
+}
+
+/// The comparators one comma-separated clause stands for, or `None` when it
+/// is not part of the grammar.
+fn parse_clause(part: &str) -> Option<Vec<Comparator>> {
+    // Two-character operators before their one-character prefixes, and `=`
+    // (an alias of `==`) after both.
+    for (prefix, op) in [
+        (">=", Op::Ge),
+        ("<=", Op::Le),
+        ("==", Op::Eq),
+        (">", Op::Gt),
+        ("<", Op::Lt),
+        ("=", Op::Eq),
+    ] {
+        if let Some(rest) = part.strip_prefix(prefix) {
+            let version = SimpleVersion::parse(rest.trim())?;
+            return Some(vec![Comparator { op, version }]);
+        }
+    }
+    let (tilde, rest) = match (part.strip_prefix('~'), part.strip_prefix('^')) {
+        (Some(rest), _) => (true, rest),
+        (None, Some(rest)) => (false, rest),
+        // A bare version is shorthand for caret.
+        (None, None) => (false, part),
+    };
+    let lower = SimpleVersion::parse(rest.trim())?;
+    let upper = if tilde {
+        // Below the next minor, or the next major when only a major is given.
+        match lower.parts.as_slice() {
+            [major] => vec![major + 1],
+            [major, minor, ..] => vec![*major, minor + 1],
+            _ => return None,
+        }
+    } else {
+        // Below the next change of the leftmost non-zero component.
+        match lower.parts.as_slice() {
+            [0, 0, patch] => vec![0, 0, patch + 1],
+            [0, minor, ..] => vec![0, minor + 1],
+            [major, ..] => vec![major + 1],
+            _ => return None,
+        }
+    };
+    // The lower operand is written canonically, as the emitted expression
+    // always has.
+    let lower = SimpleVersion::from_parts(lower.parts);
+    Some(vec![
+        Comparator {
+            op: Op::Ge,
+            version: lower,
+        },
+        Comparator {
+            op: Op::Lt,
+            version: SimpleVersion::from_parts(upper),
+        },
+    ])
+}
+
+/// Join compiled clauses with `and`, parenthesised when there are several
+/// so the whole composes with other axes.
+fn join_clauses(clauses: Vec<String>) -> String {
+    if clauses.len() == 1 {
+        clauses.into_iter().next().expect("one clause")
+    } else {
+        format!("({})", clauses.join(" and "))
+    }
+}
 
 impl HoudiniRange {
-    /// Parse and validate a houdini range string. Errors mirror
-    /// [`compile_houdini_req`]'s — the same parser drives both.
+    /// Parse and validate a houdini range string.
     pub fn parse(req: impl Into<String>) -> Result<Self, ExpressionError> {
-        let req = req.into();
-        // Compile once to validate. We don't store the result because
-        // callers may want the original text (for round-trip
-        // serialization, error messages, etc.).
-        compile_houdini_req(&req)?;
-        Ok(Self(req))
+        let text = req.into();
+        let invalid = || ExpressionError::InvalidHoudiniReq(text.clone());
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(invalid());
+        }
+        let clauses = trimmed
+            .split(',')
+            .map(|part| {
+                let part = part.trim();
+                if part.is_empty() {
+                    None
+                } else {
+                    parse_clause(part)
+                }
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(invalid)?;
+        Ok(Self { text, clauses })
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.text
+    }
+
+    fn comparators(&self) -> impl Iterator<Item = &Comparator> {
+        self.clauses.iter().flatten()
+    }
+
+    /// The range as a flat conjunction of atoms, for a conditional branch.
+    fn atoms(&self) -> Vec<ConditionAtom> {
+        self.comparators().map(Comparator::atom).collect()
     }
 
     /// Compile to the Houdini package.json `enable` expression.
-    ///
-    /// Infallible: parsing succeeded at construction time, so the
-    /// re-compile here cannot fail. Returns the canonical Houdini-side
-    /// expression string.
     pub fn to_enable_expression(&self) -> String {
-        compile_houdini_req(&self.0).expect("HoudiniRange validated at parse time")
+        join_clauses(
+            self.clauses
+                .iter()
+                .map(|clause| {
+                    clause
+                        .iter()
+                        .map(|c| c.atom().compile())
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                })
+                .collect(),
+        )
     }
 
     /// The `enable` expression in the form SideFX's hpackage repository
     /// accepts, or an error naming the bound that has no representation
     /// there.
     ///
-    /// Equivalent to [`to_enable_expression`](Self::to_enable_expression)
-    /// with every operand rewritten by
-    /// [`normalize_hpackage_houdini_req`], plus two checks. The range must
-    /// compile to exactly one clause, because hpackage matches the whole
+    /// Every operand is rewritten to `major.minor` (see
+    /// [`SimpleVersion::hpackage`]), plus two checks. The range must compile
+    /// to exactly one comparison, because hpackage matches the whole
     /// `enable` value rather than searching it — so a bounded range is
-    /// refused here rather than at upload. And that clause must be `>=` or
-    /// `<=`, since a range compiling only to `<`, `>`, `==` or `!=` reads to
+    /// refused here rather than at upload. And that comparison must be `>=`
+    /// or `<=`, since a range compiling only to `<`, `>` or `==` reads to
     /// hpackage as a package declaring no Houdini version at all.
     ///
     /// Splitting a bounded range into one object key per clause is what the
@@ -337,63 +592,67 @@ impl HoudiniRange {
     /// an object whose keys do not all match is not gated at all. That holds
     /// for a single-key object too, so there is no safe subset.
     pub fn to_enable_expression_hpackage(&self) -> Result<String, ExpressionError> {
-        let normalized = normalize_hpackage_houdini_req(&self.0)?;
-        let atoms = houdini_req_atoms(&normalized)?;
-        // hpackage matches the whole `enable` value against one clause, so a
-        // bounded range has no form it can read — and the object form that
-        // looks like the repair silently ungates the package in Houdini.
-        if atoms.len() > 1 {
+        let normalized = self
+            .comparators()
+            .map(|c| {
+                Ok(Comparator {
+                    op: c.op,
+                    version: c.version.hpackage(&self.text)?,
+                })
+            })
+            .collect::<Result<Vec<_>, ExpressionError>>()?;
+        if normalized.len() > 1 {
             return Err(ExpressionError::HpackageMultipleClauses {
-                req: self.0.clone(),
-                count: atoms.len(),
+                req: self.text.clone(),
+                count: normalized.len(),
             });
         }
-        if !atoms.iter().any(|atom| matches!(atom.op, ">=" | "<=")) {
-            return Err(ExpressionError::HpackageNoBound(self.0.clone()));
+        let only = &normalized[0];
+        if !matches!(only.op, Op::Ge | Op::Le) {
+            return Err(ExpressionError::HpackageNoBound(self.text.clone()));
         }
-        compile_houdini_req(&normalized)
+        Ok(only.atom().compile())
     }
 
-    /// Lower bound of the range, if any clause implies one. See
-    /// [`houdini_req_lower_bound`] for the matrix.
+    /// The lower bound: the operand of the first comparison that implies
+    /// one (`>=`, `>`, `==`, and the lower half of caret, tilde and a bare
+    /// version). `"<22"` has none; `"<22, >=20.5"` has `20.5`. Python ABI
+    /// selection reads it.
     pub fn lower_bound(&self) -> Option<String> {
-        houdini_req_lower_bound(&self.0)
+        self.comparators()
+            .find(|c| matches!(c.op, Op::Ge | Op::Gt | Op::Eq))
+            .map(|c| c.version.text.clone())
     }
 
-    /// Whether the range bounds above. See [`houdini_req_has_upper_bound`].
+    /// Whether the range bounds above (some comparison is `<`, `<=` or
+    /// `==`, including the upper half of caret, tilde and a bare version).
+    /// `hpm check` flags native packages whose range does not: a DSO built
+    /// against one Houdini major typically won't load in the next.
     pub fn has_upper_bound(&self) -> bool {
-        houdini_req_has_upper_bound(&self.0)
+        self.comparators()
+            .any(|c| matches!(c.op, Op::Lt | Op::Le | Op::Eq))
     }
 
-    /// Whether a concrete Houdini `major.minor` satisfies this range.
+    /// Whether a concrete Houdini `major.minor` (and `build`, when known)
+    /// satisfies this range, evaluated the way Houdini evaluates the emitted
+    /// `enable` expression.
     ///
     /// Used to check a package against a target Houdini *before* writing a
-    /// manifest for it. The emitted `enable` expression is evaluated by
-    /// Houdini at startup, so a package that doesn't satisfy the range fails
-    /// silently — it loads nothing and reports nothing. Answering the same
-    /// question up front turns that into an error at install time.
+    /// manifest for it: a package whose `enable` does not match fails
+    /// silently in Houdini, loading nothing and reporting nothing.
     ///
-    /// The range grammar is Cargo-style, so it is evaluated with the same
-    /// semver semantics `enable` compilation assumes.
-    ///
-    /// `build` is the third component when the caller knows it. Pass `None`
-    /// when only `major.minor` is known: the range is then evaluated against
-    /// the *highest* build in that line rather than build 0, because a range
+    /// Pass `build: None` when only `major.minor` is known: the range is then
+    /// evaluated against the *highest* build in that line, because a range
     /// like `">=20.5.445"` describes a point inside the 20.5 line, and
-    /// testing `20.5.0` against it would reject every build of a line that
-    /// mostly satisfies it — leaving no answerable target at all.
+    /// testing build 0 against it would reject every build of a line that
+    /// mostly satisfies it.
     pub fn matches_version(&self, major: u32, minor: u32, build: Option<u32>) -> bool {
-        let Ok(req) = semver::VersionReq::parse(&self.0) else {
-            // Unreachable for a validated range, but a permissive answer is
-            // the safe failure here: it defers to Houdini's own evaluation
-            // rather than blocking an install on our parser disagreeing.
-            return true;
-        };
-        let patch = match build {
-            Some(build) => build as u64,
-            None => u64::MAX,
-        };
-        req.matches(&semver::Version::new(major as u64, minor as u64, patch))
+        let version = [
+            u64::from(major),
+            u64::from(minor),
+            build.map_or(u64::MAX, u64::from),
+        ];
+        self.comparators().all(|c| c.matches(version))
     }
 }
 
@@ -406,7 +665,13 @@ impl std::str::FromStr for HoudiniRange {
 
 impl std::fmt::Display for HoudiniRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.text)
+    }
+}
+
+impl Serialize for HoudiniRange {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(&self.text)
     }
 }
 
@@ -414,299 +679,6 @@ impl<'de> Deserialize<'de> for HoudiniRange {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(de)?;
         Self::parse(raw).map_err(serde::de::Error::custom)
-    }
-}
-
-/// Extract the lower bound of a Cargo-style houdini version requirement, if
-/// any clause implies one.
-///
-/// Returns the version string from the first comparator with an implied lower
-/// bound (`>=`, `>`, `==`, `^`, `~`, or a bare version — bare aliases caret).
-/// Pure upper-bound comparators (`<`, `<=`) are skipped, so `"<22"` returns
-/// `None` and `"<22, >=20.5"` returns `Some("20.5")`.
-///
-/// Used by Python ABI selection: the lower bound of `[compat].houdini`
-/// determines which embedded CPython version a project's venv must match.
-pub fn houdini_req_lower_bound(req: &str) -> Option<String> {
-    let trimmed = req.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    for raw_part in trimmed.split(',') {
-        let part = raw_part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        let version = if let Some(rest) = part.strip_prefix(">=") {
-            rest.trim()
-        } else if let Some(rest) = part.strip_prefix("==") {
-            rest.trim()
-        } else if let Some(rest) = part.strip_prefix(">") {
-            rest.trim()
-        } else if part.starts_with("<=") || part.starts_with("<") {
-            continue;
-        } else if let Some(rest) = part.strip_prefix('^') {
-            rest.trim()
-        } else if let Some(rest) = part.strip_prefix('~') {
-            rest.trim()
-        } else {
-            part
-        };
-        if is_simple_version(version) {
-            return Some(version.to_string());
-        }
-    }
-    None
-}
-
-/// Whether a Cargo-style houdini version requirement has an upper bound.
-///
-/// Returns `true` if any comma-separated clause implies an upper bound
-/// (`<`, `<=`, `=`, `==`, `^`, `~`, or a bare version — bare aliases
-/// caret). Pure lower-bound clauses (`>=`, `>`) do not contribute.
-///
-/// Used by `hpm check` to flag packages that ship native binaries (have
-/// `[compat].platforms` declared) yet leave their Houdini range
-/// unbounded above — a footgun, since DSOs compiled against one Houdini
-/// major typically won't load in the next.
-pub fn houdini_req_has_upper_bound(req: &str) -> bool {
-    req.trim()
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .any(|p| {
-            // Lower-only forms — these don't bound above.
-            if let Some(rest) = p.strip_prefix(">=") {
-                return !is_simple_version(rest.trim());
-            }
-            if let Some(rest) = p.strip_prefix('>') {
-                return !is_simple_version(rest.trim());
-            }
-            // Everything else implies an upper bound when it parses:
-            //   <X, <=X (explicit upper), =X, ==X (exact),
-            //   ^X, ~X, bare X (semver compatibility ranges).
-            true
-        })
-}
-
-/// Translate a Cargo-style version requirement into a Houdini expression.
-///
-/// Each comma-separated comparator becomes one `houdini_version <op> '<v>'`
-/// clause; caret/tilde/bare-version forms expand to `>= X and < Y` ranges
-/// using semver upper bounds. All clauses combine with `and`, parenthesised
-/// so they compose cleanly when joined with other axes.
-pub fn compile_houdini_req(req: &str) -> Result<String, ExpressionError> {
-    let trimmed = req.trim();
-    if trimmed.is_empty() {
-        return Err(ExpressionError::InvalidHoudiniReq(req.to_string()));
-    }
-
-    // Split top-level on commas (semver allows `>=21, <22`).
-    let mut clauses: Vec<String> = Vec::new();
-    for raw_part in trimmed.split(',') {
-        let part = raw_part.trim();
-        if part.is_empty() {
-            return Err(ExpressionError::InvalidHoudiniReq(req.to_string()));
-        }
-        let expanded = expand_comparator(part)
-            .ok_or_else(|| ExpressionError::InvalidHoudiniReq(req.to_string()))?;
-        clauses.push(expanded);
-    }
-
-    if clauses.len() == 1 {
-        Ok(clauses.into_iter().next().unwrap())
-    } else {
-        Ok(format!("({})", clauses.join(" and ")))
-    }
-}
-
-/// Rewrite every version operand in a Houdini requirement to the
-/// `major.minor` shape SideFX's hpackage repository accepts.
-///
-/// hpackage extracts a package's Houdini version by regex-matching
-/// `houdini_version (<=|>=) '(.+?)'` in the `enable` expression and requires
-/// the operand to have exactly two parts after its own trailing-zero
-/// trimming. A one-segment bound is padded (`21` becomes `21.0`); a
-/// three-segment bound is accepted only when the build is zero, since
-/// `21.0.0` trims back to `21.0` and means the same thing.
-///
-/// A non-zero build segment is refused rather than truncated. `>=20.5.445`
-/// names a point *inside* the 20.5 line, so rewriting it to `>=20.5` would
-/// quietly enable the package on builds it excludes — and the same
-/// `enable` string ships to hpm-managed installs, so the widening would not
-/// stay on the SideFX side.
-///
-/// Operator structure is preserved: only the operands change, so the
-/// compiled expression is the one [`compile_houdini_req`] would produce for
-/// the rewritten range.
-pub fn normalize_hpackage_houdini_req(req: &str) -> Result<String, ExpressionError> {
-    let trimmed = req.trim();
-    if trimmed.is_empty() {
-        return Err(ExpressionError::InvalidHoudiniReq(req.to_string()));
-    }
-    let mut parts: Vec<String> = Vec::new();
-    for raw_part in trimmed.split(',') {
-        let part = raw_part.trim();
-        if part.is_empty() {
-            return Err(ExpressionError::InvalidHoudiniReq(req.to_string()));
-        }
-        // The operator is the leading run of comparator characters; whatever
-        // follows is the version operand. `compile_houdini_req` validates the
-        // operator itself when the rewritten range is compiled.
-        let op_len = part
-            .find(|c: char| !matches!(c, '<' | '>' | '=' | '^' | '~'))
-            .unwrap_or(part.len());
-        let (op, version) = part.split_at(op_len);
-        let normalized = normalize_hpackage_operand(version.trim(), req)?;
-        parts.push(format!("{}{}", op, normalized));
-    }
-    Ok(parts.join(", "))
-}
-
-fn normalize_hpackage_operand(v: &str, req: &str) -> Result<String, ExpressionError> {
-    let parts = parse_simple_version(v)
-        .ok_or_else(|| ExpressionError::InvalidHoudiniReq(req.to_string()))?;
-    match parts.as_slice() {
-        [major] => Ok(format!("{}.0", major)),
-        [major, minor] => Ok(format!("{}.{}", major, minor)),
-        // `parse_simple_version` caps at three segments, so the tail is one
-        // number: keep the bound only when trimming it changes nothing.
-        [major, minor, tail @ ..] if tail.iter().all(|n| *n == 0) => {
-            Ok(format!("{}.{}", major, minor))
-        }
-        _ => Err(ExpressionError::HpackageOperand {
-            req: req.to_string(),
-            operand: v.to_string(),
-        }),
-    }
-}
-
-fn expand_comparator(part: &str) -> Option<String> {
-    let atoms = comparator_atoms(part)?;
-    Some(
-        atoms
-            .iter()
-            .map(ConditionAtom::compile)
-            .collect::<Vec<_>>()
-            .join(" and "),
-    )
-}
-
-/// The whole requirement as a flat conjunction of atoms (comma-separated
-/// comparators all AND together).
-fn houdini_req_atoms(req: &str) -> Result<Vec<ConditionAtom>, ExpressionError> {
-    let trimmed = req.trim();
-    if trimmed.is_empty() {
-        return Err(ExpressionError::InvalidHoudiniReq(req.to_string()));
-    }
-    let mut atoms: Vec<ConditionAtom> = Vec::new();
-    for raw_part in trimmed.split(',') {
-        let part = raw_part.trim();
-        if part.is_empty() {
-            return Err(ExpressionError::InvalidHoudiniReq(req.to_string()));
-        }
-        atoms.extend(
-            comparator_atoms(part)
-                .ok_or_else(|| ExpressionError::InvalidHoudiniReq(req.to_string()))?,
-        );
-    }
-    Ok(atoms)
-}
-
-fn comparator_atoms(part: &str) -> Option<Vec<ConditionAtom>> {
-    // Prefix order matters: two-character operators before their
-    // one-character prefixes, and `=` (alias of `==`) after both.
-    for (prefix, op) in [
-        (">=", ">="),
-        ("<=", "<="),
-        ("==", "=="),
-        (">", ">"),
-        ("<", "<"),
-        ("=", "=="),
-    ] {
-        if let Some(rest) = part.strip_prefix(prefix) {
-            let v = rest.trim();
-            if !is_simple_version(v) {
-                return None;
-            }
-            return Some(vec![ConditionAtom::new("houdini_version", op, v)]);
-        }
-    }
-
-    if let Some(rest) = part.strip_prefix('^') {
-        return caret_atoms(rest.trim());
-    }
-    if let Some(rest) = part.strip_prefix('~') {
-        return tilde_atoms(rest.trim());
-    }
-
-    // Bare version is shorthand for caret.
-    caret_atoms(part)
-}
-
-fn caret_atoms(v: &str) -> Option<Vec<ConditionAtom>> {
-    let parts = parse_simple_version(v)?;
-    let lower = format!("{}", DisplayVersion(&parts));
-    let upper = match parts.as_slice() {
-        [0, 0, p] => format!("0.0.{}", p + 1),
-        [0, m, _] => format!("0.{}", m + 1),
-        [maj, _, _] => format!("{}", maj + 1),
-        [0, m] => format!("0.{}", m + 1),
-        [maj, _] => format!("{}", maj + 1),
-        [maj] => format!("{}", maj + 1),
-        _ => return None,
-    };
-    Some(vec![
-        ConditionAtom::new("houdini_version", ">=", lower),
-        ConditionAtom::new("houdini_version", "<", upper),
-    ])
-}
-
-fn tilde_atoms(v: &str) -> Option<Vec<ConditionAtom>> {
-    let parts = parse_simple_version(v)?;
-    let lower = format!("{}", DisplayVersion(&parts));
-    let upper = match parts.as_slice() {
-        [maj, m, _] => format!("{}.{}", maj, m + 1),
-        [maj, m] => format!("{}.{}", maj, m + 1),
-        [maj] => format!("{}", maj + 1),
-        _ => return None,
-    };
-    Some(vec![
-        ConditionAtom::new("houdini_version", ">=", lower),
-        ConditionAtom::new("houdini_version", "<", upper),
-    ])
-}
-
-fn parse_simple_version(v: &str) -> Option<Vec<u64>> {
-    if v.is_empty() {
-        return None;
-    }
-    let mut out = Vec::new();
-    for seg in v.split('.') {
-        let n: u64 = seg.parse().ok()?;
-        out.push(n);
-    }
-    if out.is_empty() || out.len() > 3 {
-        return None;
-    }
-    Some(out)
-}
-
-fn is_simple_version(v: &str) -> bool {
-    parse_simple_version(v).is_some()
-}
-
-struct DisplayVersion<'a>(&'a [u64]);
-
-impl<'a> std::fmt::Display for DisplayVersion<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (i, n) in self.0.iter().enumerate() {
-            if i > 0 {
-                f.write_str(".")?;
-            }
-            write!(f, "{}", n)?;
-        }
-        Ok(())
     }
 }
 
@@ -743,9 +715,6 @@ pub enum ExpressionError {
     HpackageMultipleClauses { req: String, count: usize },
 }
 
-/// Lower a `Conditional` env value into Houdini's `[{ "<expr>": "<val>" }, …]`
-/// shape, applying the supplied substitutions to each branch's `set` string.
-///
 /// Result of lowering a `Conditional` env value for one install context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoweredConditional {
@@ -759,7 +728,10 @@ pub enum LoweredConditional {
     Branches(Vec<HashMap<String, String>>),
 }
 
-/// Variants whose `install_source` axis does not match `is_dev` are
+/// Lower a `Conditional` env value into Houdini's `[{ "<expr>": "<val>" }, …]`
+/// shape, applying the supplied substitutions to each branch's `set` string.
+///
+/// Variants whose `install_source` axis does not match `source` are
 /// filtered out before lowering, so install-time gates never reach the
 /// Houdini-side expression. The `install_source` axis is also stripped
 /// from surviving variants when compiling the runtime `when` expression.
@@ -773,8 +745,7 @@ pub enum LoweredConditional {
 /// branch AND-ed on — negation by comparison-flipping joined with `or`,
 /// since the expression grammar has no `not`. Houdini also has no boolean
 /// literals (`{"true": v}` silently defines a *variable named `true`*
-/// instead of applying `v` — the old encoding of unconditional branches
-/// was broken), so unconditional branches are handled structurally: a
+/// instead of applying `v`), so unconditional branches are handled structurally: a
 /// leading one collapses the whole value to
 /// [`LoweredConditional::Unconditional`], and a trailing fallback's
 /// expression is just the accumulated negations. Either way, anything
@@ -782,7 +753,7 @@ pub enum LoweredConditional {
 pub fn lower_conditional(
     variants: &[EnvValueBranch],
     substitutions: &[(&str, &str)],
-    is_dev: bool,
+    source: InstallSource,
 ) -> Result<LoweredConditional, ExpressionError> {
     let mut branches: Vec<HashMap<String, String>> = Vec::new();
     // One entry per emitted branch: its condition negated, parenthesized
@@ -790,7 +761,10 @@ pub fn lower_conditional(
     let mut prior_negations: Vec<String> = Vec::new();
 
     for variant in variants {
-        if !variant.when.matches_install_source(is_dev) {
+        if !variant
+            .when
+            .matches_install_source(source == InstallSource::Dev)
+        {
             continue;
         }
         // Strip the install_source axis before compiling — it must not

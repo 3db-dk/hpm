@@ -80,7 +80,6 @@ my-first-package/
 ├── hpm.toml           # HPM manifest
 ├── README.md
 ├── .gitignore
-├── package.json       # Houdini-native package file
 ├── otls/              # HDAs / .otl files
 ├── python/            # Python modules (python/__init__.py is pre-created)
 ├── scripts/           # Shelf tools and script hooks
@@ -133,7 +132,7 @@ A dependency can target a specific registry:
 
 ```toml
 [dependencies]
-studio-tools = { version = "1.0.0", registry = "studio" }
+"studio/studio-tools" = { version = "1.0.0", registry = "studio" }
 ```
 
 Without `registry`, HPM resolves through every configured registry in order.
@@ -142,15 +141,21 @@ Without `registry`, HPM resolves through every configured registry in order.
 
 ### Global options
 
-Available on every command:
+Available on every command, before or after the subcommand name, except
+`--output`, which goes before it (`hpm --output json list`): `build` and
+`pack` have their own `--output <dir>`.
 
 | Option | Description |
 |--------|-------------|
-| `-v, --verbose` | Increase verbosity (repeat for more detail). |
+| `-v, --verbose` | Show progress logs on stderr (`-vv` for more). By default only warnings and errors appear there. |
 | `-q, --quiet` | Suppress non-error output. |
 | `--color <when>` | `auto`, `always`, or `never`. |
-| `--output <format>` | `human` (default), `json`, `json-lines`, `json-compact`. |
-| `-C, --directory <dir>` | Run as if invoked from `<dir>`. |
+| `--output <format>` | `human` (default), `json`, `json-lines`, `json-compact`. The JSON error document follows the same format. |
+| `-C, --directory <dir>` | Run as if invoked from `<dir>`: the project is found there, and relative paths in other arguments resolve against it. |
+
+Commands that work on a project (`add`, `remove`, `update`, `list`, `install`,
+`check`, `build`, `pack`, `run`, `audit`) also take `-m, --manifest <path>`,
+naming the project's `hpm.toml` or the directory holding it.
 
 ### `hpm init`
 
@@ -269,9 +274,11 @@ bytes identify it as a program — an ELF or Mach-O object, or a `#!` script —
 install restores the executable bit, mirroring the read bits (`0644` becomes
 `0755`, `0640` becomes `0750`). The repair is additive: a mode the archive does
 declare is applied untouched, and a file that is not a program is never made
-executable. Archives are checksum- and signature-verified before any of this,
-and hpm already runs `[scripts]` programs out of the installed tree, so this
-grants nothing a well-formed archive could not claim for itself.
+executable. hpm already runs `[scripts]` programs out of the installed tree, so
+this grants nothing a well-formed archive could not claim for itself. (A
+registry archive is checked against the entry's SHA-256 when the registry
+supplies one; signatures are not verified yet, and URL dependencies are not
+checked. See the security page.)
 
 The same repair reaches trees that are already installed. A package at a version
 you already have is never re-extracted, so a tree installed by an older hpm
@@ -327,7 +334,7 @@ With no packages, updates all. With specific packages, updates only those.
 hpm update --dry-run
 hpm update
 hpm update studio/geometry-tools
-hpm update --yes --output json      # CI-friendly
+hpm --output json update --yes      # CI-friendly
 ```
 
 ### `hpm list`
@@ -354,8 +361,7 @@ hpm check
 Check runs:
 
 - `hpm.toml` exists, parses, and passes manifest validation (scoped `creator/slug` path, semver version, `[compat].houdini` parseable, `[stage]` and `[[operators]]` per-platform consistency with `[compat].platforms`).
-- Generated Houdini `package.json` serializes cleanly.
-- Soft warnings for: missing description, missing authors, missing keywords, missing `[compat].houdini`, missing README or license file, missing `.gitignore` when a `.git` directory is present, packages larger than 100 MB, and individual files larger than 10 MB.
+- Soft warnings for: missing description, missing authors, missing keywords, missing `[compat].houdini`, missing README or license file, missing `.gitignore` when a `.git` directory is present, packages larger than 100 MB, and individual files larger than 10 MB. Size is measured over what `hpm pack` would ship: files excluded by `.gitignore`, `.hpmignore` or `[stage]` (a `build/` tree, say) do not count.
 
 Check is advisory — warnings do not fail the command.
 
@@ -775,6 +781,11 @@ Audit checks:
 - **Lock file presence** — warns if `hpm.lock` is missing.
 - **Lock file staleness** — warns if `hpm.lock` is older than 90 days.
 - **Checksum verification** — verifies every cached package in `~/.hpm/packages/` matches the checksum stored in `hpm.lock`.
+- **Installed files** — compares each locked package's installed files with the record its install wrote (missing, truncated or changed files).
+
+The first three are advisories: they print `WARN` and the audit still
+succeeds. Checksum and installed-file failures, and an `hpm.lock` that cannot
+be read, are integrity failures: they print `FAIL` and `hpm audit` exits 1.
 
 See [Security](security.md) for more.
 
@@ -1005,14 +1016,14 @@ one of four shapes:
 # 4. Local path (development). Installs a copy of the package's install
 #    image: the files `hpm pack` would ship (see [stage]), not the whole
 #    workspace, so .git/, build trees and virtualenvs are never copied.
-local-tools = { path = "../local-tools" }
-local-tools = { path = "../local-tools", optional = true }
+"local/local-tools" = { path = "../local-tools" }
+"local/optional-tools" = { path = "../optional-tools", optional = true }
 
 # 5. Local path, installed as a symlink/junction (live edits)
 #    Working-tree edits become visible to a live Houdini session without
 #    re-running `hpm install`. Otherwise identical to (4): same _dev/ namespace
 #    isolation, no effect on registry installs at the same coordinate.
-local-tools = { path = "../local-tools", link = true }
+"local/linked-tools" = { path = "../linked-tools", link = true }
 ```
 
 A `registry = "<name>"` key pins the dependency to one configured registry.
@@ -1658,8 +1669,7 @@ hard error, not a silent fallback to defaults.
 
 ```toml
 [install]
-path = "packages/hpm"        # relative install path inside projects
-parallel_downloads = 8
+parallel_downloads = 8       # packages a sync fetches and installs at once
 
 [storage]
 home_dir = "/Users/me/.hpm"                # default: $HOME/.hpm
@@ -1689,11 +1699,13 @@ key_path = "/Users/me/.hpm/signing.pem"    # fallback for `hpm pack`
 ### What each section controls
 
 **`[install]`**
-- `path`, `parallel_downloads` — **accepted but currently inert.** Both
-  deserialize and validate, but no code outside `hpm-config` reads them.
-  The per-project package directory is hardcoded to `<project>/.hpm/packages`
-  (`Config::project_paths`), so overriding `path` has no effect. Left in the
-  schema for compatibility; do not rely on either.
+- `parallel_downloads` — the most registry or URL packages a sync fetches
+  and installs at once (default 8; must be at least 1).
+- `path` — written by older hpm versions but never used (projects always
+  install into `<project>/.hpm/packages`). It is still accepted, with a
+  warning, so an existing config keeps loading; remove it.
+
+Any other key in a config file is an error that names it.
 
 **`[storage]`**
 - `home_dir` — HPM's root on disk. Default `$HOME/.hpm` on every platform (Linux, macOS, Windows). All other storage paths derive from this by default.
@@ -1834,11 +1846,11 @@ A typical CI recipe:
 ```sh
 set -e
 hpm install --frozen-lockfile                 # fail if lock is stale
-hpm audit                                       # warn on security issues
+hpm audit                                       # fail on integrity problems
 hpm pack --json                                 # produce archive + manifest
 ```
 
-`hpm update --dry-run --output json` is useful for nightly jobs that want to
+`hpm --output json update --dry-run` is useful for nightly jobs that want to
 detect available updates without applying them.
 
 ## Troubleshooting

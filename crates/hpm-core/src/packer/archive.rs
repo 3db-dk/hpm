@@ -70,8 +70,8 @@ pub struct PackResult {
     pub signature: Option<String>,
     /// Hex-encoded first 8 bytes of the public key (if signing key provided).
     pub key_id: Option<String>,
-    /// Platform tag if this is a platform-specific archive.
-    pub platform: Option<String>,
+    /// The target platform of a platform-specific archive.
+    pub platform: Option<Platform>,
 }
 
 /// Create a zip archive of the package directory, filtering via ignore

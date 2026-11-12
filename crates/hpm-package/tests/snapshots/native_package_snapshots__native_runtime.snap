@@ -1,0 +1,58 @@
+---
+source: crates/hpm-package/tests/native_package_snapshots.rs
+expression: render(name)
+---
+--- Generic
+file: runtime.json
+{
+  "name": "runtime",
+  "hpath": "$HOUDINI_PACKAGE_PATH/runtime",
+  "load_package_once": true,
+  "show": true,
+  "enable": "(houdini_version >= '20.5' and houdini_version < '22')",
+  "env": [
+    {
+      "PKG_RUNTIME": "$HOUDINI_PACKAGE_PATH/runtime"
+    },
+    {
+      "HOUDINI_OTLSCAN_PATH": {
+        "method": "append",
+        "value": [
+          "$HOUDINI_PACKAGE_PATH/runtime/extra_otls"
+        ]
+      }
+    },
+    {
+      "MY_ROOT": "$HOUDINI_PACKAGE_PATH/runtime/data"
+    },
+    {
+      "OCIO": {
+        "method": "replace",
+        "value": [
+          {
+            "houdini_version >= '21' and houdini_os == 'linux'": "/opt/ocio/linux21.ocio"
+          },
+          {
+            "houdini_python == 'python3.11' and ( houdini_version < '21' or houdini_os != 'linux' )": "/opt/ocio/py311.ocio"
+          },
+          {
+            "( houdini_version < '21' or houdini_os != 'linux' ) and houdini_python != 'python3.11'": "/opt/ocio/default.ocio"
+          }
+        ]
+      }
+    },
+    {
+      "PATH": {
+        "method": "prepend",
+        "value": [
+          "$HOUDINI_PACKAGE_PATH/runtime/bin"
+        ]
+      }
+    }
+  ],
+  "hpackage": {
+    "version": "2.3.4"
+  }
+}
+--- SideFxHpackage
+error: houdini version requirement `>=20.5, <22` compiles to 2 clauses, and SideFX's hpackage repository accepts an `enable` of exactly one — it matches the whole value against a single `houdini_version >= 'major.minor'` clause. There is no way to keep the upper bound: the multi-clause string Houdini honours is the one hpackage cannot read, and the per-clause object form hpackage's own docs suggest is not a narrower gate but no gate at all (Houdini treats it as a conditional map, loading the package when a key matches and warning `Unsupported value for enable` when none does — measured on 21.0.729 and 22.0.368). Declare a single lower bound such as `>=21.0` to publish there, or host the archive elsewhere and keep the bounded range.

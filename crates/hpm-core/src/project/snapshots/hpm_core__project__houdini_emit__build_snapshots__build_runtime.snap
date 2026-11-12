@@ -1,0 +1,100 @@
+---
+source: crates/hpm-core/src/project/houdini_emit.rs
+expression: render(name)
+---
+--- is_dev=false venv=None overrides=STUDIO_LICENSE
+{
+  "hpath": [
+    "/store/runtime@2.3.4"
+  ],
+  "env": [
+    {
+      "HOUDINI_OTLSCAN_PATH": {
+        "method": "append",
+        "value": [
+          "/store/runtime@2.3.4/extra_otls"
+        ]
+      }
+    },
+    {
+      "MY_ROOT": "/store/runtime@2.3.4/data"
+    },
+    {
+      "OCIO": {
+        "method": "replace",
+        "value": [
+          {
+            "houdini_version >= '21' and houdini_os == 'linux'": "/opt/ocio/linux21.ocio"
+          },
+          {
+            "houdini_python == 'python3.11' and ( houdini_version < '21' or houdini_os != 'linux' )": "/opt/ocio/py311.ocio"
+          },
+          {
+            "( houdini_version < '21' or houdini_os != 'linux' ) and houdini_python != 'python3.11'": "/opt/ocio/default.ocio"
+          }
+        ]
+      }
+    },
+    {
+      "PATH": {
+        "method": "prepend",
+        "value": [
+          "/store/runtime@2.3.4/bin"
+        ]
+      }
+    }
+  ],
+  "enable": "(houdini_version >= '20.5' and houdini_version < '22')"
+}
+--- is_dev=true venv=Some("/venvs/0123abcd/site-packages") overrides=STUDIO_LICENSE
+{
+  "hpath": [
+    "/store/runtime@2.3.4"
+  ],
+  "env": [
+    {
+      "PYTHONPATH": {
+        "method": "prepend",
+        "value": [
+          "/venvs/0123abcd/site-packages"
+        ]
+      }
+    },
+    {
+      "HOUDINI_OTLSCAN_PATH": {
+        "method": "append",
+        "value": [
+          "/store/runtime@2.3.4/extra_otls"
+        ]
+      }
+    },
+    {
+      "MY_ROOT": "/store/runtime@2.3.4/data"
+    },
+    {
+      "OCIO": {
+        "method": "replace",
+        "value": [
+          {
+            "houdini_version >= '21' and houdini_os == 'linux'": "/opt/ocio/linux21.ocio"
+          },
+          {
+            "houdini_python == 'python3.11' and ( houdini_version < '21' or houdini_os != 'linux' )": "/opt/ocio/py311.ocio"
+          },
+          {
+            "( houdini_version < '21' or houdini_os != 'linux' ) and houdini_python != 'python3.11'": "/store/runtime@2.3.4/dev.ocio"
+          }
+        ]
+      }
+    },
+    {
+      "PATH": {
+        "method": "prepend",
+        "value": [
+          "/store/runtime@2.3.4/bin"
+        ]
+      }
+    }
+  ],
+  "enable": "(houdini_version >= '20.5' and houdini_version < '22')"
+}

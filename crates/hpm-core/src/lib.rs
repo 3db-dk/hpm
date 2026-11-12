@@ -43,6 +43,8 @@
 
 pub mod archive_fetcher;
 pub mod asset_index;
+pub mod check;
+pub(crate) mod digest;
 pub mod discovery;
 pub mod disk_full;
 pub mod exec_mode;
@@ -63,6 +65,9 @@ pub mod registry;
 pub mod script_run;
 pub mod storage;
 pub mod tree_hash;
+
+#[cfg(test)]
+mod digest_spec;
 
 // ==========================================================================
 // Stable library API

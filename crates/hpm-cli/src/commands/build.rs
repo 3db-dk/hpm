@@ -17,9 +17,9 @@
 //! DSOs on Windows. HPM is a one-shot copier — managing those output
 //! paths is the user's responsibility, not a background-service concern.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use hpm_core::packer::{StageFilter, build_ignore_rules, stage_to_dir};
-use hpm_package::{PackageManifest, Platform};
+use hpm_package::Platform;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,7 +32,7 @@ pub struct BuildOptions {
     /// Manifest or its containing directory. None = cwd.
     pub manifest: Option<PathBuf>,
     /// Target platform; defaults to host when `[compat].platforms` is declared.
-    pub platform: Option<String>,
+    pub platform: Option<Platform>,
     /// Override `[stage].output_dir`. Absolute paths are used verbatim;
     /// relative paths resolve against the manifest directory. Useful when
     /// running multiple Houdini sessions, each with its own staged image
@@ -70,7 +70,9 @@ pub async fn build(options: BuildOptions, console: &mut Console) -> Result<()> {
         anyhow::bail!("Package has no [stage] section — nothing to build");
     }
 
-    let platform = resolve_target_platform(&manifest, options.platform.as_deref())?;
+    let platform = manifest
+        .compat
+        .resolve_target_platform(options.platform, Platform::current())?;
 
     // A non-default profile that names no declared table still sets
     // HPM_BUILD_PROFILE, but its absence is usually a typo worth surfacing.
@@ -145,43 +147,6 @@ pub async fn build(options: BuildOptions, console: &mut Console) -> Result<()> {
     console.stdout(format!("  output: {}", output_dir.display()));
 
     Ok(())
-}
-
-fn resolve_target_platform(
-    manifest: &PackageManifest,
-    requested: Option<&str>,
-) -> Result<Option<Platform>> {
-    let declared = &manifest.compat.platforms;
-    match (requested, declared.is_empty()) {
-        (Some(_), true) => {
-            bail!("--platform was specified but package has no [compat].platforms")
-        }
-        (Some(p), false) => {
-            let platform: Platform = p.parse().map_err(|e: String| anyhow::anyhow!(e))?;
-            if !declared.contains(&platform) {
-                bail!(
-                    "Platform '{}' is not declared in [compat].platforms: {:?}",
-                    platform,
-                    declared
-                );
-            }
-            Ok(Some(platform))
-        }
-        (None, false) => {
-            let detected = Platform::current()
-                .context("Could not detect host platform; pass --platform explicitly")?;
-            if !declared.contains(&detected) {
-                bail!(
-                    "Host platform '{}' is not declared in [compat].platforms: {:?}. \
-                     Pass --platform to target a different one.",
-                    detected,
-                    declared
-                );
-            }
-            Ok(Some(detected))
-        }
-        (None, true) => Ok(None),
-    }
 }
 
 /// Normalize a `--houdini-majors` flag into the `HPM_HOUDINI_MAJORS` value.

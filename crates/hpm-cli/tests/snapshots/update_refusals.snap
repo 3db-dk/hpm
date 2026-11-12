@@ -1,0 +1,23 @@
+---
+source: crates/hpm-cli/tests/exit_codes.rs
+expression: report
+---
+args: --output json-compact update
+exit: 1
+--- stdout
+--- stderr
+{"elapsed_ms": [MS],"error":"Package error: `hpm --output json-compact update` needs --dry-run to report updates or --yes to apply them","error_type":"package","success":false}
+args: update --dry-run acme/nope
+exit: 1
+--- stdout
+--- stderr
+error: Package error: Not a dependency in [WORK]/app/hpm.toml: acme/nope
+args: update --dry-run
+exit: 1
+--- stdout
+--- stderr
+error: Package error: Failed to read [WORK]/app/hpm.lock: Failed to parse TOML file: [WORK]/app/hpm.lock: TOML parse error at line 1, column 14
+  |
+1 | [dependencies
+  |              ^
+unclosed table, expected `]`

@@ -1,0 +1,48 @@
+---
+source: crates/hpm-core/src/project/houdini_emit.rs
+expression: render(name)
+---
+--- is_dev=false venv=None overrides=STUDIO_LICENSE
+{
+  "hpath": [
+    "/store/native@0.9.0"
+  ],
+  "env": [
+    {
+      "HOUDINI_DSO_PATH": {
+        "method": "prepend",
+        "value": [
+          {
+            "houdini_os == 'windows'": "/store/native@0.9.0/dso/win"
+          },
+          {
+            "houdini_os != 'windows'": "/store/native@0.9.0/dso"
+          }
+        ]
+      }
+    }
+  ],
+  "enable": "houdini_version >= '21' and houdini_version < '22'"
+}
+--- is_dev=true venv=Some("/venvs/0123abcd/site-packages") overrides=STUDIO_LICENSE
+{
+  "hpath": [
+    "/store/native@0.9.0"
+  ],
+  "env": [
+    {
+      "HOUDINI_DSO_PATH": {
+        "method": "prepend",
+        "value": [
+          {
+            "houdini_os == 'windows'": "/store/native@0.9.0/dso/win"
+          },
+          {
+            "houdini_os != 'windows'": "/store/native@0.9.0/dso"
+          }
+        ]
+      }
+    }
+  ],
+  "enable": "houdini_version >= '21' and houdini_version < '22'"
+}

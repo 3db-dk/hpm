@@ -7,6 +7,239 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `hpm add creator/slug@1.0.0` writes the dependency as `creator/slug`.
+  It wrote the key `"creator/slug@1.0.0"`, which nothing could install.
+
+- `hpm clean` no longer removes a version of a package that another kept
+  package depends on when the project itself pins a different version of
+  it; whether it was kept used to depend on the order of the project's
+  dependencies. A package depending on another version of a package
+  already in its chain is also kept now.
+- `hpm add` resolves against the project's `[[registries]]` when it
+  declares any, as `hpm install` does, instead of always the configured
+  registries.
+
+- A `[compat].houdini` range semver cannot read (`==21`, or an operand with
+  a leading zero such as `22.00`) no longer counts as matching every
+  Houdini. `hpm global add` and dependency solving now judge a range the way
+  Houdini evaluates the package's `enable` (checked against Houdini 22.0's
+  own evaluation: a version is compared over the operand's components, so
+  `21.0.445` equals `21` and is below `21.1`). The emitted `enable` strings
+  are unchanged.
+- A range written with a single `=` (`=21`) has a lower bound again, so the
+  project's Python version is chosen from it instead of skipped.
+
+- Installing one version from two places at once (hpm and TumbleTrove
+  Desktop, or two syncs) no longer corrupts the store copy. Each fetch now
+  extracts into a directory of its own, and a store copy is copied into a
+  private staging directory and renamed into place, so the store never
+  shows a half-copied tree.
+- A download whose extraction failed (a crash, or an entry refused as a
+  path traversal) is no longer installed on the next attempt as it stood,
+  unverified. Nothing in fetch staging is reused.
+- An archive with a root-level file whose name begins like a directory
+  beside it (`a` next to `ab/`) no longer loses that file on extraction.
+
+- `fetch_manifest` (used by TumbleTrove Desktop) finds a package already in
+  the store when asked by its scoped `creator/slug` name. It looked in the
+  wrong directory, missed, and downloaded and re-copied the package over a
+  live store copy. It also stages downloads under `home_dir` like every
+  other install, instead of beside `packages_dir`.
+- `fetch_manifest` with `"latest"` picks the highest non-yanked release
+  instead of the highest version outright.
+
+- `hpm init` writes a valid `python/__init__.py`. It used to begin with an
+  empty string literal followed by bare text, which Python rejects.
+
+### Changed
+
+- Python venvs, the bundled uv, uv's cache and config, and the managed
+  CPython it downloads now live under the configured `[storage] home_dir`
+  (`venvs/`, `tools/`, `uv-cache/`, `uv-config/`, `uv-python/`). They
+  always went to `~/.hpm` whatever it said. **Upgrade note:** with a
+  custom `home_dir`, the copies an older hpm left in `~/.hpm` are not
+  moved or cleaned up; the first sync rebuilds venvs under the new home,
+  and the old directories can be deleted by hand. With the default home
+  nothing moves. TumbleTrove Desktop's `prepare_script_env` reads the
+  user's configuration for the same home.
+
+- `[install] parallel_downloads` now bounds how many packages a sync
+  installs at once (it was read but never used), and must be at least 1:
+  a config file with `parallel_downloads = 0` (which meant nothing before)
+  now fails to load until the line is removed or raised. `[install] path`, which
+  was never used, is gone from the config; an existing file holding it
+  still loads, with a warning. Any other unknown key in a config file is
+  now an error that names it (a misspelt `[registry]` or
+  `paralel_downloads` used to be ignored). Config files written by
+  `Config::save` (TumbleTrove Desktop) still load.
+
+- More of `hpm.toml` is checked when it is read rather than by
+  `validate()` later: the package version must be semver, a `python`
+  selector must be a Python version (a script's `python` pin was never
+  checked), platform keys in `[stage.platform]`, profile platforms and
+  per-platform operator sources must be known platforms, and a script's
+  `when` may only use `os` (and a conditional `cmd` must not be empty).
+  Errors name the bad key or value instead of "did not match any
+  variant".
+
+- **Stricter `hpm.toml`:** a dependency table with an unknown or misplaced
+  key is now an error that names it, instead of the key being dropped
+  (`registy = ...` and `optinal = true` used to give an unpinned, required
+  dependency; a path dependency's `version` vanished; `{}` parsed). The same
+  holds for `[python_dependencies]` tables, which must give `version` and/or
+  `extras`. Every installable published TumbleTrove package still parses.
+  **Upgrade note:** the rule applies to every `hpm.toml` hpm reads, including
+  packages from `url = ...` dependencies and copies already in the store. A
+  store copy whose manifest is now refused is skipped (with a warning) when
+  listing installed packages, and reinstalling it names the manifest error;
+  move the copy and its `.files.json` aside (as for a repair) once a fixed
+  version is available.
+- `hpm list --output json`: a path or URL dependency's `spec` no longer
+  carries `"optional": false`.
+
+- `hpm.lock` no longer records `url = "unresolved"` for a registry
+  dependency that was already installed when no previous lock entry knew
+  its source. hpm now looks the download URL up in the project's registries
+  (only in that case), and stops with an error when it cannot. Existing
+  lockfiles holding `"unresolved"` still pass `--frozen-lockfile`, which
+  compares versions only and never contacts a registry, and the next lock
+  rewrite replaces the placeholder.
+
+- `hpm clean` stops with an error, instead of deleting more, when it cannot
+  read something that decides what is in use: the global-install directory
+  or an entry in it, a dev copy's user records, or an entry in a project
+  search root. A dev copy whose records cannot be read is kept.
+
+- An install never replaces a store copy that is already there (a running
+  Houdini may have it loaded); `hpm global add` used to. To repair a damaged
+  copy, move it and its `.files.json` aside first, as TumbleTrove Desktop
+  does. A tree without `hpm.toml` or a stale link is still replaced.
+
+- `[storage] cache_dir` is honoured: downloaded archives are cached there.
+  They used to go to `<home_dir>/cache` whatever it said. Archives an older
+  hpm left in `<home_dir>/cache`, and extracted downloads left in
+  `<packages_dir>/../fetch` when `packages_dir` is outside `home_dir`, are
+  still reclaimed by the fetch-staging sweep and by `evict_download`.
+
+- `hpm check` (and the check `hpm pack` runs first) measures package size
+  over what pack would ship, so a gitignored `build/` or `target/` tree no
+  longer triggers "Package size is large" or "Large file detected". A
+  file in the package that cannot be read is now an error instead of
+  silently skipping the size check.
+- `hpm init` prints its package tree sorted, with correct `└──` /
+  `│` connectors.
+- `hpm install` no longer draws a spinner (which ignored `--quiet`).
+- `-v`, `-q`, `--color` and `-C` work after the subcommand too
+  (`hpm update -v`). `--output <format>` still goes before it.
+- `-C <dir>` now means "run in `<dir>`" for every command: `add`,
+  `remove`, `update`, `list`, `install` and `audit` used to ignore it.
+  Relative paths in other arguments resolve against it, as with
+  `git -C`. `check`, `pack` and `run` take `-m/--manifest` like the
+  other project commands.
+- Without `-v`, stderr carries only warnings and errors: the timestamped
+  INFO lines that preceded every result (and the JSON error document) are
+  gone. Warnings the user should act on (an old or unreadable lockfile,
+  an existing dependency being replaced, a skipped update requirement)
+  go through the normal warning output.
+- Invalid values are refused with a usage error (exit 2) instead of
+  being accepted: `init --vcs` takes `git` or `none` (`--vcs gti` used
+  to skip git silently), `registry add --type` takes `api` or `git`,
+  `build`/`pack --platform` a known platform, `global --houdini` a
+  Houdini version, and `clean --python-only` conflicts with
+  `--comprehensive`.
+- **Exit codes:** `hpm audit` exits 1 when a checksum or installed-file
+  check fails, or `hpm.lock` cannot be read (printed as `FAIL`; the
+  advisories still only warn). `hpm registry update` exits 1 when a
+  registry could not be refreshed, after reporting each one; it used to
+  print "complete" and exit 0. `hpm --output json update` needs
+  `--dry-run` or `--yes`; it used to apply the updates without asking.
+  Scripts that relied on exit 0 from these now see the failure.
+- `hpm update` stops on an `hpm.lock` it cannot read instead of treating
+  the project as unlocked, and on a package name that is not a
+  dependency instead of ignoring it.
+- The JSON error document honours `--output json-compact` and
+  `json-lines` (one line) instead of always being pretty-printed.
+- `hpm pack` refuses a host platform missing from `[compat].platforms`
+  with the message `hpm build` gives, and both list the declared
+  platforms by name (`linux-x86_64, macos-aarch64`). A package directory
+  that cannot be listed while looking for `{slug}.json` or `README.md` is
+  now an error instead of counting as "not there".
+
+- `hpm init` no longer writes a root `package.json`. Nothing read it: hpm
+  writes each dependency's Houdini package file at install time, and
+  `hpm pack` generates the shipped `{slug}.json`. Existing files are left
+  alone, and `hpm init` in a directory that has one still works.
+- `hpm check` no longer reports the two "[OK] Generated ... package.json"
+  lines in `info`; they checked output from an emitter nothing else used.
+
+### Removed
+
+- **Breaking (hpm-core API):** `ProjectManager::add_dependency` and
+  `ProjectManager::remove_dependency`, `storage::PackageSpec`,
+  `storage::VersionReq`, `InstalledPackage::is_compatible_with` and
+  `ProjectError::NoMatchingVersion`. Nothing called them; they also
+  wrote ranges into `hpm.toml` that install then looked up as exact
+  versions, and read a bare version as `^x.y.z`. Edit dependencies with
+  `project::manifest_edit` (what `hpm add` / `hpm remove` use) and run
+  `sync_dependencies`.
+- **Breaking (hpm-package API):** `PackageManifest::generate_houdini_package`,
+  `ManifestEnvEntry::to_houdini_env_value`, `HoudiniEnvValue::replace` and
+  `DependencySpec::validate`. `generate_houdini_package` emitted a
+  different file from the one hpm installs; use
+  `generate_houdini_native_package(_for)` for the shipped `{slug}.json`.
+- **Breaking (hpm-core API):** `ProjectManager::generate_houdini_manifests`.
+  It emitted without the package's venv; `sync_dependencies` writes the
+  manifests.
+- `ProjectManager::lock_file` builds `hpm.lock` from a sync (the CLI's
+  lock building moved into hpm-core), and `PythonDependencySpec::version_req`
+  and `Platform::host_id` replace copies of the same logic.
+- **Breaking (hpm-config API):** `InstallConfig::path` is removed and
+  `parallel_downloads` is a `NonZeroUsize`.
+- **Breaking (hpm-package API):** `Condition::python` and
+  `ScriptEnv::python` are `PythonTag`s; `PlatformStaging::entries` and
+  `OperatorSource::PerPlatform` are keyed by `Platform`; `ScriptEnv::cmd`
+  is a `ScriptCommand` (`ScriptVariant`/`ScriptCondition`, `os` only);
+  `Platform::os_key` returns `OsKey`; `ManifestEnvEntry::lower` and
+  `lower_conditional` take an `InstallSource` instead of `is_dev`.
+- **Breaking (hpm-package API):** `PythonDependencySpec::Detailed`'s
+  `optional` is a `bool` and `extras` a `Vec<String>` (they were `Option`s),
+  and `PythonDependencySpec::extras()` returns a slice.
+- **Breaking (hpm-package API):** the free functions in `env_value`
+  (`compile_houdini_req`, `houdini_req_lower_bound`,
+  `houdini_req_has_upper_bound`, `normalize_hpackage_houdini_req`). Use the
+  methods of `HoudiniRange`. **Breaking (hpm-core API):**
+  `python::collect_python_dependencies` is no longer `async`; a Houdini
+  version with a non-numeric minor (`21.x`) is now an error.
+- `hpm_core::packer::pack_package` does everything `hpm pack` does except
+  signing-key resolution and rendering, so embedders get the same
+  archive, gates and warnings; `CompatConfig::resolve_target_platform`
+  (hpm-package) picks the target platform for pack and build.
+  **Breaking (hpm-core API):** `PackResult::platform` is an
+  `Option<Platform>` (it was a string; it serializes the same).
+- Package validation moved into `hpm_core::check` (`check_package` returns
+  a `Report` of typed findings), for pack and TumbleTrove Desktop to share.
+- **Breaking (hpm-core API):** `LockFile::has_changes`. What it checked
+  (`--frozen-lockfile`) is `ProjectManager::lock_is_current`, which compares
+  a sync's outcomes with the lock without building a new one.
+- **Breaking (hpm-core API):** `python::get_venvs_dir`. The Python
+  subsystem takes a `python::PythonHome` (`PythonHome::for_storage(&config.storage)`,
+  or `PythonHome::of_user()` for `~/.hpm`): `initialize`,
+  `resolve_dependencies`, `resolve_combined`, `ensure_script_venv`,
+  `bundled::ensure_uv_binary` / `ensure_managed_python` / `run_uv_command`,
+  `VenvManager::new` (now infallible) and `VenvManager::with_venvs_dir`,
+  and `PythonCleanupAnalyzer::new` (now infallible) take one.
+  `prepare_script_env(entry)` keeps its signature and resolves the home
+  from the user's configuration; `prepare_script_env_in(home, entry)` takes
+  it explicitly.
+- **Breaking (hpm-core / hpm-config API):** `archive_fetcher::cas_install_dir`,
+  `archive_fetcher::fetcher_install_dir`, `StorageConfig::package_dir` and
+  `FetchManifestError::NoVersionsAvailable`. Use `storage::StoreLayout`
+  (`StorageManager::layout()`) or `storage::layout::cas_dir` /
+  `download_key`; `StorageManager::get_package_path` and `package_exists`
+  are unchanged and now accept a scoped name too.
+
 ## [0.37.0] - 2026-11-11
 
 ### Fixed

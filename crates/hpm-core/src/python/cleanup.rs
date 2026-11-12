@@ -1,5 +1,6 @@
 //! Python virtual environment cleanup integration
 
+use super::PythonHome;
 use super::error::PythonError;
 use super::types::OrphanedVenv;
 use super::venv::VenvManager;
@@ -11,16 +12,17 @@ pub struct PythonCleanupAnalyzer {
 }
 
 impl PythonCleanupAnalyzer {
-    pub fn new() -> Result<Self, PythonError> {
-        Ok(Self {
-            venv_manager: VenvManager::new()?,
-        })
+    /// An analyzer over the venvs of `home`.
+    pub fn new(home: &PythonHome) -> Self {
+        Self {
+            venv_manager: VenvManager::new(home),
+        }
     }
 
     /// Construct an analyzer backed by an explicit `VenvManager`.
     ///
     /// Used by tests that point at a tempdir via `VenvManager::with_venvs_dir`
-    /// so they don't race with real state in `~/.hpm/venvs/`.
+    /// so they don't race with real state in the hpm home's `venvs/`.
     pub fn with_venv_manager(venv_manager: VenvManager) -> Self {
         Self { venv_manager }
     }
@@ -148,10 +150,5 @@ mod tests {
 
         assert_eq!(result.format_space_freed(), "1.5 KB");
         assert_eq!(result.format_space_that_would_be_freed(), "2.0 KB");
-    }
-
-    #[tokio::test]
-    async fn test_python_cleanup_analyzer_creation() {
-        let _analyzer = PythonCleanupAnalyzer::new().expect("home dir resolves under test env");
     }
 }

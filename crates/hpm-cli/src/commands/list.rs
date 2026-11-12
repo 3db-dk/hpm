@@ -71,18 +71,11 @@ fn manifest_json(manifest: &PackageManifest) -> serde_json::Value {
         .python_dependencies
         .iter()
         .map(|(name, spec)| {
-            let extras = match spec {
-                PythonDependencySpec::Detailed {
-                    extras: Some(extras),
-                    ..
-                } => extras.clone(),
-                _ => Vec::new(),
-            };
             serde_json::json!({
                 "name": name,
-                "version": format_python_dependency_spec(spec),
-                "extras": extras,
-                "optional": is_optional_python_dependency(spec),
+                "version": spec.version_req().to_string(),
+                "extras": spec.extras(),
+                "optional": spec.is_optional(),
             })
         })
         .collect();
@@ -142,9 +135,9 @@ fn display_tree(manifest: &PackageManifest, console: &mut Console) {
             let is_last = idx == count - 1;
             let prefix = if is_last { "└── " } else { "├── " };
 
-            let version_info = format_python_dependency_spec(spec);
+            let version_info = spec.version_req().to_string();
             let extras_info = format_python_extras(spec);
-            let optional_marker = if is_optional_python_dependency(spec) {
+            let optional_marker = if spec.is_optional() {
                 style(" [optional]").dim().to_string()
             } else {
                 String::new()
@@ -235,8 +228,8 @@ fn display_python_dependencies(manifest: &PackageManifest, console: &mut Console
         console.stdout("  (none)");
     } else {
         for (name, spec) in &manifest.python_dependencies {
-            let version_info = format_python_dependency_spec(spec);
-            let optional_marker = if is_optional_python_dependency(spec) {
+            let version_info = spec.version_req().to_string();
+            let optional_marker = if spec.is_optional() {
                 " (optional)"
             } else {
                 ""
@@ -303,44 +296,8 @@ fn is_optional_dependency(spec: &DependencySpec) -> bool {
     spec.is_optional()
 }
 
-/// Format Python dependency specification for display
-///
-/// Converts a Python dependency specification into a human-readable version string.
-///
-/// # Arguments
-///
-/// * `spec` - The Python dependency specification to format
-///
-/// # Returns
-///
-/// A formatted version string, or `"*"` if no version is specified
-fn format_python_dependency_spec(spec: &PythonDependencySpec) -> String {
-    match spec {
-        PythonDependencySpec::Simple(version) => version.clone(),
-        PythonDependencySpec::Detailed { version, .. } => {
-            version.clone().unwrap_or_else(|| "*".to_string())
-        }
-    }
-}
-
 /// Check if Python dependency is optional
 ///
-/// Determines whether a Python dependency specification marks the dependency as optional.
-///
-/// # Arguments
-///
-/// * `spec` - The Python dependency specification to check
-///
-/// # Returns
-///
-/// `true` if the dependency is marked as optional, `false` otherwise
-fn is_optional_python_dependency(spec: &PythonDependencySpec) -> bool {
-    match spec {
-        PythonDependencySpec::Simple(_) => false,
-        PythonDependencySpec::Detailed { optional, .. } => optional.unwrap_or(false),
-    }
-}
-
 /// Format Python dependency extras for display
 ///
 /// Formats the extras list for a Python dependency into a display string.
@@ -354,19 +311,11 @@ fn is_optional_python_dependency(spec: &PythonDependencySpec) -> bool {
 ///
 /// A formatted extras string like `" [security,socks]"`, or empty string if no extras
 fn format_python_extras(spec: &PythonDependencySpec) -> String {
-    match spec {
-        PythonDependencySpec::Simple(_) => String::new(),
-        PythonDependencySpec::Detailed { extras, .. } => {
-            if let Some(extras_list) = extras {
-                if !extras_list.is_empty() {
-                    format!(" [{}]", extras_list.join(","))
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            }
-        }
+    let extras = spec.extras();
+    if extras.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", extras.join(","))
     }
 }
 
@@ -460,34 +409,6 @@ mod tests {
     }
 
     #[test]
-    fn test_format_python_dependency_spec() {
-        let simple = PythonDependencySpec::Simple(">=1.20.0".to_string());
-        let result = format_python_dependency_spec(&simple);
-        assert_eq!(result, ">=1.20.0");
-
-        let detailed = PythonDependencySpec::Detailed {
-            version: Some("^3.5.0".to_string()),
-            optional: None,
-            extras: None,
-        };
-        let result = format_python_dependency_spec(&detailed);
-        assert_eq!(result, "^3.5.0");
-    }
-
-    #[test]
-    fn test_is_optional_python_dependency() {
-        let simple = PythonDependencySpec::Simple(">=1.20.0".to_string());
-        assert!(!is_optional_python_dependency(&simple));
-
-        let optional = PythonDependencySpec::Detailed {
-            version: Some("^3.5.0".to_string()),
-            optional: Some(true),
-            extras: None,
-        };
-        assert!(is_optional_python_dependency(&optional));
-    }
-
-    #[test]
     fn test_format_python_extras() {
         let no_extras = PythonDependencySpec::Simple(">=1.20.0".to_string());
         let result = format_python_extras(&no_extras);
@@ -495,16 +416,16 @@ mod tests {
 
         let with_extras = PythonDependencySpec::Detailed {
             version: Some(">=2.25.0".to_string()),
-            optional: None,
-            extras: Some(vec!["security".to_string(), "socks".to_string()]),
+            optional: false,
+            extras: vec!["security".to_string(), "socks".to_string()],
         };
         let result = format_python_extras(&with_extras);
         assert_eq!(result, " [security,socks]");
 
         let empty_extras = PythonDependencySpec::Detailed {
             version: Some(">=2.25.0".to_string()),
-            optional: None,
-            extras: Some(vec![]),
+            optional: false,
+            extras: vec![],
         };
         let result = format_python_extras(&empty_extras);
         assert_eq!(result, "");

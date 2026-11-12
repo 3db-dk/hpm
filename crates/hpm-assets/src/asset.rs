@@ -142,4 +142,35 @@ mod tests {
         assert_eq!(base, "fast_scatter");
         assert_eq!(ver, None);
     }
+
+    fn text() -> impl proptest::strategy::Strategy<Value = String> {
+        use proptest::prelude::*;
+        prop_oneof![
+            "[a-zA-Z0-9_:./ ]{0,20}",
+            Just("Ünïcødé/日本 \"q\"".to_string())
+        ]
+    }
+
+    proptest::proptest! {
+        /// The wire shape round-trips: `kind` discriminator, `None` omitted.
+        #[test]
+        fn asset_round_trips_through_json(
+            kind in proptest::sample::select(vec![AssetKind::HdaOperator, AssetKind::DsoOperator]),
+            type_name in text(),
+            category in text(),
+            label in proptest::option::of(text()),
+            namespace in proptest::option::of(text()),
+            op_version in proptest::option::of(text()),
+            tab_submenu in proptest::option::of(text()),
+            icon in proptest::option::of(text()),
+            source_file in proptest::option::of(text()),
+        ) {
+            let asset = Asset { kind, type_name, category, label, namespace, op_version, tab_submenu, icon, source_file };
+            let json = serde_json::to_value(&asset).unwrap();
+            let object = json.as_object().unwrap();
+            proptest::prop_assert!(object.values().all(|v| !v.is_null()), "None fields must be omitted");
+            let back: Asset = serde_json::from_value(json).unwrap();
+            proptest::prop_assert_eq!(back, asset);
+        }
+    }
 }

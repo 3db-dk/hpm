@@ -4,8 +4,6 @@
 //! direct URLs provided by the registry.
 
 use crate::package_source::{PackageSource, PackageSourceError};
-use sha2::{Digest, Sha256};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -15,48 +13,15 @@ mod extract;
 
 use extract::extract_archive_sync;
 
-/// Compute the on-disk directory where `ArchiveFetcher` extracts a fetched
-/// package keyed by `(name, version)`. Slashes in `name` (e.g. scoped
-/// `creator/slug`) are replaced with `-` so the result is a single
-/// directory name.
-///
-/// This is the **staging** path — `hpm install` and friends fetch into
-/// `<.hpm>/fetch/<safe_name>-<version>/`, then copy into the canonical
-/// `StorageManager` CAS via `install_into_cas`. To find a package's
-/// canonical install location instead, see [`cas_install_dir`].
-pub fn fetcher_install_dir(packages_dir: &Path, name: &str, version: &str) -> PathBuf {
-    let safe_name = name.replace('/', "-");
-    packages_dir.join(format!("{}-{}", safe_name, version))
-}
+/// Per-process sequence for private download and staging names, so two
+/// fetches of one version (in this process or another) never share a file.
+static PRIVATE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Compute the canonical `StorageManager` CAS path for a dependency
-/// referenced by `name` (the dependency key, possibly scoped as
-/// `creator/slug`) and `version`. The CAS keys by **bare slug**: scoped
-/// names are reduced to their last `/`-segment so the layout matches
-/// what `StorageManager::install_into_cas` writes.
-///
-/// Used by `LockFile::verify_checksums` and any consumer that needs to
-/// locate an installed package off the lockfile alone.
-pub fn cas_install_dir(packages_dir: &Path, name: &str, version: &str) -> PathBuf {
-    let slug = name.rsplit('/').next().unwrap_or(name);
-    packages_dir.join(format!("{}@{}", slug, version))
-}
-
-/// SHA-256 of a file's bytes, streamed (blocking operation). Used to verify
-/// a downloaded archive against the registry entry's `cksum`.
-fn compute_file_sha256_sync(path: &Path) -> Result<String, FetchError> {
-    let mut hasher = Sha256::new();
-    let mut file = std::fs::File::open(path)?;
-    let mut buffer = [0u8; 8192];
-    loop {
-        let bytes_read = file.read(&mut buffer)?;
-        if bytes_read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..bytes_read]);
-    }
-    let result = hasher.finalize();
-    Ok(result.iter().map(|b| format!("{:02x}", b)).collect())
+/// `<key>.<pid>-<seq>`: a name only this fetch uses. The fetch-staging sweep
+/// removes such entries once they are old enough to belong to no live fetch.
+fn private_name(key: &str) -> String {
+    let seq = PRIVATE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{key}.{}-{seq}", std::process::id())
 }
 
 /// Compute a SHA-256 checksum of a directory's contents (blocking operation)
@@ -108,9 +73,11 @@ pub enum FetchError {
 pub struct FetchResult {
     /// Path to the extracted package directory
     pub package_path: PathBuf,
-    /// SHA-256 checksum of the package contents
+    /// Tree hash of the extracted package ([`crate::tree_hash::hash_tree`]),
+    /// the value hpm.lock records — not the archive's SHA-256
     pub checksum: String,
-    /// Whether the package was fetched from cache
+    /// Whether the archive came from the download cache rather than the
+    /// network
     pub from_cache: bool,
 }
 
@@ -124,20 +91,28 @@ pub struct ArchiveFetcher {
     http_client: reqwest::Client,
     /// Directory for caching downloaded archives
     cache_dir: PathBuf,
-    /// Directory for extracted packages
-    packages_dir: PathBuf,
+    /// Directory downloads are extracted into before they are copied into
+    /// the store
+    staging_dir: PathBuf,
 }
 
 impl ArchiveFetcher {
-    /// Create a new archive fetcher.
-    ///
-    /// # Arguments
-    /// * `cache_dir` - Directory for caching downloaded archives
-    /// * `packages_dir` - Directory for extracted packages
-    pub fn new(cache_dir: PathBuf, packages_dir: PathBuf) -> Result<Self, FetchError> {
-        // Ensure directories exist
+    /// The fetcher for a store: archives cached in `[storage] cache_dir`,
+    /// extracted under `<home_dir>/fetch` (see [`crate::storage::StoreLayout`]).
+    pub fn for_storage(config: &hpm_config::StorageConfig) -> Result<Self, FetchError> {
+        let layout = crate::storage::StoreLayout::new(config);
+        Self::new(
+            layout.cache_dir().to_path_buf(),
+            layout.fetch_dir().to_path_buf(),
+        )
+    }
+
+    /// Create an archive fetcher caching archives in `cache_dir` and
+    /// extracting into `staging_dir`. Production code uses
+    /// [`Self::for_storage`].
+    pub fn new(cache_dir: PathBuf, staging_dir: PathBuf) -> Result<Self, FetchError> {
         std::fs::create_dir_all(&cache_dir).map_err(FetchError::CacheDirectoryError)?;
-        std::fs::create_dir_all(&packages_dir).map_err(FetchError::CacheDirectoryError)?;
+        std::fs::create_dir_all(&staging_dir).map_err(FetchError::CacheDirectoryError)?;
 
         // 5 min timeout for large packages
         let http_client =
@@ -146,7 +121,7 @@ impl ArchiveFetcher {
         Ok(Self {
             http_client,
             cache_dir,
-            packages_dir,
+            staging_dir,
         })
     }
 
@@ -174,8 +149,9 @@ impl ArchiveFetcher {
         Ok((installed, fetched.checksum))
     }
 
-    /// Fetch a package archive — download to the URL-keyed cache file,
-    /// extract into the staging dir, and report the on-disk checksum.
+    /// Fetch a package archive — download into the archive cache (keyed by
+    /// name and version), verify it, extract it into a staging directory of
+    /// its own, and report the extracted tree's checksum.
     ///
     /// Path dependencies don't go through here; they're copied straight
     /// into the dev CAS via `StorageManager::install_as_dev_copy`.
@@ -202,40 +178,16 @@ impl ArchiveFetcher {
         package_name: &str,
         expected_sha256: Option<&str>,
     ) -> Result<FetchResult, FetchError> {
-        let package_dir = fetcher_install_dir(&self.packages_dir, package_name, version);
-        // The download cache file (a sibling, with the archive bytes) is
-        // keyed off the same dir name minus the parent.
-        let cache_key = package_dir
-            .file_name()
-            .expect("fetcher_install_dir always yields a filename")
-            .to_string_lossy()
-            .into_owned();
-
-        // Check if already extracted
-        if tokio::fs::try_exists(&package_dir)
-            .await
-            .map_err(FetchError::CacheProbeError)?
-        {
-            info!("Package {} already cached at {:?}", cache_key, package_dir);
-            let dir_for_checksum = package_dir.clone();
-            let checksum = tokio::task::spawn_blocking(move || {
-                compute_directory_checksum_sync(&dir_for_checksum)
-            })
-            .await
-            .map_err(|e| {
-                FetchError::ExtractionError(format!("Checksum task join error: {}", e))
-            })??;
-            return Ok(FetchResult {
-                package_path: package_dir,
-                checksum,
-                from_cache: true,
-            });
-        }
+        let cache_key = crate::storage::layout::download_key(package_name, version);
+        // Every fetch extracts into a directory of its own: an extraction is
+        // never reused (a crash or a refused entry would leave a partial tree
+        // that would be installed unverified), and two fetches of one version
+        // never write into, or delete, each other's tree.
+        let package_dir = self.staging_dir.join(private_name(&cache_key));
 
         info!("Downloading package from {}", url);
 
-        // Download the archive directly from the URL
-        let archive_path = self.download_archive(url, &cache_key).await?;
+        let (archive_path, from_cache) = self.download_archive(url, &cache_key).await?;
 
         // Verify the archive bytes against the registry checksum before
         // anything is extracted. A corrupt or tampered cached archive is
@@ -245,7 +197,7 @@ impl ArchiveFetcher {
             let expected = expected.to_string();
             let path_for_verify = archive_path.clone();
             let actual =
-                tokio::task::spawn_blocking(move || compute_file_sha256_sync(&path_for_verify))
+                tokio::task::spawn_blocking(move || crate::digest::sha256_file(&path_for_verify))
                     .await
                     .map_err(|e| {
                         FetchError::ExtractionError(format!("Checksum task join error: {}", e))
@@ -268,11 +220,23 @@ impl ArchiveFetcher {
         info!("Extracting package to {:?}", package_dir);
         let archive_path_clone = archive_path.clone();
         let package_dir_clone = package_dir.clone();
-        tokio::task::spawn_blocking(move || {
+        let extracted = tokio::task::spawn_blocking(move || {
             extract_archive_sync(&archive_path_clone, &package_dir_clone)
         })
         .await
-        .map_err(|e| FetchError::ExtractionError(format!("Task join error: {}", e)))??;
+        .map_err(|e| FetchError::ExtractionError(format!("Task join error: {}", e)))
+        .and_then(|r| r);
+        if let Err(e) = extracted {
+            if let Err(rm) = tokio::fs::remove_dir_all(&package_dir).await
+                && rm.kind() != std::io::ErrorKind::NotFound
+            {
+                warn!(
+                    "Could not remove failed extraction {:?}: {}",
+                    package_dir, rm
+                );
+            }
+            return Err(e);
+        }
 
         // Compute checksum
         let package_dir_for_checksum = package_dir.clone();
@@ -290,7 +254,7 @@ impl ArchiveFetcher {
         Ok(FetchResult {
             package_path: package_dir,
             checksum,
-            from_cache: false,
+            from_cache,
         })
     }
 
@@ -307,19 +271,22 @@ impl ArchiveFetcher {
     /// SHA-256 of zero bytes; and a download interrupted partway left a
     /// truncated file that the `try_exists` probe above would happily serve
     /// as a complete cache hit forever after.
-    async fn download_archive(&self, url: &str, cache_key: &str) -> Result<PathBuf, FetchError> {
+    async fn download_archive(
+        &self,
+        url: &str,
+        cache_key: &str,
+    ) -> Result<(PathBuf, bool), FetchError> {
         let archive_path = self.cache_dir.join(cache_key);
 
-        // Check if already downloaded
         if tokio::fs::try_exists(&archive_path)
             .await
             .map_err(FetchError::CacheProbeError)?
         {
             debug!("Archive already cached at {:?}", archive_path);
-            return Ok(archive_path);
+            return Ok((archive_path, true));
         }
 
-        let response = self.http_client.get(url).send().await?;
+        let mut response = self.http_client.get(url).send().await?;
 
         if !response.status().is_success() {
             return Err(FetchError::DownloadFailed {
@@ -328,16 +295,23 @@ impl ArchiveFetcher {
             });
         }
 
-        // Stream the response to a file
-        let bytes = response.bytes().await?;
-
-        let partial_path = self.cache_dir.join(format!("{}.part", cache_key));
+        // Stream the body chunk by chunk (an archive is never held whole in
+        // memory) into a `.part` file only this download writes, and rename
+        // it into place once complete. A download cut short leaves its
+        // `.part` behind for `evict_download` and the staging sweep.
+        let partial_path = self
+            .cache_dir
+            .join(format!("{}.part", private_name(cache_key)));
         let mut file = tokio::fs::File::create(&partial_path)
             .await
             .map_err(FetchError::WriteError)?;
-        file.write_all(&bytes)
-            .await
-            .map_err(FetchError::WriteError)?;
+        let mut downloaded: u64 = 0;
+        while let Some(chunk) = response.chunk().await? {
+            downloaded += chunk.len() as u64;
+            file.write_all(&chunk)
+                .await
+                .map_err(FetchError::WriteError)?;
+        }
         // `write_all` alone doesn't get the bytes to disk — flush drains
         // tokio's buffer into the OS and `sync_all` makes the file durable
         // before anyone can observe it under its final name.
@@ -346,21 +320,26 @@ impl ArchiveFetcher {
         drop(file);
 
         if let Err(e) = tokio::fs::rename(&partial_path, &archive_path).await {
-            // A concurrent fetch of the same package may have won the race.
-            // Windows' rename refuses to clobber an existing file, so treat
-            // "destination is now there" as success and drop our copy.
-            if tokio::fs::try_exists(&archive_path).await.unwrap_or(false) {
-                debug!("Archive appeared concurrently at {:?}", archive_path);
-                let _ = tokio::fs::remove_file(&partial_path).await;
-                return Ok(archive_path);
+            let concurrent = tokio::fs::try_exists(&archive_path).await.unwrap_or(false);
+            if let Err(rm) = tokio::fs::remove_file(&partial_path).await {
+                warn!(
+                    "Could not remove partial download {:?}: {}",
+                    partial_path, rm
+                );
             }
-            let _ = tokio::fs::remove_file(&partial_path).await;
+            // A concurrent fetch of the same package put the same archive in
+            // place first, and the replace failed because something has it
+            // open (Windows): use theirs.
+            if concurrent {
+                debug!("Archive appeared concurrently at {:?}", archive_path);
+                return Ok((archive_path, false));
+            }
             return Err(FetchError::WriteError(e));
         }
 
-        info!("Downloaded {} bytes to {:?}", bytes.len(), archive_path);
+        info!("Downloaded {} bytes to {:?}", downloaded, archive_path);
 
-        Ok(archive_path)
+        Ok((archive_path, false))
     }
 }
 
@@ -381,14 +360,6 @@ mod tests {
         assert!(fetcher.is_ok());
     }
 
-    // Path-source tests removed: path dependencies bypass the fetcher
-    // entirely and copy straight into the dev CAS via
-    // `StorageManager::install_as_dev_copy`.
-
-    // Unit tests for PackageSource git/version validation removed -
-    // covered by prop_release_asset_url_structure, prop_cache_key_uniqueness,
-    // and prop_source_type_exclusive in package_source.rs
-
     /// Build a small in-memory zip archive with one file.
     fn make_test_zip() -> Vec<u8> {
         let mut buf = std::io::Cursor::new(Vec::new());
@@ -404,13 +375,7 @@ mod tests {
     }
 
     fn sha256_hex(bytes: &[u8]) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(bytes);
-        hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect()
+        crate::digest::sha256_bytes(bytes)
     }
 
     /// Installing a download leaves no copy of it in staging. Every install
@@ -510,8 +475,9 @@ mod tests {
             !archive_path.exists(),
             "corrupt cached archive must be removed"
         );
-        assert!(
-            !fetcher_install_dir(&packages_dir, "pkg", "1.0.0").exists(),
+        assert_eq!(
+            std::fs::read_dir(&packages_dir).unwrap().count(),
+            0,
             "nothing may be extracted from an unverified archive"
         );
     }
@@ -558,16 +524,22 @@ mod tests {
         let bytes = make_test_zip();
         let url = serve_once(bytes.clone()).await;
 
-        let path = fetcher.download_archive(&url, "pkg-1.0.0").await.unwrap();
+        let (path, from_cache) = fetcher.download_archive(&url, "pkg-1.0.0").await.unwrap();
+        assert!(!from_cache);
 
         assert_eq!(
-            compute_file_sha256_sync(&path).unwrap(),
+            crate::digest::sha256_file(&path).unwrap(),
             sha256_hex(&bytes),
             "archive contents must be durable before download_archive returns"
         );
+        let parts: Vec<_> = std::fs::read_dir(&cache_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".part"))
+            .collect();
         assert!(
-            !cache_dir.join("pkg-1.0.0.part").exists(),
-            "the staging file must be renamed away, not left behind"
+            parts.is_empty(),
+            "the .part file must be renamed away, not left behind: {parts:?}"
         );
     }
 
@@ -589,6 +561,51 @@ mod tests {
             .expect("a freshly downloaded archive must verify against its checksum");
         assert!(result.package_path.join("hpm.toml").exists());
         assert!(!result.from_cache);
+    }
+
+    /// An archive far larger than one network read arrives intact: every
+    /// chunk of the streamed body reaches the file, so the checksum verifies
+    /// and the large member extracts byte for byte.
+    #[tokio::test]
+    async fn test_fetch_streams_a_multi_chunk_archive() {
+        let temp = TempDir::new().unwrap();
+        let fetcher =
+            ArchiveFetcher::new(temp.path().join("cache"), temp.path().join("packages")).unwrap();
+
+        // 4 MiB of pseudo-random bytes, stored uncompressed.
+        let mut state: u32 = 0x9e37_79b9;
+        let payload: Vec<u8> = (0..4 * 1024 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect();
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            use std::io::Write;
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let stored = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("pkg-1.0/hpm.toml", stored).unwrap();
+            zip.write_all(b"[package]\n").unwrap();
+            zip.start_file("pkg-1.0/data.bin", stored).unwrap();
+            zip.write_all(&payload).unwrap();
+            zip.finish().unwrap();
+        }
+        let bytes = buf.into_inner();
+        let digest = sha256_hex(&bytes);
+        let url = serve_once(bytes).await;
+
+        let result = fetcher
+            .fetch_direct_url(&url, "1.0.0", "big", Some(&digest))
+            .await
+            .expect("a multi-chunk download must verify against its checksum");
+        assert_eq!(
+            std::fs::read(result.package_path.join("data.bin")).unwrap(),
+            payload
+        );
     }
 
     /// A matching checksum extracts normally.
@@ -613,5 +630,140 @@ mod tests {
             .await
             .expect("verified archive should extract");
         assert!(result.package_path.join("hpm.toml").exists());
+    }
+
+    /// Two installs of one version at once both succeed and leave one
+    /// complete store copy with its record. They used to share one staging
+    /// directory and copy into the store directory in place, so each could
+    /// delete or overwrite the other's tree mid-copy.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_installs_of_one_version_both_succeed() {
+        let temp = TempDir::new().unwrap();
+        let config = hpm_config::StorageConfig {
+            home_dir: temp.path().to_path_buf(),
+            cache_dir: temp.path().join("cache"),
+            packages_dir: temp.path().join("packages"),
+            registry_cache_dir: temp.path().join("registry"),
+        };
+        let storage =
+            std::sync::Arc::new(crate::storage::StorageManager::new(config.clone()).unwrap());
+        let fetcher = ArchiveFetcher::for_storage(&config).unwrap();
+        // The archive is already cached, so both fetches start at once.
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            use std::io::Write;
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("tool-1.0.0/hpm.toml", opts).unwrap();
+            zip.write_all(
+                b"[package]\npath = \"studio/tool\"\nname = \"Tool\"\nversion = \"1.0.0\"\n",
+            )
+            .unwrap();
+            for n in 0..200 {
+                zip.start_file(format!("tool-1.0.0/data/{n}.bin"), opts)
+                    .unwrap();
+                zip.write_all(&vec![n as u8; 4096]).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        std::fs::write(
+            temp.path().join("cache/studio-tool-1.0.0"),
+            buf.into_inner(),
+        )
+        .unwrap();
+
+        let source = PackageSource::url("https://example.invalid/tool.zip", "1.0.0").unwrap();
+        let runs: Vec<_> = (0..4)
+            .map(|_| {
+                let (fetcher, storage, source) = (fetcher.clone(), storage.clone(), source.clone());
+                tokio::spawn(async move {
+                    fetcher
+                        .fetch_into_store::<FetchIntoStoreTestError>(
+                            &storage,
+                            &source,
+                            "studio/tool",
+                        )
+                        .await
+                        .map(|(installed, _)| installed.install_path)
+                })
+            })
+            .collect();
+        for run in runs {
+            run.await
+                .unwrap()
+                .expect("every concurrent install succeeds");
+        }
+
+        let store = storage.get_package_path("tool", "1.0.0");
+        assert_eq!(std::fs::read_dir(store.join("data")).unwrap().count(), 200);
+        match crate::install_manifest::verify(&store).unwrap() {
+            crate::install_manifest::Verification::Checked(report) => {
+                assert!(report.is_intact(), "{report:?}")
+            }
+            other => panic!("the store copy must carry its record, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_dir(temp.path().join("fetch"))
+                .unwrap()
+                .count(),
+            0
+        );
+        let hidden: Vec<_> = std::fs::read_dir(temp.path().join("packages"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with('.'))
+            .collect();
+        assert!(hidden.is_empty(), "no store staging left: {hidden:?}");
+    }
+
+    /// An extraction that fails partway leaves nothing in staging, so the
+    /// partial tree can never be installed. Any existing staging directory
+    /// used to be taken as a finished extraction and copied into the store
+    /// unchecked.
+    #[tokio::test]
+    async fn a_failed_extraction_leaves_no_staging_behind() {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+
+        let temp = TempDir::new().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let staging = temp.path().join("fetch");
+        let fetcher = ArchiveFetcher::new(cache_dir.clone(), staging.clone()).unwrap();
+
+        // A valid entry, then one that escapes the target.
+        let mut tar = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+        let mut ok = tar::Header::new_gnu();
+        ok.set_size(9);
+        ok.set_mode(0o644);
+        ok.set_cksum();
+        tar.append_data(&mut ok, "pkg-1.0/hpm.toml", &b"[package]"[..])
+            .unwrap();
+        let mut evil = tar::Header::new_old();
+        let name = b"pkg-1.0/../../escaped.txt";
+        evil.as_old_mut().name[..name.len()].copy_from_slice(name);
+        evil.set_size(3);
+        evil.set_mode(0o644);
+        evil.set_cksum();
+        tar.append(&evil, &b"pwn"[..]).unwrap();
+        std::fs::write(
+            cache_dir.join("pkg-1.0.0"),
+            tar.into_inner().unwrap().finish().unwrap(),
+        )
+        .unwrap();
+
+        for _ in 0..2 {
+            let result = fetcher
+                .fetch_direct_url("https://example.invalid/p.tgz", "1.0.0", "pkg", None)
+                .await;
+            assert!(
+                matches!(result, Err(FetchError::PathTraversalDetected(_))),
+                "{result:?}"
+            );
+            assert_eq!(
+                std::fs::read_dir(&staging).unwrap().count(),
+                0,
+                "a failed extraction must not leave a tree to reuse"
+            );
+        }
     }
 }

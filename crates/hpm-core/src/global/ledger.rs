@@ -48,17 +48,21 @@ pub struct GlobalEntry {
     /// than recomputed so that a naming-scheme change in a later hpm still
     /// removes the file this install actually created.
     pub manifest_file: String,
-    /// CAS directory backing this install, used as a `hpm clean` GC root.
+    /// The store directory this install's manifest points Houdini at.
+    /// Informational: `hpm clean` protects the install by its package and
+    /// `version`, not by this path.
     pub install_path: PathBuf,
 }
 
 /// Contents of one `~/.hpm/global/houdini-<X.Y>.json`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Ledger {
-    /// Keyed by scoped `creator/slug`, so one package cannot be globally
-    /// installed twice at different versions for the same Houdini.
+    /// Keyed by scoped `creator/slug` (stored as that string), so one
+    /// package cannot be globally installed twice at different versions for
+    /// the same Houdini. A key that is not a package path fails
+    /// [`Ledger::load`].
     #[serde(default)]
-    pub packages: BTreeMap<String, GlobalEntry>,
+    pub packages: BTreeMap<PackagePath, GlobalEntry>,
 }
 
 impl Ledger {
@@ -99,24 +103,21 @@ impl Ledger {
     /// globally replaces the first rather than accumulating, matching the
     /// single manifest file on disk.
     pub fn insert(&mut self, package: &PackagePath, entry: GlobalEntry) -> Option<GlobalEntry> {
-        self.packages.insert(package.as_str().to_string(), entry)
+        self.packages.insert(package.clone(), entry)
     }
 
     pub fn remove(&mut self, package: &PackagePath) -> Option<GlobalEntry> {
-        self.packages.remove(package.as_str())
+        self.packages.remove(package)
     }
 
-    /// Entries as `(scoped creator/slug, entry)` pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &GlobalEntry)> {
+    /// Entries as `(package, entry)` pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&PackagePath, &GlobalEntry)> {
         self.packages.iter()
     }
 }
 
-/// A ledger entry paired with the scoped `creator/slug` it is filed under.
-pub type ScopedEntry = (String, GlobalEntry);
-
-/// A ledger that could not be read, and why.
-pub type LedgerFailure = (PathBuf, LedgerError);
+/// A ledger entry paired with the package it is filed under.
+pub type ScopedEntry = (PackagePath, GlobalEntry);
 
 /// Every global entry across every Houdini version's ledger under `hpm_home`.
 ///
@@ -125,22 +126,24 @@ pub type LedgerFailure = (PathBuf, LedgerError);
 /// directory as unreferenced and delete the bytes out from under a manifest
 /// that Houdini still loads.
 ///
-/// A ledger that fails to parse is skipped with the error returned alongside,
-/// never treated as empty — "no roots" and "unreadable roots" must not look
-/// the same to a garbage collector.
-pub fn all_global_entries(hpm_home: &Path) -> (Vec<ScopedEntry>, Vec<LedgerFailure>) {
+/// Only a missing `global` directory means "no entries". A directory or
+/// ledger that cannot be read is an error, never treated as empty: "no roots"
+/// and "unreadable roots" must not look the same to a garbage collector.
+pub fn all_global_entries(hpm_home: &Path) -> Result<Vec<ScopedEntry>, LedgerError> {
     let dir = hpm_home.join("global");
     let mut entries = Vec::new();
-    let mut failures = Vec::new();
 
     let read_dir = match std::fs::read_dir(&dir) {
         Ok(rd) => rd,
         // No global directory means nothing was ever installed globally.
-        Err(_) => return (entries, failures),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(entries),
+        Err(e) => return Err(IoOp::wrap("read global ledger directory", &dir, e).into()),
     };
 
-    for dir_entry in read_dir.flatten() {
-        let path = dir_entry.path();
+    for dir_entry in read_dir {
+        let path = dir_entry
+            .map_err(|e| IoOp::wrap("read global ledger directory", &dir, e))?
+            .path();
         // Only files this module writes are ledgers. Matching every `*.json`
         // would let an unrelated file dropped in this directory (an editor
         // backup, a user's notes) abort cleanup as an unreadable ledger.
@@ -151,13 +154,10 @@ pub fn all_global_entries(hpm_home: &Path) -> (Vec<ScopedEntry>, Vec<LedgerFailu
         if !is_ledger {
             continue;
         }
-        match Ledger::load(&path) {
-            Ok(ledger) => entries.extend(ledger.packages),
-            Err(e) => failures.push((path, e)),
-        }
+        entries.extend(Ledger::load(&path)?.packages);
     }
 
-    (entries, failures)
+    Ok(entries)
 }
 
 #[cfg(test)]
@@ -206,7 +206,7 @@ mod tests {
 
         let loaded = Ledger::load(&path).unwrap();
         let (name, entry) = loaded.iter().next().unwrap();
-        assert_eq!(name, "acme/tools");
+        assert_eq!(name.as_str(), "acme/tools");
         assert_eq!(entry.version, "1.2.3");
     }
 
@@ -243,9 +243,7 @@ mod tests {
                 .unwrap();
         }
 
-        let (entries, failures) = all_global_entries(home);
-        assert_eq!(entries.len(), 2);
-        assert!(failures.is_empty());
+        assert_eq!(all_global_entries(home).unwrap().len(), 2);
     }
 
     /// An unreadable ledger is reported, not silently dropped — a GC that
@@ -257,9 +255,10 @@ mod tests {
         std::fs::create_dir_all(home.join("global")).unwrap();
         std::fs::write(home.join("global").join("houdini-21.0.json"), b"broken").unwrap();
 
-        let (entries, failures) = all_global_entries(home);
-        assert!(entries.is_empty());
-        assert_eq!(failures.len(), 1);
+        assert!(matches!(
+            all_global_entries(home),
+            Err(LedgerError::Parse { .. })
+        ));
     }
 
     /// Only files this module writes are ledgers. Treating every `*.json`
@@ -281,9 +280,8 @@ mod tests {
             ))
             .unwrap();
 
-        let (entries, failures) = all_global_entries(home);
+        let entries = all_global_entries(home).expect("stray json must not fail the scan");
         assert_eq!(entries.len(), 1);
-        assert!(failures.is_empty(), "stray json must not fail the scan");
     }
 
     #[test]
@@ -299,14 +297,82 @@ mod tests {
             ))
             .unwrap();
 
-        let (entries, _) = all_global_entries(home);
-        assert_eq!(entries[0].0, "acme/tools");
+        assert_eq!(
+            all_global_entries(home).unwrap()[0].0.as_str(),
+            "acme/tools"
+        );
     }
 
     #[test]
-    fn no_global_dir_yields_no_entries_and_no_failures() {
+    fn no_global_dir_yields_no_entries() {
         let tmp = TempDir::new().unwrap();
-        let (entries, failures) = all_global_entries(tmp.path());
-        assert!(entries.is_empty() && failures.is_empty());
+        assert!(all_global_entries(tmp.path()).unwrap().is_empty());
+    }
+
+    /// A global directory that cannot be listed is an error, not "nothing
+    /// installed globally": `hpm clean` would otherwise delete global
+    /// installs.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_global_dir_is_an_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let global = tmp.path().join("global");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::set_permissions(&global, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = all_global_entries(tmp.path());
+        std::fs::set_permissions(&global, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(result, Err(LedgerError::Io(_))), "{result:?}");
+    }
+
+    /// A key that is not a package path fails the load, naming the ledger,
+    /// so `hpm global` and `hpm clean` both stop on it rather than skipping it.
+    #[test]
+    fn a_key_that_is_not_a_package_path_fails_the_load() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("houdini-21.0.json");
+        let json = serde_json::json!({ "packages": { "not a path": {
+            "version": "1.0.0", "manifest_file": "hpm-x.json", "install_path": "/store/x@1.0.0"
+        } } });
+        std::fs::write(&path, json.to_string()).unwrap();
+        match Ledger::load(&path) {
+            Err(LedgerError::Parse { path: p, .. }) => assert_eq!(p, path),
+            other => panic!("expected a parse error, got {other:?}"),
+        }
+    }
+
+    mod format {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn package() -> impl Strategy<Value = PackagePath> {
+            ("[a-c]{1,2}", "[a-c][a-c-]{0,3}[a-c]")
+                .prop_map(|(creator, slug)| pkg(&format!("{creator}/{slug}")))
+        }
+
+        proptest! {
+            /// A ledger round-trips through disk, and its JSON keys are the
+            /// scoped `creator/slug` strings ledgers already on disk use.
+            #[test]
+            fn ledger_round_trips_with_scoped_string_keys(
+                installs in prop::collection::vec((package(), "[0-9]\\.[0-9]\\.[0-9]"), 0..6)
+            ) {
+                let tmp = TempDir::new().unwrap();
+                let path = tmp.path().join("global").join("houdini-21.0.json");
+                let mut ledger = Ledger::default();
+                for (package, version) in &installs {
+                    ledger.insert(package, entry(version, &format!("hpm-{}.json", package.file_stem())));
+                }
+                ledger.save(&path).unwrap();
+
+                let loaded = Ledger::load(&path).unwrap();
+                prop_assert_eq!(&loaded.packages, &ledger.packages);
+                let json: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                let keys: Vec<&str> = json["packages"].as_object().unwrap().keys().map(String::as_str).collect();
+                let expected: Vec<String> = ledger.iter().map(|(k, _)| k.to_string()).collect();
+                prop_assert_eq!(keys, expected);
+            }
+        }
     }
 }

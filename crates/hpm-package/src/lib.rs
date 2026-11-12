@@ -11,7 +11,7 @@
 //! - **Package Templates**: Standardized package structure generation
 //! - **Dependency Management**: Support for registry, URL, and path dependencies, plus Python dependencies
 //! - **Platform-Aware Packaging**: Native platform declarations for multi-architecture archives
-//! - **Version Constraint Handling**: Full semantic versioning support
+//! - **Versions**: package versions are semver; a bare dependency version is an exact pin
 //!
 //! ## Key Types
 //!
@@ -64,7 +64,7 @@
 //! // Add HPM dependencies
 //! let mut deps = IndexMap::new();
 //! deps.insert(
-//!     "utility-nodes".to_string(),
+//!     "studio/utility-nodes".to_string(),
 //!     DependencySpec::url(
 //!         "https://example.com/packages/utility-nodes/1.0.0/utility-nodes-1.0.0.zip",
 //!         "1.0.0"
@@ -81,7 +81,7 @@
 //! manifest.python_dependencies = py_deps;
 //! ```
 //!
-//! ## Generating Houdini package.json
+//! ## Generating the bundled `{slug}.json`
 //!
 //! ```rust
 //! use hpm_package::{PackageManifest, PackagePath};
@@ -95,9 +95,11 @@
 //!     None,
 //! );
 //!
-//! // Generate Houdini-compatible package.json
-//! let houdini_package = manifest.generate_houdini_package()
+//! // The Houdini package file `hpm pack` ships at the archive root
+//! let (file_name, houdini_package) = manifest
+//!     .generate_houdini_native_package()
 //!     .expect("validated manifest produces a Houdini package");
+//! assert_eq!(file_name, "my-package.json");
 //!
 //! let json = serde_json::to_string_pretty(&houdini_package)
 //!     .expect("Should serialize to JSON");
@@ -120,19 +122,21 @@ pub mod toml_file_error;
 // Re-exports for convenient access
 pub use atomic_write::atomic_write;
 pub use dependency::DependencySpec;
-pub use env_value::{Condition, EnvValue, EnvValueBranch, HoudiniRange, InstallSource, OsKey};
+pub use env_value::{
+    Condition, EnvValue, EnvValueBranch, HoudiniRange, InstallSource, OsKey, PythonTag,
+};
 pub use houdini::{
     HoudiniEnvValue, HoudiniMethod, HoudiniNativePackage, HoudiniPackage, HpackageMetadata,
     NativePackageTarget, normalize_hpackage_version, validate_hpackage_descriptor,
 };
 pub use io_error::IoOp;
 pub use manifest::{
-    CompatConfig, EnvMethod, ManifestEnvEntry, ManifestLoadError, PackageInfo, PackageManifest,
-    PackageScripts, PlaceRule, PlatformStaging, RegistryConfig, RegistryType, ScriptEntry,
-    ScriptEnv, StageConfig, StagePlatformRules, ValidationLevel, ValidationReport,
-    parse_manifest_str,
+    CompatConfig, DeclaredPlatforms, EnvMethod, ManifestEnvEntry, ManifestLoadError, PackageInfo,
+    PackageManifest, PackageScripts, PlaceRule, PlatformStaging, RegistryConfig, RegistryType,
+    ScriptCommand, ScriptCondition, ScriptEntry, ScriptEnv, ScriptVariant, StageConfig,
+    StagePlatformRules, TargetPlatformError, ValidationLevel, ValidationReport, parse_manifest_str,
 };
-pub use package_path::{PackagePath, PackagePathError};
+pub use package_path::{PackagePath, PackagePathError, split_name_version};
 pub use path_util::user_home;
 pub use platform::Platform;
 pub use python::PythonDependencySpec;

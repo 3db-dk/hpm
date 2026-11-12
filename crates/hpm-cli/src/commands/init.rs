@@ -8,6 +8,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::info;
 
+/// Version control to set up in a new package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Vcs {
+    Git,
+    None,
+}
+
 pub struct InitOptions {
     pub name_or_path: Option<String>,
     pub description: Option<String>,
@@ -18,7 +25,7 @@ pub struct InitOptions {
     /// `">=20.5, <22"`). When `None`, the template default (`"^21"`) is kept.
     pub houdini: Option<String>,
     pub bare: bool,
-    pub vcs: String,
+    pub vcs: Vcs,
     /// Base directory where the package should be created. If None, uses current working directory.
     pub base_dir: Option<PathBuf>,
 }
@@ -103,7 +110,7 @@ pub async fn init_package(options: InitOptions, console: &mut Console) -> Result
     info!("Package structure created successfully");
 
     // Initialize version control
-    if options.vcs == "git" {
+    if options.vcs == Vcs::Git {
         init_git_repository(&target_dir).await?;
         info!("Initialized git repository");
     }
@@ -119,7 +126,7 @@ pub async fn init_package(options: InitOptions, console: &mut Console) -> Result
     }
 
     console.status(format!("\n{}", style("Package structure:").bold()));
-    print_directory_tree(&target_dir, 0, console)?;
+    print_directory_tree(&target_dir, console)?;
 
     if !options.bare {
         console.status(format!("\n{}", style("Next steps:").bold()));
@@ -328,48 +335,46 @@ async fn init_git_repository(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn print_directory_tree(dir: &Path, depth: usize, console: &mut Console) -> Result<()> {
-    if depth > 3 {
-        // Limit recursion depth
-        return Ok(());
+/// Print the tree under `dir`, sorted by name, without hidden entries
+/// other than `.gitignore`, at most four levels deep.
+fn print_directory_tree(dir: &Path, console: &mut Console) -> Result<()> {
+    for line in directory_tree_lines(dir, "", 0)? {
+        console.status(line);
     }
+    Ok(())
+}
 
-    let entries = fs::read_dir(dir)
-        .context("Failed to read directory")?
-        .collect::<Result<Vec<_>, _>>()
-        .context("Failed to collect directory entries")?;
-
-    for (i, entry) in entries.iter().enumerate() {
-        let is_last = i == entries.len() - 1;
-        let prefix = if depth == 0 {
-            if is_last {
-                "└── ".to_string()
-            } else {
-                "├── ".to_string()
-            }
-        } else {
-            let mut p = "    ".repeat(depth);
-            p.push_str(if is_last { "└── " } else { "├── " });
-            p
-        };
-
-        let file_name_os = entry.file_name();
-        let file_name = file_name_os.to_string_lossy();
-
-        // Skip hidden files and directories
-        if file_name.starts_with('.') && file_name != ".gitignore" {
+fn directory_tree_lines(dir: &Path, indent: &str, depth: usize) -> Result<Vec<String>> {
+    const MAX_DEPTH: usize = 3;
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(dir).with_context(|| format!("Failed to read {}", dir.display()))? {
+        let entry = entry.with_context(|| format!("Failed to read {}", dir.display()))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') && name != ".gitignore" {
             continue;
         }
+        let is_dir = entry
+            .file_type()
+            .with_context(|| format!("Failed to stat {}", entry.path().display()))?
+            .is_dir();
+        entries.push((name, entry.path(), is_dir));
+    }
+    entries.sort();
 
-        console.status(format!("{}{}", prefix, file_name));
-
-        // Recursively print subdirectories
-        if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-            print_directory_tree(&entry.path(), depth + 1, console)?;
+    let mut lines = Vec::new();
+    let count = entries.len();
+    for (i, (name, path, is_dir)) in entries.into_iter().enumerate() {
+        let is_last = i + 1 == count;
+        lines.push(format!(
+            "{indent}{}{name}",
+            if is_last { "└── " } else { "├── " }
+        ));
+        if is_dir && depth < MAX_DEPTH {
+            let child_indent = format!("{indent}{}", if is_last { "    " } else { "│   " });
+            lines.extend(directory_tree_lines(&path, &child_indent, depth + 1)?);
         }
     }
-
-    Ok(())
+    Ok(lines)
 }
 
 #[cfg(test)]
@@ -397,7 +402,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: Some(">=20.5".to_string()),
             bare: true,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -442,7 +447,7 @@ mod tests {
             license: "Apache-2.0".to_string(),
             houdini: Some(">=20.5, <=21.0".to_string()),
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -460,7 +465,7 @@ mod tests {
 
         // Verify all expected files exist
         assert!(package_path.join("hpm.toml").exists());
-        assert!(package_path.join("package.json").exists());
+        assert!(!package_path.join("package.json").exists());
         assert!(package_path.join("README.md").exists());
         assert!(package_path.join(".gitignore").exists());
         assert!(package_path.join("python").join("__init__.py").exists());
@@ -481,16 +486,6 @@ mod tests {
         assert!(hpm_toml_content.contains("Test Author <test@example.com>"));
         assert!(hpm_toml_content.contains("license = \"Apache-2.0\""));
         assert!(hpm_toml_content.contains("houdini = \">=20.5, <=21.0\""));
-
-        // Validate package.json content (Houdini package manifest)
-        let package_json_content = fs::read_to_string(package_path.join("package.json")).unwrap();
-        let package_json: serde_json::Value = serde_json::from_str(&package_json_content).unwrap();
-        assert_eq!(package_json["env"].as_array().unwrap().len(), 2);
-        assert!(package_json_content.contains("PYTHONPATH"));
-        assert!(package_json_content.contains("HOUDINI_SCRIPT_PATH"));
-        assert!(package_json_content.contains("houdini_version >= '20.5'"));
-        assert!(package_json_content.contains("houdini_version <= '21.0'"));
-        assert!(package_json["hpath"].as_array().is_some());
 
         // Validate README.md content
         let readme_content = fs::read_to_string(package_path.join("README.md")).unwrap();
@@ -524,7 +519,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -560,7 +555,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -592,7 +587,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -619,7 +614,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(test_dir),
         };
 
@@ -643,7 +638,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(test_dir.clone()),
         };
 
@@ -670,7 +665,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -696,7 +691,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -727,7 +722,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -753,7 +748,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -782,7 +777,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(test_dir.clone()),
         };
 

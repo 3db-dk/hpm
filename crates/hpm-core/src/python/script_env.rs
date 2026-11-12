@@ -19,12 +19,13 @@
 //! Houdini 21.x's bundled interpreter, which is the most common case for
 //! the out-of-process hooks (`tt_setup`, etc.) this feature exists to serve.
 
+use super::PythonHome;
 use super::error::PythonError;
 use super::types::{PythonVersion, ResolvedDependencySet};
 use super::venv::VenvManager;
 use hpm_package::ScriptEntry;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 use tracing::info;
 
@@ -39,6 +40,7 @@ use tracing::info;
 /// is computed over the resolved exact versions, so different requirement
 /// strings that resolve to the same closure share storage.
 pub async fn ensure_script_venv(
+    home: &PythonHome,
     python_version: Option<&str>,
     requirements: &[String],
 ) -> Result<PathBuf, PythonError> {
@@ -56,13 +58,14 @@ pub async fn ensure_script_venv(
             requirements.len(),
             py_str
         );
-        super::resolver::compile_requirements(requirements, parsed)
+        super::resolver::compile_requirements(home, requirements, parsed)
             .await
             .map_err(|e| e.uv_context("Failed to resolve script requirements"))?
     };
 
-    let manager = VenvManager::new()?;
-    manager.ensure_virtual_environment(&resolved).await
+    VenvManager::new(home)
+        .ensure_virtual_environment(&resolved)
+        .await
 }
 
 /// Env-var mutations a caller should apply to a script subprocess before
@@ -105,32 +108,40 @@ impl ScriptEnvHandle {
             env_vars.insert(k.clone(), v.clone());
         }
         if let Some(prefix) = &self.path_prepend {
-            const PATH_KEY: &str = "PATH";
-            let existing = env_vars
-                .get(PATH_KEY)
-                .cloned()
-                .or_else(|| std::env::var(PATH_KEY).ok())
-                .unwrap_or_default();
-            env_vars.insert(PATH_KEY.to_string(), compose_path(prefix, &existing));
+            prepend_env_paths(env_vars, "PATH", std::slice::from_ref(prefix));
         }
     }
 }
 
-/// Prepend `prefix` to `existing` using the platform path separator.
-/// Pure helper extracted so unit tests can exercise the composition
-/// without mutating the process environment.
-fn compose_path(prefix: &Path, existing: &str) -> String {
+/// Prepend `prefixes` to the path-list env var `key` (in `env_vars`, falling
+/// back to the process env), joined by the platform separator. No-op when
+/// `prefixes` is empty; an empty existing value adds no separator.
+pub(crate) fn prepend_env_paths(
+    env_vars: &mut HashMap<String, String>,
+    key: &str,
+    prefixes: &[PathBuf],
+) {
+    if prefixes.is_empty() {
+        return;
+    }
     let separator = if cfg!(target_os = "windows") {
         ";"
     } else {
         ":"
     };
-    let prefix_str = prefix.to_string_lossy();
-    if existing.is_empty() {
-        prefix_str.into_owned()
-    } else {
-        format!("{}{}{}", prefix_str, separator, existing)
+    let mut parts: Vec<String> = prefixes
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let existing = env_vars
+        .get(key)
+        .cloned()
+        .or_else(|| std::env::var(key).ok())
+        .unwrap_or_default();
+    if !existing.is_empty() {
+        parts.push(existing);
     }
+    env_vars.insert(key.to_string(), parts.join(separator));
 }
 
 /// Prepare the per-script environment for `entry`. When the entry's table
@@ -150,12 +161,29 @@ fn compose_path(prefix: &Path, existing: &str) -> String {
 /// Surfaces `ensure_script_venv` failures (uv bootstrap, interpreter
 /// download, dependency resolve). Callers typically wrap the error with
 /// a `"preparing script venv for <name>"` context.
+///
+/// The venv lives under the hpm home of the user's configuration
+/// (`[storage] home_dir`), loaded only when the entry needs a venv; a
+/// caller that already holds the configuration uses
+/// [`prepare_script_env_in`].
 pub async fn prepare_script_env(entry: &ScriptEntry) -> Result<ScriptEnvHandle, PythonError> {
     if !entry.needs_venv() {
         return Ok(ScriptEnvHandle::default());
     }
-    super::initialize().await?;
-    let venv_path = ensure_script_venv(entry.python(), entry.requirements()).await?;
+    let config = hpm_config::Config::load().map_err(Box::new)?;
+    prepare_script_env_in(&PythonHome::for_storage(&config.storage), entry).await
+}
+
+/// [`prepare_script_env`] with the venv under `home`.
+pub async fn prepare_script_env_in(
+    home: &PythonHome,
+    entry: &ScriptEntry,
+) -> Result<ScriptEnvHandle, PythonError> {
+    if !entry.needs_venv() {
+        return Ok(ScriptEnvHandle::default());
+    }
+    super::initialize(home).await?;
+    let venv_path = ensure_script_venv(home, entry.python(), entry.requirements()).await?;
     let bin_dir = super::venv_layout::bin_dir(&venv_path);
     let mut env = HashMap::new();
     env.insert(
@@ -203,23 +231,36 @@ mod tests {
         );
     }
 
+    /// Prepending yields the prefixes in order, then the existing value,
+    /// joined by the platform separator; an empty existing value adds no
+    /// trailing separator and no prefixes leave the value alone.
     #[test]
-    fn compose_path_prepends_with_platform_separator() {
-        let composed = compose_path(&PathBuf::from("/venv/bin"), "/usr/bin");
-        let separator = if cfg!(target_os = "windows") {
-            ';'
+    fn prepend_env_paths_puts_prefixes_before_the_existing_value() {
+        let sep = if cfg!(target_os = "windows") {
+            ";"
         } else {
-            ':'
+            ":"
         };
-        assert!(composed.starts_with("/venv/bin"));
-        assert!(composed.contains(separator));
-        assert!(composed.ends_with("/usr/bin"));
-    }
-
-    #[test]
-    fn compose_path_omits_separator_when_existing_is_empty() {
-        let composed = compose_path(&PathBuf::from("/venv/bin"), "");
-        assert_eq!(composed, "/venv/bin");
+        for (prefixes, existing, expected) in [
+            (
+                vec!["/venv/bin"],
+                "/usr/bin",
+                format!("/venv/bin{sep}/usr/bin"),
+            ),
+            (vec!["/venv/bin"], "", "/venv/bin".to_string()),
+            (
+                vec!["/pkg/python", "/dep/python"],
+                "/existing",
+                format!("/pkg/python{sep}/dep/python{sep}/existing"),
+            ),
+            (vec![], "/existing", "/existing".to_string()),
+        ] {
+            let mut env = HashMap::new();
+            env.insert("KEY".to_string(), existing.to_string());
+            let prefixes: Vec<PathBuf> = prefixes.into_iter().map(PathBuf::from).collect();
+            prepend_env_paths(&mut env, "KEY", &prefixes);
+            assert_eq!(env["KEY"], expected);
+        }
     }
 
     #[test]
@@ -245,11 +286,11 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_script_env_returns_empty_handle_for_table_without_venv_fields() {
-        use hpm_package::{EnvValue, ScriptEnv};
+        use hpm_package::{ScriptCommand, ScriptEnv};
         // Table form with neither python nor requirements behaves like the
         // shorthand per ScriptEntry::needs_venv() — still empty handle.
         let entry = ScriptEntry::WithEnv(ScriptEnv {
-            cmd: EnvValue::Flat("python scripts/foo.py".to_string()),
+            cmd: ScriptCommand::Flat("python scripts/foo.py".to_string()),
             python: None,
             requirements: vec![],
             label: None,

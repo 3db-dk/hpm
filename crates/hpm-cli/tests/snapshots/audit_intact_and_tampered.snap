@@ -1,0 +1,40 @@
+---
+source: crates/hpm-cli/tests/exit_codes.rs
+expression: report
+---
+args: install
+exit: 0
+--- stdout
+SUCCESS: Dependencies installed successfully
+--- stderr
+[TIME]  WARN No registry checksum for local-dep-1.0.0; installing archive unverified
+args: audit
+exit: 0
+--- stdout
+
+HPM Security Audit
+========================================
+
+  PASS Lock file exists (hpm.lock)
+  PASS Lock file is recent
+  PASS Package checksums verified
+  PASS Installed files match their install records
+  WARN local/dep: Uses insecure HTTP URL
+
+Found 1 warning(s).
+--- stderr
+args: audit
+exit: 1
+--- stdout
+
+HPM Security Audit
+========================================
+
+  PASS Lock file exists (hpm.lock)
+  PASS Lock file is recent
+  WARN local/dep: Uses insecure HTTP URL
+  FAIL Checksum verification failed: Checksum mismatch for local/dep: expected [SHA256], got [SHA256]
+  FAIL local/dep@1.0.0: otls/a.hda differs from what was installed
+
+--- stderr
+error: Package error: Audit found 2 integrity failure(s) and 1 warning(s): installed packages differ from hpm.lock

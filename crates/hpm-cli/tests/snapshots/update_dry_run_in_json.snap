@@ -1,0 +1,18 @@
+---
+source: crates/hpm-cli/tests/exit_codes.rs
+expression: report
+---
+args: --output json update --dry-run
+exit: 0
+--- stdout
+{
+  "updates": [
+    {
+      "current": "1.0.0",
+      "currentIsYanked": false,
+      "latest": "1.2.0",
+      "name": "acme/tools"
+    }
+  ]
+}
+--- stderr

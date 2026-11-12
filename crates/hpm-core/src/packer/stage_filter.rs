@@ -53,12 +53,11 @@ impl StageFilter {
         let mut other_platform_patterns = Vec::new();
 
         if let Some(target) = target {
-            let target_str = target.as_str();
-            for (platform_str, rules) in &stage.platform.entries {
+            for (platform, rules) in &stage.platform.entries {
                 for rule in &rules.place {
                     let from = Pattern::new(&rule.from)
                         .map_err(|e| PackError::GlobPattern(e.to_string()))?;
-                    if platform_str == target_str {
+                    if platform == target {
                         let trimmed = rule.to.trim();
                         let to_is_dir = trimmed.ends_with('/') || trimmed == ".";
                         let to = if trimmed == "." || trimmed == "./" {

@@ -9,17 +9,12 @@
 
 use super::manifest_utils::{determine_manifest_path, load_manifest};
 use crate::console::Console;
-use crate::progress::OperationProgress;
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
-use hpm_core::{
-    InstallOutcome, LockFile, LockedDependency, LockedPythonDependency, LockedSource,
-    ProjectManager, StorageManager,
-};
-use hpm_package::{PackageManifest, PythonDependencySpec};
+use hpm_core::{LockFile, ProjectManager, StorageManager};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::info;
 
 /// CLI entry for `hpm install`: sync, then report success. Internal callers
 /// (`add`/`remove`/`update`) use [`install_dependencies`] directly and own
@@ -30,7 +25,7 @@ pub async fn execute(
     frozen_lockfile: bool,
     console: &mut Console,
 ) -> Result<()> {
-    install_dependencies(config, manifest_path, frozen_lockfile).await?;
+    install_dependencies(config, manifest_path, frozen_lockfile, console).await?;
     console.success("Dependencies installed successfully");
     Ok(())
 }
@@ -40,23 +35,21 @@ pub async fn execute(
 /// * `config` — caller-loaded HPM configuration (shared with this process).
 /// * `manifest_path` — explicit `hpm.toml` path, or `None` for cwd lookup.
 /// * `frozen_lockfile` — fail instead of regenerating `hpm.lock`.
+/// * `console` — where warnings about the existing lockfile go.
 pub async fn install_dependencies(
     config: &Config,
     manifest_path: Option<PathBuf>,
     frozen_lockfile: bool,
+    console: &mut Console,
 ) -> Result<()> {
     info!("Starting dependency installation");
     if frozen_lockfile {
         info!("Using frozen lockfile mode - lock file must exist and not change");
     }
 
-    let mut progress = OperationProgress::new();
-    progress.start("Installing dependencies");
-
     let manifest_path = determine_manifest_path(manifest_path)?;
     info!("Using manifest: {}", manifest_path.display());
 
-    progress.set_message("Loading manifest");
     let manifest = load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
     info!(
@@ -81,22 +74,17 @@ pub async fn install_dependencies(
     let existing_lock = if lock_path.exists() {
         match LockFile::load(&lock_path) {
             Ok(lock) => {
-                progress.set_message("Verifying cached packages");
                 lock.verify_checksums(&config.storage.packages_dir)
                     .context(
                         "Package integrity check failed. \
                      Delete the corrupted package and run 'hpm install' again.",
                     )?;
                 info!("Cached packages verified successfully");
-                if let Some(ref metadata) = lock.metadata
-                    && let Some(days) = metadata.days_since_generated()
-                    && days > 90
-                {
-                    warn!(
-                        "Lock file is {} days old. \
-                                 Consider running 'hpm update' to check for newer versions.",
-                        days
-                    );
+                if let Some(days) = lock.metadata.as_ref().and_then(|m| m.stale_days()) {
+                    console.warn(format!(
+                        "Lock file is {days} days old. \
+                         Consider running 'hpm update' to check for newer versions."
+                    ));
                 }
                 Some(lock)
             }
@@ -108,7 +96,7 @@ pub async fn install_dependencies(
                         e
                     );
                 }
-                warn!("Failed to load existing lock file: {}", e);
+                console.warn(format!("Failed to load existing lock file: {e}"));
                 None
             }
         }
@@ -118,7 +106,6 @@ pub async fn install_dependencies(
 
     // Sync via ProjectManager. The manager owns all the install mechanics —
     // parallel fetch, CAS install, Houdini manifest emission, stale sweep.
-    progress.set_message("Installing dependencies");
     let storage_manager = Arc::new(
         StorageManager::new(config.storage.clone())
             .context("Failed to initialize storage manager")?,
@@ -130,98 +117,32 @@ pub async fn install_dependencies(
         .await
         .context("Failed to sync project dependencies")?;
 
-    // Generate (or refuse to update) the lockfile from sync outcomes.
-    let new_lock = build_lock_file(&manifest, &outcomes, existing_lock.as_ref());
     if frozen_lockfile {
-        // --frozen-lockfile: the new lockfile must equal the existing one.
-        // has_changes() compares dependencies + python_dependencies only,
-        // ignoring metadata.generated_at which always differs.
-        if let Some(ref existing) = existing_lock
-            && new_lock.has_changes(existing)
-        {
+        // The lock must already record what the sync resolved. Checked
+        // without building a new lock, which may need the registry.
+        let existing = existing_lock
+            .as_ref()
+            .expect("--frozen-lockfile loaded hpm.lock above");
+        if !ProjectManager::lock_is_current(&manifest, &outcomes, existing) {
             bail!(
                 "--frozen-lockfile is set but the resolved dependency set differs from hpm.lock. \
-                     Re-run without --frozen-lockfile to regenerate it."
+                 Re-run without --frozen-lockfile to regenerate it."
             );
         }
         info!("Skipping lock file update (--frozen-lockfile)");
     } else {
-        progress.set_message("Generating lock file");
+        let new_lock = project_manager
+            .lock_file(&manifest, &outcomes, existing_lock.as_ref())
+            .await
+            .context("Failed to build the lock file")?;
         new_lock
             .save(&lock_path)
             .with_context(|| format!("Failed to write lock file: {}", lock_path.display()))?;
         info!("Lock file generated: {}", lock_path.display());
     }
 
-    progress.finish_success("Dependencies installed");
     info!("Dependency installation completed successfully");
     Ok(())
-}
-
-/// Build a fresh `LockFile` from sync outcomes, backfilling fields that
-/// `sync_dependencies` couldn't populate from the prior lockfile.
-///
-/// `InstallOutcome` leaves `checksum` / `source` as `None` when the install
-/// short-circuited on the CAS (already-installed package); we look those
-/// fields up in the prior lockfile so the new file isn't lossy. Only deps
-/// that are genuinely new to the project, with no prior entry, fall back
-/// to `LockedSource::url("unresolved", version)`.
-fn build_lock_file(
-    manifest: &PackageManifest,
-    outcomes: &[(String, InstallOutcome)],
-    existing: Option<&LockFile>,
-) -> LockFile {
-    let mut lock = LockFile::new(
-        manifest.package.name.clone(),
-        manifest.package.version.clone(),
-    );
-
-    for (name, outcome) in outcomes {
-        let prior = existing.and_then(|l| l.get_dependency(name));
-        let (checksum, source) = resolve_locked_fields(outcome, prior);
-        lock.add_dependency(
-            name.to_string(),
-            LockedDependency {
-                version: outcome.package.version.clone(),
-                checksum,
-                source,
-            },
-        );
-    }
-
-    for (name, spec) in &manifest.python_dependencies {
-        let version = match spec {
-            PythonDependencySpec::Simple(v) => v.clone(),
-            PythonDependencySpec::Detailed { version, .. } => {
-                version.clone().unwrap_or_else(|| "*".to_string())
-            }
-        };
-        lock.add_python_dependency(name.to_string(), LockedPythonDependency::new(version));
-    }
-
-    lock
-}
-
-/// Compute `(checksum, source)` for a lockfile entry from this sync's
-/// `InstallOutcome` plus the prior lockfile entry. Fresh-fetched outcomes
-/// always win; CAS short-circuits inherit from the prior entry where
-/// possible.
-fn resolve_locked_fields(
-    outcome: &InstallOutcome,
-    prior: Option<&LockedDependency>,
-) -> (Option<String>, LockedSource) {
-    let checksum = outcome
-        .checksum
-        .clone()
-        .or_else(|| prior.and_then(|p| p.checksum.clone()));
-
-    let source = outcome
-        .source
-        .clone()
-        .or_else(|| prior.map(|p| p.source.clone()))
-        .unwrap_or_else(|| LockedSource::url("unresolved", outcome.package.version.clone()));
-
-    (checksum, source)
 }
 
 #[cfg(test)]
@@ -283,7 +204,9 @@ houdini = ">=20.5"
         let _cwd = CwdGuard::enter(temp_dir.path());
 
         let config = Config::default();
-        install_dependencies(&config, None, false).await.unwrap();
+        install_dependencies(&config, None, false, &mut Console::new())
+            .await
+            .unwrap();
 
         assert!(temp_dir.path().join(".hpm/packages").exists());
         let lock_path = temp_dir.path().join("hpm.lock");
@@ -306,7 +229,7 @@ description = "Test custom manifest path"
         std::fs::write(&manifest_path, manifest_content).unwrap();
 
         let config = Config::default();
-        install_dependencies(&config, Some(manifest_path), false)
+        install_dependencies(&config, Some(manifest_path), false, &mut Console::new())
             .await
             .unwrap();
 
@@ -321,7 +244,12 @@ description = "Test custom manifest path"
         let rt = tokio::runtime::Runtime::new().unwrap();
         let config = Config::default();
         let err = rt
-            .block_on(install_dependencies(&config, Some(nonexistent), false))
+            .block_on(install_dependencies(
+                &config,
+                Some(nonexistent),
+                false,
+                &mut Console::new(),
+            ))
             .unwrap_err();
         assert!(err.to_string().contains("does not exist"));
     }

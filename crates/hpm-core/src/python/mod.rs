@@ -94,23 +94,25 @@
 //! ## Quick Start Example
 //!
 //! ```rust,no_run
-//! use hpm_core::python::{initialize, collect_python_dependencies, resolve_dependencies, VenvManager};
+//! use hpm_core::python::{initialize, collect_python_dependencies, resolve_dependencies, PythonHome, VenvManager};
 //! use hpm_package::PackageManifest;
 //!
 //! # async fn example() -> Result<(), hpm_core::python::PythonError> {
-//! // 1. Initialize the Python dependency system
-//! initialize().await?;
+//! // 1. Initialize the Python dependency system under the hpm home
+//! //    (`PythonHome::for_storage(&config.storage)` in a configured caller)
+//! let home = PythonHome::of_user()?;
+//! initialize(&home).await?;
 //!
 //! // 2. Collect dependencies from package manifests. The first arg is the
 //! //    project's `[compat].houdini` lower bound — authoritative for Python ABI.
 //! let packages: Vec<PackageManifest> = vec![]; // Your package manifests
-//! let collected_deps = collect_python_dependencies(Some("22.0.307"), &packages).await?;
+//! let collected_deps = collect_python_dependencies(Some("22.0.307"), &packages)?;
 //!
 //! // 3. Resolve to exact versions with conflict detection
-//! let resolved_sets = resolve_dependencies(&collected_deps).await?;
+//! let resolved_sets = resolve_dependencies(&home, &collected_deps).await?;
 //!
 //! // 4. Create virtual environment for the resolved dependencies
-//! let venv_manager = VenvManager::new()?;
+//! let venv_manager = VenvManager::new(&home);
 //! let venv_path = venv_manager.ensure_virtual_environment(&resolved_sets).await?;
 //! println!("Virtual environment ready at: {:?}", venv_path);
 //! # Ok(())
@@ -121,10 +123,10 @@
 //!
 //! ### Cleanup Management
 //! ```rust,no_run
-//! use hpm_core::python::cleanup::PythonCleanupAnalyzer;
+//! use hpm_core::python::{PythonHome, cleanup::PythonCleanupAnalyzer};
 //!
 //! # async fn cleanup_example() -> Result<(), hpm_core::python::PythonError> {
-//! let analyzer = PythonCleanupAnalyzer::new()?;
+//! let analyzer = PythonCleanupAnalyzer::new(&PythonHome::of_user()?);
 //! let active_packages = vec!["package-a@1.0.0".to_string()];
 //!
 //! // Find orphaned virtual environments
@@ -142,12 +144,12 @@
 //!
 //! ### Conflict Resolution
 //! ```rust,no_run
-//! use hpm_core::python::resolve_dependencies;
+//! use hpm_core::python::{resolve_dependencies, PythonHome};
 //!
 //! # async fn conflict_example() -> Result<(), hpm_core::python::PythonError> {
 //! # use hpm_core::python::types::PythonDependencies;
 //! # let collected_deps = PythonDependencies::default();
-//! match resolve_dependencies(&collected_deps).await {
+//! match resolve_dependencies(&PythonHome::of_user()?, &collected_deps).await {
 //!     Ok(resolved) => println!("Resolution successful: {} packages", resolved.packages.len()),
 //!     Err(e) => {
 //!         println!("Dependency conflict detected: {}", e);
@@ -178,17 +180,49 @@ pub(crate) fn default_python_version() -> types::PythonVersion {
     types::PythonVersion::new(3, 11, None)
 }
 
-/// The root HPM data directory (`~/.hpm`).
-///
-/// Errors if the user's home directory cannot be determined — typically
-/// because `$HOME` (Unix) or `%USERPROFILE%` (Windows) is unset in the
-/// invoking environment. Previously this silently fell back to `"."`,
-/// which scattered uv binaries and venvs across whichever cwd hpm
-/// happened to run from. Hard error catches the misconfiguration up front.
-pub(crate) fn hpm_root() -> Result<std::path::PathBuf, PythonError> {
-    hpm_package::user_home()
-        .map(|home| home.join(".hpm"))
-        .ok_or(PythonError::HomeDirNotFound)
+/// Where the Python subsystem keeps its files, all under one hpm home
+/// (`[storage] home_dir`, `~/.hpm` by default): the bundled uv
+/// (`tools/`), uv's cache and config (`uv-cache/`, `uv-config/`), the
+/// managed CPython it downloads (`uv-python/`) and the shared venvs
+/// (`venvs/`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonHome {
+    root: std::path::PathBuf,
+}
+
+impl PythonHome {
+    /// The Python home inside the hpm home `hpm_home`.
+    pub fn new(hpm_home: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            root: hpm_home.into(),
+        }
+    }
+
+    /// The Python home of a configured store (`[storage] home_dir`).
+    pub fn for_storage(storage: &hpm_config::StorageConfig) -> Self {
+        Self::new(&storage.home_dir)
+    }
+
+    /// The default hpm home, `~/.hpm`, for callers without a configuration.
+    /// Errors when the home directory cannot be determined (`$HOME` /
+    /// `%USERPROFILE%` unset) rather than falling back to the working
+    /// directory.
+    pub fn of_user() -> Result<Self, PythonError> {
+        hpm_package::user_home()
+            .map(|home| Self::new(home.join(".hpm")))
+            .ok_or(PythonError::HomeDirNotFound)
+    }
+
+    /// The hpm home this lives in.
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
+    /// The shared venvs directory, `<home>/venvs`, each venv named by the
+    /// hash of its resolved dependency set.
+    pub fn venvs_dir(&self) -> std::path::PathBuf {
+        self.root.join("venvs")
+    }
 }
 
 // Typed error surface for the whole python subsystem
@@ -210,10 +244,10 @@ pub use types::{
 pub use venv::VenvManager;
 
 // Per-script venvs (table-form `[scripts]` entries with python/requirements)
-pub use script_env::{ScriptEnvHandle, ensure_script_venv, prepare_script_env};
+pub use script_env::{
+    ScriptEnvHandle, ensure_script_venv, prepare_script_env, prepare_script_env_in,
+};
 pub use venv_layout::bin_dir as venv_bin_dir;
-
-use std::path::PathBuf;
 
 /// Initialize Python dependency management system
 ///
@@ -233,32 +267,13 @@ use std::path::PathBuf;
 ///
 /// ```rust,no_run
 /// # async fn example() -> Result<(), hpm_core::python::PythonError> {
-/// hpm_core::python::initialize().await?;
+/// let home = hpm_core::python::PythonHome::of_user()?;
+/// hpm_core::python::initialize(&home).await?;
 /// // Python dependency management is now ready to use
 /// # Ok(())
 /// # }
 /// ```
-pub async fn initialize() -> Result<(), PythonError> {
-    bundled::ensure_uv_binary().await?;
+pub async fn initialize(home: &PythonHome) -> Result<(), PythonError> {
+    bundled::ensure_uv_binary(home).await?;
     Ok(())
-}
-
-/// The HPM virtual environments directory (`~/.hpm/venvs/`).
-///
-/// All venvs are organized by content hash for sharing between packages
-/// with identical resolved dependencies:
-///
-/// ```text
-/// ~/.hpm/venvs/
-/// ├── a1b2c3d4/          # Virtual environment with hash a1b2c3d4
-/// │   ├── metadata.json  # Environment metadata and package references
-/// │   ├── lib/           # Python packages
-/// │   └── ...
-/// └── e5f6g7h8/          # Another virtual environment
-///     └── ...
-/// ```
-///
-/// Errors via `hpm_root` when the user's home directory is unset.
-pub fn get_venvs_dir() -> Result<PathBuf, PythonError> {
-    hpm_root().map(|root| root.join("venvs"))
 }

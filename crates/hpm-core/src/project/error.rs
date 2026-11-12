@@ -12,8 +12,6 @@ use std::path::PathBuf;
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
     /// IO failure with the operation verb, path, and source `io::Error`.
-    /// Subsumes the prior DirectoryCreation / DirectoryRead / ManifestIo
-    /// variants — all three carried the same shape (op + path + io::Error).
     #[error(transparent)]
     Io(#[from] IoOp),
 
@@ -22,7 +20,7 @@ pub enum ProjectError {
 
     /// hpm.toml could not be parsed as an editable TOML document. Distinct
     /// from `Manifest(ManifestLoadError::Parse)` because the edit paths
-    /// (`update_project_manifest`, `remove_from_project_manifest`) use
+    /// (`project::manifest_edit`) use
     /// `toml_edit::DocumentMut`, which carries its own error type.
     #[error("Failed to parse {} as editable TOML", path.display())]
     ManifestEdit {
@@ -82,16 +80,12 @@ pub enum ProjectError {
     #[error("Invalid registry configuration")]
     RegistryConfiguration(#[source] Box<RegistryError>),
 
-    /// Registry returned versions, but none satisfied the requirement.
-    #[error("No version of {name} matches requirement {version_req}")]
-    NoMatchingVersion { name: String, version_req: String },
-
     /// Python dependency collection / resolution / venv creation failed.
     /// `python` returns [`crate::python::PythonError`]; the source stays
     /// erased behind a trait object so this enum has no structural
     /// dependence on the python subsystem's error type.
     #[error("Python dependency resolution failed")]
-    PythonResolution(#[source] Box<dyn std::error::Error + Send + Sync>),
+    PythonResolution(#[source] Box<crate::python::PythonError>),
 
     #[error(
         "Required env var '{var}' for package '{package}' has no value. \
@@ -106,15 +100,32 @@ pub enum ProjectError {
         message: String,
     },
 
-    /// A `package-env` script was run but the project's dependency
-    /// environment isn't ready: the lockfile is missing, or a locked
-    /// dependency isn't present in the global package store. The message
-    /// points the user at `hpm install`.
-    #[error("{0}")]
-    PackageEnvNotReady(String),
-    // (`[compat].houdini` is now a `HoudiniRange` newtype that validates
-    // at deserialize time, so the prior `InvalidHoudiniCompat` variant is
-    // unreachable and has been removed.)
+    /// A `package-env` script was run in a directory with no `hpm.toml`.
+    #[error(
+        "No hpm.toml found at {} — a package environment needs a project manifest.",
+        manifest.display()
+    )]
+    PackageEnvNoManifest { manifest: PathBuf },
+
+    /// A `package-env` script was run but `hpm.lock` cannot be read: the
+    /// project's dependencies have not been installed and locked yet.
+    #[error(
+        "Could not read {} ({source}). Run 'hpm install' to resolve and lock this \
+         project's dependencies before running a package-env script.",
+        lock.display()
+    )]
+    PackageEnvNoLock {
+        lock: PathBuf,
+        source: Box<crate::lock::LockError>,
+    },
+
+    /// A `package-env` script was run but a locked dependency is not in the
+    /// store.
+    #[error(
+        "Dependency {name}@{version} is locked but not installed. Run 'hpm install' to \
+         populate the package environment."
+    )]
+    PackageEnvNotInstalled { name: String, version: String },
 }
 
 // Hand-written so call sites can `?` from the unboxed source error types.
@@ -138,10 +149,8 @@ mod tests {
     use std::io;
     use std::path::Path;
 
-    /// IoOp → ProjectError via the derived `#[from]` impl. This is the
-    /// hot path that replaced the prior `DirectoryCreation` / `DirectoryRead`
-    /// / `ManifestIo` variants — every `?` on a filesystem call in the
-    /// project layer now flows through here.
+    /// IoOp → ProjectError via the derived `#[from]` impl: every `?` on a
+    /// filesystem call in the project layer flows through here.
     #[test]
     fn from_io_op_lifts_to_io_variant() {
         let inner = IoOp::wrap(

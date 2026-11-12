@@ -3,8 +3,18 @@
 use crate::package_path::PackagePath;
 use serde::{Deserialize, Serialize};
 
+fn semantic_version<'de, D: serde::Deserializer<'de>>(de: D) -> Result<String, D::Error> {
+    let version = String::deserialize(de)?;
+    semver::Version::parse(&version).map_err(|e| {
+        serde::de::Error::custom(format!(
+            "package version `{version}` is not a semantic version (MAJOR.MINOR.PATCH): {e}"
+        ))
+    })?;
+    Ok(version)
+}
+
 /// Package metadata information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageInfo {
     /// Scoped package path: `creator-slug/package-slug` (e.g. `tumblehead/tumble-rig`).
@@ -12,6 +22,9 @@ pub struct PackageInfo {
     pub path: PackagePath,
     /// Freeform display name (e.g. `TumbleRig`)
     pub name: String,
+    /// Semantic version (`MAJOR.MINOR.PATCH`, with optional pre-release and
+    /// build metadata), checked when the manifest is parsed.
+    #[serde(deserialize_with = "semantic_version")]
     pub version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

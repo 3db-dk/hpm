@@ -16,8 +16,8 @@
 //!   variable; both are Houdini-accepted shapes (the model panics
 //!   otherwise).
 
+use super::houdini_emit::build_houdini_package;
 use super::houdini_env_model::{VarState, apply_package_files};
-use super::tests::test_setup;
 use super::*;
 use hpm_package::{EnvMethod, ManifestEnvEntry, PackagePath};
 use indexmap::IndexMap;
@@ -57,10 +57,6 @@ proptest! {
         overrides in prop::collection::vec(prop::option::of(0u8..3), VARS.len()),
     ) {
         let temp_dir = TempDir::new().unwrap();
-        let (config, storage_manager) = test_setup(temp_dir.path());
-        let project_root = temp_dir.path().join("project");
-        std::fs::create_dir_all(&project_root).unwrap();
-        let pm = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
         // A package-side `set` is emitted as a flat, non-mergeable string
         // (it must overwrite, so a path-registered variable like OCIO is
@@ -143,8 +139,7 @@ proptest! {
                 is_dev: false,
             };
 
-            let pkg = pm
-                .create_houdini_package_with_python(&installed, None, &project_overrides)
+            let pkg = build_houdini_package(&installed, None, &project_overrides)
                 .unwrap();
             files.push((format!("{slug}.json"), serde_json::to_value(&pkg).unwrap()));
         }

@@ -25,7 +25,7 @@ use std::collections::HashMap;
 /// Absent fields are omitted from the JSON rather than serialized as
 /// `null` — Houdini logs `WARNING: Unsupported value for requires` (etc.)
 /// for explicit nulls.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct HoudiniPackage {
     /// Houdini path entries (for HOUDINI_OTLSCAN_PATH, etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -96,7 +96,7 @@ impl std::fmt::Display for HoudiniMethod {
 /// promises. Only a genuinely conditional `set` value falls back to
 /// `Detailed`/`DetailedConditional` with [`HoudiniMethod::Replace`], since
 /// the conditional-object array form cannot be a flat string.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum HoudiniEnvValue {
     /// Simple string value (sets the variable directly)
@@ -134,16 +134,6 @@ impl HoudiniEnvValue {
         }
     }
 
-    /// Create a `replace` environment value. Used for the list form of a
-    /// conditional `set`; flat/unconditional `set` emits [`Self::simple`]
-    /// instead (see [`ManifestEnvEntry::lower`][crate::manifest::env]).
-    pub fn replace(value: impl Into<String>) -> Self {
-        HoudiniEnvValue::Detailed {
-            method: HoudiniMethod::Replace,
-            value: vec![value.into()],
-        }
-    }
-
     // No conditional() constructor on purpose: conditional-object arrays
     // must go through `lower_conditional`, which compiles the branch
     // expressions to be mutually exclusive. A hand-built array would
@@ -155,7 +145,7 @@ impl HoudiniEnvValue {
 /// Unlike `HoudiniPackage` (which uses `$HPM_PACKAGE_ROOT` for HPM runtime),
 /// this uses `$HOUDINI_PACKAGE_PATH/{slug}` so the archive works directly
 /// with Houdini's built-in package loading.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct HoudiniNativePackage {
     /// Package slug name
     pub name: String,
@@ -186,7 +176,7 @@ pub struct HoudiniNativePackage {
 }
 
 /// Metadata block within a Houdini native package.json.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct HpackageMetadata {
     /// Package version string
     pub version: String,
@@ -553,7 +543,6 @@ mod tests {
     fn houdini_env_value_constructors() {
         let simple = HoudiniEnvValue::simple("value");
         let prepend = HoudiniEnvValue::prepend("value");
-        let replace = HoudiniEnvValue::replace("value");
 
         match simple {
             HoudiniEnvValue::Simple(v) => assert_eq!(v, "value"),
@@ -563,14 +552,6 @@ mod tests {
         match prepend {
             HoudiniEnvValue::Detailed { method, value } => {
                 assert_eq!(method, HoudiniMethod::Prepend);
-                assert_eq!(value, vec!["value"]);
-            }
-            _ => panic!("Expected Detailed variant"),
-        }
-
-        match replace {
-            HoudiniEnvValue::Detailed { method, value } => {
-                assert_eq!(method, HoudiniMethod::Replace);
                 assert_eq!(value, vec!["value"]);
             }
             _ => panic!("Expected Detailed variant"),

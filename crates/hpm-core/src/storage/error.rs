@@ -29,8 +29,9 @@ pub enum StorageError {
     #[error(transparent)]
     DependencyResolution(Box<DependencyError>),
 
+    /// Boxed for the same size reason as `DependencyResolution`.
     #[error("Python cleanup failed: {0}")]
-    PythonCleanup(String),
+    PythonCleanup(#[source] Box<crate::python::PythonError>),
 
     #[error(
         "{message}. Refusing to clean up — without the global ledger, \
@@ -48,6 +49,12 @@ pub enum StorageError {
         #[source]
         source: std::io::Error,
     },
+}
+
+impl From<crate::python::PythonError> for StorageError {
+    fn from(e: crate::python::PythonError) -> Self {
+        StorageError::PythonCleanup(Box::new(e))
+    }
 }
 
 impl From<DependencyError> for StorageError {

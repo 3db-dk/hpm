@@ -20,10 +20,10 @@ use crate::script_sink::ConsoleSink;
 pub async fn run_script(
     script: &str,
     extra_args: &[String],
-    directory: Option<PathBuf>,
+    manifest: Option<PathBuf>,
     console: &mut Console,
 ) -> Result<i32> {
-    let manifest_path = determine_manifest_path(directory)?;
+    let manifest_path = determine_manifest_path(manifest)?;
     let manifest = load_manifest(&manifest_path)?;
     let package_root = manifest_path
         .parent()

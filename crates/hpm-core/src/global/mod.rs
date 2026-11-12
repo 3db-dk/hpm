@@ -145,7 +145,7 @@ pub fn list(hpm_home: &Path, version: HoudiniVersion) -> Result<Vec<GlobalInstal
         .map(|(name, entry)| {
             let manifest_path = packages_dir.join(&entry.manifest_file);
             GlobalInstall {
-                package: name.clone(),
+                package: name.to_string(),
                 version: entry.version.clone(),
                 registry: entry.registry.clone(),
                 manifest_present: manifest_path.exists(),
@@ -345,7 +345,12 @@ pub async fn add(
 
     check_compatible(&installed.manifest, version)?;
 
-    let venv_site_packages = resolve_global_python(&installed, version).await?;
+    let venv_site_packages = resolve_global_python(
+        &crate::python::PythonHome::for_storage(&config.storage),
+        &installed,
+        version,
+    )
+    .await?;
 
     let hpm_home = &config.storage.home_dir;
     let manifest_path = write_install(
@@ -375,6 +380,7 @@ pub async fn add(
 /// build the venv against the wrong CPython and crash on import inside
 /// Houdini.
 async fn resolve_global_python(
+    home: &crate::python::PythonHome,
     installed: &InstalledPackage,
     version: HoudiniVersion,
 ) -> Result<Option<PathBuf>, GlobalError> {
@@ -388,24 +394,23 @@ async fn resolve_global_python(
         )))
     };
 
-    crate::python::initialize().await.map_err(to_project)?;
+    crate::python::initialize(home).await.map_err(to_project)?;
 
     let collected = crate::python::collect_python_dependencies(
         Some(&version.as_dir_component()),
         std::slice::from_ref(&installed.manifest),
     )
-    .await
     .map_err(to_project)?;
 
     if collected.dependencies.is_empty() {
         return Ok(None);
     }
 
-    let resolved = crate::python::resolve_dependencies(&collected)
+    let resolved = crate::python::resolve_dependencies(home, &collected)
         .await
         .map_err(to_project)?;
 
-    let venv_manager = crate::python::VenvManager::new().map_err(to_project)?;
+    let venv_manager = crate::python::VenvManager::new(home);
     let venv_path = venv_manager
         .ensure_virtual_environment_for(&resolved, &[installed.venv_ref()])
         .await

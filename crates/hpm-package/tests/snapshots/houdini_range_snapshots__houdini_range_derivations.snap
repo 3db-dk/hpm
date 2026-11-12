@@ -1,0 +1,409 @@
+---
+source: crates/hpm-package/tests/houdini_range_snapshots.rs
+expression: out
+---
+">=21"
+  enable: houdini_version >= '21'
+  hpackage: houdini_version >= '21.0'
+  lower_bound: Some("21")
+  has_upper_bound: false
+">=21.0"
+  enable: houdini_version >= '21.0'
+  hpackage: houdini_version >= '21.0'
+  lower_bound: Some("21.0")
+  has_upper_bound: false
+">=20.5"
+  enable: houdini_version >= '20.5'
+  hpackage: houdini_version >= '20.5'
+  lower_bound: Some("20.5")
+  has_upper_bound: false
+">=20.5.445"
+  enable: houdini_version >= '20.5.445'
+  hpackage: error: houdini version requirement `>=20.5.445` cannot be published
+  lower_bound: Some("20.5.445")
+  has_upper_bound: false
+">=21.0.0"
+  enable: houdini_version >= '21.0.0'
+  hpackage: houdini_version >= '21.0'
+  lower_bound: Some("21.0.0")
+  has_upper_bound: false
+">=0.5"
+  enable: houdini_version >= '0.5'
+  hpackage: houdini_version >= '0.5'
+  lower_bound: Some("0.5")
+  has_upper_bound: false
+">=0.0.3"
+  enable: houdini_version >= '0.0.3'
+  hpackage: error: houdini version requirement `>=0.0.3` cannot be published to
+  lower_bound: Some("0.0.3")
+  has_upper_bound: false
+">=22.00"
+  enable: houdini_version >= '22.00'
+  hpackage: houdini_version >= '22.0'
+  lower_bound: Some("22.00")
+  has_upper_bound: false
+"<=21"
+  enable: houdini_version <= '21'
+  hpackage: houdini_version <= '21.0'
+  lower_bound: None
+  has_upper_bound: true
+"<=21.0"
+  enable: houdini_version <= '21.0'
+  hpackage: houdini_version <= '21.0'
+  lower_bound: None
+  has_upper_bound: true
+"<=20.5"
+  enable: houdini_version <= '20.5'
+  hpackage: houdini_version <= '20.5'
+  lower_bound: None
+  has_upper_bound: true
+"<=20.5.445"
+  enable: houdini_version <= '20.5.445'
+  hpackage: error: houdini version requirement `<=20.5.445` cannot be published
+  lower_bound: None
+  has_upper_bound: true
+"<=21.0.0"
+  enable: houdini_version <= '21.0.0'
+  hpackage: houdini_version <= '21.0'
+  lower_bound: None
+  has_upper_bound: true
+"<=0.5"
+  enable: houdini_version <= '0.5'
+  hpackage: houdini_version <= '0.5'
+  lower_bound: None
+  has_upper_bound: true
+"<=0.0.3"
+  enable: houdini_version <= '0.0.3'
+  hpackage: error: houdini version requirement `<=0.0.3` cannot be published to
+  lower_bound: None
+  has_upper_bound: true
+"<=22.00"
+  enable: houdini_version <= '22.00'
+  hpackage: houdini_version <= '22.0'
+  lower_bound: None
+  has_upper_bound: true
+">21"
+  enable: houdini_version > '21'
+  hpackage: error: houdini version requirement `>21` leaves SideFX's hpackage r
+  lower_bound: Some("21")
+  has_upper_bound: false
+">21.0"
+  enable: houdini_version > '21.0'
+  hpackage: error: houdini version requirement `>21.0` leaves SideFX's hpackage
+  lower_bound: Some("21.0")
+  has_upper_bound: false
+">20.5"
+  enable: houdini_version > '20.5'
+  hpackage: error: houdini version requirement `>20.5` leaves SideFX's hpackage
+  lower_bound: Some("20.5")
+  has_upper_bound: false
+">20.5.445"
+  enable: houdini_version > '20.5.445'
+  hpackage: error: houdini version requirement `>20.5.445` cannot be published 
+  lower_bound: Some("20.5.445")
+  has_upper_bound: false
+">21.0.0"
+  enable: houdini_version > '21.0.0'
+  hpackage: error: houdini version requirement `>21.0.0` leaves SideFX's hpacka
+  lower_bound: Some("21.0.0")
+  has_upper_bound: false
+">0.5"
+  enable: houdini_version > '0.5'
+  hpackage: error: houdini version requirement `>0.5` leaves SideFX's hpackage 
+  lower_bound: Some("0.5")
+  has_upper_bound: false
+">0.0.3"
+  enable: houdini_version > '0.0.3'
+  hpackage: error: houdini version requirement `>0.0.3` cannot be published to 
+  lower_bound: Some("0.0.3")
+  has_upper_bound: false
+">22.00"
+  enable: houdini_version > '22.00'
+  hpackage: error: houdini version requirement `>22.00` leaves SideFX's hpackag
+  lower_bound: Some("22.00")
+  has_upper_bound: false
+"<21"
+  enable: houdini_version < '21'
+  hpackage: error: houdini version requirement `<21` leaves SideFX's hpackage r
+  lower_bound: None
+  has_upper_bound: true
+"<21.0"
+  enable: houdini_version < '21.0'
+  hpackage: error: houdini version requirement `<21.0` leaves SideFX's hpackage
+  lower_bound: None
+  has_upper_bound: true
+"<20.5"
+  enable: houdini_version < '20.5'
+  hpackage: error: houdini version requirement `<20.5` leaves SideFX's hpackage
+  lower_bound: None
+  has_upper_bound: true
+"<20.5.445"
+  enable: houdini_version < '20.5.445'
+  hpackage: error: houdini version requirement `<20.5.445` cannot be published 
+  lower_bound: None
+  has_upper_bound: true
+"<21.0.0"
+  enable: houdini_version < '21.0.0'
+  hpackage: error: houdini version requirement `<21.0.0` leaves SideFX's hpacka
+  lower_bound: None
+  has_upper_bound: true
+"<0.5"
+  enable: houdini_version < '0.5'
+  hpackage: error: houdini version requirement `<0.5` leaves SideFX's hpackage 
+  lower_bound: None
+  has_upper_bound: true
+"<0.0.3"
+  enable: houdini_version < '0.0.3'
+  hpackage: error: houdini version requirement `<0.0.3` cannot be published to 
+  lower_bound: None
+  has_upper_bound: true
+"<22.00"
+  enable: houdini_version < '22.00'
+  hpackage: error: houdini version requirement `<22.00` leaves SideFX's hpackag
+  lower_bound: None
+  has_upper_bound: true
+"==21"
+  enable: houdini_version == '21'
+  hpackage: error: houdini version requirement `==21` leaves SideFX's hpackage 
+  lower_bound: Some("21")
+  has_upper_bound: true
+"==21.0"
+  enable: houdini_version == '21.0'
+  hpackage: error: houdini version requirement `==21.0` leaves SideFX's hpackag
+  lower_bound: Some("21.0")
+  has_upper_bound: true
+"==20.5"
+  enable: houdini_version == '20.5'
+  hpackage: error: houdini version requirement `==20.5` leaves SideFX's hpackag
+  lower_bound: Some("20.5")
+  has_upper_bound: true
+"==20.5.445"
+  enable: houdini_version == '20.5.445'
+  hpackage: error: houdini version requirement `==20.5.445` cannot be published
+  lower_bound: Some("20.5.445")
+  has_upper_bound: true
+"==21.0.0"
+  enable: houdini_version == '21.0.0'
+  hpackage: error: houdini version requirement `==21.0.0` leaves SideFX's hpack
+  lower_bound: Some("21.0.0")
+  has_upper_bound: true
+"==0.5"
+  enable: houdini_version == '0.5'
+  hpackage: error: houdini version requirement `==0.5` leaves SideFX's hpackage
+  lower_bound: Some("0.5")
+  has_upper_bound: true
+"==0.0.3"
+  enable: houdini_version == '0.0.3'
+  hpackage: error: houdini version requirement `==0.0.3` cannot be published to
+  lower_bound: Some("0.0.3")
+  has_upper_bound: true
+"==22.00"
+  enable: houdini_version == '22.00'
+  hpackage: error: houdini version requirement `==22.00` leaves SideFX's hpacka
+  lower_bound: Some("22.00")
+  has_upper_bound: true
+"=21"
+  enable: houdini_version == '21'
+  hpackage: error: houdini version requirement `=21` leaves SideFX's hpackage r
+  lower_bound: Some("21")
+  has_upper_bound: true
+"=21.0"
+  enable: houdini_version == '21.0'
+  hpackage: error: houdini version requirement `=21.0` leaves SideFX's hpackage
+  lower_bound: Some("21.0")
+  has_upper_bound: true
+"=20.5"
+  enable: houdini_version == '20.5'
+  hpackage: error: houdini version requirement `=20.5` leaves SideFX's hpackage
+  lower_bound: Some("20.5")
+  has_upper_bound: true
+"=20.5.445"
+  enable: houdini_version == '20.5.445'
+  hpackage: error: houdini version requirement `=20.5.445` cannot be published 
+  lower_bound: Some("20.5.445")
+  has_upper_bound: true
+"=21.0.0"
+  enable: houdini_version == '21.0.0'
+  hpackage: error: houdini version requirement `=21.0.0` leaves SideFX's hpacka
+  lower_bound: Some("21.0.0")
+  has_upper_bound: true
+"=0.5"
+  enable: houdini_version == '0.5'
+  hpackage: error: houdini version requirement `=0.5` leaves SideFX's hpackage 
+  lower_bound: Some("0.5")
+  has_upper_bound: true
+"=0.0.3"
+  enable: houdini_version == '0.0.3'
+  hpackage: error: houdini version requirement `=0.0.3` cannot be published to 
+  lower_bound: Some("0.0.3")
+  has_upper_bound: true
+"=22.00"
+  enable: houdini_version == '22.00'
+  hpackage: error: houdini version requirement `=22.00` leaves SideFX's hpackag
+  lower_bound: Some("22.00")
+  has_upper_bound: true
+"^21"
+  enable: houdini_version >= '21' and houdini_version < '22'
+  hpackage: error: houdini version requirement `^21` compiles to 2 clauses, and
+  lower_bound: Some("21")
+  has_upper_bound: true
+"^21.0"
+  enable: houdini_version >= '21.0' and houdini_version < '22'
+  hpackage: error: houdini version requirement `^21.0` compiles to 2 clauses, a
+  lower_bound: Some("21.0")
+  has_upper_bound: true
+"^20.5"
+  enable: houdini_version >= '20.5' and houdini_version < '21'
+  hpackage: error: houdini version requirement `^20.5` compiles to 2 clauses, a
+  lower_bound: Some("20.5")
+  has_upper_bound: true
+"^20.5.445"
+  enable: houdini_version >= '20.5.445' and houdini_version < '21'
+  hpackage: error: houdini version requirement `^20.5.445` cannot be published 
+  lower_bound: Some("20.5.445")
+  has_upper_bound: true
+"^21.0.0"
+  enable: houdini_version >= '21.0.0' and houdini_version < '22'
+  hpackage: error: houdini version requirement `^21.0.0` compiles to 2 clauses,
+  lower_bound: Some("21.0.0")
+  has_upper_bound: true
+"^0.5"
+  enable: houdini_version >= '0.5' and houdini_version < '0.6'
+  hpackage: error: houdini version requirement `^0.5` compiles to 2 clauses, an
+  lower_bound: Some("0.5")
+  has_upper_bound: true
+"^0.0.3"
+  enable: houdini_version >= '0.0.3' and houdini_version < '0.0.4'
+  hpackage: error: houdini version requirement `^0.0.3` cannot be published to 
+  lower_bound: Some("0.0.3")
+  has_upper_bound: true
+"^22.00"
+  enable: houdini_version >= '22.0' and houdini_version < '23'
+  hpackage: error: houdini version requirement `^22.00` compiles to 2 clauses, 
+  lower_bound: Some("22.0")
+  has_upper_bound: true
+"~21"
+  enable: houdini_version >= '21' and houdini_version < '22'
+  hpackage: error: houdini version requirement `~21` compiles to 2 clauses, and
+  lower_bound: Some("21")
+  has_upper_bound: true
+"~21.0"
+  enable: houdini_version >= '21.0' and houdini_version < '21.1'
+  hpackage: error: houdini version requirement `~21.0` compiles to 2 clauses, a
+  lower_bound: Some("21.0")
+  has_upper_bound: true
+"~20.5"
+  enable: houdini_version >= '20.5' and houdini_version < '20.6'
+  hpackage: error: houdini version requirement `~20.5` compiles to 2 clauses, a
+  lower_bound: Some("20.5")
+  has_upper_bound: true
+"~20.5.445"
+  enable: houdini_version >= '20.5.445' and houdini_version < '20.6'
+  hpackage: error: houdini version requirement `~20.5.445` cannot be published 
+  lower_bound: Some("20.5.445")
+  has_upper_bound: true
+"~21.0.0"
+  enable: houdini_version >= '21.0.0' and houdini_version < '21.1'
+  hpackage: error: houdini version requirement `~21.0.0` compiles to 2 clauses,
+  lower_bound: Some("21.0.0")
+  has_upper_bound: true
+"~0.5"
+  enable: houdini_version >= '0.5' and houdini_version < '0.6'
+  hpackage: error: houdini version requirement `~0.5` compiles to 2 clauses, an
+  lower_bound: Some("0.5")
+  has_upper_bound: true
+"~0.0.3"
+  enable: houdini_version >= '0.0.3' and houdini_version < '0.1'
+  hpackage: error: houdini version requirement `~0.0.3` cannot be published to 
+  lower_bound: Some("0.0.3")
+  has_upper_bound: true
+"~22.00"
+  enable: houdini_version >= '22.0' and houdini_version < '22.1'
+  hpackage: error: houdini version requirement `~22.00` compiles to 2 clauses, 
+  lower_bound: Some("22.0")
+  has_upper_bound: true
+"21"
+  enable: houdini_version >= '21' and houdini_version < '22'
+  hpackage: error: houdini version requirement `21` compiles to 2 clauses, and 
+  lower_bound: Some("21")
+  has_upper_bound: true
+"21.0"
+  enable: houdini_version >= '21.0' and houdini_version < '22'
+  hpackage: error: houdini version requirement `21.0` compiles to 2 clauses, an
+  lower_bound: Some("21.0")
+  has_upper_bound: true
+"20.5"
+  enable: houdini_version >= '20.5' and houdini_version < '21'
+  hpackage: error: houdini version requirement `20.5` compiles to 2 clauses, an
+  lower_bound: Some("20.5")
+  has_upper_bound: true
+"20.5.445"
+  enable: houdini_version >= '20.5.445' and houdini_version < '21'
+  hpackage: error: houdini version requirement `20.5.445` cannot be published t
+  lower_bound: Some("20.5.445")
+  has_upper_bound: true
+"21.0.0"
+  enable: houdini_version >= '21.0.0' and houdini_version < '22'
+  hpackage: error: houdini version requirement `21.0.0` compiles to 2 clauses, 
+  lower_bound: Some("21.0.0")
+  has_upper_bound: true
+"0.5"
+  enable: houdini_version >= '0.5' and houdini_version < '0.6'
+  hpackage: error: houdini version requirement `0.5` compiles to 2 clauses, and
+  lower_bound: Some("0.5")
+  has_upper_bound: true
+"0.0.3"
+  enable: houdini_version >= '0.0.3' and houdini_version < '0.0.4'
+  hpackage: error: houdini version requirement `0.0.3` cannot be published to S
+  lower_bound: Some("0.0.3")
+  has_upper_bound: true
+"22.00"
+  enable: houdini_version >= '22.0' and houdini_version < '23'
+  hpackage: error: houdini version requirement `22.00` compiles to 2 clauses, a
+  lower_bound: Some("22.0")
+  has_upper_bound: true
+">=20.5, <22"
+  enable: (houdini_version >= '20.5' and houdini_version < '22')
+  hpackage: error: houdini version requirement `>=20.5, <22` compiles to 2 clau
+  lower_bound: Some("20.5")
+  has_upper_bound: true
+">21, <=22.5"
+  enable: (houdini_version > '21' and houdini_version <= '22.5')
+  hpackage: error: houdini version requirement `>21, <=22.5` compiles to 2 clau
+  lower_bound: Some("21")
+  has_upper_bound: true
+"^21, <21.5"
+  enable: (houdini_version >= '21' and houdini_version < '22' and houdini_version < '21.5')
+  hpackage: error: houdini version requirement `^21, <21.5` compiles to 3 claus
+  lower_bound: Some("21")
+  has_upper_bound: true
+"~20.5, >=20.5.445"
+  enable: (houdini_version >= '20.5' and houdini_version < '20.6' and houdini_version >= '20.5.445')
+  hpackage: error: houdini version requirement `~20.5, >=20.5.445` cannot be pu
+  lower_bound: Some("20.5")
+  has_upper_bound: true
+"<22, >=20.5"
+  enable: (houdini_version < '22' and houdini_version >= '20.5')
+  hpackage: error: houdini version requirement `<22, >=20.5` compiles to 2 clau
+  lower_bound: Some("20.5")
+  has_upper_bound: true
+"=21, <21.5"
+  enable: (houdini_version == '21' and houdini_version < '21.5')
+  hpackage: error: houdini version requirement `=21, <21.5` compiles to 2 claus
+  lower_bound: Some("21")
+  has_upper_bound: true
+" >= 21 ,  < 22 "
+  enable: (houdini_version >= '21' and houdini_version < '22')
+  hpackage: error: houdini version requirement ` >= 21 ,  < 22 ` compiles to 2 
+  lower_bound: Some("21")
+  has_upper_bound: true
+">=21,"
+  parse: error: invalid houdini version requirement: >=21,
+""
+  parse: error: invalid houdini version requirement: 
+"!=21"
+  parse: error: invalid houdini version requirement: !=21
+"21.x"
+  parse: error: invalid houdini version requirement: 21.x
+">=21.0.0.1"
+  parse: error: invalid houdini version requirement: >=21.0.0.1

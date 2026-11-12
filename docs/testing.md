@@ -271,9 +271,9 @@ access back.
 
 ### Real bug caught by property tests
 
-`VersionReq::new("   ")` (whitespace-only) was incorrectly accepted as valid.
-A property test that fed `r"\s*"` into the constructor surfaced it; the fix
-was to trim before the empty check. Every such bug gets a regression file
+A whitespace-only version requirement (`"   "`) was once accepted as valid.
+A property test that fed `r"\s*"` into the parser surfaced it; the fix was
+to trim before the empty check. Every such bug gets a regression file
 that fails until the fix stays in place.
 
 ## Regression files

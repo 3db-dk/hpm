@@ -324,12 +324,9 @@ impl ResolvedDependencySet {
         for (name, version) in &self.packages {
             hasher.update(format!("{}:{}", name, version));
         }
-        hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>()[..16]
-            .to_string()
+        let mut hex = crate::digest::finish_hex(hasher);
+        hex.truncate(16);
+        hex
     }
 }
 
@@ -735,5 +732,17 @@ mod tests {
         let hash2 = resolved.hash();
         assert_eq!(hash1, hash2);
         assert_eq!(hash1.len(), 16);
+    }
+
+    /// `ResolvedDependencySet::hash` names venv directories on disk, so its
+    /// output is a stored format: pinned for a fixed set.
+    #[test]
+    fn resolved_dependency_set_hash_golden() {
+        let mut set = ResolvedDependencySet::new(PythonVersion::new(3, 11, Some(9)));
+        set.add_package("numpy", "1.26.4");
+        set.add_package("requests", "2.31.0");
+        assert_eq!(set.hash(), "8fb20c03a2d0c860");
+        let empty = ResolvedDependencySet::new(PythonVersion::new(3, 10, None));
+        assert_eq!(empty.hash(), "0cab788a2bd34080");
     }
 }

@@ -40,19 +40,7 @@ use hpm_core::project::manifest_edit;
 use hpm_core::registry::RegistrySet;
 use hpm_package::DependencySpec;
 use std::path::PathBuf;
-use tracing::{info, warn};
-
-/// Parse `name@version` syntax. Returns (name, optional_version).
-fn parse_name_version(input: &str) -> (String, Option<String>) {
-    if let Some(at_pos) = input.rfind('@') {
-        let name = &input[..at_pos];
-        let version = &input[at_pos + 1..];
-        if !name.is_empty() && !version.is_empty() {
-            return (name.to_string(), Some(version.to_string()));
-        }
-    }
-    (input.to_string(), None)
-}
+use tracing::info;
 
 /// Add package dependencies to hpm.toml manifest
 ///
@@ -100,25 +88,38 @@ pub async fn add_packages(
 
     // Validate the manifest before editing it. Edits below go through
     // toml_edit (formatting-preserving), not a serde round-trip.
-    load_manifest(&manifest_path)
+    let manifest = load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
+    // The project's registries (its `[[registries]]`, else the configured
+    // ones), built once: the same set `hpm install` resolves against.
+    let registry_set = if path.is_none() {
+        Some(RegistrySet::for_project(
+            &manifest.registries,
+            config,
+            None,
+        )?)
+    } else {
+        None
+    };
 
     // Add each package
     for package_name in &package_names {
-        let dependency_spec = if let Some(ref local_path) = path {
+        let (pkg_name, dependency_spec) = if let Some(ref local_path) = path {
             // Path-based dependency (for development)
             let path_str = local_path.to_string_lossy().to_string();
-            DependencySpec::Path {
+            let spec = DependencySpec::Path {
                 path: path_str,
                 optional,
                 link,
-            }
+            };
+            (package_name.as_str(), spec)
         } else {
-            // Resolve from registries
-            // Parse name@version syntax
-            let (pkg_name, requested_version) = parse_name_version(package_name);
+            // Resolve from registries; `name@version` pins a version.
+            let (pkg_name, requested_version) = hpm_package::split_name_version(package_name);
 
-            let registry_set = RegistrySet::from_config(config)?;
+            let registry_set = registry_set
+                .as_ref()
+                .expect("built above for registry adds");
 
             if registry_set.is_empty() {
                 let example_pkg = package_names.first().unwrap();
@@ -139,9 +140,9 @@ pub async fn add_packages(
             // Resolve through the shared core resolver: an explicit version
             // is looked up exactly; otherwise "*" picks the highest
             // non-yanked semver.
-            let req = requested_version.as_deref().unwrap_or("*");
+            let req = requested_version.unwrap_or("*");
             let entry = registry_set
-                .resolve_in(&pkg_name, req, registry)
+                .resolve_in(pkg_name, req, registry)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to resolve {}@{}: {}", pkg_name, req, e))?;
 
@@ -151,29 +152,29 @@ pub async fn add_packages(
             // resolved across the whole set stays unpinned, so recording the
             // registry that happened to answer first would silently narrow
             // future resolution to it.
-            DependencySpec::Registry {
+            let spec = DependencySpec::Registry {
                 version: entry.version.clone(),
                 registry: registry.map(str::to_string),
                 optional,
-            }
+            };
+            (pkg_name, spec)
         };
 
-        let replaced =
-            manifest_edit::upsert_dependency(&manifest_path, package_name, &dependency_spec)
-                .with_context(|| {
-                    format!("Failed to update manifest at {}", manifest_path.display())
-                })?;
+        let replaced = manifest_edit::upsert_dependency(&manifest_path, pkg_name, &dependency_spec)
+            .with_context(|| format!("Failed to update manifest at {}", manifest_path.display()))?;
         if replaced {
-            warn!("Dependency '{}' already existed, updated it", package_name);
+            console.warn(format!(
+                "Dependency '{pkg_name}' already existed, updated it"
+            ));
         }
-        info!("Added dependency: {}", package_name);
+        info!("Added dependency: {}", pkg_name);
     }
 
     info!("Successfully added {} dependencies", package_names.len());
 
     // Install the newly added dependencies
     info!("Installing dependencies...");
-    super::install::install_dependencies(config, Some(manifest_path), false)
+    super::install::install_dependencies(config, Some(manifest_path), false, console)
         .await
         .context("Failed to install dependencies after adding packages")?;
 
@@ -189,7 +190,6 @@ pub async fn add_packages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::manifest_utils::save_manifest;
     use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
     use hpm_package::{PackageManifest, PackagePath};
     use proptest::prelude::*;
@@ -363,9 +363,7 @@ mod tests {
 
             let manifest_path = test_path.join("hpm.toml");
 
-            // Save manifest
-            let save_result = save_manifest(&manifest, &manifest_path);
-            prop_assert!(save_result.is_ok(), "Should save manifest at any valid path");
+            std::fs::write(&manifest_path, toml::to_string(&manifest).unwrap()).unwrap();
 
             // Load manifest
             let load_result = load_manifest(&manifest_path);
@@ -458,43 +456,6 @@ mod tests {
 
             let path_json = serde_json::to_string(&path_spec);
             prop_assert!(path_json.is_ok(), "Path dependency spec should always serialize");
-        }
-
-        /// Test that manifest operations are atomic and don't leave partial files
-        #[test]
-        fn prop_manifest_operations_atomic(
-            package_name in edge_case_package_name_strategy(),
-            version in r"[0-9]+\.[0-9]+\.[0-9]+"
-        ) {
-            let temp_dir = TempDir::new().unwrap();
-            let manifest_path = temp_dir.path().join("hpm.toml");
-
-            let manifest = PackageManifest::new(
-                PackagePath::new(format!("studio/{}", package_name)).unwrap(),
-                package_name.clone(),
-                version.clone(),
-                Some("Test package".to_string()),
-                Vec::new(),
-                None,
-            );
-
-            // Save manifest
-            let save_result = save_manifest(&manifest, &manifest_path);
-
-            if save_result.is_ok() {
-                // File should exist and be complete
-                prop_assert!(manifest_path.exists(), "Manifest file should exist after successful save");
-
-                // Should be able to read back immediately
-                let content = std::fs::read_to_string(&manifest_path);
-                prop_assert!(content.is_ok(), "Should be able to read saved manifest");
-
-                if let Ok(content_str) = content {
-                    prop_assert!(!content_str.is_empty(), "Manifest content should not be empty");
-                    prop_assert!(content_str.contains(&package_name), "Should contain package name");
-                    prop_assert!(content_str.contains(&version), "Should contain version");
-                }
-            }
         }
 
         /// Test error handling consistency for file operations

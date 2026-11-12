@@ -3,9 +3,12 @@
 //!
 //! ## Range semantics
 //!
-//! Each dependency's spec is parsed as a `semver::VersionReq`. The
+//! Each dependency's spec is parsed with hpm's grammar
+//! (`VersionRequirement`) and searched as its update range
+//! (`as_update_range`): a pinned `1.2.3` is read as `^1.2.3`, so `hpm update`
+//! offers the newest compatible release; a range is searched as itself. The
 //! registry is queried for all versions of the package; non-yanked entries
-//! matching the requirement are sorted and the highest picked. If that
+//! matching the range are sorted and the highest picked. If that
 //! differs from the currently-locked version it's reported as an update.
 //!
 //! ## Apply
@@ -30,11 +33,11 @@ use crate::output::OutputFormat;
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
 use hpm_core::project::manifest_edit;
+use hpm_core::registry::requirement::VersionRequirement;
 use hpm_core::{LockFile, registry::RegistrySet};
 use hpm_package::DependencySpec;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct UpdateOptions {
@@ -67,6 +70,9 @@ struct Candidate {
     /// yanked. The upgrade itself filters yanks; this flag drives a
     /// per-package WARN so users know their existing pin is unsafe.
     locked_is_yanked: bool,
+    /// The dependency spec with `latest` as its version, keeping its
+    /// `registry` pin and `optional` flag.
+    updated_spec: DependencySpec,
 }
 
 pub async fn update_packages(
@@ -74,6 +80,14 @@ pub async fn update_packages(
     options: UpdateOptions,
     console: &mut Console,
 ) -> Result<()> {
+    // Without a terminal prompt to ask, JSON mode would apply updates
+    // unasked; a script must say which it wants.
+    if options.output.is_json() && !options.yes && !options.dry_run {
+        bail!(
+            "`hpm --output {} update` needs --dry-run to report updates or --yes to apply them",
+            options.output
+        );
+    }
     let manifest_path = determine_manifest_path(options.manifest.clone())?;
     let manifest = load_manifest(&manifest_path)?;
     let project_dir = manifest_path
@@ -81,7 +95,14 @@ pub async fn update_packages(
         .context("Manifest file has no parent directory")?;
     let lock_path = project_dir.join("hpm.lock");
 
-    let existing_lock = LockFile::load(&lock_path).ok();
+    let existing_lock = if lock_path.exists() {
+        Some(
+            LockFile::load(&lock_path)
+                .with_context(|| format!("Failed to read {}", lock_path.display()))?,
+        )
+    } else {
+        None
+    };
     let registry_set = RegistrySet::from_config(config)?;
     if registry_set.is_empty() {
         bail!(
@@ -91,9 +112,28 @@ pub async fn update_packages(
     }
 
     let filter: HashSet<&str> = options.packages.iter().map(|s| s.as_str()).collect();
+    let unknown: Vec<&str> = options
+        .packages
+        .iter()
+        .map(String::as_str)
+        .filter(|name| !manifest.dependencies.contains_key(*name))
+        .collect();
+    if !unknown.is_empty() {
+        bail!(
+            "Not a dependency in {}: {}",
+            manifest_path.display(),
+            unknown.join(", ")
+        );
+    }
 
-    let candidates =
-        collect_candidates(&registry_set, &manifest, existing_lock.as_ref(), &filter).await?;
+    let candidates = collect_candidates(
+        &registry_set,
+        &manifest,
+        existing_lock.as_ref(),
+        &filter,
+        console,
+    )
+    .await?;
 
     if candidates.is_empty() {
         if options.output.is_json() {
@@ -111,20 +151,17 @@ pub async fn update_packages(
         return Ok(());
     }
 
-    if !options.yes
-        && matches!(options.output, OutputFormat::Human)
-        && !console.confirm("Apply these updates?")?
-    {
+    if !options.yes && !console.confirm("Apply these updates?")? {
         console.status("Update cancelled");
         return Ok(());
     }
 
     // Rewrite each candidate's spec to the resolved exact version through
     // the formatting-preserving editor, then run install to fetch + lock.
-    apply_updates(&manifest, &manifest_path, &candidates)
+    apply_updates(&manifest_path, &candidates)
         .with_context(|| format!("Failed to write {}", manifest_path.display()))?;
 
-    super::install::install_dependencies(config, Some(manifest_path), false)
+    super::install::install_dependencies(config, Some(manifest_path), false, console)
         .await
         .context("Failed to install the updated dependency set")?;
 
@@ -143,6 +180,7 @@ async fn collect_candidates(
     manifest: &hpm_package::PackageManifest,
     existing_lock: Option<&LockFile>,
     filter: &HashSet<&str>,
+    console: &mut Console,
 ) -> Result<Vec<Candidate>> {
     if manifest.dependencies.is_empty() {
         return Ok(Vec::new());
@@ -156,22 +194,21 @@ async fn collect_candidates(
         // URL and Path deps don't update through a registry. A pinned
         // `registry` narrows the candidate search to that registry, so an
         // update can't silently migrate the dependency to another source.
-        let (ver_req_str, pinned_registry) = match spec {
+        let (ver_req_str, pinned_registry, optional) = match spec {
             DependencySpec::Registry {
                 version: v,
                 registry: r,
-                ..
-            } => (v, r.as_deref()),
+                optional,
+            } => (v, r.as_deref(), *optional),
             DependencySpec::Url { .. } | DependencySpec::Path { .. } => continue,
         };
 
-        let req = match semver::VersionReq::parse(ver_req_str) {
-            Ok(r) => r,
+        let req = match VersionRequirement::parse(ver_req_str) {
+            Ok(r) => r.as_update_range(),
             Err(e) => {
-                warn!(
-                    "Skipping {}: invalid version requirement '{}': {}",
-                    name, ver_req_str, e
-                );
+                console.warn(format!(
+                    "Skipping {name}: invalid version requirement '{ver_req_str}': {e}"
+                ));
                 continue;
             }
         };
@@ -200,6 +237,11 @@ async fn collect_candidates(
             candidates.push(Candidate {
                 name: name.clone(),
                 locked,
+                updated_spec: DependencySpec::Registry {
+                    version: latest.clone(),
+                    registry: pinned_registry.map(str::to_string),
+                    optional,
+                },
                 latest,
                 locked_is_yanked,
             });
@@ -251,33 +293,11 @@ fn print_candidates(candidates: &[Candidate], output: OutputFormat, console: &mu
     }
 }
 
-/// Mutate `manifest.dependencies` so each candidate's spec becomes the
-/// resolved exact version. `Registry { version, .. }` retains its
-/// `registry` / `optional` fields with `version` replaced, so a bare-string
-/// shorthand stays a bare string when written back.
-fn apply_updates(
-    manifest: &hpm_package::PackageManifest,
-    manifest_path: &std::path::Path,
-    candidates: &[Candidate],
-) -> Result<()> {
+/// Write each candidate's updated spec through the formatting-preserving
+/// editor.
+fn apply_updates(manifest_path: &std::path::Path, candidates: &[Candidate]) -> Result<()> {
     for c in candidates {
-        let Some(spec) = manifest.dependencies.get(&c.name) else {
-            continue;
-        };
-        let new_spec = match spec {
-            DependencySpec::Registry {
-                registry, optional, ..
-            } => DependencySpec::Registry {
-                version: c.latest.clone(),
-                registry: registry.clone(),
-                optional: *optional,
-            },
-            DependencySpec::Url { .. } | DependencySpec::Path { .. } => {
-                // collect_candidates already filtered these out.
-                continue;
-            }
-        };
-        manifest_edit::upsert_dependency(manifest_path, &c.name, &new_spec)?;
+        manifest_edit::upsert_dependency(manifest_path, &c.name, &c.updated_spec)?;
     }
     Ok(())
 }
@@ -315,24 +335,32 @@ bar = { version = "^2.0.0", registry = "main" }
 "#,
         )
         .unwrap();
-        let manifest = PackageManifest::from_path(&manifest_path).unwrap();
-
         let candidates = vec![
             Candidate {
                 name: "foo".to_string(),
                 locked: Some("1.0.0".to_string()),
                 latest: "1.0.5".to_string(),
                 locked_is_yanked: false,
+                updated_spec: DependencySpec::Registry {
+                    version: "1.0.5".to_string(),
+                    registry: None,
+                    optional: false,
+                },
             },
             Candidate {
                 name: "bar".to_string(),
                 locked: Some("2.0.1".to_string()),
                 latest: "2.1.0".to_string(),
                 locked_is_yanked: false,
+                updated_spec: DependencySpec::Registry {
+                    version: "2.1.0".to_string(),
+                    registry: Some("main".to_string()),
+                    optional: false,
+                },
             },
         ];
 
-        apply_updates(&manifest, &manifest_path, &candidates).unwrap();
+        apply_updates(&manifest_path, &candidates).unwrap();
 
         let updated = PackageManifest::from_path(&manifest_path).unwrap();
         match &updated.dependencies["foo"] {

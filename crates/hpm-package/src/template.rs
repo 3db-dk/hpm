@@ -69,10 +69,6 @@ impl PackageTemplate {
             "hpm.toml".to_string(),
             self.generate_manifest_toml(manifest),
         );
-        self.files.insert(
-            "package.json".to_string(),
-            self.generate_houdini_package_json(manifest),
-        );
         self.files
             .insert("README.md".to_string(), self.generate_readme(manifest));
         self.files
@@ -103,21 +99,8 @@ impl PackageTemplate {
 
     fn generate_manifest_toml(&self, manifest: &PackageManifest) -> String {
         // PackageManifest is a plain serde-derived struct with no custom
-        // serializers; `to_string_pretty` cannot fail on it. The prior
-        // `.unwrap_or_else` fallback emitted a *different* manifest, which
-        // would silently diverge from what the author asked for.
+        // serializers; `to_string_pretty` cannot fail on it.
         toml::to_string_pretty(manifest).expect("PackageManifest::Serialize cannot fail")
-    }
-
-    fn generate_houdini_package_json(&self, manifest: &PackageManifest) -> String {
-        // `generate_houdini_package` errors only on malformed `[runtime]`
-        // conditional values or `[compat].houdini` — both rejected by
-        // `validate()` before the template is built. Same for the JSON
-        // serializer over `HoudiniPackage` (plain serde-derived struct).
-        let houdini_pkg = manifest
-            .generate_houdini_package()
-            .expect("template manifest passes validate()");
-        serde_json::to_string_pretty(&houdini_pkg).expect("HoudiniPackage::Serialize cannot fail")
     }
 
     fn generate_readme(&self, manifest: &PackageManifest) -> String {
@@ -223,7 +206,7 @@ Thumbs.db
     }
 
     fn generate_python_init(&self) -> String {
-        r#"""
+        r#""""
 Houdini package Python module.
 """
 
@@ -258,7 +241,7 @@ mod tests {
         assert!(template.directories.contains(&"scripts".to_string()));
         assert!(template.files.contains_key("hpm.toml"));
         assert!(template.files.contains_key("README.md"));
-        assert!(template.files.contains_key("package.json"));
+        assert!(!template.files.contains_key("package.json"));
     }
 
     #[test]
@@ -343,7 +326,7 @@ mod tests {
         }
 
         // Validate all expected files were created
-        let expected_files = ["hpm.toml", "README.md", "package.json", ".gitignore"];
+        let expected_files = ["hpm.toml", "README.md", ".gitignore"];
         for file in &expected_files {
             let file_path = temp_dir.path().join(file);
             assert!(file_path.exists(), "File {} should exist", file);
@@ -386,15 +369,6 @@ mod tests {
             assert!(readme_content.contains(license));
         }
 
-        // Validate package.json content (Houdini package manifest)
-        let package_json_content =
-            std::fs::read_to_string(package_path.join("package.json")).unwrap();
-        let package_json: serde_json::Value = serde_json::from_str(&package_json_content).unwrap();
-        assert!(package_json["env"].is_array());
-        assert!(package_json_content.contains("PYTHONPATH"));
-        assert!(package_json_content.contains("HOUDINI_SCRIPT_PATH"));
-        assert!(package_json["hpath"].is_array());
-
         // Validate .gitignore content
         let gitignore_content = std::fs::read_to_string(package_path.join(".gitignore")).unwrap();
         assert!(gitignore_content.contains("*.hip.bak"));
@@ -407,5 +381,10 @@ mod tests {
             std::fs::read_to_string(package_path.join("python").join("__init__.py")).unwrap();
         assert!(python_init_content.contains("Houdini package Python module"));
         assert!(python_init_content.contains("__version__ = \"1.0.0\""));
+        // The module docstring is a balanced triple-quoted string, so the
+        // file is valid Python.
+        assert!(
+            python_init_content.starts_with("\"\"\"\nHoudini package Python module.\n\"\"\"\n")
+        );
     }
 }

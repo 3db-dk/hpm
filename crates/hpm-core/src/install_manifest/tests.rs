@@ -51,9 +51,16 @@ fn the_record_round_trips_beside_the_package_and_is_forgotten() {
     );
     assert_eq!(read(&dir).unwrap(), Some(manifest.clone()));
 
-    // A second write replaces the first (Windows' rename does not).
-    super::write(&dir, &manifest).unwrap();
-    assert_eq!(read(&dir).unwrap(), Some(manifest));
+    // A second write replaces the first, on every platform.
+    write(&dir.join("b.txt"), b"b");
+    let second = record_tree(&dir).unwrap();
+    assert_ne!(second, manifest);
+    super::write(&dir, &second).unwrap();
+    assert_eq!(read(&dir).unwrap(), Some(second));
+    assert!(
+        !tmp.path().join("tool@1.0.0.files.json.tmp").exists(),
+        "no staging file is left behind"
+    );
 
     forget(&dir);
     assert!(!sibling.exists());

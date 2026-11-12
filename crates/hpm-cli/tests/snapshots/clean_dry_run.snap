@@ -1,0 +1,9 @@
+---
+source: crates/hpm-cli/tests/cli_snapshots.rs
+expression: "env.run(env.work.path(), &[\"clean\", \"--dry-run\"])"
+---
+args: clean --dry-run
+exit: 0
+--- stdout
+No orphaned packages found - cleanup not needed
+--- stderr
