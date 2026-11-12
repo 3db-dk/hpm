@@ -171,22 +171,9 @@ pub fn write(package_dir: &Path, manifest: &InstallManifest) -> Result<(), IoOp>
     })?;
     let json = serde_json::to_vec(manifest)
         .map_err(|e| IoOp::wrap("encode install record", &path, std::io::Error::other(e)))?;
-    let mut tmp = path.clone().into_os_string();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, json).map_err(|e| IoOp::wrap("write install record", &tmp, e))?;
-    if let Err(e) = std::fs::rename(&tmp, &path) {
-        // Windows' rename refuses to replace an existing file.
-        if path.exists() {
-            let _ = std::fs::remove_file(&path);
-            if std::fs::rename(&tmp, &path).is_ok() {
-                return Ok(());
-            }
-        }
-        let _ = std::fs::remove_file(&tmp);
-        return Err(IoOp::wrap("commit install record", &path, e));
-    }
-    Ok(())
+    // `std::fs::rename` replaces an existing file on every platform
+    // (`MoveFileExW` with `MOVEFILE_REPLACE_EXISTING` on Windows).
+    hpm_package::atomic_write(&path, json)
 }
 
 /// Read the record for `package_dir`. `Ok(None)` when there is none; an

@@ -1,15 +1,10 @@
 //! Crash-safe file writes via stage-and-rename.
 //!
-//! `LockFile::save`, `Config::save`, `VenvMetadata::save`, and the Houdini
-//! package.json emitter all wrote the target file in place. A crash or
-//! killed process mid-write would leave a half-written file that the next
-//! load would refuse — and in venv's case, would force an expensive
-//! full venv rebuild via the self-heal path.
-//!
-//! All four call sites had collapsed into the same five lines: build a
-//! `<path>.tmp` sibling, write into it, rename onto the target. This
-//! module owns that pattern so a future fix (e.g. fsync the parent dir,
-//! handle Windows rename semantics) lands in one place.
+//! A crash or killed process mid-write must never leave a half-written
+//! lockfile, config, venv metadata, Houdini package file or install record:
+//! the next load would refuse it (and for a venv, rebuild it). Every such
+//! write goes through [`atomic_write`], which stages to a sibling and renames
+//! onto the target.
 
 use crate::IoOp;
 use std::path::Path;
