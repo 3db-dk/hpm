@@ -108,18 +108,11 @@ pub(super) fn create_dev_link(
 /// On Windows, `symlink_metadata` reads the entry's reparse tag and
 /// `FileType::is_symlink` is true for the name-surrogate tags, which are
 /// symlinks and junctions (`IO_REPARSE_TAG_MOUNT_POINT`), while a placeholder
-/// such as a OneDrive cloud file stays a directory. This used to ask
-/// `junction::exists` as well, for a stdlib that reported junctions as plain
-/// directories; that call opens the directory with `share_mode(0)`, so it
-/// failed with os error 32 whenever anything else had the directory open (a
-/// reclaim listing it, a second install, Explorer showing it) and an
-/// install failed with it. The `path` argument is kept for the callers.
-pub(super) fn is_link_entry(
-    meta: &std::fs::Metadata,
-    path: &std::path::Path,
-) -> std::io::Result<bool> {
-    let _ = path;
-    Ok(meta.file_type().is_symlink())
+/// such as a OneDrive cloud file stays a directory. Judging from metadata
+/// needs no handle on the directory, so it works while anything else has the
+/// directory open (a reclaim listing it, a second install, Explorer).
+pub(super) fn is_link(meta: &std::fs::Metadata) -> bool {
+    meta.file_type().is_symlink()
 }
 
 /// Remove an install entry without following links. The caller is
@@ -143,9 +136,7 @@ pub(super) fn remove_install_entry(
     // a tree that is half removed.
     crate::install_manifest::forget(target_dir);
 
-    if is_link_entry(meta, target_dir)
-        .map_err(|e| IoOp::wrap("inspect install entry at", target_dir, e))?
-    {
+    if is_link(meta) {
         return remove_dev_link(target_dir)
             .map_err(|e| IoOp::wrap("remove dev link at", target_dir, e).into());
     }
@@ -184,9 +175,7 @@ pub(super) fn clear_existing_install(
         Err(e) => return Err(IoOp::wrap("stat install target", target_dir, e).into()),
     };
 
-    if is_link_entry(&meta, target_dir)
-        .map_err(|e| IoOp::wrap("inspect install entry at", target_dir, e))?
-    {
+    if is_link(&meta) {
         warn!(
             "replacing existing link install for {}@{} at {}",
             name,
@@ -216,9 +205,7 @@ pub(super) fn clear_container_link(container: &Path) -> Result<(), StorageError>
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(IoOp::wrap("stat dev container", container, e).into()),
     };
-    if is_link_entry(&meta, container)
-        .map_err(|e| IoOp::wrap("inspect dev container at", container, e))?
-    {
+    if is_link(&meta) {
         warn!(
             "replacing prior dev link at {} with a content-addressed copy",
             container.display()
@@ -417,48 +404,29 @@ mod tests {
         std::fs::create_dir_all(plain.join("a")).unwrap();
 
         let meta = |p: &std::path::Path| std::fs::symlink_metadata(p).unwrap();
-        assert!(is_link_entry(&meta(&link), &link).unwrap(), "a junction");
-        assert!(
-            !is_link_entry(&meta(&plain), &plain).unwrap(),
-            "a plain directory"
-        );
+        assert!(is_link(&meta(&link)), "a junction");
+        assert!(!is_link(&meta(&plain)), "a plain directory");
 
         // Another open handle on the directory, as a concurrent reclaim's
         // listing has.
         let _listing = std::fs::read_dir(&plain).unwrap();
         let _held = std::fs::File::open(plain.join("a")).ok();
-        assert!(!is_link_entry(&meta(&plain), &plain).unwrap());
-        assert!(is_link_entry(&meta(&link), &link).unwrap());
+        assert!(!is_link(&meta(&plain)));
+        assert!(is_link(&meta(&link)));
     }
 
-    /// Regression for the Windows reparse-point bug: a plain directory
-    /// (a `DevCopy` install) must inspect as "not a link", not as
-    /// an `ERROR_NOT_A_REPARSE_POINT` IoOp.
-    ///
-    /// The bug only surfaced on Windows (where `junction::exists` rides
-    /// over a FSCTL ioctl that reports 4390 for non-reparse entries),
-    /// but the *contract* — `is_link_entry` on a real directory returns
-    /// `Ok(false)` — is platform-independent. Asserting it on every host
-    /// keeps the contract from quietly re-regressing under future tightenings.
+    /// A plain directory (a `DevCopy` install) is not a link.
     #[test]
     fn plain_directory_inspects_as_non_link() {
         let tmp = tempfile::TempDir::new().unwrap();
         let dir = tmp.path().join("dev_copy_install");
         std::fs::create_dir(&dir).unwrap();
         let meta = std::fs::symlink_metadata(&dir).unwrap();
-
-        let result = is_link_entry(&meta, &dir);
-        assert!(
-            matches!(result, Ok(false)),
-            "expected Ok(false) for a plain directory, got {:?}",
-            result
-        );
+        assert!(!is_link(&meta));
     }
 
-    /// On Unix, a symlink to a directory must inspect as a link. The
-    /// Windows `junction` branch isn't exercised by this test (the entry
-    /// is a symlink, so the early return fires first); pair with a manual
-    /// Windows-side smoke test for full coverage.
+    /// A symlink to a directory is a link (junctions are covered by the
+    /// Windows-only test above).
     #[cfg(unix)]
     #[test]
     fn symlink_inspects_as_link() {
@@ -468,8 +436,7 @@ mod tests {
         let link = tmp.path().join("the_link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
         let meta = std::fs::symlink_metadata(&link).unwrap();
-
-        assert!(matches!(is_link_entry(&meta, &link), Ok(true)));
+        assert!(is_link(&meta));
     }
 
     fn write(path: &std::path::Path, contents: &str) {

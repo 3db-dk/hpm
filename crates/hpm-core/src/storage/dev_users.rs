@@ -39,7 +39,7 @@ use tracing::{debug, info, warn};
 
 #[cfg(test)]
 use super::dev_install::dev_copy_is_complete;
-use super::dev_install::{is_hash_dir_name, is_link_entry};
+use super::dev_install::{is_hash_dir_name, is_link};
 
 /// Directory under a dev container holding one record directory per hash.
 /// Hidden and not hash-shaped, so nothing that walks hash copies sees it.
@@ -593,8 +593,7 @@ fn drop_orphan_records(container: &Path, state_of: &impl Fn(u32) -> ProcessState
 /// `DevLink` install is a symlink or junction into the user's workspace, and
 /// `Path::is_dir` would answer for the workspace instead.
 pub(crate) fn is_copy_container(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .is_ok_and(|meta| meta.is_dir() && matches!(is_link_entry(&meta, path), Ok(false)))
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir() && !is_link(&meta))
 }
 
 /// The other version containers of the same package beside `container`
