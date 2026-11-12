@@ -9,6 +9,7 @@
 
 pub mod api;
 pub mod git;
+pub mod requirement;
 pub mod solve;
 pub mod types;
 
@@ -325,14 +326,17 @@ impl RegistrySet {
         req: &str,
         registry: Option<&str>,
     ) -> Result<RegistryEntry, RegistryError> {
-        if semver::Version::parse(req).is_ok() {
-            return self.get_version_in(name, req, registry).await;
-        }
-        let parsed = semver::VersionReq::parse(req).map_err(|e| {
+        let parsed = requirement::VersionRequirement::parse(req).map_err(|e| {
             RegistryError::ParseError(format!("Invalid version requirement '{}': {}", req, e))
         })?;
+        // An exact version is looked up directly, so the registry picks the
+        // build for this host.
+        if let requirement::VersionRequirement::Exact(_) = parsed {
+            return self.get_version_in(name, req.trim(), registry).await;
+        }
         let versions = self.get_versions_in(name, registry).await?;
-        highest_matching(&versions, &parsed)
+        parsed
+            .select(&versions)
             .cloned()
             .ok_or_else(|| RegistryError::VersionNotFound {
                 name: name.to_string(),

@@ -35,7 +35,7 @@
 
 use super::types::RegistryEntry;
 use hpm_package::HoudiniRange;
-use semver::{Version, VersionReq};
+use semver::Version;
 use std::fmt;
 
 /// The Houdini a project targets, for filtering versions by their
@@ -356,17 +356,10 @@ fn meets(req: &str, cand: &Candidate<'_>) -> bool {
     }
 }
 
-/// Parse a `deps` requirement. A bare full version (`"1.2.3"`) means exactly
-/// that version, as it does everywhere in an hpm manifest
-/// ([`RegistrySet::resolve`](super::RegistrySet::resolve) looks one up
-/// directly); Cargo's grammar alone would read it as `^1.2.3`. Anything else
-/// is Cargo's grammar.
-pub(crate) fn requirement(req: &str) -> Option<VersionReq> {
-    let req = req.trim();
-    if Version::parse(req).is_ok() {
-        return VersionReq::parse(&format!("={req}")).ok();
-    }
-    VersionReq::parse(req).ok()
+/// Parse a `deps` requirement with hpm's one grammar
+/// ([`VersionRequirement`](super::requirement::VersionRequirement)).
+pub(crate) fn requirement(req: &str) -> Option<super::requirement::VersionRequirement> {
+    super::requirement::VersionRequirement::parse(req).ok()
 }
 
 #[cfg(test)]

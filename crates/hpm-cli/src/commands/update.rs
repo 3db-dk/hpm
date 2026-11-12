@@ -3,9 +3,12 @@
 //!
 //! ## Range semantics
 //!
-//! Each dependency's spec is parsed as a `semver::VersionReq`. The
+//! Each dependency's spec is parsed with hpm's grammar
+//! (`VersionRequirement`) and searched as its update range
+//! (`as_update_range`): a pinned `1.2.3` is read as `^1.2.3`, so `hpm update`
+//! offers the newest compatible release; a range is searched as itself. The
 //! registry is queried for all versions of the package; non-yanked entries
-//! matching the requirement are sorted and the highest picked. If that
+//! matching the range are sorted and the highest picked. If that
 //! differs from the currently-locked version it's reported as an update.
 //!
 //! ## Apply
@@ -30,6 +33,7 @@ use crate::output::OutputFormat;
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
 use hpm_core::project::manifest_edit;
+use hpm_core::registry::requirement::VersionRequirement;
 use hpm_core::{LockFile, registry::RegistrySet};
 use hpm_package::DependencySpec;
 use std::collections::HashSet;
@@ -165,8 +169,8 @@ async fn collect_candidates(
             DependencySpec::Url { .. } | DependencySpec::Path { .. } => continue,
         };
 
-        let req = match semver::VersionReq::parse(ver_req_str) {
-            Ok(r) => r,
+        let req = match VersionRequirement::parse(ver_req_str) {
+            Ok(r) => r.as_update_range(),
             Err(e) => {
                 warn!(
                     "Skipping {}: invalid version requirement '{}': {}",
