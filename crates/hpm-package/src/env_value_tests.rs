@@ -1,102 +1,90 @@
 use super::*;
 
 // The derivations as functions of the range text, for terse tables.
-fn compile_houdini_req(req: &str) -> Result<String, ExpressionError> {
+fn enable_of(req: &str) -> Result<String, ExpressionError> {
     HoudiniRange::parse(req).map(|r| r.to_enable_expression())
 }
 
-fn houdini_req_has_upper_bound(req: &str) -> bool {
+fn has_upper_bound_of(req: &str) -> bool {
     HoudiniRange::parse(req).is_ok_and(|r| r.has_upper_bound())
 }
 
-fn houdini_req_lower_bound(req: &str) -> Option<String> {
+fn lower_bound_of(req: &str) -> Option<String> {
     HoudiniRange::parse(req).ok()?.lower_bound()
 }
 
 #[test]
 fn caret_major_only_expands_to_major_range() {
-    let s = compile_houdini_req("^21").unwrap();
+    let s = enable_of("^21").unwrap();
     assert_eq!(s, "houdini_version >= '21' and houdini_version < '22'");
 }
 
 #[test]
 fn bare_major_aliases_caret() {
-    let s = compile_houdini_req("21").unwrap();
+    let s = enable_of("21").unwrap();
     assert_eq!(s, "houdini_version >= '21' and houdini_version < '22'");
 }
 
 #[test]
 fn tilde_major_minor_expands_to_minor_range() {
-    let s = compile_houdini_req("~21.5").unwrap();
+    let s = enable_of("~21.5").unwrap();
     assert_eq!(s, "houdini_version >= '21.5' and houdini_version < '21.6'");
 }
 
 #[test]
 fn comma_separated_comparators_combine_with_and() {
-    let s = compile_houdini_req(">=21, <22.5").unwrap();
+    let s = enable_of(">=21, <22.5").unwrap();
     assert_eq!(s, "(houdini_version >= '21' and houdini_version < '22.5')");
 }
 
 #[test]
 fn houdini_upper_bound_detection() {
     // Lower-only forms — no upper bound.
-    assert!(!houdini_req_has_upper_bound(">=20.5"));
-    assert!(!houdini_req_has_upper_bound(">21"));
-    assert!(!houdini_req_has_upper_bound(">=20.5, >=21"));
+    assert!(!has_upper_bound_of(">=20.5"));
+    assert!(!has_upper_bound_of(">21"));
+    assert!(!has_upper_bound_of(">=20.5, >=21"));
     // Everything else has an upper bound.
-    assert!(houdini_req_has_upper_bound("^21"));
-    assert!(houdini_req_has_upper_bound("~21.5"));
-    assert!(houdini_req_has_upper_bound("21"));
-    assert!(houdini_req_has_upper_bound("=21"));
-    assert!(houdini_req_has_upper_bound("==21"));
-    assert!(houdini_req_has_upper_bound("<22"));
-    assert!(houdini_req_has_upper_bound("<=21.5"));
+    assert!(has_upper_bound_of("^21"));
+    assert!(has_upper_bound_of("~21.5"));
+    assert!(has_upper_bound_of("21"));
+    assert!(has_upper_bound_of("=21"));
+    assert!(has_upper_bound_of("==21"));
+    assert!(has_upper_bound_of("<22"));
+    assert!(has_upper_bound_of("<=21.5"));
     // Mixed — any upper-bounding clause is enough.
-    assert!(houdini_req_has_upper_bound(">=20.5, <22"));
-    assert!(houdini_req_has_upper_bound(">=20.5, ^21"));
+    assert!(has_upper_bound_of(">=20.5, <22"));
+    assert!(has_upper_bound_of(">=20.5, ^21"));
     // Empty / unparseable — no upper bound.
-    assert!(!houdini_req_has_upper_bound(""));
+    assert!(!has_upper_bound_of(""));
 }
 
 #[test]
 fn houdini_lower_bound_extraction() {
-    assert_eq!(houdini_req_lower_bound("20.5"), Some("20.5".to_string()));
-    assert_eq!(houdini_req_lower_bound("^21"), Some("21".to_string()));
-    assert_eq!(houdini_req_lower_bound("~21.5"), Some("21.5".to_string()));
-    assert_eq!(houdini_req_lower_bound(">=20.5"), Some("20.5".to_string()));
-    assert_eq!(
-        houdini_req_lower_bound(">=20.5, <22"),
-        Some("20.5".to_string())
-    );
-    assert_eq!(
-        houdini_req_lower_bound("<22, >=20.5"),
-        Some("20.5".to_string())
-    );
-    assert_eq!(houdini_req_lower_bound("<22"), None);
-    assert_eq!(houdini_req_lower_bound("<=21"), None);
-    assert_eq!(houdini_req_lower_bound(""), None);
-    assert_eq!(houdini_req_lower_bound("garbage"), None);
+    assert_eq!(lower_bound_of("20.5"), Some("20.5".to_string()));
+    assert_eq!(lower_bound_of("^21"), Some("21".to_string()));
+    assert_eq!(lower_bound_of("~21.5"), Some("21.5".to_string()));
+    assert_eq!(lower_bound_of(">=20.5"), Some("20.5".to_string()));
+    assert_eq!(lower_bound_of(">=20.5, <22"), Some("20.5".to_string()));
+    assert_eq!(lower_bound_of("<22, >=20.5"), Some("20.5".to_string()));
+    assert_eq!(lower_bound_of("<22"), None);
+    assert_eq!(lower_bound_of("<=21"), None);
+    assert_eq!(lower_bound_of(""), None);
+    assert_eq!(lower_bound_of("garbage"), None);
 }
 
 #[test]
 fn invalid_houdini_req_rejected() {
-    assert!(compile_houdini_req("not-a-version").is_err());
-    assert!(compile_houdini_req("").is_err());
-    assert!(compile_houdini_req(">=").is_err());
+    assert!(enable_of("not-a-version").is_err());
+    assert!(enable_of("").is_err());
+    assert!(enable_of(">=").is_err());
 }
 
 /// `=` is documented as an exact-version alias of `==`; it used to fall
 /// through to the bare-version (caret) parser and error out.
 #[test]
 fn single_equals_aliases_exact_version() {
-    assert_eq!(
-        compile_houdini_req("=21").unwrap(),
-        "houdini_version == '21'"
-    );
-    assert_eq!(
-        compile_houdini_req("==21").unwrap(),
-        "houdini_version == '21'"
-    );
+    assert_eq!(enable_of("=21").unwrap(), "houdini_version == '21'");
+    assert_eq!(enable_of("==21").unwrap(), "houdini_version == '21'");
 }
 
 #[test]
