@@ -1956,9 +1956,10 @@ async fn dev_dry_run_agrees_with_the_real_run_and_writes_nothing() {
 }
 
 /// What counts as an installed package in the store: a `<slug>@<version>`
-/// directory holding `hpm.toml`. The install record and exec-mode stamp
-/// beside it, `_dev`, staging and tombstone directories, and a directory
-/// without a manifest are not packages.
+/// directory directly in it, holding `hpm.toml`. The install record and
+/// exec-mode stamp beside it, `_dev`, staging and tombstone directories, a
+/// directory without a manifest, and a directory without `@` (or anything
+/// under one) are not packages.
 #[test]
 fn only_slug_at_version_directories_are_packages() {
     let temp = TempDir::new().unwrap();
@@ -1975,6 +1976,17 @@ fn only_slug_at_version_directories_are_packages() {
     std::fs::write(packages.join("tool@1.0.0.files.json"), b"{}").unwrap();
     std::fs::write(packages.join("tool@1.0.0.exec-modes"), b"1").unwrap();
     std::fs::create_dir_all(packages.join("empty@1.0.0")).unwrap();
+    // A directory without `@`, even one holding a manifest, is not a store
+    // copy; nor is anything under it (no hpm writes `<creator>/<slug>@<v>`).
+    std::fs::create_dir_all(packages.join("notes")).unwrap();
+    std::fs::write(
+        packages.join("notes").join("hpm.toml"),
+        manifest("notes", "1.0.0"),
+    )
+    .unwrap();
+    let scoped = packages.join("studio").join("scoped@1.0.0");
+    std::fs::create_dir_all(&scoped).unwrap();
+    std::fs::write(scoped.join("hpm.toml"), manifest("scoped", "1.0.0")).unwrap();
     for hidden in [".stage-1-0", ".reclaim-x"] {
         let dir = packages.join(hidden).join("x@1.0.0");
         std::fs::create_dir_all(&dir).unwrap();
