@@ -37,7 +37,7 @@ impl ProjectManager {
     /// dependencies (plus `extra_requirements` — the script's own
     /// `requirements`), and every involved package's `python/` directory on
     /// `PYTHONPATH`. The project's own Houdini version drives the interpreter
-    /// ABI, exactly as in [`Self::resolve_python_deps`].
+    /// ABI, exactly as in a sync (both use `python_env::ensure_venv`).
     ///
     /// Read-only: the dependency set is taken from the existing `hpm.lock` +
     /// global package store, so this never fetches packages or rewrites
