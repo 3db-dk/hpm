@@ -591,6 +591,51 @@ mod tests {
         assert!(!result.from_cache);
     }
 
+    /// An archive far larger than one network read arrives intact: every
+    /// chunk of the streamed body reaches the file, so the checksum verifies
+    /// and the large member extracts byte for byte.
+    #[tokio::test]
+    async fn test_fetch_streams_a_multi_chunk_archive() {
+        let temp = TempDir::new().unwrap();
+        let fetcher =
+            ArchiveFetcher::new(temp.path().join("cache"), temp.path().join("packages")).unwrap();
+
+        // 4 MiB of pseudo-random bytes, stored uncompressed.
+        let mut state: u32 = 0x9e37_79b9;
+        let payload: Vec<u8> = (0..4 * 1024 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect();
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            use std::io::Write;
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let stored = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("pkg-1.0/hpm.toml", stored).unwrap();
+            zip.write_all(b"[package]\n").unwrap();
+            zip.start_file("pkg-1.0/data.bin", stored).unwrap();
+            zip.write_all(&payload).unwrap();
+            zip.finish().unwrap();
+        }
+        let bytes = buf.into_inner();
+        let digest = sha256_hex(&bytes);
+        let url = serve_once(bytes).await;
+
+        let result = fetcher
+            .fetch_direct_url(&url, "1.0.0", "big", Some(&digest))
+            .await
+            .expect("a multi-chunk download must verify against its checksum");
+        assert_eq!(
+            std::fs::read(result.package_path.join("data.bin")).unwrap(),
+            payload
+        );
+    }
+
     /// A matching checksum extracts normally.
     #[tokio::test]
     async fn test_fetch_accepts_matching_checksum() {
