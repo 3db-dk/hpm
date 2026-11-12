@@ -23,6 +23,7 @@ use tracing::info;
 
 pub mod error;
 pub(crate) mod houdini_emit;
+mod locking;
 pub mod manifest_edit;
 pub mod types;
 

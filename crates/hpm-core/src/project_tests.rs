@@ -1779,3 +1779,121 @@ async fn a_new_version_reclaims_the_old_container_once_nothing_points_at_it() {
     let new = config.storage.packages_dir.join("_dev").join("rig@1.1.0");
     assert_eq!(dev_hashes(&new).len(), 1);
 }
+
+mod lock_building {
+    use super::*;
+    use crate::lock::{LockFile, LockedDependency, LockedSource};
+
+    fn outcome(
+        name: &str,
+        version: &str,
+        checksum: Option<&str>,
+        source: Option<LockedSource>,
+    ) -> (String, InstallOutcome) {
+        let manifest = hpm_package::parse_manifest_str(&format!(
+            "[package]\npath = \"{name}\"\nname = \"x\"\nversion = \"{version}\"\n"
+        ))
+        .unwrap();
+        (
+            name.to_string(),
+            InstallOutcome {
+                package: InstalledPackage {
+                    version: version.to_string(),
+                    manifest,
+                    install_path: PathBuf::from("/store").join(version),
+                    is_dev: false,
+                },
+                checksum: checksum.map(str::to_string),
+                source,
+            },
+        )
+    }
+
+    fn project() -> hpm_package::PackageManifest {
+        hpm_package::parse_manifest_str(
+            "[package]\npath = \"studio/proj\"\nname = \"proj\"\nversion = \"0.1.0\"\n\n\
+             [dependencies]\n\"acme/cached\" = \"2.0.0\"\n\n\
+             [python_dependencies]\nnumpy = \">=1.24\"\nrequests = { extras = [\"socks\"] }\n",
+        )
+        .unwrap()
+    }
+
+    fn manager(temp: &TempDir) -> ProjectManager {
+        let (config, storage) = test_setup(temp.path());
+        let root = temp.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        ProjectManager::new(root, storage, config).unwrap()
+    }
+
+    fn prior_with(source: LockedSource) -> LockFile {
+        let mut prior = LockFile::new("proj".into(), "0.1.0".into());
+        prior.add_dependency(
+            "acme/cached".into(),
+            LockedDependency {
+                version: "2.0.0".into(),
+                checksum: Some("bb".into()),
+                source,
+            },
+        );
+        prior
+    }
+
+    /// A fresh fetch records what it fetched; an install found in the store
+    /// keeps the previous lock entry's checksum and source; a path
+    /// dependency records its path; Python dependencies record their
+    /// requirement (`*` when none).
+    #[tokio::test]
+    async fn the_lock_records_each_install_and_keeps_what_a_store_hit_cannot_know() {
+        let temp = TempDir::new().unwrap();
+        let fetched = LockedSource::url("https://r/tools-1.0.0.zip", "1.0.0");
+        let path = LockedSource::path("../rig");
+        let outcomes = vec![
+            outcome("acme/tools", "1.0.0", Some("aa"), Some(fetched.clone())),
+            outcome("acme/cached", "2.0.0", None, None),
+            outcome("acme/rig", "0.1.0", None, Some(path.clone())),
+        ];
+        let prior_source = LockedSource::url("https://r/cached-2.0.0.zip", "2.0.0");
+        let lock = manager(&temp)
+            .lock_file(
+                &project(),
+                &outcomes,
+                Some(&prior_with(prior_source.clone())),
+            )
+            .await
+            .unwrap();
+        let dep = |n: &str| lock.get_dependency(n).unwrap().clone();
+        assert_eq!(dep("acme/tools").source, fetched);
+        assert_eq!(dep("acme/tools").checksum.as_deref(), Some("aa"));
+        assert_eq!(dep("acme/cached").source, prior_source);
+        assert_eq!(dep("acme/cached").checksum.as_deref(), Some("bb"));
+        assert_eq!(dep("acme/rig").source, path);
+        assert_eq!(lock.python_dependencies["numpy"].version, ">=1.24");
+        assert_eq!(lock.python_dependencies["requests"].version, "*");
+        assert_eq!(lock.package.name, "proj");
+    }
+
+    /// A store hit with no usable previous entry (none, or an older hpm's
+    /// `"unresolved"` placeholder) has its source looked up in the
+    /// project's registries; it is never written as a URL nobody can fetch.
+    /// With no registry to ask, building the lock fails and says why.
+    #[tokio::test]
+    async fn a_store_hit_without_a_known_source_is_resolved_never_invented() {
+        let temp = TempDir::new().unwrap();
+        let manager = manager(&temp);
+        let outcomes = vec![outcome("acme/cached", "2.0.0", None, None)];
+        let placeholder = prior_with(LockedSource::url("unresolved", "2.0.0"));
+        for prior in [None, Some(&placeholder)] {
+            match manager.lock_file(&project(), &outcomes, prior).await {
+                Err(ProjectError::RegistryResolution {
+                    name, version_req, ..
+                }) => {
+                    assert_eq!(
+                        (name.as_str(), version_req.as_str()),
+                        ("acme/cached", "2.0.0")
+                    );
+                }
+                other => panic!("expected a resolution error, got {other:?}"),
+            }
+        }
+    }
+}

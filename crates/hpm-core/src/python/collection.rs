@@ -117,12 +117,9 @@ fn convert_spec_to_dependency(
             Ok(PythonDependency::new(name, VersionSpec::new(version_spec)))
         }
         PythonDependencySpec::Detailed {
-            version,
-            optional,
-            extras,
+            optional, extras, ..
         } => {
-            let version_spec = version.as_deref().unwrap_or("*");
-            let mut dep = PythonDependency::new(name, VersionSpec::new(version_spec));
+            let mut dep = PythonDependency::new(name, VersionSpec::new(spec.version_req()));
 
             if let Some(true) = optional {
                 dep = dep.optional();

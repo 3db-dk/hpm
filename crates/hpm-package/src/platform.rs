@@ -47,6 +47,13 @@ impl Platform {
         }
     }
 
+    /// This host's `<os>-<arch>` identifier: [`Self::as_str`] of
+    /// [`Self::current`] on a supported host, and the same shape on any other
+    /// (`freebsd-x86_64`), for messages and the lockfile's `platform`.
+    pub fn host_id() -> String {
+        format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::LinuxX86_64 => "linux-x86_64",

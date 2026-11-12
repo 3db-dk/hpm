@@ -12,11 +12,7 @@ use crate::console::Console;
 use crate::progress::OperationProgress;
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
-use hpm_core::{
-    InstallOutcome, LockFile, LockedDependency, LockedPythonDependency, LockedSource,
-    ProjectManager, StorageManager,
-};
-use hpm_package::{PackageManifest, PythonDependencySpec};
+use hpm_core::{LockFile, ProjectManager, StorageManager};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -131,7 +127,10 @@ pub async fn install_dependencies(
         .context("Failed to sync project dependencies")?;
 
     // Generate (or refuse to update) the lockfile from sync outcomes.
-    let new_lock = build_lock_file(&manifest, &outcomes, existing_lock.as_ref());
+    let new_lock = project_manager
+        .lock_file(&manifest, &outcomes, existing_lock.as_ref())
+        .await
+        .context("Failed to build the lock file")?;
     if frozen_lockfile {
         // --frozen-lockfile: the new lockfile must equal the existing one.
         // has_changes() compares dependencies + python_dependencies only,
@@ -156,72 +155,6 @@ pub async fn install_dependencies(
     progress.finish_success("Dependencies installed");
     info!("Dependency installation completed successfully");
     Ok(())
-}
-
-/// Build a fresh `LockFile` from sync outcomes, backfilling fields that
-/// `sync_dependencies` couldn't populate from the prior lockfile.
-///
-/// `InstallOutcome` leaves `checksum` / `source` as `None` when the install
-/// short-circuited on the CAS (already-installed package); we look those
-/// fields up in the prior lockfile so the new file isn't lossy. Only deps
-/// that are genuinely new to the project, with no prior entry, fall back
-/// to `LockedSource::url("unresolved", version)`.
-fn build_lock_file(
-    manifest: &PackageManifest,
-    outcomes: &[(String, InstallOutcome)],
-    existing: Option<&LockFile>,
-) -> LockFile {
-    let mut lock = LockFile::new(
-        manifest.package.name.clone(),
-        manifest.package.version.clone(),
-    );
-
-    for (name, outcome) in outcomes {
-        let prior = existing.and_then(|l| l.get_dependency(name));
-        let (checksum, source) = resolve_locked_fields(outcome, prior);
-        lock.add_dependency(
-            name.to_string(),
-            LockedDependency {
-                version: outcome.package.version.clone(),
-                checksum,
-                source,
-            },
-        );
-    }
-
-    for (name, spec) in &manifest.python_dependencies {
-        let version = match spec {
-            PythonDependencySpec::Simple(v) => v.clone(),
-            PythonDependencySpec::Detailed { version, .. } => {
-                version.clone().unwrap_or_else(|| "*".to_string())
-            }
-        };
-        lock.add_python_dependency(name.to_string(), LockedPythonDependency::new(version));
-    }
-
-    lock
-}
-
-/// Compute `(checksum, source)` for a lockfile entry from this sync's
-/// `InstallOutcome` plus the prior lockfile entry. Fresh-fetched outcomes
-/// always win; CAS short-circuits inherit from the prior entry where
-/// possible.
-fn resolve_locked_fields(
-    outcome: &InstallOutcome,
-    prior: Option<&LockedDependency>,
-) -> (Option<String>, LockedSource) {
-    let checksum = outcome
-        .checksum
-        .clone()
-        .or_else(|| prior.and_then(|p| p.checksum.clone()));
-
-    let source = outcome
-        .source
-        .clone()
-        .or_else(|| prior.map(|p| p.source.clone()))
-        .unwrap_or_else(|| LockedSource::url("unresolved", outcome.package.version.clone()));
-
-    (checksum, source)
 }
 
 #[cfg(test)]
@@ -324,79 +257,5 @@ description = "Test custom manifest path"
             .block_on(install_dependencies(&config, Some(nonexistent), false))
             .unwrap_err();
         assert!(err.to_string().contains("does not exist"));
-    }
-
-    mod lock_building {
-        use super::*;
-        use hpm_core::storage::InstalledPackage;
-
-        fn outcome(
-            name: &str,
-            version: &str,
-            checksum: Option<&str>,
-            source: Option<LockedSource>,
-        ) -> (String, InstallOutcome) {
-            let manifest = hpm_package::parse_manifest_str(&format!(
-                "[package]\npath = \"{name}\"\nname = \"x\"\nversion = \"{version}\"\n"
-            ))
-            .unwrap();
-            (
-                name.to_string(),
-                InstallOutcome {
-                    package: InstalledPackage {
-                        version: version.to_string(),
-                        manifest,
-                        install_path: std::path::PathBuf::from("/store").join(version),
-                        is_dev: false,
-                    },
-                    checksum: checksum.map(str::to_string),
-                    source,
-                },
-            )
-        }
-
-        fn project() -> PackageManifest {
-            hpm_package::parse_manifest_str(
-                "[package]\npath = \"studio/proj\"\nname = \"proj\"\nversion = \"0.1.0\"\n\n\
-                 [python_dependencies]\nnumpy = \">=1.24\"\nrequests = { extras = [\"socks\"] }\n",
-            )
-            .unwrap()
-        }
-
-        /// A fresh fetch records what it fetched; an install found in the
-        /// store keeps the previous lock entry's checksum and source; a path
-        /// dependency records its path; Python dependencies record their
-        /// requirement (`*` when none).
-        #[test]
-        fn the_lock_records_each_install_and_keeps_what_a_store_hit_cannot_know() {
-            let fetched = LockedSource::url("https://r/tools-1.0.0.zip", "1.0.0");
-            let path = LockedSource::path("../rig");
-            let outcomes = vec![
-                outcome("acme/tools", "1.0.0", Some("aa"), Some(fetched.clone())),
-                outcome("acme/cached", "2.0.0", None, None),
-                outcome("acme/rig", "0.1.0", None, Some(path.clone())),
-            ];
-            let mut prior = LockFile::new("proj".into(), "0.1.0".into());
-            let prior_source = LockedSource::url("https://r/cached-2.0.0.zip", "2.0.0");
-            prior.add_dependency(
-                "acme/cached".into(),
-                LockedDependency {
-                    version: "2.0.0".into(),
-                    checksum: Some("bb".into()),
-                    source: prior_source.clone(),
-                },
-            );
-
-            let lock = build_lock_file(&project(), &outcomes, Some(&prior));
-            let dep = |n: &str| lock.get_dependency(n).unwrap().clone();
-            assert_eq!(dep("acme/tools").source, fetched);
-            assert_eq!(dep("acme/tools").checksum.as_deref(), Some("aa"));
-            assert_eq!(dep("acme/cached").source, prior_source);
-            assert_eq!(dep("acme/cached").checksum.as_deref(), Some("bb"));
-            assert_eq!(dep("acme/rig").source, path);
-            assert_eq!(lock.python_dependencies["numpy"].version, ">=1.24");
-            assert_eq!(lock.python_dependencies["requests"].version, "*");
-            assert_eq!(lock.package.name, "proj");
-        }
     }
 }

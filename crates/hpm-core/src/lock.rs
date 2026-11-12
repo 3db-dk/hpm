@@ -184,7 +184,7 @@ impl LockFile {
             metadata: Some(LockMetadata {
                 generated_at: Some(chrono_now()),
                 hpm_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-                platform: Some(current_platform()),
+                platform: Some(hpm_package::Platform::host_id()),
             }),
         }
     }
@@ -332,11 +332,6 @@ fn chrono_now() -> String {
         .expect("formatting a UTC timestamp with a static format description cannot fail")
 }
 
-/// Get the current platform identifier
-fn current_platform() -> String {
-    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,12 +347,22 @@ mod tests {
         assert!(timestamp.ends_with('Z'));
     }
 
+    /// The lock records this host as `<os>-<arch>`, which on a supported
+    /// host is its `Platform` string.
     #[test]
-    fn test_current_platform() {
-        let platform = current_platform();
-        // Should contain OS and arch
-        assert!(platform.contains('-'));
-        assert!(!platform.is_empty());
+    fn the_lock_records_the_host_platform() {
+        let platform = LockFile::new("p".into(), "1.0.0".into())
+            .metadata
+            .unwrap()
+            .platform
+            .unwrap();
+        assert_eq!(
+            platform,
+            format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+        );
+        if let Some(host) = hpm_package::Platform::current() {
+            assert_eq!(platform, host.as_str());
+        }
     }
 
     /// Build a fake fetched package directory for verify_checksums tests:

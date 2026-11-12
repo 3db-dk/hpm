@@ -456,9 +456,7 @@ pub(crate) fn select_build_for_host<'a>(
     select_build(builds, host).ok_or_else(|| RegistryError::NoCompatibleBuild {
         name: name.to_string(),
         version: version.to_string(),
-        host: host
-            .map(|p| p.as_str().to_string())
-            .unwrap_or_else(|| format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)),
+        host: hpm_package::Platform::host_id(),
     })
 }
 

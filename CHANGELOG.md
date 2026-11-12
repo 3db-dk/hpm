@@ -52,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `hpm.lock` no longer records `url = "unresolved"` for a registry
+  dependency that was already installed when no previous lock entry knew
+  its source. hpm now looks the download URL up in the project's registries
+  (only in that case), and stops with an error when it cannot. Existing
+  lockfiles holding `"unresolved"` still pass `--frozen-lockfile` (which
+  compares versions), and the next lock rewrite replaces the placeholder.
+
 - `hpm clean` stops with an error, instead of deleting more, when it cannot
   read something that decides what is in use: the global-install directory
   or an entry in it, a dev copy's user records, or an entry in a project
@@ -93,6 +100,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking (hpm-core API):** `ProjectManager::generate_houdini_manifests`.
   It emitted without the package's venv; `sync_dependencies` writes the
   manifests.
+- `ProjectManager::lock_file` builds `hpm.lock` from a sync (the CLI's
+  lock building moved into hpm-core), and `PythonDependencySpec::version_req`
+  and `Platform::host_id` replace copies of the same logic.
 - **Breaking (hpm-package API):** the free functions in `env_value`
   (`compile_houdini_req`, `houdini_req_lower_bound`,
   `houdini_req_has_upper_bound`, `normalize_hpackage_houdini_req`). Use the

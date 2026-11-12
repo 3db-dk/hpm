@@ -42,6 +42,14 @@ pub enum PythonDependencySpec {
 }
 
 impl PythonDependencySpec {
+    /// The version requirement, `"*"` when the spec gives none.
+    pub fn version_req(&self) -> &str {
+        match self {
+            Self::Simple(version) => version,
+            Self::Detailed { version, .. } => version.as_deref().unwrap_or("*"),
+        }
+    }
+
     /// Create a simple Python dependency with just a version constraint.
     pub fn simple(version: impl Into<String>) -> Self {
         PythonDependencySpec::Simple(version.into())
@@ -113,5 +121,20 @@ mod tests {
         let json = serde_json::to_string(&detailed).unwrap();
         assert!(json.contains(">=1.0.0"));
         assert!(json.contains("dev"));
+    }
+
+    #[test]
+    fn version_req_is_the_requirement_or_any() {
+        assert_eq!(
+            PythonDependencySpec::Simple(">=1.20".into()).version_req(),
+            ">=1.20"
+        );
+        let detailed = |version: Option<&str>| PythonDependencySpec::Detailed {
+            version: version.map(str::to_string),
+            optional: None,
+            extras: None,
+        };
+        assert_eq!(detailed(Some("^3.5")).version_req(), "^3.5");
+        assert_eq!(detailed(None).version_req(), "*");
     }
 }

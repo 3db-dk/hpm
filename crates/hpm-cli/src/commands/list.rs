@@ -80,7 +80,7 @@ fn manifest_json(manifest: &PackageManifest) -> serde_json::Value {
             };
             serde_json::json!({
                 "name": name,
-                "version": format_python_dependency_spec(spec),
+                "version": spec.version_req().to_string(),
                 "extras": extras,
                 "optional": is_optional_python_dependency(spec),
             })
@@ -142,7 +142,7 @@ fn display_tree(manifest: &PackageManifest, console: &mut Console) {
             let is_last = idx == count - 1;
             let prefix = if is_last { "└── " } else { "├── " };
 
-            let version_info = format_python_dependency_spec(spec);
+            let version_info = spec.version_req().to_string();
             let extras_info = format_python_extras(spec);
             let optional_marker = if is_optional_python_dependency(spec) {
                 style(" [optional]").dim().to_string()
@@ -235,7 +235,7 @@ fn display_python_dependencies(manifest: &PackageManifest, console: &mut Console
         console.stdout("  (none)");
     } else {
         for (name, spec) in &manifest.python_dependencies {
-            let version_info = format_python_dependency_spec(spec);
+            let version_info = spec.version_req().to_string();
             let optional_marker = if is_optional_python_dependency(spec) {
                 " (optional)"
             } else {
@@ -301,26 +301,6 @@ fn format_dependency_spec(spec: &DependencySpec) -> String {
 /// `true` if the dependency is marked as optional, `false` otherwise
 fn is_optional_dependency(spec: &DependencySpec) -> bool {
     spec.is_optional()
-}
-
-/// Format Python dependency specification for display
-///
-/// Converts a Python dependency specification into a human-readable version string.
-///
-/// # Arguments
-///
-/// * `spec` - The Python dependency specification to format
-///
-/// # Returns
-///
-/// A formatted version string, or `"*"` if no version is specified
-fn format_python_dependency_spec(spec: &PythonDependencySpec) -> String {
-    match spec {
-        PythonDependencySpec::Simple(version) => version.clone(),
-        PythonDependencySpec::Detailed { version, .. } => {
-            version.clone().unwrap_or_else(|| "*".to_string())
-        }
-    }
 }
 
 /// Check if Python dependency is optional
@@ -457,21 +437,6 @@ mod tests {
             link: false,
         };
         assert!(!is_optional_dependency(&path_not_optional));
-    }
-
-    #[test]
-    fn test_format_python_dependency_spec() {
-        let simple = PythonDependencySpec::Simple(">=1.20.0".to_string());
-        let result = format_python_dependency_spec(&simple);
-        assert_eq!(result, ">=1.20.0");
-
-        let detailed = PythonDependencySpec::Detailed {
-            version: Some("^3.5.0".to_string()),
-            optional: None,
-            extras: None,
-        };
-        let result = format_python_dependency_spec(&detailed);
-        assert_eq!(result, "^3.5.0");
     }
 
     #[test]
