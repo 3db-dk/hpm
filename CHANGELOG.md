@@ -66,7 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user's configuration for the same home.
 
 - `[install] parallel_downloads` now bounds how many packages a sync
-  installs at once (it was read but never used). `[install] path`, which
+  installs at once (it was read but never used), and must be at least 1:
+  a config file with `parallel_downloads = 0` (which meant nothing before)
+  now fails to load until the line is removed or raised. `[install] path`, which
   was never used, is gone from the config; an existing file holding it
   still loads, with a warning. Any other unknown key in a config file is
   now an error that names it (a misspelt `[registry]` or
