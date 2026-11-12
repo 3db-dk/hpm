@@ -1058,7 +1058,7 @@ fn list_dependencies_resolves_creator_scoped_manifests() {
     std::fs::create_dir_all(&project_root).unwrap();
 
     // Put a real package in the store so the lookup has something to find.
-    let store_dir = config.storage.packages_dir.join("acme").join("tools@1.0.0");
+    let store_dir = config.storage.packages_dir.join("tools@1.0.0");
     std::fs::create_dir_all(&store_dir).unwrap();
     std::fs::write(
         store_dir.join("hpm.toml"),
@@ -1095,11 +1095,7 @@ fn list_dependencies_reports_the_version_the_project_installs() {
         let project_root = temp_dir.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
         for version in ["1.0.0", "0.9.0", "1.2.0"] {
-            let dir = config
-                .storage
-                .packages_dir
-                .join("acme")
-                .join(format!("tools@{version}"));
+            let dir = config.storage.packages_dir.join(format!("tools@{version}"));
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join("hpm.toml"),
@@ -1150,11 +1146,7 @@ fn list_dependencies_reports_a_path_dependencys_dev_install() {
         let manifest = |version: &str| {
             format!("[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"{version}\"\n")
         };
-        let registry = config
-            .storage
-            .packages_dir
-            .join("acme")
-            .join("tools@1.88.1");
+        let registry = config.storage.packages_dir.join("tools@1.88.1");
         std::fs::create_dir_all(&registry).unwrap();
         std::fs::write(registry.join("hpm.toml"), manifest("1.88.1")).unwrap();
         let dev = config
@@ -1207,11 +1199,7 @@ fn list_dependencies_follows_the_emitted_hpath() {
             format!("[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"{version}\"\n")
         };
         for version in ["1.0.0", "1.2.0"] {
-            let dir = config
-                .storage
-                .packages_dir
-                .join("acme")
-                .join(format!("tools@{version}"));
+            let dir = config.storage.packages_dir.join(format!("tools@{version}"));
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("hpm.toml"), manifest(version)).unwrap();
         }
@@ -1227,11 +1215,7 @@ fn list_dependencies_follows_the_emitted_hpath() {
         let hpath = if target == "outside" {
             outside.clone()
         } else {
-            config
-                .storage
-                .packages_dir
-                .join("acme")
-                .join(format!("tools@{target}"))
+            config.storage.packages_dir.join(format!("tools@{target}"))
         };
         let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
         let pkg_dir = &project_manager.project_paths.packages_dir;
@@ -1329,7 +1313,7 @@ proptest! {
         let manifest = |path: &str, version: &str| {
             format!("[package]\npath = \"{path}\"\nname = \"T\"\nversion = \"{version}\"\n")
         };
-        let registry_dir = |v: &str| store.join("acme").join(format!("tools@{v}"));
+        let registry_dir = |v: &str| store.join(format!("tools@{v}"));
         for (v, present) in VERSIONS.iter().zip(&installed) {
             if *present {
                 std::fs::create_dir_all(registry_dir(v)).unwrap();
@@ -1341,7 +1325,7 @@ proptest! {
             std::fs::create_dir_all(&dev_dir).unwrap();
             std::fs::write(dev_dir.join("hpm.toml"), manifest("acme/tools", "1.89.0")).unwrap();
         }
-        let foreign_dir = store.join("acme").join("other@1.0.0");
+        let foreign_dir = store.join("other@1.0.0");
         std::fs::create_dir_all(&foreign_dir).unwrap();
         std::fs::write(foreign_dir.join("hpm.toml"), manifest("acme/other", "1.0.0")).unwrap();
         let outside_dir = temp_dir.path().join("elsewhere").join("tools@1.0.0");
@@ -1415,7 +1399,7 @@ fn list_dependencies_never_substitutes_another_version() {
     let (config, storage_manager) = test_setup(temp_dir.path());
     let project_root = temp_dir.path().join("project");
     std::fs::create_dir_all(&project_root).unwrap();
-    let dir = config.storage.packages_dir.join("acme").join("tools@1.0.0");
+    let dir = config.storage.packages_dir.join("tools@1.0.0");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("hpm.toml"),

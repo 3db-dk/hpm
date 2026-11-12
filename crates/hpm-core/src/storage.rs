@@ -309,12 +309,8 @@ impl StorageManager {
         }
     }
 
-    /// Recursively collect installed packages from a directory.
-    ///
-    /// With scoped package paths (e.g. `creator/slug`), packages live at
-    /// `~/.hpm/packages/creator/slug@version/`. Directories without `@` in
-    /// their name are treated as scope directories and are walked one level
-    /// deeper. Directories with `@` are treated as package directories.
+    /// Collect the store's packages: the `<slug>@<version>` directories
+    /// directly in `dir` (see [`StoreLayout`]).
     ///
     /// The `_dev` subtree is reserved for path-installed packages
     /// (`install_as_dev_copy`) and is intentionally invisible to
@@ -328,31 +324,24 @@ impl StorageManager {
     ) -> Result<(), StorageError> {
         let entries = std::fs::read_dir(dir).map_err(|e| IoOp::wrap("read directory", dir, e))?;
 
-        for entry in entries.flatten() {
-            let path = entry.path();
+        for entry in entries {
+            let path = entry
+                .map_err(|e| IoOp::wrap("read directory", dir, e))?
+                .path();
+            let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            // `_dev` holds path installs; hidden entries are staging
+            // directories and tombstones; names without `@` are not store
+            // copies. None of them is a package.
+            if dir_name == DEV_INSTALL_DIR || dir_name.starts_with('.') || !dir_name.contains('@') {
+                continue;
+            }
             if !path.is_dir() {
                 continue;
             }
-
-            let dir_name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(name) => name.to_string(),
-                None => continue,
-            };
-
-            // `_dev` holds path installs; hidden entries are staging
-            // directories and tombstones, never packages.
-            if dir_name == DEV_INSTALL_DIR || dir_name.starts_with('.') {
-                continue;
-            }
-
-            if dir_name.contains('@') {
-                // This is a package directory (e.g. `slug@1.0.0` or `fire-fx@2.0.0`)
-                if let Some(installed_package) = self.parse_installed_package(path)? {
-                    packages.push(installed_package);
-                }
-            } else {
-                // This is a scope directory (e.g. `creator`), walk into it
-                self.collect_installed_packages(&entry.path(), packages)?;
+            if let Some(installed_package) = self.parse_installed_package(path)? {
+                packages.push(installed_package);
             }
         }
 

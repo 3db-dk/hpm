@@ -342,65 +342,6 @@ fn list_packages_skips_directories_without_manifest() {
     assert!(packages.is_empty());
 }
 
-#[test]
-fn list_installed_scoped_packages() {
-    let temp_dir = TempDir::new().unwrap();
-    let storage_config = StorageConfig {
-        home_dir: temp_dir.path().to_path_buf(),
-        cache_dir: temp_dir.path().join("cache"),
-        packages_dir: temp_dir.path().join("packages"),
-        registry_cache_dir: temp_dir.path().join("registry"),
-    };
-
-    let storage_manager = StorageManager::new(storage_config).unwrap();
-
-    // Create a scoped package at packages/tumblehead/fire-fx@1.0.0/
-    let package_dir = temp_dir
-        .path()
-        .join("packages")
-        .join("tumblehead")
-        .join("fire-fx@1.0.0");
-    std::fs::create_dir_all(&package_dir).unwrap();
-
-    let manifest_content = r#"
-[package]
-path = "tumblehead/fire-fx"
-name = "Fire FX"
-version = "1.0.0"
-description = "A fire effects package"
-
-[compat]
-houdini = ">=20.5"
-"#;
-    std::fs::write(package_dir.join("hpm.toml"), manifest_content).unwrap();
-
-    // Also create a non-scoped package at packages/old-pkg@2.0.0/
-    let old_pkg_dir = temp_dir.path().join("packages").join("old-pkg@2.0.0");
-    std::fs::create_dir_all(&old_pkg_dir).unwrap();
-    std::fs::write(
-        old_pkg_dir.join("hpm.toml"),
-        "[package]\npath = \"studio/old-pkg\"\nname = \"Old Package\"\nversion = \"2.0.0\"",
-    )
-    .unwrap();
-
-    let packages = storage_manager.list_installed().unwrap();
-    assert_eq!(packages.len(), 2);
-
-    // Find the scoped package
-    let fire_fx = packages
-        .iter()
-        .find(|p| p.manifest.package.slug() == "fire-fx")
-        .unwrap();
-    assert_eq!(fire_fx.version, "1.0.0");
-
-    // Find the non-scoped package
-    let old_pkg = packages
-        .iter()
-        .find(|p| p.manifest.package.slug() == "old-pkg")
-        .unwrap();
-    assert_eq!(old_pkg.version, "2.0.0");
-}
-
 #[tokio::test]
 async fn install_into_cas_without_manifest_fails() {
     let temp_dir = TempDir::new().unwrap();
@@ -1277,11 +1218,8 @@ async fn cleanup_comprehensive_reports_dev_orphans() {
 /// Plant an installed registry package at `packages/<creator>/<slug>@<version>/`,
 /// declaring `deps` (name, requirement) as its own registry dependencies.
 fn plant_installed(home: &std::path::Path, path: &str, version: &str, deps: &[(&str, &str)]) {
-    let (creator, slug) = path.split_once('/').unwrap();
-    let dir = home
-        .join("packages")
-        .join(creator)
-        .join(format!("{slug}@{version}"));
+    let slug = path.split_once('/').unwrap().1;
+    let dir = home.join("packages").join(format!("{slug}@{version}"));
     std::fs::create_dir_all(&dir).unwrap();
     let mut manifest =
         format!("[package]\npath = \"{path}\"\nname = \"{slug}\"\nversion = \"{version}\"\n");
