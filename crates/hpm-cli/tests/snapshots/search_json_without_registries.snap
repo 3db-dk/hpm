@@ -1,0 +1,9 @@
+---
+source: crates/hpm-cli/tests/cli_snapshots.rs
+expression: "env.run(env.work.path(), &[\"--output\", \"json\", \"search\", \"rig\"])"
+---
+args: --output json search rig
+exit: 0
+--- stdout
+[]
+--- stderr

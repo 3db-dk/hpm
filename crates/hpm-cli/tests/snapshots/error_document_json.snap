@@ -1,0 +1,15 @@
+---
+source: crates/hpm-cli/tests/cli_snapshots.rs
+expression: "env.run(env.work.path(), &[\"--output\", \"json\", \"list\"])"
+---
+args: --output json list
+exit: 1
+--- stdout
+--- stderr
+[TIME]  INFO Listing package dependencies
+{
+  "elapsed_ms": [MS],
+  "error": "Package error: No hpm.toml found in current directory: [WORK]. Use --manifest to specify a path.",
+  "error_type": "package",
+  "success": false
+}

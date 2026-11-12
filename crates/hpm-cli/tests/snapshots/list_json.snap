@@ -1,0 +1,68 @@
+---
+source: crates/hpm-cli/tests/cli_snapshots.rs
+expression: "env.run(&dir, &[\"--output\", \"json\", \"list\"])"
+---
+args: --output json list
+exit: 0
+--- stdout
+{
+  "dependencies": [
+    {
+      "name": "acme/rig",
+      "optional": true,
+      "spec": {
+        "optional": true,
+        "registry": "studio",
+        "version": "2.0.0"
+      }
+    },
+    {
+      "name": "acme/tools",
+      "optional": false,
+      "spec": "1.0.0"
+    },
+    {
+      "name": "other/local",
+      "optional": false,
+      "spec": {
+        "link": true,
+        "optional": false,
+        "path": "../local"
+      }
+    },
+    {
+      "name": "other/remote",
+      "optional": false,
+      "spec": {
+        "optional": false,
+        "url": "https://example.com/remote-1.0.0.zip",
+        "version": "1.0.0"
+      }
+    }
+  ],
+  "package": {
+    "description": "A fixture package",
+    "houdini": ">=20.5, <22",
+    "name": "Demo",
+    "version": "1.2.3"
+  },
+  "python_dependencies": [
+    {
+      "extras": [],
+      "name": "numpy",
+      "optional": false,
+      "version": ">=1.24"
+    },
+    {
+      "extras": [
+        "socks"
+      ],
+      "name": "requests",
+      "optional": false,
+      "version": "^2.31"
+    }
+  ]
+}
+--- stderr
+[TIME]  INFO Listing package dependencies
+[TIME]  INFO Using manifest: [WORK]/demo/hpm.toml

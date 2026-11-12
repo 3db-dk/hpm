@@ -1,0 +1,23 @@
+---
+source: crates/hpm-cli/tests/cli_snapshots.rs
+expression: "env.run(&dir, &[\"list\"])"
+---
+args: list
+exit: 0
+--- stdout
+Package: Demo v1.2.3
+Description: A fixture package
+Houdini compatibility: >=20.5, <22
+
+HPM Dependencies:
+  acme/rig registry: studio (version: 2.0.0) (optional)
+  acme/tools registry (version: 1.0.0)
+  other/local path: ../local
+  other/remote url: https://example.com/remote-1.0.0.zip (version: 1.0.0)
+
+Python Dependencies:
+  numpy >=1.24
+  requests ^2.31 [socks]
+--- stderr
+[TIME]  INFO Listing package dependencies
+[TIME]  INFO Using manifest: [WORK]/demo/hpm.toml

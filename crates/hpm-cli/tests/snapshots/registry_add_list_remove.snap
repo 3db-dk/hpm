@@ -1,0 +1,35 @@
+---
+source: crates/hpm-cli/tests/cli_snapshots.rs
+expression: transcript
+---
+args: registry add https://example.com/registry --name studio --type api
+exit: 0
+--- stdout
+[+] Added registry 'studio' (API)
+    URL: https://example.com/registry
+--- stderr
+[TIME]  INFO Added registry 'studio' at https://example.com/registry
+
+args: registry list
+exit: 0
+--- stdout
+Registries 1 configured:
+
+  * studio [API]
+    https://example.com/registry
+--- stderr
+
+args: registry remove studio
+exit: 0
+--- stdout
+[-] Removed registry 'studio'
+--- stderr
+
+args: registry list
+exit: 0
+--- stdout
+No registries configured.
+
+Add a registry with:
+  hpm registry add <url> --name <alias>
+--- stderr

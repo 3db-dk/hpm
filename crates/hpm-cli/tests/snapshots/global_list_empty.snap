@@ -1,0 +1,23 @@
+---
+source: crates/hpm-cli/tests/cli_snapshots.rs
+expression: transcript
+---
+args: global list --houdini 21.0
+exit: 0
+--- stdout
+Nothing installed globally for Houdini 21.0.
+
+Install one with:
+  hpm global add <creator/slug> --houdini 21.0
+--- stderr
+
+args: --output json global list --houdini 21.0
+exit: 1
+--- stdout
+--- stderr
+{
+  "elapsed_ms": [MS],
+  "error": "Configuration error: the 'global' command does not support --output json",
+  "error_type": "config",
+  "success": false
+}
