@@ -177,7 +177,7 @@ pub async fn prepare_script(
     extra_env: &HashMap<String, String>,
     sink: &mut dyn ScriptSink,
 ) -> Result<PreparedScript, ScriptRunError> {
-    let host_os = Platform::current().and_then(|p| p.os_key().map(str::to_string));
+    let host_os = Platform::current().and_then(|p| p.os_key().map(|os| os.as_str().to_string()));
     let resolved_cmd =
         entry
             .resolve_cmd(host_os.as_deref())

@@ -122,7 +122,9 @@ pub mod toml_file_error;
 // Re-exports for convenient access
 pub use atomic_write::atomic_write;
 pub use dependency::DependencySpec;
-pub use env_value::{Condition, EnvValue, EnvValueBranch, HoudiniRange, InstallSource, OsKey};
+pub use env_value::{
+    Condition, EnvValue, EnvValueBranch, HoudiniRange, InstallSource, OsKey, PythonTag,
+};
 pub use houdini::{
     HoudiniEnvValue, HoudiniMethod, HoudiniNativePackage, HoudiniPackage, HpackageMetadata,
     NativePackageTarget, normalize_hpackage_version, validate_hpackage_descriptor,
@@ -130,9 +132,9 @@ pub use houdini::{
 pub use io_error::IoOp;
 pub use manifest::{
     CompatConfig, EnvMethod, ManifestEnvEntry, ManifestLoadError, PackageInfo, PackageManifest,
-    PackageScripts, PlaceRule, PlatformStaging, RegistryConfig, RegistryType, ScriptEntry,
-    ScriptEnv, StageConfig, StagePlatformRules, ValidationLevel, ValidationReport,
-    parse_manifest_str,
+    PackageScripts, PlaceRule, PlatformStaging, RegistryConfig, RegistryType, ScriptCommand,
+    ScriptCondition, ScriptEntry, ScriptEnv, ScriptVariant, StageConfig, StagePlatformRules,
+    ValidationLevel, ValidationReport, parse_manifest_str,
 };
 pub use package_path::{PackagePath, PackagePathError};
 pub use path_util::user_home;

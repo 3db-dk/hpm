@@ -147,7 +147,7 @@ fn os_serialized_form_unchanged() {
 fn python_translates_with_or_without_python_prefix() {
     assert_eq!(
         compile_condition(&Condition {
-            python: Some("3.11".to_string()),
+            python: Some(PythonTag::parse("3.11").unwrap()),
             ..Default::default()
         })
         .unwrap()
@@ -156,7 +156,7 @@ fn python_translates_with_or_without_python_prefix() {
     );
     assert_eq!(
         compile_condition(&Condition {
-            python: Some("python3.10".to_string()),
+            python: Some(PythonTag::parse("python3.10").unwrap()),
             ..Default::default()
         })
         .unwrap()
@@ -211,7 +211,12 @@ fn lower_conditional_substitutes_pkg_root_per_branch() {
         houdini_branch("^22", "$HPM_PACKAGE_ROOT/h22/x"),
     ];
     let lowered = branches(
-        lower_conditional(&variants, &[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false).unwrap(),
+        lower_conditional(
+            &variants,
+            &[("$HPM_PACKAGE_ROOT", "/abs/pkg")],
+            InstallSource::Registry,
+        )
+        .unwrap(),
     );
     assert_eq!(lowered.len(), 2);
     let key = lowered[0].keys().next().unwrap();
@@ -233,7 +238,7 @@ fn lower_conditional_compiles_branches_mutually_exclusive() {
             set: "fallback".to_string(),
         },
     ];
-    let lowered = branches(lower_conditional(&variants, &[], false).unwrap());
+    let lowered = branches(lower_conditional(&variants, &[], InstallSource::Registry).unwrap());
     assert_eq!(lowered.len(), 3);
     assert_eq!(
         lowered[0].keys().next().unwrap(),
@@ -264,7 +269,7 @@ fn empty_when_lowers_unconditional() {
         set: "default".to_string(),
     }];
     assert_eq!(
-        lower_conditional(&variants, &[], false).unwrap(),
+        lower_conditional(&variants, &[], InstallSource::Registry).unwrap(),
         LoweredConditional::Unconditional("default".to_string())
     );
 }
@@ -281,7 +286,7 @@ fn branches_after_unconditional_are_pruned() {
         houdini_branch("^21", "unreachable"),
     ];
     assert_eq!(
-        lower_conditional(&variants, &[], false).unwrap(),
+        lower_conditional(&variants, &[], InstallSource::Registry).unwrap(),
         LoweredConditional::Unconditional("wins".to_string())
     );
 
@@ -295,7 +300,7 @@ fn branches_after_unconditional_are_pruned() {
         },
         houdini_branch("^22", "unreachable"),
     ];
-    let lowered = branches(lower_conditional(&variants, &[], false).unwrap());
+    let lowered = branches(lower_conditional(&variants, &[], InstallSource::Registry).unwrap());
     assert_eq!(lowered.len(), 2);
     assert_eq!(lowered[1].values().next().unwrap(), "fallback");
 }
@@ -318,14 +323,14 @@ fn install_source_dev_filters_out_for_registry_install() {
     ];
     // Registry install: dev variant drops, fallback is unconditional.
     assert_eq!(
-        lower_conditional(&variants, &[], false).unwrap(),
+        lower_conditional(&variants, &[], InstallSource::Registry).unwrap(),
         LoweredConditional::Unconditional("dso".to_string())
     );
     // Dev install: the dev branch is unconditional at runtime and wins;
     // the dso fallback is unreachable and must NOT also fire (it used to,
     // shadowing the dev build under `prepend`).
     assert_eq!(
-        lower_conditional(&variants, &[], true).unwrap(),
+        lower_conditional(&variants, &[], InstallSource::Dev).unwrap(),
         LoweredConditional::Unconditional("build/Release".to_string())
     );
 }
@@ -343,7 +348,7 @@ fn install_source_strips_from_runtime_expression() {
         },
         set: "x".to_string(),
     }];
-    let lowered = branches(lower_conditional(&variants, &[], true).unwrap());
+    let lowered = branches(lower_conditional(&variants, &[], InstallSource::Dev).unwrap());
     assert_eq!(lowered.len(), 1);
     let key = lowered[0].keys().next().unwrap();
     assert!(key.contains("houdini_version"));
@@ -360,11 +365,11 @@ fn install_source_registry_filters_out_for_dev_install() {
         set: "dso".to_string(),
     }];
     assert_eq!(
-        lower_conditional(&variants, &[], true).unwrap(),
+        lower_conditional(&variants, &[], InstallSource::Dev).unwrap(),
         LoweredConditional::Branches(Vec::new())
     );
     assert_eq!(
-        lower_conditional(&variants, &[], false).unwrap(),
+        lower_conditional(&variants, &[], InstallSource::Registry).unwrap(),
         LoweredConditional::Unconditional("dso".to_string())
     );
 }

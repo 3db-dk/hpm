@@ -20,11 +20,43 @@ use std::collections::HashMap;
 /// `Flat` is a single string, used directly (with `$HPM_PACKAGE_ROOT`
 /// substituted). `Conditional` is an ordered list of variants — the first
 /// whose `when` matches the running Houdini wins.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum EnvValue {
     Flat(String),
     Conditional(Vec<EnvValueBranch>),
+}
+
+// Hand-written so an invalid branch reports its own error (a bad `python`,
+// an unknown `os`) instead of "did not match any variant".
+impl<'de> Deserialize<'de> for EnvValue {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ValueVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ValueVisitor {
+            type Value = EnvValue;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a string or a list of `{ when, set }` variants")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(EnvValue::Flat(value.to_string()))
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                Vec::<EnvValueBranch>::deserialize(serde::de::value::SeqAccessDeserializer::new(
+                    seq,
+                ))
+                .map(EnvValue::Conditional)
+            }
+        }
+
+        deserializer.deserialize_any(ValueVisitor)
+    }
 }
 
 impl EnvValue {
@@ -145,7 +177,7 @@ pub struct Condition {
     /// Houdini Python identifier: `"3.11"`, `"3.10"`, etc. Compiles to
     /// `houdini_python == 'python3.11'`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub python: Option<String>,
+    pub python: Option<PythonTag>,
     /// Install-source filter: `"dev"` (path dependency) or `"registry"`
     /// (registry/URL install). Filtered at install time and never emitted to
     /// Houdini — so a branch gated `install_source = "dev"` disappears
@@ -165,12 +197,17 @@ impl Condition {
     /// True when this selector's `install_source` axis matches the given
     /// install context. A `None` axis matches both. Other axes are ignored
     /// here — those are evaluated by Houdini, not hpm.
+    ///
+    /// Takes `is_dev` (a path-installed package) rather than an
+    /// [`InstallSource`] because TumbleTrove Desktop calls it that way.
     pub fn matches_install_source(&self, is_dev: bool) -> bool {
-        match self.install_source {
-            None => true,
-            Some(InstallSource::Dev) => is_dev,
-            Some(InstallSource::Registry) => !is_dev,
-        }
+        let source = if is_dev {
+            InstallSource::Dev
+        } else {
+            InstallSource::Registry
+        };
+        self.install_source
+            .is_none_or(|required| required == source)
     }
 }
 
@@ -282,24 +319,45 @@ fn condition_atoms(selector: &Condition) -> Result<Vec<ConditionAtom>, Expressio
         atoms.push(ConditionAtom::new(
             "houdini_python",
             Op::Eq,
-            python_identifier(py)?,
+            py.identifier(),
         ));
     }
 
     Ok(atoms)
 }
 
-/// Normalize a python axis value (`"3.11"` or `"python3.11"`) to the
-/// `python<v>` identifier Houdini compares `houdini_python` against.
-fn python_identifier(py: &str) -> Result<String, ExpressionError> {
-    if py.is_empty() {
-        return Err(ExpressionError::InvalidPython(py.to_string()));
+/// A Python version as `hpm.toml` names one: `"3.11"`, or `"python3.11"`
+/// (Houdini's `houdini_python` spelling). Checked when the manifest is
+/// parsed; kept as written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct PythonTag(String);
+
+impl PythonTag {
+    pub fn parse(tag: impl Into<String>) -> Result<Self, ExpressionError> {
+        let tag = tag.into();
+        let version = tag.strip_prefix("python").unwrap_or(&tag);
+        if version.is_empty() || !version.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return Err(ExpressionError::InvalidPython(tag));
+        }
+        Ok(Self(tag))
     }
-    let trimmed = py.strip_prefix("python").unwrap_or(py);
-    if !trimmed.chars().all(|c| c.is_ascii_digit() || c == '.') {
-        return Err(ExpressionError::InvalidPython(py.to_string()));
+
+    /// The tag as written.
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
-    Ok(format!("python{}", trimmed))
+
+    /// The `python<v>` identifier Houdini compares `houdini_python` against.
+    fn identifier(&self) -> String {
+        format!("python{}", self.0.strip_prefix("python").unwrap_or(&self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for PythonTag {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        Self::parse(String::deserialize(de)?).map_err(serde::de::Error::custom)
+    }
 }
 
 /// A validated Cargo-style Houdini version range, e.g. `"^21"`,
@@ -673,7 +731,7 @@ pub enum LoweredConditional {
 /// Lower a `Conditional` env value into Houdini's `[{ "<expr>": "<val>" }, …]`
 /// shape, applying the supplied substitutions to each branch's `set` string.
 ///
-/// Variants whose `install_source` axis does not match `is_dev` are
+/// Variants whose `install_source` axis does not match `source` are
 /// filtered out before lowering, so install-time gates never reach the
 /// Houdini-side expression. The `install_source` axis is also stripped
 /// from surviving variants when compiling the runtime `when` expression.
@@ -695,7 +753,7 @@ pub enum LoweredConditional {
 pub fn lower_conditional(
     variants: &[EnvValueBranch],
     substitutions: &[(&str, &str)],
-    is_dev: bool,
+    source: InstallSource,
 ) -> Result<LoweredConditional, ExpressionError> {
     let mut branches: Vec<HashMap<String, String>> = Vec::new();
     // One entry per emitted branch: its condition negated, parenthesized
@@ -703,7 +761,10 @@ pub fn lower_conditional(
     let mut prior_negations: Vec<String> = Vec::new();
 
     for variant in variants {
-        if !variant.when.matches_install_source(is_dev) {
+        if !variant
+            .when
+            .matches_install_source(source == InstallSource::Dev)
+        {
             continue;
         }
         // Strip the install_source axis before compiling — it must not

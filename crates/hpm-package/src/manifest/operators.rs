@@ -33,7 +33,7 @@ pub enum OperatorKind {
 ///
 /// Deserializes from either form: a bare string is [`Single`](Self::Single); a
 /// table keyed by platform identifier is [`PerPlatform`](Self::PerPlatform).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum OperatorSource {
     /// A single archive-relative path, present in every archive.
@@ -41,7 +41,39 @@ pub enum OperatorSource {
     /// Per-platform archive-relative paths, keyed by platform identifier
     /// (`linux-x86_64`, `macos-aarch64`, …). Keys must appear in
     /// `[compat].platforms`.
-    PerPlatform(IndexMap<String, String>),
+    PerPlatform(IndexMap<Platform, String>),
+}
+
+// Hand-written so an unknown platform key is named in the error instead of
+// "did not match any variant".
+impl<'de> Deserialize<'de> for OperatorSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SourceVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for SourceVisitor {
+            type Value = OperatorSource;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an archive path or a table of paths keyed by platform")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, path: &str) -> Result<Self::Value, E> {
+                Ok(OperatorSource::Single(path.to_string()))
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                IndexMap::<Platform, String>::deserialize(
+                    serde::de::value::MapAccessDeserializer::new(map),
+                )
+                .map(OperatorSource::PerPlatform)
+            }
+        }
+
+        deserializer.deserialize_any(SourceVisitor)
+    }
 }
 
 /// Outcome of resolving an [`OperatorDecl`]'s source against a target platform.
@@ -101,7 +133,7 @@ impl OperatorDecl {
             None => SourceResolution::Unspecified,
             Some(OperatorSource::Single(path)) => SourceResolution::Path(path),
             Some(OperatorSource::PerPlatform(map)) => match platform {
-                Some(p) => match map.get(p.as_str()) {
+                Some(p) => match map.get(p) {
                     Some(path) => SourceResolution::Path(path),
                     None => SourceResolution::NotForPlatform,
                 },

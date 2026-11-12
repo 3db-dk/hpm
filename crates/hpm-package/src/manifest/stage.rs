@@ -115,11 +115,12 @@ impl StageConfig {
 }
 
 /// `[stage.platform.*]` table. Each entry is a list of place rules for a
-/// single platform key (`"linux-x86_64"`, `"macos-aarch64"`, etc.).
+/// single platform (`linux-x86_64`, `macos-aarch64`, ...); an unknown
+/// platform key fails the parse.
 #[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 pub struct PlatformStaging {
     #[serde(flatten)]
-    pub entries: IndexMap<String, StagePlatformRules>,
+    pub entries: IndexMap<crate::Platform, StagePlatformRules>,
 }
 
 impl PlatformStaging {
@@ -200,7 +201,7 @@ mod tests {
             ..Default::default()
         };
         stage.platform.entries.insert(
-            "windows-x86_64".to_string(),
+            crate::Platform::WindowsX86_64,
             StagePlatformRules {
                 place: vec![place("build/Release/*.dll", "dso/")],
             },
@@ -268,7 +269,7 @@ mod tests {
     fn profile_place_rules_append_to_existing_platform() {
         let mut profile_platform = PlatformStaging::default();
         profile_platform.entries.insert(
-            "windows-x86_64".to_string(),
+            crate::Platform::WindowsX86_64,
             StagePlatformRules {
                 place: vec![place("build/Debug/*.pdb", "dso/")],
             },
@@ -281,7 +282,7 @@ mod tests {
             },
         );
         let resolved = stage.resolved_for_profile("debug");
-        let win = &resolved.platform.entries["windows-x86_64"].place;
+        let win = &resolved.platform.entries[&crate::Platform::WindowsX86_64].place;
         assert_eq!(win.len(), 2);
         assert_eq!(win[0].from, "build/Release/*.dll");
         assert_eq!(win[1].from, "build/Debug/*.pdb");
@@ -291,7 +292,7 @@ mod tests {
     fn profile_place_rules_create_new_platform_key() {
         let mut profile_platform = PlatformStaging::default();
         profile_platform.entries.insert(
-            "linux-x86_64".to_string(),
+            crate::Platform::LinuxX86_64,
             StagePlatformRules {
                 place: vec![place("build/debug/*.so", "dso/")],
             },
@@ -304,7 +305,17 @@ mod tests {
             },
         );
         let resolved = stage.resolved_for_profile("debug");
-        assert!(resolved.platform.entries.contains_key("linux-x86_64"));
-        assert!(resolved.platform.entries.contains_key("windows-x86_64"));
+        assert!(
+            resolved
+                .platform
+                .entries
+                .contains_key(&crate::Platform::LinuxX86_64)
+        );
+        assert!(
+            resolved
+                .platform
+                .entries
+                .contains_key(&crate::Platform::WindowsX86_64)
+        );
     }
 }

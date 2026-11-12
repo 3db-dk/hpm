@@ -306,7 +306,8 @@ async fn validate_best_practices(
             manifest.scripts.commands.len()
         ));
 
-        let host_os = hpm_package::Platform::current().and_then(|p| p.os_key().map(str::to_string));
+        let host_os = hpm_package::Platform::current()
+            .and_then(|p| p.os_key().map(|os| os.as_str().to_string()));
         for (name, entry) in &manifest.scripts.commands {
             let resolved = entry.resolve_cmd(host_os.as_deref());
             match resolved {

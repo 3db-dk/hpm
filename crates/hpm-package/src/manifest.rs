@@ -32,7 +32,9 @@ pub use error::ManifestLoadError;
 pub use info::PackageInfo;
 pub use operators::{OperatorDecl, OperatorKind, OperatorSource, SourceResolution};
 pub use registry::{RegistryConfig, RegistryType};
-pub use scripts::{PackageScripts, ScriptEntry, ScriptEnv};
+pub use scripts::{
+    PackageScripts, ScriptCommand, ScriptCondition, ScriptEntry, ScriptEnv, ScriptVariant,
+};
 pub use stage::{PlaceRule, PlatformStaging, StageConfig, StagePlatformRules};
 pub use validation::{ValidationLevel, ValidationReport};
 
@@ -42,13 +44,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::dependency::DependencySpec;
-use crate::env_value::{EnvValue, HoudiniRange};
+use crate::env_value::{HoudiniRange, InstallSource};
 use crate::houdini::{
     HoudiniEnvValue, HoudiniNativePackage, HpackageMetadata, NativePackageTarget,
     normalize_hpackage_version,
 };
 use crate::package_path::PackagePath;
-use crate::platform::Platform;
 use crate::python::PythonDependencySpec;
 
 use env::validate_env_table;
@@ -281,54 +282,13 @@ impl PackageManifest {
                 ));
             }
             if let Some(OperatorSource::PerPlatform(map)) = &op.source {
-                for key in map.keys() {
-                    match key.parse::<Platform>() {
-                        Ok(platform) => {
-                            if !self.compat.platforms.contains(&platform) {
-                                report.errors.push(format!(
-                                    "[[operators]][{}].source: platform '{}' not listed in [compat].platforms",
-                                    i, key
-                                ));
-                            }
-                        }
-                        Err(e) => report
-                            .errors
-                            .push(format!("[[operators]][{}].source.{}: {}", i, key, e)),
+                for platform in map.keys() {
+                    if !self.compat.platforms.contains(platform) {
+                        report.errors.push(format!(
+                            "[[operators]][{}].source: platform '{}' not listed in [compat].platforms",
+                            i, platform
+                        ));
                     }
-                }
-            }
-        }
-
-        // Validate [scripts] entries: a conditional `cmd` may only gate on
-        // the `os` axis. Other axes (`houdini`, `python`, `install_source`)
-        // require runtime context HPM doesn't have at `hpm run` time, so we
-        // reject them up front rather than silently dropping variants.
-        for (name, entry) in &self.scripts.commands {
-            let ScriptEntry::WithEnv(env) = entry else {
-                continue;
-            };
-            let EnvValue::Conditional(variants) = &env.cmd else {
-                continue;
-            };
-            if variants.is_empty() {
-                report.errors.push(format!(
-                    "script '{}': conditional cmd list must not be empty",
-                    name
-                ));
-                continue;
-            }
-            for variant in variants {
-                // The `os` axis itself is typed (`OsKey`), so an unknown
-                // keyword already failed at manifest load.
-                if variant.when.houdini.is_some()
-                    || variant.when.python.is_some()
-                    || variant.when.install_source.is_some()
-                {
-                    report.errors.push(format!(
-                        "script '{}': only the `os` axis is supported in script `when` selectors; \
-                         `houdini`, `python`, and `install_source` axes have no meaning at `hpm run` time",
-                        name
-                    ));
                 }
             }
         }
@@ -344,33 +304,24 @@ impl PackageManifest {
         staging: &PlatformStaging,
         report: &mut ValidationReport,
     ) {
-        for (platform_str, rules) in &staging.entries {
-            let platform = match platform_str.parse::<Platform>() {
-                Ok(p) => p,
-                Err(e) => {
-                    report
-                        .errors
-                        .push(format!("[{}.{}]: {}", label, platform_str, e));
-                    continue;
-                }
-            };
-            if !self.compat.platforms.contains(&platform) {
+        for (platform, rules) in &staging.entries {
+            if !self.compat.platforms.contains(platform) {
                 report.errors.push(format!(
                     "[{}.{}] declared but '{}' not listed in [compat].platforms",
-                    label, platform_str, platform_str
+                    label, platform, platform
                 ));
             }
             for (i, rule) in rules.place.iter().enumerate() {
                 if rule.from.trim().is_empty() {
                     report.errors.push(format!(
                         "[{}.{}].place[{}]: `from` must not be empty",
-                        label, platform_str, i
+                        label, platform, i
                     ));
                 }
                 if rule.to.trim().is_empty() {
                     report.errors.push(format!(
                         "[{}.{}].place[{}]: `to` must not be empty (use \"./\" for the archive root)",
-                        label, platform_str, i
+                        label, platform, i
                     ));
                 }
             }
@@ -454,7 +405,7 @@ impl PackageManifest {
         // emitted.
         for (key, entry) in &self.runtime {
             let Some(houdini_value) = entry
-                .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)], false)
+                .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)], InstallSource::Registry)
                 .map_err(|e| e.to_string())?
             else {
                 continue;

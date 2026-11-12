@@ -435,7 +435,7 @@ fn test_stage_config() -> hpm_package::manifest::StageConfig {
     let mut entries = indexmap::IndexMap::new();
     for plat in ["linux-x86_64", "macos-aarch64", "windows-x86_64"] {
         entries.insert(
-            plat.to_string(),
+            plat.parse::<hpm_package::Platform>().unwrap(),
             StagePlatformRules {
                 place: vec![PlaceRule {
                     from: format!("lib/{}/*", plat),
@@ -536,7 +536,7 @@ fn shared_glob_across_platforms_rides_through_each_archive() {
     let mut entries = indexmap::IndexMap::new();
     for plat in ["linux-x86_64", "macos-aarch64", "windows-x86_64"] {
         entries.insert(
-            plat.to_string(),
+            plat.parse::<hpm_package::Platform>().unwrap(),
             hpm_package::manifest::StagePlatformRules {
                 place: vec![hpm_package::manifest::PlaceRule {
                     from: "resolver/houdini*/**/*".to_string(),
@@ -598,7 +598,7 @@ fn target_glob_overrides_other_platform_match() {
     // isn't dropped just because macOS also lists `shared/*`.
     let mut entries = indexmap::IndexMap::new();
     entries.insert(
-        "linux-x86_64".to_string(),
+        hpm_package::Platform::LinuxX86_64,
         hpm_package::manifest::StagePlatformRules {
             place: vec![hpm_package::manifest::PlaceRule {
                 from: "shared/*".to_string(),
@@ -607,7 +607,7 @@ fn target_glob_overrides_other_platform_match() {
         },
     );
     entries.insert(
-        "macos-aarch64".to_string(),
+        hpm_package::Platform::MacosAarch64,
         hpm_package::manifest::StagePlatformRules {
             place: vec![
                 hpm_package::manifest::PlaceRule {

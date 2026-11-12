@@ -1,7 +1,7 @@
 //! `[scripts]` entries: shorthand command strings or table-form entries
 //! with optional per-script uv-managed Python environments.
 
-use crate::env_value::{Condition, EnvValue};
+use crate::env_value::OsKey;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 /// resolves them through the same uv pipeline that backs `[python_dependencies]`
 /// and runs `cmd` with the resolved interpreter on PATH. When both are absent,
 /// the table form behaves identically to the shorthand.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 #[serde(untagged)]
 pub enum ScriptEntry {
     Plain(String),
@@ -34,17 +34,16 @@ pub enum ScriptEntry {
 
 /// The table form of [`ScriptEntry`].
 ///
-/// `cmd` is an [`EnvValue`] — either a flat string or an ordered list
+/// `cmd` is a [`ScriptCommand`] — either a flat string or an ordered list
 /// of `{ when, set }` variants. For scripts only the `os` axis of `when`
 /// is meaningful (HPM doesn't know the user's Houdini version or Python
-/// at `hpm run` time); other axes on a script variant are rejected at
-/// manifest validation time.
+/// at `hpm run` time); any other axis on a script variant fails the parse.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScriptEnv {
-    pub cmd: EnvValue,
+    pub cmd: ScriptCommand,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub python: Option<String>,
+    pub python: Option<crate::PythonTag>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requirements: Vec<String>,
     /// Optional human-readable display name for this script, for tools that
@@ -96,10 +95,10 @@ impl ScriptEntry {
             ScriptEntry::WithEnv(env) => &env.cmd,
         };
         match spec {
-            EnvValue::Flat(s) => Some(s.clone()),
-            EnvValue::Conditional(variants) => variants
+            ScriptCommand::Flat(s) => Some(s.clone()),
+            ScriptCommand::Conditional(variants) => variants
                 .iter()
-                .find(|v| script_condition_matches(&v.when, host_os))
+                .find(|v| v.when.matches(host_os))
                 .map(|v| v.set.clone()),
         }
     }
@@ -108,7 +107,7 @@ impl ScriptEntry {
     pub fn python(&self) -> Option<&str> {
         match self {
             ScriptEntry::Plain(_) => None,
-            ScriptEntry::WithEnv(env) => env.python.as_deref(),
+            ScriptEntry::WithEnv(env) => env.python.as_ref().map(crate::PythonTag::as_str),
         }
     }
 
@@ -157,20 +156,111 @@ impl ScriptEntry {
     }
 }
 
-/// Per-script `when` matching: only the `os` axis is honoured. The other
-/// axes (`houdini`, `python`, `install_source`) are rejected at manifest
-/// validate time; if they survive here, treat as a non-match.
-fn script_condition_matches(condition: &Condition, host_os: Option<&str>) -> bool {
-    if condition.houdini.is_some()
-        || condition.python.is_some()
-        || condition.install_source.is_some()
-    {
-        return false;
+/// A script's command: one string, or an ordered list of `{ when, set }`
+/// variants of which the first whose `when` matches the host is run.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize)]
+#[serde(untagged)]
+pub enum ScriptCommand {
+    Flat(String),
+    /// Never empty (the parse refuses an empty list).
+    Conditional(Vec<ScriptVariant>),
+}
+
+/// One variant of a conditional script command.
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptVariant {
+    #[serde(default, skip_serializing_if = "ScriptCondition::is_empty")]
+    pub when: ScriptCondition,
+    pub set: String,
+}
+
+/// A script variant's selector. Only the host OS is known when a script
+/// runs, so `os` is the only axis; `houdini`, `python` or `install_source`
+/// here is a parse error rather than a variant that never matches.
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptCondition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os: Option<OsKey>,
+}
+
+impl ScriptCondition {
+    pub fn is_empty(&self) -> bool {
+        self.os.is_none()
     }
-    match (&condition.os, host_os) {
-        (None, _) => true,
-        (Some(req), Some(host)) => req.as_str() == host,
-        (Some(_), None) => false,
+
+    /// Whether this selector matches `host_os` (`"linux"`, `"macos"`,
+    /// `"windows"`, as `std::env::consts::OS` names them).
+    fn matches(&self, host_os: Option<&str>) -> bool {
+        match (&self.os, host_os) {
+            (None, _) => true,
+            (Some(required), Some(host)) => required.as_str() == host,
+            (Some(_), None) => false,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ScriptCommand {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct CommandVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for CommandVisitor {
+            type Value = ScriptCommand;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a command string or a list of `{ when, set }` variants")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, cmd: &str) -> Result<Self::Value, E> {
+                Ok(ScriptCommand::Flat(cmd.to_string()))
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                let variants = Vec::<ScriptVariant>::deserialize(
+                    serde::de::value::SeqAccessDeserializer::new(seq),
+                )?;
+                if variants.is_empty() {
+                    return Err(serde::de::Error::custom(
+                        "a conditional `cmd` needs at least one `{ when, set }` variant",
+                    ));
+                }
+                Ok(ScriptCommand::Conditional(variants))
+            }
+        }
+
+        deserializer.deserialize_any(CommandVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for ScriptEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EntryVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for EntryVisitor {
+            type Value = ScriptEntry;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a command string or a script table")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, cmd: &str) -> Result<Self::Value, E> {
+                Ok(ScriptEntry::Plain(cmd.to_string()))
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                ScriptEnv::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+                    .map(ScriptEntry::WithEnv)
+            }
+        }
+
+        deserializer.deserialize_any(EntryVisitor)
     }
 }
 
@@ -266,7 +356,7 @@ mod tests {
     #[test]
     fn package_env_false_is_not_serialized() {
         let entry = ScriptEntry::WithEnv(ScriptEnv {
-            cmd: EnvValue::Flat("ruff .".to_string()),
+            cmd: ScriptCommand::Flat("ruff .".to_string()),
             python: None,
             requirements: Vec::new(),
             label: None,
@@ -322,7 +412,7 @@ mod tests {
     #[test]
     fn unset_label_and_description_are_not_serialized() {
         let entry = ScriptEntry::WithEnv(ScriptEnv {
-            cmd: EnvValue::Flat("ruff .".to_string()),
+            cmd: ScriptCommand::Flat("ruff .".to_string()),
             python: None,
             requirements: Vec::new(),
             label: None,
@@ -339,7 +429,7 @@ mod tests {
     #[test]
     fn label_and_description_round_trip() {
         let entry = ScriptEntry::WithEnv(ScriptEnv {
-            cmd: EnvValue::Flat("python -m mytool.ui".to_string()),
+            cmd: ScriptCommand::Flat("python -m mytool.ui".to_string()),
             python: None,
             requirements: Vec::new(),
             label: Some("Launch My Tool".to_string()),
@@ -355,7 +445,7 @@ mod tests {
     #[test]
     fn package_env_true_round_trips() {
         let entry = ScriptEntry::WithEnv(ScriptEnv {
-            cmd: EnvValue::Flat("python -m tumblepipe.farm".to_string()),
+            cmd: ScriptCommand::Flat("python -m tumblepipe.farm".to_string()),
             python: None,
             requirements: Vec::new(),
             label: None,

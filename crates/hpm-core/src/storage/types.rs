@@ -26,6 +26,16 @@ impl InstalledPackage {
     /// and a bare-slug reference would let one package's venv look live
     /// because an unrelated package happens to share its slug. Venv creation
     /// and venv cleanup must both go through this so the two cannot drift.
+    /// How this package was installed, for the `install_source` axis of
+    /// `[runtime]` variants.
+    pub fn install_source(&self) -> hpm_package::InstallSource {
+        if self.is_dev {
+            hpm_package::InstallSource::Dev
+        } else {
+            hpm_package::InstallSource::Registry
+        }
+    }
+
     pub fn venv_ref(&self) -> String {
         format!("{}@{}", self.manifest.package.identifier(), self.version)
     }

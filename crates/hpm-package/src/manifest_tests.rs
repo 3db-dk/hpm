@@ -1,4 +1,6 @@
 use super::*;
+use crate::env_value::{EnvValue, InstallSource};
+use crate::platform::Platform;
 
 fn make_manifest() -> PackageManifest {
     PackageManifest::new(
@@ -214,7 +216,7 @@ fn strict_rejects_place_rule_with_empty_from_or_to() {
     let mut m = make_manifest();
     m.compat.platforms = vec![Platform::LinuxX86_64];
     m.stage.platform.entries.insert(
-        "linux-x86_64".to_string(),
+        Platform::LinuxX86_64,
         StagePlatformRules {
             place: vec![
                 PlaceRule {
@@ -254,48 +256,25 @@ fn strict_rejects_place_rule_with_empty_from_or_to() {
 }
 
 #[test]
-fn strict_rejects_unknown_stage_platform_key() {
-    let mut m = make_manifest();
-    m.stage
-        .platform
-        .entries
-        .insert("not-a-platform".to_string(), StagePlatformRules::default());
-    let report = m.validate_with(ValidationLevel::Strict);
-    assert!(!report.is_ok());
-    assert!(
-        report
-            .errors
-            .iter()
-            .any(|e| e.contains("[stage.platform.not-a-platform]")),
-        "{:?}",
-        report.errors
-    );
+fn an_unknown_stage_platform_key_fails_the_parse() {
+    let err = toml::from_str::<PackageManifest>(
+        "[package]\npath = \"studio/test\"\nname = \"T\"\nversion = \"1.0.0\"\n\n\
+         [stage.platform.not-a-platform]\nplace = []\n",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("not-a-platform"), "{err}");
 }
 
 #[test]
-fn strict_rejects_empty_conditional_cmd_list() {
-    let mut m = make_manifest();
-    m.scripts.commands.insert(
-        "tt".to_string(),
-        ScriptEntry::WithEnv(ScriptEnv {
-            cmd: EnvValue::Conditional(Vec::new()),
-            python: None,
-            requirements: Vec::new(),
-            label: None,
-            description: None,
-            package_env: false,
-        }),
-    );
-    let report = m.validate_with(ValidationLevel::Strict);
-    assert!(!report.is_ok());
-    assert!(
-        report
-            .errors
-            .iter()
-            .any(|e| e.contains("tt") && e.contains("must not be empty")),
-        "{:?}",
-        report.errors
-    );
+fn an_empty_conditional_cmd_list_fails_the_parse() {
+    let err = toml::from_str::<PackageManifest>(
+        "[package]\npath = \"studio/test\"\nname = \"T\"\nversion = \"1.0.0\"\n\n\
+         [scripts]\ntt = { cmd = [] }\n",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("at least one"), "{err}");
 }
 
 #[test]
@@ -310,7 +289,7 @@ fn strict_accepts_plain_script_entries() {
     m.scripts.commands.insert(
         "build".to_string(),
         ScriptEntry::WithEnv(ScriptEnv {
-            cmd: EnvValue::Flat("cargo build".to_string()),
+            cmd: ScriptCommand::Flat("cargo build".to_string()),
             python: None,
             requirements: Vec::new(),
             label: None,
@@ -772,10 +751,13 @@ place = [
     assert_eq!(stage.prepack, vec!["build-dso".to_string()]);
     assert_eq!(stage.platform.entries.len(), 2);
     assert_eq!(
-        stage.platform.entries["linux-x86_64"].place[0].from,
+        stage.platform.entries[&Platform::LinuxX86_64].place[0].from,
         "build/linux/*.so"
     );
-    assert_eq!(stage.platform.entries["linux-x86_64"].place[0].to, "dso/");
+    assert_eq!(
+        stage.platform.entries[&Platform::LinuxX86_64].place[0].to,
+        "dso/"
+    );
 }
 
 #[test]
@@ -824,7 +806,7 @@ fn stage_platform_not_in_compat_rejected() {
     };
     let mut entries = IndexMap::new();
     entries.insert(
-        "windows-x86_64".to_string(),
+        Platform::WindowsX86_64,
         StagePlatformRules {
             place: vec![PlaceRule {
                 from: "lib/*".to_string(),
@@ -856,7 +838,7 @@ fn stage_place_empty_from_rejected() {
     };
     let mut entries = IndexMap::new();
     entries.insert(
-        "linux-x86_64".to_string(),
+        Platform::LinuxX86_64,
         StagePlatformRules {
             place: vec![PlaceRule {
                 from: "".to_string(),
@@ -1263,12 +1245,10 @@ cmd = [
   { when = { houdini = "^21" }, set = "x" },
 ]
 "#;
-    let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-    let err = manifest.validate().unwrap_err();
-    assert!(
-        err.contains("only the `os` axis"),
-        "unexpected error: {err}"
-    );
+    let err = toml::from_str::<PackageManifest>(toml_str)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("houdini"), "unexpected error: {err}");
 }
 
 #[test]
@@ -1284,8 +1264,10 @@ cmd = [
   { when = { install_source = "dev" }, set = "x" },
 ]
 "#;
-    let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
-    assert!(manifest.validate().is_err());
+    let err = toml::from_str::<PackageManifest>(toml_str)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("install_source"), "unexpected error: {err}");
 }
 
 #[test]
@@ -1444,7 +1426,10 @@ value = [
     let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
     let entry = manifest.runtime.get("PXR_PLUGINPATH_NAME").unwrap();
     let lowered = entry
-        .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false)
+        .lower(
+            &[("$HPM_PACKAGE_ROOT", "/abs/pkg")],
+            InstallSource::Registry,
+        )
         .unwrap()
         .unwrap();
     match lowered {
@@ -1492,7 +1477,10 @@ value = "$HPM_PACKAGE_ROOT/config.ocio"
     let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
     let entry = manifest.runtime.get("OCIO").unwrap();
     let lowered = entry
-        .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false)
+        .lower(
+            &[("$HPM_PACKAGE_ROOT", "/abs/pkg")],
+            InstallSource::Registry,
+        )
         .unwrap()
         .unwrap();
     match lowered {
@@ -1521,7 +1509,10 @@ value = "$HPM_PACKAGE_ROOT/x"
         let manifest: PackageManifest = toml::from_str(&toml_str).unwrap();
         let entry = manifest.runtime.get("MY_LIST").unwrap();
         let lowered = entry
-            .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false)
+            .lower(
+                &[("$HPM_PACKAGE_ROOT", "/abs/pkg")],
+                InstallSource::Registry,
+            )
             .unwrap()
             .unwrap();
         match lowered {
@@ -1555,7 +1546,10 @@ value = [
     let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
     let entry = manifest.runtime.get("OCIO").unwrap();
     let lowered = entry
-        .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false)
+        .lower(
+            &[("$HPM_PACKAGE_ROOT", "/abs/pkg")],
+            InstallSource::Registry,
+        )
         .unwrap()
         .unwrap();
     match lowered {
@@ -1587,7 +1581,10 @@ value = [
     let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
     let entry = manifest.runtime.get("OCIO").unwrap();
     let lowered = entry
-        .lower(&[("$HPM_PACKAGE_ROOT", "/abs/pkg")], false)
+        .lower(
+            &[("$HPM_PACKAGE_ROOT", "/abs/pkg")],
+            InstallSource::Registry,
+        )
         .unwrap()
         .unwrap();
     match lowered {

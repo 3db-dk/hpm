@@ -52,6 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- More of `hpm.toml` is checked when it is read rather than by
+  `validate()` later: the package version must be semver, a `python`
+  selector must be a Python version (a script's `python` pin was never
+  checked), platform keys in `[stage.platform]`, profile platforms and
+  per-platform operator sources must be known platforms, and a script's
+  `when` may only use `os` (and a conditional `cmd` must not be empty).
+  Errors name the bad key or value instead of "did not match any
+  variant".
+
 - **Stricter `hpm.toml`:** a dependency table with an unknown or misplaced
   key is now an error that names it, instead of the key being dropped
   (`registy = ...` and `optinal = true` used to give an unpinned, required
@@ -112,6 +121,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ProjectManager::lock_file` builds `hpm.lock` from a sync (the CLI's
   lock building moved into hpm-core), and `PythonDependencySpec::version_req`
   and `Platform::host_id` replace copies of the same logic.
+- **Breaking (hpm-package API):** `Condition::python` and
+  `ScriptEnv::python` are `PythonTag`s; `PlatformStaging::entries` and
+  `OperatorSource::PerPlatform` are keyed by `Platform`; `ScriptEnv::cmd`
+  is a `ScriptCommand` (`ScriptVariant`/`ScriptCondition`, `os` only);
+  `Platform::os_key` returns `OsKey`; `ManifestEnvEntry::lower` and
+  `lower_conditional` take an `InstallSource` instead of `is_dev`.
 - **Breaking (hpm-package API):** `PythonDependencySpec::Detailed`'s
   `optional` is a `bool` and `extras` a `Vec<String>` (they were `Option`s),
   and `PythonDependencySpec::extras()` returns a slice.

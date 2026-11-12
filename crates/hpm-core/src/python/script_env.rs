@@ -245,11 +245,11 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_script_env_returns_empty_handle_for_table_without_venv_fields() {
-        use hpm_package::{EnvValue, ScriptEnv};
+        use hpm_package::{ScriptCommand, ScriptEnv};
         // Table form with neither python nor requirements behaves like the
         // shorthand per ScriptEntry::needs_venv() — still empty handle.
         let entry = ScriptEntry::WithEnv(ScriptEnv {
-            cmd: EnvValue::Flat("python scripts/foo.py".to_string()),
+            cmd: ScriptCommand::Flat("python scripts/foo.py".to_string()),
             python: None,
             requirements: vec![],
             label: None,

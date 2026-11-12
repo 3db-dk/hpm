@@ -71,11 +71,11 @@ impl Platform {
     ///
     /// Returns `None` for [`Platform::Universal`], which has no OS to
     /// match against — universal targets never satisfy an `os = ...` gate.
-    pub fn os_key(&self) -> Option<&'static str> {
+    pub fn os_key(&self) -> Option<crate::OsKey> {
         match self {
-            Self::LinuxX86_64 | Self::LinuxAarch64 => Some("linux"),
-            Self::MacosX86_64 | Self::MacosAarch64 => Some("macos"),
-            Self::WindowsX86_64 | Self::WindowsAarch64 => Some("windows"),
+            Self::LinuxX86_64 | Self::LinuxAarch64 => Some(crate::OsKey::Linux),
+            Self::MacosX86_64 | Self::MacosAarch64 => Some(crate::OsKey::Macos),
+            Self::WindowsX86_64 | Self::WindowsAarch64 => Some(crate::OsKey::Windows),
             Self::Universal => None,
         }
     }
@@ -207,12 +207,18 @@ mod tests {
 
     #[test]
     fn os_key_groups_by_os_for_native_variants() {
-        assert_eq!(Platform::LinuxX86_64.os_key(), Some("linux"));
-        assert_eq!(Platform::LinuxAarch64.os_key(), Some("linux"));
-        assert_eq!(Platform::MacosX86_64.os_key(), Some("macos"));
-        assert_eq!(Platform::MacosAarch64.os_key(), Some("macos"));
-        assert_eq!(Platform::WindowsX86_64.os_key(), Some("windows"));
-        assert_eq!(Platform::WindowsAarch64.os_key(), Some("windows"));
+        assert_eq!(Platform::LinuxX86_64.os_key(), Some(crate::OsKey::Linux));
+        assert_eq!(Platform::LinuxAarch64.os_key(), Some(crate::OsKey::Linux));
+        assert_eq!(Platform::MacosX86_64.os_key(), Some(crate::OsKey::Macos));
+        assert_eq!(Platform::MacosAarch64.os_key(), Some(crate::OsKey::Macos));
+        assert_eq!(
+            Platform::WindowsX86_64.os_key(),
+            Some(crate::OsKey::Windows)
+        );
+        assert_eq!(
+            Platform::WindowsAarch64.os_key(),
+            Some(crate::OsKey::Windows)
+        );
     }
 
     #[test]

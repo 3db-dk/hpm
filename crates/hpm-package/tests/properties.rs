@@ -215,7 +215,7 @@ fn runtime_condition_strategy() -> impl Strategy<Value = Condition> {
         .prop_map(|(houdini, os, python, install_source)| Condition {
             houdini: houdini.map(|r| HoudiniRange::parse(r).expect("strategy yields valid ranges")),
             os,
-            python: python.map(str::to_string),
+            python: python.map(|p| hpm_package::PythonTag::parse(p).unwrap()),
             install_source,
         })
 }
@@ -246,16 +246,23 @@ fn runtime_entry_strategy() -> impl Strategy<Value = ManifestEnvEntry> {
 }
 
 fn script_entry_strategy() -> impl Strategy<Value = ScriptEntry> {
-    let os_only = prop::option::of(os_key_strategy())
-        .prop_map(|os| Condition {
-            os,
-            ..Condition::default()
-        })
-        .boxed();
+    let command = prop_oneof![
+        text_strategy().prop_map(hpm_package::ScriptCommand::Flat),
+        prop::collection::vec(
+            (prop::option::of(os_key_strategy()), text_strategy()).prop_map(|(os, set)| {
+                hpm_package::ScriptVariant {
+                    when: hpm_package::ScriptCondition { os },
+                    set,
+                }
+            }),
+            1..4
+        )
+        .prop_map(hpm_package::ScriptCommand::Conditional),
+    ];
     prop_oneof![
         text_strategy().prop_map(ScriptEntry::Plain),
         (
-            env_value_strategy(os_only),
+            command,
             prop::option::of(prop::sample::select(vec!["3.10", "3.11"])),
             prop::collection::vec("[a-z]{2,8}(==1\\.[0-9])?", 0..3),
             prop::option::of(text_strategy()),
@@ -266,7 +273,7 @@ fn script_entry_strategy() -> impl Strategy<Value = ScriptEntry> {
                 |(cmd, python, requirements, label, description, package_env)| {
                     ScriptEntry::WithEnv(ScriptEnv {
                         cmd,
-                        python: python.map(str::to_string),
+                        python: python.map(|p| hpm_package::PythonTag::parse(p).unwrap()),
                         requirements,
                         label,
                         description,
@@ -317,10 +324,7 @@ fn platform_staging_strategy(declared: Vec<Platform>) -> BoxedStrategy<PlatformS
         0..3,
     )
     .prop_map(|entries| PlatformStaging {
-        entries: entries
-            .into_iter()
-            .map(|(p, r)| (p.to_string(), r))
-            .collect(),
+        entries: entries.into_iter().collect(),
     })
     .boxed()
 }
@@ -375,11 +379,7 @@ fn operator_strategy(declared: Vec<Platform>) -> impl Strategy<Value = OperatorD
             (prop::sample::select(declared), "dso/[a-z]{1,8}\\.so"),
             1..3,
         )
-        .prop_map(|v| {
-            Some(OperatorSource::PerPlatform(
-                v.into_iter().map(|(p, s)| (p.to_string(), s)).collect(),
-            ))
-        })
+        .prop_map(|v| Some(OperatorSource::PerPlatform(v.into_iter().collect())))
         .boxed()
     };
     (

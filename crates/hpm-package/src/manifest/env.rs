@@ -75,11 +75,10 @@ impl ManifestEnvEntry {
     /// Lower this entry into a Houdini env value, applying the supplied
     /// substitutions to each value branch.
     ///
-    /// `is_dev` controls the install-source filter for conditional
-    /// variants: `true` means a path-installed (dev) package; `false`
-    /// means a registry/URL-installed (published) consumer. Variants
-    /// gated to a non-matching `install_source` are dropped before
-    /// emission.
+    /// `source` is how the package is installed: [`crate::InstallSource::Dev`] for
+    /// a path dependency, [`crate::InstallSource::Registry`] for a registry or URL
+    /// install. Variants gated to another `install_source` are dropped
+    /// before emission.
     ///
     /// Returns `Ok(None)` when the effective value is empty — either the
     /// entry was a required-but-unsupplied placeholder, or every branch
@@ -89,7 +88,7 @@ impl ManifestEnvEntry {
     pub fn lower(
         &self,
         substitutions: &[(&str, &str)],
-        is_dev: bool,
+        source: crate::InstallSource,
     ) -> Result<Option<HoudiniEnvValue>, ExpressionError> {
         let Some(value) = self.value.as_ref() else {
             return Ok(None);
@@ -128,7 +127,7 @@ impl ManifestEnvEntry {
                 }
             }
             EnvValue::Conditional(variants) => {
-                match lower_conditional(variants, substitutions, is_dev)? {
+                match lower_conditional(variants, substitutions, source)? {
                     // First surviving branch is unconditional — the value
                     // is effectively flat in this install context, so it
                     // follows the flat-value rules above: `set` emits a

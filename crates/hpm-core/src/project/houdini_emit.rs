@@ -2,7 +2,7 @@
 //! the project `[runtime]` overrides manifest, and the stale-manifest sweep.
 
 use crate::storage::InstalledPackage;
-use hpm_package::{EnvMethod, EnvValue, HoudiniPackage, IoOp, ManifestEnvEntry};
+use hpm_package::{EnvMethod, EnvValue, HoudiniPackage, InstallSource, IoOp, ManifestEnvEntry};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -184,14 +184,13 @@ impl ProjectManager {
                 );
             }
 
-            let lowered =
-                entry
-                    .lower(&[], false)
-                    .map_err(|e| ProjectError::InvalidEnvExpression {
-                        var: key.clone(),
-                        package: "the project's hpm.toml [runtime]".to_string(),
-                        message: e.to_string(),
-                    })?;
+            let lowered = entry.lower(&[], InstallSource::Registry).map_err(|e| {
+                ProjectError::InvalidEnvExpression {
+                    var: key.clone(),
+                    package: "the project's hpm.toml [runtime]".to_string(),
+                    message: e.to_string(),
+                }
+            })?;
             if let Some(houdini_value) = lowered {
                 let mut env_map = HashMap::new();
                 env_map.insert(key.clone(), houdini_value);
@@ -323,7 +322,7 @@ pub fn build_houdini_package(
         let pkg_root = package_path.to_string_lossy().into_owned();
         let user_runtime = &installed_package.manifest.runtime;
         let slug = installed_package.manifest.package.slug().to_string();
-        let is_dev = installed_package.is_dev;
+        let source = installed_package.install_source();
 
         // Lower one entry and, unless it is inert in this install
         // context (every variant install-source-filtered out), push it
@@ -333,7 +332,7 @@ pub fn build_houdini_package(
                     env: &mut Vec<HashMap<String, hpm_package::HoudiniEnvValue>>|
          -> Result<(), ProjectError> {
             let lowered = entry
-                .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)], is_dev)
+                .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)], source)
                 .map_err(|e| ProjectError::InvalidEnvExpression {
                     var: key.to_string(),
                     package: slug.clone(),
