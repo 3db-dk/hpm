@@ -603,15 +603,7 @@ impl ProjectManager {
 /// [`houdini_emit::build_houdini_package`] as the install's root. `None`
 /// for a file that cannot be read or has no `hpath`.
 fn emitted_install_dir(manifest: &Path) -> Option<PathBuf> {
-    let text = std::fs::read_to_string(manifest).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let hpath = value.get("hpath")?;
-    let first = match hpath {
-        serde_json::Value::Array(items) => items.first()?.as_str()?,
-        serde_json::Value::String(s) => s.as_str(),
-        _ => return None,
-    };
-    Some(PathBuf::from(first))
+    houdini_emit::hpaths(manifest).ok()?.into_iter().next()
 }
 
 /// The installed copy of `path` a project uses: the `pinned` version when

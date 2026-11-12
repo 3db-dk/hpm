@@ -10,6 +10,22 @@ use tracing::{debug, warn};
 
 use super::{ProjectError, ProjectManager};
 
+/// The `hpath` entries of the Houdini package file at `manifest`, in order,
+/// accepting both forms Houdini reads: a string and an array of strings.
+/// Empty when the file has no `hpath`. An unreadable file is an
+/// [`std::io::Error`]; one that is not JSON is one of kind `InvalidData`.
+pub(crate) fn hpaths(manifest: &Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+    let text = std::fs::read_to_string(manifest)?;
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let as_path = |v: &serde_json::Value| v.as_str().map(std::path::PathBuf::from);
+    Ok(match json.get("hpath") {
+        Some(serde_json::Value::Array(items)) => items.iter().filter_map(as_path).collect(),
+        Some(v) => as_path(v).into_iter().collect(),
+        None => Vec::new(),
+    })
+}
+
 /// File name of the project-level `[runtime]` overrides manifest, written
 /// into the project packages dir alongside the per-package `<creator>.<slug>.json`
 /// files.
@@ -451,5 +467,47 @@ mod build_snapshots {
         for name in CORPUS {
             insta::assert_snapshot!(format!("build_{name}"), render(name));
         }
+    }
+}
+
+#[cfg(test)]
+mod hpaths_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// `hpaths` reads back exactly the paths a package file names, in
+        /// order, whether `hpath` is an array or (for one path) a string.
+        #[test]
+        fn hpaths_reads_back_what_was_written(
+            paths in prop::collection::vec("/[a-z0-9 ._@-]{1,12}(/[a-z0-9 ._@-]{1,12}){0,3}", 0..4),
+            as_string in any::<bool>(),
+        ) {
+            let dir = tempfile::TempDir::new().unwrap();
+            let file = dir.path().join("acme.rig.json");
+            let hpath = if as_string && paths.len() == 1 {
+                serde_json::json!(paths[0])
+            } else {
+                serde_json::json!(paths)
+            };
+            std::fs::write(&file, serde_json::to_vec(&serde_json::json!({ "hpath": hpath, "env": [] })).unwrap()).unwrap();
+            let read: Vec<String> = hpaths(&file).unwrap().iter().map(|p| p.to_string_lossy().into_owned()).collect();
+            prop_assert_eq!(read, paths);
+        }
+    }
+
+    #[test]
+    fn hpaths_of_a_file_that_is_not_json_is_invalid_data() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("x.json");
+        std::fs::write(&file, b"nope").unwrap();
+        assert_eq!(
+            hpaths(&file).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            hpaths(&dir.path().join("missing.json")).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
     }
 }

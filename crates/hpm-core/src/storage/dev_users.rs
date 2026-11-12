@@ -33,8 +33,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
 use tracing::{debug, info, warn};
 
 #[cfg(test)]
@@ -118,8 +118,7 @@ pub(crate) fn record_project_user(install_path: &Path, manifest_path: &Path) -> 
     };
     let manifest = std::path::absolute(manifest_path)?;
     let key = crate::digest::to_hex(&Sha256::digest(manifest.to_string_lossy().as_bytes())[..8]);
-    let json = serde_json::to_vec(&serde_json::json!({ "manifest": manifest }))
-        .map_err(io::Error::other)?;
+    let json = serde_json::to_vec(&ProjectRecord { manifest }).map_err(io::Error::other)?;
     write_record(
         &records_dir(container, hash),
         &format!("{PROJECT_PREFIX}{key}.json"),
@@ -128,28 +127,22 @@ pub(crate) fn record_project_user(install_path: &Path, manifest_path: &Path) -> 
     Ok(true)
 }
 
+/// A project's claim on a dev copy: the Houdini package file that points
+/// `hpath` at it. Stored as `.users/<hash>/project-<key>.json`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ProjectRecord {
+    manifest: PathBuf,
+}
+
 /// Whether the manifest a project record names still points `hpath` at
 /// `copy`. A manifest that is gone (the project or the package was removed)
 /// uses nothing; one that cannot be read or parsed is kept, since a copy kept
 /// too long costs disk and one removed too early costs a project.
-fn project_record_is_live(record: &serde_json::Value, copy: &Path) -> bool {
-    let Some(manifest) = record.get("manifest").and_then(|m| m.as_str()) else {
-        return true;
-    };
-    let text = match std::fs::read_to_string(manifest) {
-        Ok(t) => t,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return false,
-        Err(_) => return true,
-    };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return true;
-    };
-    let points_here =
-        |v: &serde_json::Value| v.as_str().is_some_and(|s| same_path(Path::new(s), copy));
-    match json.get("hpath") {
-        Some(serde_json::Value::Array(items)) => items.iter().any(points_here),
-        Some(v) => points_here(v),
-        None => false,
+fn project_record_is_live(record: &ProjectRecord, copy: &Path) -> bool {
+    match crate::project::houdini_emit::hpaths(&record.manifest) {
+        Ok(paths) => paths.iter().any(|p| same_path(p, copy)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        Err(_) => true,
     }
 }
 
@@ -194,7 +187,7 @@ pub(crate) fn hash_in_use(
                         .map(|rec| rec.is_live(state_of))
                         .unwrap_or(true)
                 } else if name.starts_with(PROJECT_PREFIX) {
-                    serde_json::from_slice::<serde_json::Value>(&bytes)
+                    serde_json::from_slice::<ProjectRecord>(&bytes)
                         .map(|rec| project_record_is_live(&rec, &copy))
                         .unwrap_or(true)
                 } else {
@@ -217,7 +210,7 @@ pub(crate) fn hash_in_use(
 /// In-process count of holds per dev copy, so two installs of the same copy
 /// in one process share one process record and the first to finish does not
 /// release the other's protection.
-static HOLDS: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+static HOLDS: LazyLock<Mutex<HashMap<PathBuf, usize>>> = LazyLock::new(Default::default);
 
 /// This process's claim on a dev copy it has just installed or reused, from
 /// the moment the install commits (or finds) the copy until the project's
@@ -240,10 +233,7 @@ impl DevCopyHold {
         let mut guard = HOLDS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let count = guard
-            .get_or_insert_with(HashMap::new)
-            .entry(install_path.to_path_buf())
-            .or_insert(0);
+        let count = guard.entry(install_path.to_path_buf()).or_insert(0);
         *count += 1;
         if *count == 1
             && let Err(e) = record_process_user(install_path, ProcessRecord::current())
@@ -264,7 +254,7 @@ impl DevCopyHold {
         let guard = HOLDS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.as_ref().is_some_and(|m| m.contains_key(install_path))
+        guard.contains_key(install_path)
     }
 }
 
@@ -273,13 +263,12 @@ impl Drop for DevCopyHold {
         let mut guard = HOLDS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(map) = guard.as_mut() else { return };
-        let Some(count) = map.get_mut(&self.install_path) else {
+        let Some(count) = guard.get_mut(&self.install_path) else {
             return;
         };
         *count -= 1;
         if *count == 0 {
-            map.remove(&self.install_path);
+            guard.remove(&self.install_path);
             if let Err(e) = release_process_user(&self.install_path, std::process::id()) {
                 debug!("Could not release {}: {}", self.install_path.display(), e);
             }
@@ -359,29 +348,18 @@ fn project_dev_copies(packages_dir: &Path) -> Vec<(PathBuf, PathBuf)> {
         if manifest.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&manifest) else {
+        let Ok(hpaths) = crate::project::houdini_emit::hpaths(&manifest) else {
             continue;
         };
-        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
-        };
-        let hpaths: Vec<&str> = match json.get("hpath") {
-            Some(serde_json::Value::Array(items)) => {
-                items.iter().filter_map(|v| v.as_str()).collect()
-            }
-            Some(v) => v.as_str().into_iter().collect(),
-            None => Vec::new(),
-        };
-        for hpath in hpaths {
-            let copy = Path::new(hpath);
-            let in_dev = split(copy).is_some()
+        for copy in hpaths {
+            let in_dev = split(&copy).is_some()
                 && copy
                     .parent()
                     .and_then(Path::parent)
                     .and_then(Path::file_name)
                     .is_some_and(|n| n == super::dev_install::DEV_INSTALL_DIR);
             if in_dev && copy.is_dir() {
-                out.push((manifest.clone(), copy.to_path_buf()));
+                out.push((manifest.clone(), copy));
             }
         }
     }
