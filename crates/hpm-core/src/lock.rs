@@ -129,6 +129,17 @@ impl LockMetadata {
         let today = time::OffsetDateTime::now_utc().date();
         Some((today - gen_date).whole_days())
     }
+
+    /// The lock's age in days when it is older than
+    /// [`STALE_AFTER_DAYS`](Self::STALE_AFTER_DAYS), the point at which
+    /// install and audit suggest checking for updates.
+    pub fn stale_days(&self) -> Option<i64> {
+        self.days_since_generated()
+            .filter(|days| *days > Self::STALE_AFTER_DAYS)
+    }
+
+    /// How old a lock may get before it counts as stale.
+    pub const STALE_AFTER_DAYS: i64 = 90;
 }
 
 /// Errors that can occur during lock file operations
@@ -305,6 +316,25 @@ fn chrono_now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A lock is stale only once it is older than `STALE_AFTER_DAYS`.
+    #[test]
+    fn stale_days_starts_after_the_threshold() {
+        let generated = |days_ago: i64| LockMetadata {
+            generated_at: Some(
+                (time::OffsetDateTime::now_utc() - time::Duration::days(days_ago))
+                    .date()
+                    .to_string()
+                    + "T00:00:00Z",
+            ),
+            hpm_version: None,
+            platform: None,
+        };
+        let limit = LockMetadata::STALE_AFTER_DAYS;
+        assert_eq!(generated(limit).stale_days(), None);
+        assert_eq!(generated(limit + 1).stale_days(), Some(limit + 1));
+        assert_eq!(generated(0).stale_days(), None);
+    }
     use tempfile::TempDir;
 
     // Keep only time/platform-dependent tests that can't be property-tested

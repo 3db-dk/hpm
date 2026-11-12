@@ -106,12 +106,11 @@ pub async fn audit_packages(
             Ok(lock) => {
                 // Check 3: Lock file staleness
                 if let Some(ref metadata) = lock.metadata
-                    && let Some(days) = metadata.days_since_generated()
+                    && metadata.days_since_generated().is_some()
                 {
-                    if days > 90 {
-                        add(Outcome::Warn, format!("Lock file is {} days old", days));
-                    } else {
-                        add(Outcome::Pass, "Lock file is recent".into());
+                    match metadata.stale_days() {
+                        Some(days) => add(Outcome::Warn, format!("Lock file is {} days old", days)),
+                        None => add(Outcome::Pass, "Lock file is recent".into()),
                     }
                 }
 

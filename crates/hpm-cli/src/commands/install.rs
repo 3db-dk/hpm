@@ -80,10 +80,7 @@ pub async fn install_dependencies(
                      Delete the corrupted package and run 'hpm install' again.",
                     )?;
                 info!("Cached packages verified successfully");
-                if let Some(ref metadata) = lock.metadata
-                    && let Some(days) = metadata.days_since_generated()
-                    && days > 90
-                {
+                if let Some(days) = lock.metadata.as_ref().and_then(|m| m.stale_days()) {
                     console.warn(format!(
                         "Lock file is {days} days old. \
                          Consider running 'hpm update' to check for newer versions."
