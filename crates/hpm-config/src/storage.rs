@@ -5,7 +5,7 @@ use hpm_package::user_home;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     #[serde(default = "default_storage_home")]
     pub home_dir: PathBuf,

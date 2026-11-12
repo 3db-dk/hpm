@@ -11,7 +11,7 @@ pub enum RegistryType {
 }
 
 /// A registry declared in hpm.toml's `[[registries]]` array.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegistryConfig {
     pub name: String,

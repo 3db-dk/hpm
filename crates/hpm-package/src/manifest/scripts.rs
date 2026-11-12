@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 /// resolves them through the same uv pipeline that backs `[python_dependencies]`
 /// and runs `cmd` with the resolved interpreter on PATH. When both are absent,
 /// the table form behaves identically to the shorthand.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ScriptEntry {
     Plain(String),
@@ -39,7 +39,7 @@ pub enum ScriptEntry {
 /// is meaningful (HPM doesn't know the user's Houdini version or Python
 /// at `hpm run` time); other axes on a script variant are rejected at
 /// manifest validation time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScriptEnv {
     pub cmd: EnvValue,
@@ -192,7 +192,7 @@ impl From<&str> for ScriptEntry {
 /// [`ScriptEntry::resolve_cmd`]. Per-host variation lives inside the
 /// entry's `cmd` field as a list of `{ when, set }` variants — there is
 /// no separate `[scripts.platform.<os>]` table.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 pub struct PackageScripts {
     #[serde(flatten)]
     pub commands: IndexMap<String, ScriptEntry>,

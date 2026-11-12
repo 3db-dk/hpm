@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 /// # Local path dependency installed as a symlink/junction (live edits)
 /// my-local-pkg = { path = "../my-local-package", link = true }
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DependencySpec {
     /// Registry-resolved dependency.
     ///

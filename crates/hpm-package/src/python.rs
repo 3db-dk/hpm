@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 /// # Optional dependency
 /// matplotlib = { version = ">=3.5.0", optional = true }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PythonDependencySpec {
     /// Simple version constraint string

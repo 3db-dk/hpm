@@ -5,7 +5,7 @@ use hpm_package::PackagePath;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectPaths {
     pub packages_dir: PathBuf,
     pub lock_file: PathBuf,

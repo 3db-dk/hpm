@@ -12,7 +12,7 @@ use hpm_package::TomlFileError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 pub struct ConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install: Option<InstallOverlay>,
@@ -26,7 +26,7 @@ pub struct ConfigOverlay {
     pub signing: Option<SigningOverlay>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 pub struct InstallOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -34,7 +34,7 @@ pub struct InstallOverlay {
     pub parallel_downloads: Option<usize>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 pub struct StorageOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub home_dir: Option<PathBuf>,
@@ -46,7 +46,7 @@ pub struct StorageOverlay {
     pub registry_cache_dir: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 pub struct ProjectsOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explicit_paths: Option<Vec<PathBuf>>,
@@ -58,7 +58,7 @@ pub struct ProjectsOverlay {
     pub ignore_patterns: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 pub struct SigningOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_path: Option<PathBuf>,

@@ -4,7 +4,7 @@ use crate::package_path::PackagePath;
 use serde::{Deserialize, Serialize};
 
 /// Package metadata information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageInfo {
     /// Scoped package path: `creator-slug/package-slug` (e.g. `tumblehead/tumble-rig`).

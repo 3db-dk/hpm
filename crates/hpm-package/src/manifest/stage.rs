@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 ///   base `[stage]`. Orthogonal to platform: `hpm build --profile debug`
 ///   merges the `debug` profile onto the base config. See
 ///   [`StageConfig::resolved_for_profile`].
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StageConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,7 +117,7 @@ impl StageConfig {
 
 /// `[stage.platform.*]` table. Each entry is a list of place rules for a
 /// single platform key (`"linux-x86_64"`, `"macos-aarch64"`, etc.).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 pub struct PlatformStaging {
     #[serde(flatten)]
     pub entries: IndexMap<String, StagePlatformRules>,
@@ -130,7 +130,7 @@ impl PlatformStaging {
 }
 
 /// Place rules for a single platform.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StagePlatformRules {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -141,7 +141,7 @@ pub struct StagePlatformRules {
 /// glob into the install image at `to`. If `to` ends with `/`, files keep
 /// their original basename; otherwise `to` is the literal archive path
 /// (use when relocating a single file).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlaceRule {
     pub from: String,
@@ -152,7 +152,7 @@ pub struct PlaceRule {
 /// named build profile (`"debug"`, `"release"`, etc.). Profiles are
 /// orthogonal to platforms — a profile may carry its own per-platform place
 /// rules under `[stage.profile.<name>.platform.<plat>]`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 pub struct ProfileStaging {
     #[serde(flatten)]
     pub entries: IndexMap<String, StageProfileRules>,
@@ -167,7 +167,7 @@ impl ProfileStaging {
 /// Overrides for a single build profile, layered onto the base `[stage]` by
 /// [`StageConfig::resolved_for_profile`]. All fields are optional; an absent
 /// field leaves the base value untouched.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StageProfileRules {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

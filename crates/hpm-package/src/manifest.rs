@@ -59,7 +59,7 @@ use env::validate_env_table;
 /// insertion order during serialization, ensuring deterministic TOML output.
 // No `Default` impl: a manifest without a `package.path` is meaningless.
 // Construct via `PackageManifest::new` or full struct literal.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageManifest {
     pub package: PackageInfo,

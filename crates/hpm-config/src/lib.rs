@@ -59,7 +59,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub install: InstallConfig,

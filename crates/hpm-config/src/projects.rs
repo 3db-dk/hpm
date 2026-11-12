@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct ProjectsConfig {
     pub explicit_paths: Vec<PathBuf>,
     pub search_roots: Vec<PathBuf>,

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 pub use hpm_package::RegistryType;
 
 /// Configuration for a single package registry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct RegistrySourceConfig {
     /// Display name / alias for this registry
     pub name: String,

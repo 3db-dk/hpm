@@ -25,7 +25,7 @@ use std::collections::HashMap;
 /// Absent fields are omitted from the JSON rather than serialized as
 /// `null` — Houdini logs `WARNING: Unsupported value for requires` (etc.)
 /// for explicit nulls.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct HoudiniPackage {
     /// Houdini path entries (for HOUDINI_OTLSCAN_PATH, etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -96,7 +96,7 @@ impl std::fmt::Display for HoudiniMethod {
 /// promises. Only a genuinely conditional `set` value falls back to
 /// `Detailed`/`DetailedConditional` with [`HoudiniMethod::Replace`], since
 /// the conditional-object array form cannot be a flat string.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum HoudiniEnvValue {
     /// Simple string value (sets the variable directly)
@@ -155,7 +155,7 @@ impl HoudiniEnvValue {
 /// Unlike `HoudiniPackage` (which uses `$HPM_PACKAGE_ROOT` for HPM runtime),
 /// this uses `$HOUDINI_PACKAGE_PATH/{slug}` so the archive works directly
 /// with Houdini's built-in package loading.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct HoudiniNativePackage {
     /// Package slug name
     pub name: String,
@@ -186,7 +186,7 @@ pub struct HoudiniNativePackage {
 }
 
 /// Metadata block within a Houdini native package.json.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct HpackageMetadata {
     /// Package version string
     pub version: String,

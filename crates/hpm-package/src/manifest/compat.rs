@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// An absent `[compat]` section, or an absent `houdini` field, leaves the
 /// package's Houdini compatibility unconstrained — the generated package
 /// manifest emits no `enable` clause.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompatConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
