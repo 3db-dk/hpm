@@ -325,4 +325,78 @@ description = "Test custom manifest path"
             .unwrap_err();
         assert!(err.to_string().contains("does not exist"));
     }
+
+    mod lock_building {
+        use super::*;
+        use hpm_core::storage::InstalledPackage;
+
+        fn outcome(
+            name: &str,
+            version: &str,
+            checksum: Option<&str>,
+            source: Option<LockedSource>,
+        ) -> (String, InstallOutcome) {
+            let manifest = hpm_package::parse_manifest_str(&format!(
+                "[package]\npath = \"{name}\"\nname = \"x\"\nversion = \"{version}\"\n"
+            ))
+            .unwrap();
+            (
+                name.to_string(),
+                InstallOutcome {
+                    package: InstalledPackage {
+                        version: version.to_string(),
+                        manifest,
+                        install_path: std::path::PathBuf::from("/store").join(version),
+                        is_dev: false,
+                    },
+                    checksum: checksum.map(str::to_string),
+                    source,
+                },
+            )
+        }
+
+        fn project() -> PackageManifest {
+            hpm_package::parse_manifest_str(
+                "[package]\npath = \"studio/proj\"\nname = \"proj\"\nversion = \"0.1.0\"\n\n\
+                 [python_dependencies]\nnumpy = \">=1.24\"\nrequests = { extras = [\"socks\"] }\n",
+            )
+            .unwrap()
+        }
+
+        /// A fresh fetch records what it fetched; an install found in the
+        /// store keeps the previous lock entry's checksum and source; a path
+        /// dependency records its path; Python dependencies record their
+        /// requirement (`*` when none).
+        #[test]
+        fn the_lock_records_each_install_and_keeps_what_a_store_hit_cannot_know() {
+            let fetched = LockedSource::url("https://r/tools-1.0.0.zip", "1.0.0");
+            let path = LockedSource::path("../rig");
+            let outcomes = vec![
+                outcome("acme/tools", "1.0.0", Some("aa"), Some(fetched.clone())),
+                outcome("acme/cached", "2.0.0", None, None),
+                outcome("acme/rig", "0.1.0", None, Some(path.clone())),
+            ];
+            let mut prior = LockFile::new("proj".into(), "0.1.0".into());
+            let prior_source = LockedSource::url("https://r/cached-2.0.0.zip", "2.0.0");
+            prior.add_dependency(
+                "acme/cached".into(),
+                LockedDependency {
+                    version: "2.0.0".into(),
+                    checksum: Some("bb".into()),
+                    source: prior_source.clone(),
+                },
+            );
+
+            let lock = build_lock_file(&project(), &outcomes, Some(&prior));
+            let dep = |n: &str| lock.get_dependency(n).unwrap().clone();
+            assert_eq!(dep("acme/tools").source, fetched);
+            assert_eq!(dep("acme/tools").checksum.as_deref(), Some("aa"));
+            assert_eq!(dep("acme/cached").source, prior_source);
+            assert_eq!(dep("acme/cached").checksum.as_deref(), Some("bb"));
+            assert_eq!(dep("acme/rig").source, path);
+            assert_eq!(lock.python_dependencies["numpy"].version, ">=1.24");
+            assert_eq!(lock.python_dependencies["requests"].version, "*");
+            assert_eq!(lock.package.name, "proj");
+        }
+    }
 }
