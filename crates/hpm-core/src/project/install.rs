@@ -97,10 +97,15 @@ impl ProjectManager {
         // The venv for the installed packages' Python dependencies, if any.
         let manifests: Vec<hpm_package::PackageManifest> =
             installed.iter().map(|p| p.manifest.clone()).collect();
-        let venv_site_packages =
-            super::python_env::ensure_venv(project_houdini.as_deref(), &manifests, &installed, &[])
-                .await?
-                .map(|venv| venv.site_packages);
+        let venv_site_packages = super::python_env::ensure_venv(
+            &crate::python::PythonHome::for_storage(&self.config.storage),
+            project_houdini.as_deref(),
+            &manifests,
+            &installed,
+            &[],
+        )
+        .await?
+        .map(|venv| venv.site_packages);
 
         // Generate Houdini JSON manifests for all packages, plus the
         // project overrides manifest that Houdini processes after them.

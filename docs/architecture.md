@@ -681,7 +681,7 @@ package contribution.
 The Python layer runs on four ideas, in descending order of importance:
 
 1. **Content-addressable venvs.** Hash the resolved dependency set, use it as the venv directory name. Same hash → same venv → shared across packages.
-2. **Bundled uv.** A copy of `uv` ships with HPM and lives at `~/.hpm/tools/uv`. Its cache (`~/.hpm/uv-cache/`), config (`~/.hpm/uv-config/`), and managed CPython installs (`~/.hpm/uv-python/`, pinned via `UV_PYTHON_INSTALL_DIR`) are isolated from any system `uv` so HPM never perturbs your other Python work.
+2. **Bundled uv.** A copy of `uv` ships with HPM and lives at `~/.hpm/tools/uv`. Its cache (`~/.hpm/uv-cache/`), config (`~/.hpm/uv-config/`), and managed CPython installs (`~/.hpm/uv-python/`, pinned via `UV_PYTHON_INSTALL_DIR`) are isolated from any system `uv` so HPM never perturbs your other Python work. These paths, and the venvs, are under the configured `[storage] home_dir` (`~/.hpm` by default); in code the Python subsystem takes it as a `python::PythonHome`.
 3. **Self-bootstrapping Python.** `uv pip compile` and `uv venv` need an interpreter. Before invoking either, HPM runs `uv python install <ver>` to ensure a managed CPython matching the project's Houdini ABI exists. This is what makes a clean Windows install (no system Python anywhere) Just Work — without it `pip compile` errors with `No interpreter found in virtual environments, managed installations, search path, or registry`. The ensure step is process-cached, so it costs one fast filesystem probe per resolution.
 4. **Houdini manifest generation.** For each HPM package that declares Python dependencies, HPM writes `<project>/.hpm/packages/{creator}.{slug}.json` with `PYTHONPATH` prepended at the shared venv's `site-packages`.
 

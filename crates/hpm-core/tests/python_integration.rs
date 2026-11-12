@@ -4,6 +4,12 @@ use hpm_core::python::{cleanup, collection, types, venv};
 use hpm_package::{CompatConfig, PackageInfo, PackageManifest, PackagePath, PythonDependencySpec};
 use indexmap::IndexMap;
 
+/// A venv manager whose venvs (and hpm home) sit in `dir`, so the test never
+/// reads the developer's real venvs.
+fn venvs_in(dir: std::path::PathBuf) -> venv::VenvManager {
+    venv::VenvManager::with_venvs_dir(&hpm_core::python::PythonHome::new(&dir), dir)
+}
+
 #[tokio::test]
 async fn test_end_to_end_python_workflow() {
     // This test demonstrates the complete Python dependency workflow:
@@ -130,7 +136,7 @@ async fn test_end_to_end_python_workflow() {
     // Step 4: Test VenvManager operations against an isolated tempdir so the
     // test doesn't read the developer's real `~/.hpm/venvs/` contents.
     let venvs_tmp = tempfile::TempDir::new().expect("Failed to create tempdir");
-    let venv_manager = venv::VenvManager::with_venvs_dir(venvs_tmp.path().to_path_buf());
+    let venv_manager = venvs_in(venvs_tmp.path().to_path_buf());
     let venv_path = venvs_tmp.path().join(&venv_hash);
 
     // Verify Python site packages path generation. The Unix layout must
@@ -157,9 +163,8 @@ async fn test_end_to_end_python_workflow() {
 
     // Step 5: Test cleanup analyzer against the same isolated tempdir so any
     // real venvs on the developer's machine don't leak into the assertions.
-    let cleanup_analyzer = cleanup::PythonCleanupAnalyzer::with_venv_manager(
-        venv::VenvManager::with_venvs_dir(venvs_tmp.path().to_path_buf()),
-    );
+    let cleanup_analyzer =
+        cleanup::PythonCleanupAnalyzer::with_venv_manager(venvs_in(venvs_tmp.path().to_path_buf()));
     let orphaned = cleanup_analyzer
         .analyze_orphaned_venvs(&[])
         .await
@@ -343,9 +348,8 @@ async fn test_cleanup_system_comprehensive() {
     // Route the analyzer at an empty tempdir so we don't inspect (or delete
     // from) the developer's real `~/.hpm/venvs/`.
     let venvs_tmp = tempfile::TempDir::new().expect("Failed to create tempdir");
-    let cleanup_analyzer = cleanup::PythonCleanupAnalyzer::with_venv_manager(
-        venv::VenvManager::with_venvs_dir(venvs_tmp.path().to_path_buf()),
-    );
+    let cleanup_analyzer =
+        cleanup::PythonCleanupAnalyzer::with_venv_manager(venvs_in(venvs_tmp.path().to_path_buf()));
 
     // Test with no active packages (should find no orphans since no venvs exist)
     let active_packages = vec![];
@@ -425,7 +429,8 @@ fn test_python_dependency_types_comprehensive() {
 /// against an always-empty vec, matched nothing, and classified every venv
 /// as orphaned — including the one the user's current project depends on.
 mod venv_orphan_detection {
-    use hpm_core::python::{PythonVersion, ResolvedDependencySet, VenvMetadata, cleanup, venv};
+    use super::venvs_in;
+    use hpm_core::python::{PythonVersion, ResolvedDependencySet, VenvMetadata, cleanup};
 
     /// Write a venv directory carrying `owners` as its recorded owners.
     fn seed_venv(venvs_dir: &std::path::Path, hash: &str, owners: &[&str]) {
@@ -447,9 +452,8 @@ mod venv_orphan_detection {
     }
 
     async fn orphans_of(venvs_dir: &std::path::Path, active: &[String]) -> Vec<String> {
-        let analyzer = cleanup::PythonCleanupAnalyzer::with_venv_manager(
-            venv::VenvManager::with_venvs_dir(venvs_dir.to_path_buf()),
-        );
+        let analyzer =
+            cleanup::PythonCleanupAnalyzer::with_venv_manager(venvs_in(venvs_dir.to_path_buf()));
         let mut hashes: Vec<String> = analyzer
             .analyze_orphaned_venvs(active)
             .await
@@ -532,7 +536,8 @@ mod venv_orphan_detection {
 /// deleted — the exact failure the owner-recording change was meant to end,
 /// surviving on a different code path.
 mod venv_identity_format {
-    use hpm_core::python::{PythonVersion, ResolvedDependencySet, VenvMetadata, cleanup, venv};
+    use super::venvs_in;
+    use hpm_core::python::{PythonVersion, ResolvedDependencySet, VenvMetadata, cleanup};
 
     #[tokio::test]
     async fn scoped_owner_matches_scoped_active_entry() {
@@ -552,9 +557,8 @@ mod venv_identity_format {
         )
         .unwrap();
 
-        let analyzer = cleanup::PythonCleanupAnalyzer::with_venv_manager(
-            venv::VenvManager::with_venvs_dir(tmp.path().to_path_buf()),
-        );
+        let analyzer =
+            cleanup::PythonCleanupAnalyzer::with_venv_manager(venvs_in(tmp.path().to_path_buf()));
 
         // Scoped, as every caller now builds it.
         let orphans = analyzer
@@ -582,13 +586,13 @@ mod venv_identity_format {
 /// forever leaked every venv created before owners were recorded, plus
 /// every `[scripts]` venv.
 mod unowned_venv_ages_out {
-    use hpm_core::python::{PythonVersion, ResolvedDependencySet, VenvMetadata, cleanup, venv};
+    use super::venvs_in;
+    use hpm_core::python::{PythonVersion, ResolvedDependencySet, VenvMetadata, cleanup};
     use std::time::{Duration, SystemTime};
 
     async fn orphan_hashes(dir: &std::path::Path) -> Vec<String> {
-        let analyzer = cleanup::PythonCleanupAnalyzer::with_venv_manager(
-            venv::VenvManager::with_venvs_dir(dir.to_path_buf()),
-        );
+        let analyzer =
+            cleanup::PythonCleanupAnalyzer::with_venv_manager(venvs_in(dir.to_path_buf()));
         analyzer
             .analyze_orphaned_venvs(&[])
             .await

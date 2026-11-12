@@ -36,6 +36,10 @@ The bundled `uv` and its caches (`~/.hpm/uv-cache/`, `~/.hpm/uv-config/`) are
 fully isolated from any system `uv` you might have, so HPM never interferes
 with other Python workflows.
 
+All of these paths are under the hpm home, `~/.hpm` by default. Setting
+`[storage] home_dir` in the configuration moves the venvs, the bundled `uv`,
+its caches and the managed CPython installs with it.
+
 ## Declaring dependencies
 
 Python dependencies live in the `[python_dependencies]` section of

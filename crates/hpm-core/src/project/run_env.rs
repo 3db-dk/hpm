@@ -92,6 +92,7 @@ impl ProjectManager {
         manifests.extend(dep_packages.iter().map(|p| p.manifest.clone()));
 
         let venv = super::python_env::ensure_venv(
+            &crate::python::PythonHome::for_storage(&self.config.storage),
             project_manifest.compat.houdini_min().as_deref(),
             &manifests,
             &dep_packages,

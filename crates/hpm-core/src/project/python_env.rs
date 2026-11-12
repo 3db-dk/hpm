@@ -4,7 +4,7 @@
 //! `package-env` script).
 
 use crate::python::resolver::resolve_combined;
-use crate::python::{PythonError, VenvManager, collect_python_dependencies};
+use crate::python::{PythonError, PythonHome, VenvManager, collect_python_dependencies};
 use crate::storage::InstalledPackage;
 use hpm_package::PackageManifest;
 use std::path::PathBuf;
@@ -36,6 +36,7 @@ fn python_error(e: PythonError) -> ProjectError {
 /// the only handle cleanup has on what a venv belongs to (its hash is over
 /// the *resolved* set, which cleanup cannot recompute).
 pub(super) async fn ensure_venv(
+    home: &PythonHome,
     houdini: Option<&str>,
     manifests: &[PackageManifest],
     owners: &[InstalledPackage],
@@ -47,9 +48,11 @@ pub(super) async fn ensure_venv(
         return Ok(None);
     }
 
-    crate::python::initialize().await.map_err(python_error)?;
+    crate::python::initialize(home)
+        .await
+        .map_err(python_error)?;
     let collected = collect_python_dependencies(houdini, manifests).map_err(python_error)?;
-    let resolved = resolve_combined(&collected, extra_requirements)
+    let resolved = resolve_combined(home, &collected, extra_requirements)
         .await
         .map_err(python_error)?;
     if resolved.packages.is_empty() {
@@ -61,7 +64,7 @@ pub(super) async fn ensure_venv(
         resolved.hash()
     );
 
-    let venv_manager = VenvManager::new().map_err(python_error)?;
+    let venv_manager = VenvManager::new(home);
     let used_by: Vec<String> = owners
         .iter()
         .filter(|p| !p.manifest.python_dependencies.is_empty())

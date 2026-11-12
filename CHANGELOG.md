@@ -52,6 +52,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Python venvs, the bundled uv, uv's cache and config, and the managed
+  CPython it downloads now live under the configured `[storage] home_dir`
+  (`venvs/`, `tools/`, `uv-cache/`, `uv-config/`, `uv-python/`). They
+  always went to `~/.hpm` whatever it said. **Upgrade note:** with a
+  custom `home_dir`, the copies an older hpm left in `~/.hpm` are not
+  moved or cleaned up; the first sync rebuilds venvs under the new home,
+  and the old directories can be deleted by hand. With the default home
+  nothing moves. TumbleTrove Desktop's `prepare_script_env` reads the
+  user's configuration for the same home.
+
 - `[install] parallel_downloads` now bounds how many packages a sync
   installs at once (it was read but never used). `[install] path`, which
   was never used, is gone from the config; an existing file holding it
@@ -146,6 +156,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   methods of `HoudiniRange`. **Breaking (hpm-core API):**
   `python::collect_python_dependencies` is no longer `async`; a Houdini
   version with a non-numeric minor (`21.x`) is now an error.
+- **Breaking (hpm-core API):** `python::get_venvs_dir`. The Python
+  subsystem takes a `python::PythonHome` (`PythonHome::for_storage(&config.storage)`,
+  or `PythonHome::of_user()` for `~/.hpm`): `initialize`,
+  `resolve_dependencies`, `resolve_combined`, `ensure_script_venv`,
+  `bundled::ensure_uv_binary` / `ensure_managed_python` / `run_uv_command`,
+  `VenvManager::new` (now infallible) and `VenvManager::with_venvs_dir`,
+  and `PythonCleanupAnalyzer::new` (now infallible) take one.
+  `prepare_script_env(entry)` keeps its signature and resolves the home
+  from the user's configuration; `prepare_script_env_in(home, entry)` takes
+  it explicitly.
 - **Breaking (hpm-core / hpm-config API):** `archive_fetcher::cas_install_dir`,
   `archive_fetcher::fetcher_install_dir`, `StorageConfig::package_dir` and
   `FetchManifestError::NoVersionsAvailable`. Use `storage::StoreLayout`

@@ -4,6 +4,7 @@
 
 use crate::discovery::ProjectDiscovery;
 use crate::graph::{DependencyResolver, PackageId};
+use crate::python::PythonHome;
 use crate::python::cleanup::{CleanupResult, PythonCleanupAnalyzer};
 use crate::storage::InstalledPackage;
 use hpm_config::ProjectsConfig;
@@ -407,7 +408,7 @@ impl StorageManager {
             .collect();
 
         // 4. Python virtual environment cleanup against the remaining set.
-        let python_analyzer = PythonCleanupAnalyzer::new()?;
+        let python_analyzer = PythonCleanupAnalyzer::new(&PythonHome::for_storage(&self.config));
         let orphaned_venvs = python_analyzer
             .analyze_orphaned_venvs(&remaining_packages)
             .await?;
@@ -445,7 +446,7 @@ impl StorageManager {
     pub async fn cleanup_python_only(&self, dry_run: bool) -> Result<CleanupResult, StorageError> {
         info!("Starting Python-only cleanup (dry_run: {})", dry_run);
 
-        let python_analyzer = PythonCleanupAnalyzer::new()?;
+        let python_analyzer = PythonCleanupAnalyzer::new(&PythonHome::for_storage(&self.config));
 
         // Get list of all active packages
         let active_packages = self.list_installed()?;

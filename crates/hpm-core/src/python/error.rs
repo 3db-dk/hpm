@@ -22,6 +22,10 @@ pub enum PythonError {
     )]
     HomeDirNotFound,
 
+    /// The hpm configuration naming the hpm home could not be loaded.
+    #[error(transparent)]
+    Config(#[from] Box<hpm_package::TomlFileError>),
+
     /// No UV release archive exists for the current OS/arch combination.
     #[error("UV is not available for this platform")]
     UnsupportedPlatform,

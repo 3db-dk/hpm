@@ -98,15 +98,16 @@ codes and help hints.
 
 | Type | Purpose |
 |------|---------|
-| `VenvManager` | Creates and reuses content-addressable venvs. |
+| `PythonHome` | Where the Python subsystem keeps uv, its caches, the managed CPython and the venvs: the hpm home. `PythonHome::for_storage(&config.storage)` follows `[storage] home_dir`; `PythonHome::of_user()` is `~/.hpm`. `initialize`, the resolvers, `VenvManager::new` and `PythonCleanupAnalyzer::new` take one. |
+| `VenvManager` | Creates and reuses content-addressable venvs under a `PythonHome`. |
 | `PythonVersion` | Houdini-to-Python version value. |
 | `ResolvedDependencySet` | UV-resolved dependency set (`BTreeMap<name, version>` plus the Python version) with a `hash()` content hash. |
 | `PythonDependencies`, `PythonDependency`, `VersionSpec` | Declared (pre-resolution) Python dependency types. |
 | `VenvMetadata`, `OrphanedVenv` | Per-venv `metadata.json` model and the orphan-analysis result type. |
 | `PythonCleanupAnalyzer` | Detects orphan venvs for `hpm clean --python-only`. A venv that records owners is orphaned when none is still installed; one with no recorded owners (a `[scripts]` venv, or one predating owner recording) is collected only after 30 days idle. Owners are recorded by `VenvManager::ensure_virtual_environment_for`. |
-| `prepare_script_env(entry)` | Per-script-venv building block: bootstraps bundled uv, materializes the venv if needed, and returns a `ScriptEnvHandle` carrying the env-var mutations to apply before spawning. Plain string entries return a default (no-op) handle. Covers only the `python`/`requirements` venv path — not `package-env`, `HPM_PACKAGE_ROOT`, or the command line. Most embedders should reach for `hpm_core::script_run` (above), which wires this plus the rest of the contract; use `prepare_script_env` directly only when you specifically need just the venv handle. |
+| `prepare_script_env(entry)` | Per-script-venv building block: bootstraps bundled uv, materializes the venv if needed, and returns a `ScriptEnvHandle` carrying the env-var mutations to apply before spawning. Plain string entries return a default (no-op) handle. Covers only the `python`/`requirements` venv path — not `package-env`, `HPM_PACKAGE_ROOT`, or the command line. Most embedders should reach for `hpm_core::script_run` (above), which wires this plus the rest of the contract; use `prepare_script_env` directly only when you specifically need just the venv handle. The venv goes under the home of the user's configuration; `prepare_script_env_in(home, entry)` takes the home explicitly. |
 | `ScriptEnvHandle` | Spawn-strategy-agnostic env-var bundle (`path_prepend`, `env`). `apply_to(&mut HashMap<String,String>)` folds it into a caller-staged env map ready for `Command::envs` or any other spawn primitive. |
-| `ensure_script_venv(python, requirements)` | Lower-level free function: resolves raw PEP-508 requirement strings via `uv pip compile` and defers to `VenvManager`, returning the venv root. Prefer `prepare_script_env` for the full flow. |
+| `ensure_script_venv(home, python, requirements)` | Lower-level free function: resolves raw PEP-508 requirement strings via `uv pip compile` and defers to `VenvManager`, returning the venv root. Prefer `prepare_script_env` for the full flow. |
 | `venv_bin_dir(path)` | Returns the executable directory inside a uv-created venv (`bin/` on Unix, `Scripts/` on Windows). `prepare_script_env` already prepends this to `PATH`; use directly only when bypassing the handle. |
 | `DEFAULT_PYTHON_VERSION` | `"3.11"`. The Python version `ensure_script_venv` uses when a script omits `python`. |
 

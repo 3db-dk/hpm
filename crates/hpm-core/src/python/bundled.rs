@@ -1,9 +1,10 @@
 //! UV binary management with download-on-first-use
 //!
-//! UV is downloaded on first use and cached under `~/.hpm/tools/`. All UV
+//! UV is downloaded on first use and cached under `<hpm home>/tools/`. All UV
 //! invocations run against HPM's isolated cache and config — we never fall
 //! back to a system UV.
 
+use super::PythonHome;
 use super::error::PythonError;
 use hpm_package::IoOp;
 use std::collections::HashSet;
@@ -13,10 +14,6 @@ use tokio::fs;
 use tracing::{debug, info, warn};
 
 const UV_VERSION: &str = "0.5.9";
-
-fn hpm_dir() -> Result<PathBuf, PythonError> {
-    super::hpm_root()
-}
 
 /// Platform-specific UV release archive name (filename only).
 fn uv_archive_name() -> Option<&'static str> {
@@ -68,9 +65,9 @@ fn uv_binary_name() -> &'static str {
 
 /// Env vars every UV invocation must run under so that UV never touches
 /// system caches or configuration.
-fn uv_env() -> Result<[(&'static str, PathBuf); 6], PythonError> {
-    let hpm = hpm_dir()?;
-    Ok([
+fn uv_env(home: &PythonHome) -> [(&'static str, PathBuf); 6] {
+    let hpm = home.root();
+    [
         ("UV_CACHE_DIR", hpm.join("uv-cache")),
         ("UV_CONFIG_FILE", hpm.join("uv-config/uv.toml")),
         ("UV_NO_SYNC", PathBuf::from("1")),
@@ -84,15 +81,15 @@ fn uv_env() -> Result<[(&'static str, PathBuf); 6], PythonError> {
         // without it, `pip compile` hard-fails on machines with no Python
         // anywhere (clean Windows installs).
         ("UV_PYTHON_DOWNLOADS", PathBuf::from("automatic")),
-    ])
+    ]
 }
 
 /// Ensure the bundled UV binary is downloaded and isolation configured.
 ///
 /// Returns the path to the bundled UV binary. Errors if UV cannot be
 /// downloaded or the current platform is unsupported — no system-UV fallback.
-pub async fn ensure_uv_binary() -> Result<PathBuf, PythonError> {
-    let hpm_dir = hpm_dir()?;
+pub async fn ensure_uv_binary(home: &PythonHome) -> Result<PathBuf, PythonError> {
+    let hpm_dir = home.root();
     let tools_dir = hpm_dir.join("tools");
     let uv_path = tools_dir.join(uv_binary_name());
 
@@ -103,7 +100,7 @@ pub async fn ensure_uv_binary() -> Result<PathBuf, PythonError> {
         debug!("UV binary already exists at {:?}", uv_path);
     }
 
-    setup_uv_isolation(&hpm_dir).await?;
+    setup_uv_isolation(hpm_dir).await?;
     Ok(uv_path)
 }
 
@@ -308,7 +305,7 @@ fn installed_python_versions() -> &'static Mutex<HashSet<String>> {
 /// without forcing every command to go via `--python-preference managed`
 /// (which would also force-download Python on Linux/macOS dev boxes that
 /// already have a working interpreter).
-pub async fn ensure_managed_python(version: &str) -> Result<(), PythonError> {
+pub async fn ensure_managed_python(home: &PythonHome, version: &str) -> Result<(), PythonError> {
     {
         let cache = installed_python_versions().lock().unwrap();
         if cache.contains(version) {
@@ -318,7 +315,7 @@ pub async fn ensure_managed_python(version: &str) -> Result<(), PythonError> {
 
     debug!("Ensuring managed Python {} is available", version);
     let context = || format!("Failed to install managed Python {}", version);
-    match run_uv_command(&["python", "install", version]).await {
+    match run_uv_command(home, &["python", "install", version]).await {
         Ok(_) => {}
         Err(PythonError::UvCommand { stderr, .. }) if should_reinstall(&stderr) => {
             // `uv python install` of an existing version re-checks the copy on
@@ -332,7 +329,7 @@ pub async fn ensure_managed_python(version: &str) -> Result<(), PythonError> {
                 version,
                 stderr.trim()
             );
-            run_uv_command(&["python", "install", "--reinstall", version])
+            run_uv_command(home, &["python", "install", "--reinstall", version])
                 .await
                 .map_err(|e| e.uv_context(context()))?;
         }
@@ -356,14 +353,17 @@ fn should_reinstall(stderr: &str) -> bool {
 }
 
 /// Run UV with HPM's isolated cache and config applied per-invocation.
-pub async fn run_uv_command(args: &[&str]) -> Result<std::process::Output, PythonError> {
-    let uv_path = ensure_uv_binary().await?;
+pub async fn run_uv_command(
+    home: &PythonHome,
+    args: &[&str],
+) -> Result<std::process::Output, PythonError> {
+    let uv_path = ensure_uv_binary(home).await?;
 
     debug!("Running UV command: {:?} {:?}", uv_path, args);
 
     let mut cmd = tokio::process::Command::new(&uv_path);
     cmd.args(args);
-    for (key, value) in uv_env()? {
+    for (key, value) in uv_env(home) {
         cmd.env(key, value);
     }
 
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_uv_env() {
-        let env = uv_env().expect("home dir resolves under test env");
+        let env = uv_env(&PythonHome::new("/hpm"));
         let keys: Vec<_> = env.iter().map(|(k, _)| *k).collect();
         assert!(keys.contains(&"UV_CACHE_DIR"));
         assert!(keys.contains(&"UV_CONFIG_FILE"));
@@ -424,15 +424,28 @@ mod tests {
     }
 
     /// Everything uv keeps lives under the hpm home: its cache, its config
-    /// and the managed CPython it downloads; venvs sit beside them.
+    /// and the managed CPython it downloads; venvs sit beside them. The
+    /// default home is `~/.hpm`, and a configured `[storage] home_dir`
+    /// moves all of it.
     #[test]
     fn uv_state_and_venvs_live_under_the_hpm_home() {
-        let home = hpm_package::user_home().unwrap().join(".hpm");
-        let env: std::collections::HashMap<_, _> = uv_env().unwrap().into_iter().collect();
-        assert_eq!(env["UV_CACHE_DIR"], home.join("uv-cache"));
-        assert_eq!(env["UV_CONFIG_FILE"], home.join("uv-config/uv.toml"));
-        assert_eq!(env["UV_PYTHON_INSTALL_DIR"], home.join("uv-python"));
-        assert_eq!(super::super::get_venvs_dir().unwrap(), home.join("venvs"));
+        let default = PythonHome::of_user().unwrap();
+        assert_eq!(
+            default.root(),
+            hpm_package::user_home().unwrap().join(".hpm")
+        );
+        let storage = hpm_config::StorageConfig {
+            home_dir: PathBuf::from("/studio/hpm"),
+            ..Default::default()
+        };
+        for python_home in [default, PythonHome::for_storage(&storage)] {
+            let home = python_home.root().to_path_buf();
+            let env: std::collections::HashMap<_, _> = uv_env(&python_home).into_iter().collect();
+            assert_eq!(env["UV_CACHE_DIR"], home.join("uv-cache"));
+            assert_eq!(env["UV_CONFIG_FILE"], home.join("uv-config/uv.toml"));
+            assert_eq!(env["UV_PYTHON_INSTALL_DIR"], home.join("uv-python"));
+            assert_eq!(python_home.venvs_dir(), home.join("venvs"));
+        }
     }
 
     #[test]
