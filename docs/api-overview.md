@@ -29,11 +29,13 @@ external consumers.
 Leaves are `hpm-package` and `hpm-assets` — neither depends on anything in
 the workspace, so they can be embedded by external tools without dragging in
 the rest of HPM. `hpm-config` is not a leaf: it depends on `hpm-package` for
-the shared registry and dependency types.
+the registry types (`RegistryType`, `RegistryConfig`) and the shared TOML-file
+error and atomic-write helpers.
 
 Each crate defines its own error type via `thiserror` (e.g. `StorageError`,
-`ConfigError`). `hpm-cli` converts these into a single `CliError` with exit
-codes and help hints.
+`LockError`); `hpm-config` has none and returns `hpm_package::TomlFileError`.
+`hpm-cli` converts these into a single `CliError` with exit codes and help
+hints.
 
 ## Key types by crate
 
@@ -43,14 +45,15 @@ codes and help hints.
 |------|---------|
 | `StorageManager` | Global package install/remove/list. Backed by `~/.hpm/packages/`. |
 | `ProjectDiscovery` | Scans `[projects]` paths to enumerate active HPM projects. |
-| `DependencyGraph` | Dependency graph over `PackageId`s; `mark_reachable_from_roots` powers orphan detection for `hpm clean` (the set difference itself lives in `StorageManager::find_orphaned_packages`). |
+| `DependencyGraph` | Dependency graph over `PackageId`s; `mark_reachable_from_roots` powers orphan detection for `hpm clean` (the set difference against what is installed is the cleanup plan's `orphan_packages` in `storage/cleanup.rs`, reached through `cleanup_unused` / `cleanup_unused_dry_run`). |
 | `LockFile`, `LockedDependency`, `LockedPythonDependency`, `LockMetadata` | `hpm.lock` types. |
 | `LockedSource` | Origin recorded in the lockfile for each dep — `Url { url, version }` or `Path { path }`. |
-| `LockError` | `Read`/`Parse`/`Write`/`Serialize` plus `ChecksumMismatch` and `PackageMissing { package, expected_dir }`. |
+| `LockError` | `File` (a transparent `hpm_package::TomlFileError` covering read, parse, serialize and write failures), `ChecksumMismatch { package, expected, actual }` and `PackageMissing { package, expected_dir }`. |
 | `PackageSource` | URL-only struct `{ url, version }` — what `ArchiveFetcher` downloads. Path deps bypass the fetcher and use `LockedSource::Path` in the lockfile. |
 | `storage::StoreLayout`, `storage::layout::{cas_dir, download_key}` | The one owner of store paths: `<packages_dir>/<slug>@<version>` for a registry install (a scoped `creator/slug` reduces to the slug), `<packages_dir>/_dev/<slug>@<version>` for a dev container, `<cache_dir>/<download key>` for an archive and `<home_dir>/fetch/<download key>` for its extracted staging copy. `StorageManager::layout()` returns it; `ArchiveFetcher::for_storage` builds a fetcher from it. |
 | `Registry` (async trait) | Registry abstraction. `ApiRegistry` and `GitRegistry` implement it. Note `get_versions` returns one entry per **build**, not per version — a version released for two platforms is two entries — because `get_version` needs the full set to pick the host's via `select_build_for_host`. Callers wanting one row per version go through `RegistrySet`, not this trait. |
 | `RegistrySet` | Composite that fans requests out to every configured registry. `*_in` variants (`resolve_in`, `get_version_in`, `get_versions_in`) restrict the lookup to one named registry, honouring a dependency's `registry` pin; an unconfigured name is `UnknownRegistry` rather than a fallback to the rest of the set. `get_versions` and `search` collapse each `(name, version)`'s per-platform builds to one entry, preferring the host's build then a universal one — so these are *version* views, unlike the `Registry` trait method underneath. A version with no build for this host still lists (ruling it uninstallable is `select_build_for_host`'s job at install time), and a live build always wins over a yanked one at the same version so `highest_matching` still sees it. `search` collapses per registry, so a package served by two registries still shows both. |
+| `registry::solve`, `HoudiniTarget`, `Root`, `Selection`, `Rejection`, `SolveError` | Picks one version per package so that every chosen version's registry `deps` on the others hold, for a target Houdini. Pins stand as written; an unpinned package takes the newest non-yanked version that supports the Houdini, with backtracking. Pure: callers pass each package's version list. TumbleTrove Desktop uses it; `hpm install` still selects each package on its own. |
 | `global`, `global::ledger` | `hpm global` installs into Houdini's user preferences. `build_houdini_package` is shared with the project emitter; `Ledger` records what was installed per Houdini version and doubles as a `hpm clean` GC root. |
 | `houdini_prefs` | Per-platform Houdini user-preferences directory resolution, including `HOUDINI_USER_PREF_DIR` and its `__HVER__` placeholder. The only hpm module that knows a Houdini *installation's* conventions. |
 | `ArchiveFetcher` | Downloads and extracts registry-hosted archives. |
@@ -116,7 +119,8 @@ codes and help hints.
 
 | Type | Purpose |
 |------|---------|
-| `Config` | Top-level config (defaults < `~/.hpm/config.toml` < project config < env < flags). |
+| `Config` | Top-level config. `Config::load` layers defaults < `~/.hpm/config.toml` < `<cwd>/.hpm/config.toml`, each parsed as a `ConfigOverlay`; a malformed file or an unknown key is an error. |
+| `ConfigOverlay` | The presence-aware partial config a file parses as (every field optional, unknown keys refused). Writing one writes only the fields that are set. The legacy `[install] path` is still accepted, with a warning. |
 | `StorageConfig` | `home_dir`, `cache_dir`, `packages_dir`, `registry_cache_dir`. |
 | `InstallConfig` | `parallel_downloads` (`NonZeroUsize`): how many installs a sync runs at once. |
 | `ProjectsConfig` | `explicit_paths`, `search_roots`, `max_search_depth`, `ignore_patterns`. |
@@ -144,5 +148,5 @@ Exit codes used by `hpm-cli`:
 - **Minimal coupling.** Each crate owns one concern; no upward dependencies.
 - **Async by default.** Everything I/O-bound runs on Tokio.
 - **Content-addressable storage.** Both HPM packages (`<slug>@<version>` under `~/.hpm/packages/`, with path-installed packages isolated in `_dev/`) and Python venvs (SHA-256 over the resolved set) deduplicate globally.
-- **Safety by construction.** Cleanup never removes a package an active project needs; lock file checksums are verified before every install; signing is opt-in but standard when used.
+- **Safety by construction.** Cleanup never removes a package an active project needs; cached packages are verified against `hpm.lock` before every install, and downloads against the registry checksum when one is provided; signing is opt-in but standard when used.
 - **TOML-first configuration.** Every persistent config — manifest, lock file, global config — is TOML and hand-editable.

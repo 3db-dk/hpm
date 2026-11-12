@@ -132,7 +132,7 @@ A dependency can target a specific registry:
 
 ```toml
 [dependencies]
-studio-tools = { version = "1.0.0", registry = "studio" }
+"studio/studio-tools" = { version = "1.0.0", registry = "studio" }
 ```
 
 Without `registry`, HPM resolves through every configured registry in order.
@@ -1016,14 +1016,14 @@ one of four shapes:
 # 4. Local path (development). Installs a copy of the package's install
 #    image: the files `hpm pack` would ship (see [stage]), not the whole
 #    workspace, so .git/, build trees and virtualenvs are never copied.
-local-tools = { path = "../local-tools" }
-local-tools = { path = "../local-tools", optional = true }
+"local/local-tools" = { path = "../local-tools" }
+"local/optional-tools" = { path = "../optional-tools", optional = true }
 
 # 5. Local path, installed as a symlink/junction (live edits)
 #    Working-tree edits become visible to a live Houdini session without
 #    re-running `hpm install`. Otherwise identical to (4): same _dev/ namespace
 #    isolation, no effect on registry installs at the same coordinate.
-local-tools = { path = "../local-tools", link = true }
+"local/linked-tools" = { path = "../linked-tools", link = true }
 ```
 
 A `registry = "<name>"` key pins the dependency to one configured registry.

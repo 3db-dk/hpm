@@ -149,7 +149,7 @@ ABI bug in 0.7.0). See the [Python guide](docs/python-guide.md).
 
 ## How it works
 
-- **Resolution** — naive per-package version selection: highest non-yanked version matching the spec's `VersionReq`. Transitive constraint solving is intentionally not implemented yet.
+- **Resolution** — `hpm install` selects each package on its own: the highest non-yanked version matching its version requirement. hpm-core's `registry::solve` chooses a whole set at once (each version's Houdini range and its requirements of the other packages), which TumbleTrove Desktop uses; `hpm install` does not yet.
 - **Lock file** — `hpm.lock` pins exact versions, sources, and SHA-256 checksums.
 - **Storage** — `~/.hpm/packages/` for packages, `~/.hpm/venvs/` for Python environments (same layout on Linux, macOS, Windows).
 - **Houdini integration** — `hpm install` writes one `{creator}.{slug}.json` per dependency into `<project>/.hpm/packages/`. Point Houdini's `HOUDINI_PACKAGE_PATH` at that directory, or use `hpm global` to install into Houdini's user preferences so a package loads in every session without a project.

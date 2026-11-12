@@ -20,8 +20,9 @@ HPM protects against tampering and drift through three layers.
 
 ### SHA-256 checksums
 
-Every package HPM installs is hashed end-to-end, and the hash is recorded in
-`hpm.lock`:
+Every package HPM installs is hashed as installed — a SHA-256 over the
+installed tree's relative paths and file contents — and the hash is recorded
+in `hpm.lock`:
 
 ```toml
 # hpm.lock (excerpt)
@@ -183,11 +184,14 @@ Audit runs against the current project and reports:
 | HTTP URLs in `[dependencies]` (only the `url = …` form) | `WARN` per offending dependency. |
 | `hpm.lock` presence | `PASS` or `WARN` (`No lock file found`). |
 | `hpm.lock` staleness | `PASS` (recent) or `WARN` (`Lock file is N days old`) when `N > 90`. |
-| Package checksum verification | `PASS` or `WARN` (`Checksum verification failed: ...`). |
-| Installed files against their install records | `PASS` (`Installed files match their install records`) or a `WARN` per recorded file that is missing, truncated or changed. Packages installed before hpm 0.36.0 have no record and are skipped. |
+| `hpm.lock` readable | `FAIL` (`Failed to load lock file: ...`) when it cannot be parsed. |
+| Package checksum verification | `PASS` or `FAIL` (`Checksum verification failed: ...`). |
+| Installed files against their install records | `PASS` (`Installed files match their install records`) or a `FAIL` per recorded file that is missing, truncated or changed. Packages installed before hpm 0.36.0 have no record and are skipped. |
 
-Every offender is a warning, not an error — `hpm audit` never fails the
-shell. Wire it into pre-release checklists and CI as an advisory step.
+HTTP URLs and a missing or stale lock are advisory warnings. A checksum
+mismatch, a missing, truncated or changed installed file, or an unreadable
+`hpm.lock` is an integrity failure: it prints `FAIL` and `hpm audit` exits 1,
+so it can gate CI.
 
 Example output:
 
