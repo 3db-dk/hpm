@@ -289,3 +289,26 @@ fn a_missing_operator_source_warns_without_verify_assets() {
     );
     assert_eq!(pkg.archives().len(), 1);
 }
+
+/// A pack refused by validation still prints the validation warnings
+/// before the errors.
+#[test]
+fn a_refused_pack_still_prints_the_validation_warnings() {
+    // No keywords (a warning) and a README the manifest names but the
+    // package lacks (an error).
+    let pkg = Pkg::new(&MANIFEST.replace(
+        "description = \"d\"\n",
+        "description = \"d\"\nreadme = \"docs/README.md\"\n",
+    ));
+    let out = pkg.pack(&[]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("WARNING: Package keywords are missing"),
+        "{err}"
+    );
+    assert!(
+        err.contains("README file specified in manifest not found"),
+        "{err}"
+    );
+}

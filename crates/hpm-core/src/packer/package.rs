@@ -161,6 +161,10 @@ pub fn pack_package(request: PackRequest) -> Result<PackOutcome, PackError> {
                 .messages(Severity::Error)
                 .map(str::to_string)
                 .collect(),
+            warnings: validation
+                .messages(Severity::Warning)
+                .map(str::to_string)
+                .collect(),
         });
     }
 

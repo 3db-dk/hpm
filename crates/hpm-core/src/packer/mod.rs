@@ -53,7 +53,11 @@ pub enum PackError {
         errors.len(),
         errors.join("\n  - ")
     )]
-    Validation { errors: Vec<String> },
+    Validation {
+        errors: Vec<String>,
+        /// The validation warnings, for the caller to show with the errors.
+        warnings: Vec<String>,
+    },
 
     #[error(transparent)]
     Manifest(#[from] hpm_package::ManifestLoadError),

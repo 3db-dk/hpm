@@ -75,9 +75,21 @@ pub async fn execute(config: &Config, options: PackOptions, console: &mut Consol
         verify_assets,
     };
     // Zip I/O; keep it off the async runtime.
-    let outcome = tokio::task::spawn_blocking(move || packer::pack_package(request))
+    let outcome = match tokio::task::spawn_blocking(move || packer::pack_package(request))
         .await
-        .context("Pack task panicked")??;
+        .context("Pack task panicked")?
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            // A refused pack shows its validation warnings, then fails.
+            if let packer::PackError::Validation { warnings, .. } = &error {
+                for warning in warnings {
+                    console.warn(warning);
+                }
+            }
+            return Err(error.into());
+        }
+    };
 
     // Warnings go to stderr, keeping stdout clean for --json.
     for warning in &outcome.warnings {
