@@ -1897,3 +1897,71 @@ mod lock_building {
         }
     }
 }
+
+mod package_env_not_ready {
+    use super::*;
+
+    fn manager_at(temp: &TempDir, manifest: Option<&str>) -> ProjectManager {
+        let (config, storage) = test_setup(temp.path());
+        let root = temp.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        if let Some(m) = manifest {
+            std::fs::write(root.join("hpm.toml"), m).unwrap();
+        }
+        ProjectManager::new(root, storage, config).unwrap()
+    }
+
+    const WITH_DEP: &str = "[package]\npath = \"studio/proj\"\nname = \"proj\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"acme/tools\" = \"1.0.0\"\n";
+
+    async fn message(manager: &ProjectManager) -> String {
+        match manager.resolve_package_env(&[]).await {
+            Err(e @ ProjectError::PackageEnvNotReady(_)) => e.to_string(),
+            other => panic!("expected PackageEnvNotReady, got {other:?}"),
+        }
+    }
+
+    /// Each way a package environment is not ready yet is reported before
+    /// anything is resolved, with a message that says what to do. The text
+    /// is shown to users (by TumbleTrove Desktop too).
+    #[tokio::test]
+    async fn each_not_ready_case_says_what_to_do() {
+        let temp = TempDir::new().unwrap();
+        let no_manifest = message(&manager_at(&temp, None)).await;
+        assert!(
+            no_manifest.starts_with("No hpm.toml found at "),
+            "{no_manifest}"
+        );
+        assert!(
+            no_manifest.ends_with(" — a package environment needs a project manifest."),
+            "{no_manifest}"
+        );
+
+        let temp = TempDir::new().unwrap();
+        let no_lock = message(&manager_at(&temp, Some(WITH_DEP))).await;
+        assert!(no_lock.starts_with("Could not read "), "{no_lock}");
+        assert!(
+            no_lock.ends_with(
+                "Run 'hpm install' to resolve and lock this project's dependencies before running a package-env script."
+            ),
+            "{no_lock}"
+        );
+
+        let temp = TempDir::new().unwrap();
+        let manager = manager_at(&temp, Some(WITH_DEP));
+        let mut lock = crate::lock::LockFile::new("proj".into(), "0.1.0".into());
+        lock.add_dependency(
+            "acme/tools".into(),
+            crate::lock::LockedDependency {
+                version: "1.0.0".into(),
+                checksum: None,
+                source: crate::lock::LockedSource::url("https://r/t.zip", "1.0.0"),
+            },
+        );
+        lock.save(&temp.path().join("project").join("hpm.lock"))
+            .unwrap();
+        assert_eq!(
+            message(&manager).await,
+            "Dependency acme/tools@1.0.0 is locked but not installed. Run 'hpm install' to populate the package environment."
+        );
+    }
+}
