@@ -1767,7 +1767,16 @@ async fn a_new_version_reclaims_the_old_container_once_nothing_points_at_it() {
     version("1.1.0");
     a.sync_dependencies().await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    assert_eq!(dev_hashes(&old).len(), 1, "B still points at 1.0.0");
+    assert_eq!(
+        dev_hashes(&old).len(),
+        1,
+        "B still points at 1.0.0; the container holds {:?}",
+        walkdir::WalkDir::new(&old)
+            .into_iter()
+            .flatten()
+            .map(|e| e.path().strip_prefix(&old).unwrap().display().to_string())
+            .collect::<Vec<_>>()
+    );
 
     b.sync_dependencies().await.unwrap();
     for _ in 0..200 {
