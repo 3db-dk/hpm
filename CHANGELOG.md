@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.1] - 2026-11-12
+
+### Fixed
+
+- hpm builds on Windows again. 0.38.0's Windows build failed (a logging
+  import was compiled only on Unix), so 0.38.0 shipped no Windows binary;
+  0.38.1 is the same release with that fixed. See 0.38.0 below for what
+  changed.
+
 ## [0.38.0] - 2026-11-12
 
 ### Fixed
