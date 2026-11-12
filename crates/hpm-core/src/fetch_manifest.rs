@@ -15,7 +15,6 @@ use crate::package_source::PackageSource;
 use crate::registry::{RegistryError, RegistrySet};
 use crate::storage::{StorageError, StorageManager};
 use hpm_package::{ManifestLoadError, PackageManifest};
-use std::path::Path;
 use thiserror::Error;
 use tracing::{debug, info};
 
@@ -41,15 +40,12 @@ pub enum FetchManifestError {
 
     #[error(transparent)]
     Manifest(#[from] ManifestLoadError),
-
-    #[error("no versions available for package '{0}'")]
-    NoVersionsAvailable(String),
 }
 
 /// Fetch the [`PackageManifest`] for `(name, version)`.
 ///
 /// Pass an empty string or `"latest"` as `version` to resolve the highest
-/// semver version known to the registries.
+/// non-yanked release in the registries.
 ///
 /// # Side effects
 ///
@@ -63,7 +59,17 @@ pub async fn fetch_manifest(
     registry_set: &RegistrySet,
     storage: &StorageManager,
 ) -> Result<PackageManifest, FetchManifestError> {
-    let resolved_version = resolve_version(name, version, registry_set).await?;
+    // Empty / "latest" resolves to the highest non-yanked release; an exact
+    // version is looked up only on a store miss.
+    let latest = if version.is_empty() || version == "latest" {
+        Some(registry_set.resolve(name, "*").await?)
+    } else {
+        None
+    };
+    let resolved_version = latest
+        .as_ref()
+        .map_or(version, |entry| entry.version.as_str())
+        .to_string();
 
     if storage.package_exists(name, &resolved_version) {
         debug!("fetch_manifest: CAS hit for {}@{}", name, resolved_version);
@@ -78,12 +84,15 @@ pub async fn fetch_manifest(
         name, resolved_version
     );
 
-    let entry = registry_set.get_version(name, &resolved_version).await?;
+    let entry = match latest {
+        Some(entry) => entry,
+        None => registry_set.get_version(name, &resolved_version).await?,
+    };
     let source = PackageSource::url(entry.dl.clone(), resolved_version.clone())
         .and_then(|s| s.with_registry_checksum(entry.cksum.as_deref()))
         .map_err(|e| FetchManifestError::Fetch(crate::archive_fetcher::FetchError::from(e)))?;
 
-    let fetcher = build_fetcher(storage)?;
+    let fetcher = ArchiveFetcher::for_storage(&storage.config)?;
     let (installed, _checksum) = fetcher
         .fetch_into_store::<FetchManifestError>(storage, &source, name)
         .await?;
@@ -93,51 +102,6 @@ pub async fn fetch_manifest(
         name, resolved_version
     );
     Ok(installed.manifest)
-}
-
-/// Resolve `version` to a concrete semver string. Empty / `"latest"` picks
-/// the highest semver returned by [`RegistrySet::get_versions`].
-async fn resolve_version(
-    name: &str,
-    version: &str,
-    registry_set: &RegistrySet,
-) -> Result<String, FetchManifestError> {
-    if !version.is_empty() && version != "latest" {
-        return Ok(version.to_string());
-    }
-
-    let entries = registry_set.get_versions(name).await?;
-    if entries.is_empty() {
-        return Err(FetchManifestError::NoVersionsAvailable(name.to_string()));
-    }
-
-    let best = entries
-        .iter()
-        .max_by(|a, b| {
-            match (
-                semver::Version::parse(&a.version),
-                semver::Version::parse(&b.version),
-            ) {
-                (Ok(va), Ok(vb)) => va.cmp(&vb),
-                _ => a.version.cmp(&b.version),
-            }
-        })
-        .expect("entries is non-empty");
-    Ok(best.version.clone())
-}
-
-/// Build a transient [`ArchiveFetcher`] using the same scratch directory
-/// layout as [`crate::project::ProjectManager`] so that downloads and
-/// extracted package directories are shared across both code paths.
-fn build_fetcher(storage: &StorageManager) -> Result<ArchiveFetcher, FetchError> {
-    let parent = storage
-        .config
-        .packages_dir
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
-    let cache_dir = parent.join("cache");
-    let fetch_packages_dir = parent.join("fetch");
-    ArchiveFetcher::new(cache_dir, fetch_packages_dir)
 }
 
 #[cfg(test)]
@@ -205,5 +169,103 @@ description = "test"
             .await
             .expect_err("no registries → must fail to resolve latest");
         assert!(matches!(err, FetchManifestError::Registry(_)));
+    }
+
+    /// An installed package is found by its scoped name, without asking the
+    /// registry: the store keys by slug, and `fetch_manifest` used to look
+    /// for `packages/creator/slug@version`, miss, and download it again.
+    #[tokio::test]
+    async fn scoped_name_hits_a_package_installed_by_slug() {
+        let temp = TempDir::new().unwrap();
+        let storage = make_storage(&temp);
+        let source = temp.path().join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("hpm.toml"),
+            "[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        storage.install_into_cas(&source).await.unwrap();
+
+        let manifest = fetch_manifest("acme/tools", "1.0.0", &RegistrySet::new(), &storage)
+            .await
+            .expect("an installed package must not need the registry");
+        assert_eq!(manifest.package.path.as_str(), "acme/tools");
+    }
+
+    struct FixedRegistry(Vec<crate::registry::RegistryEntry>);
+
+    #[async_trait::async_trait]
+    impl crate::registry::Registry for FixedRegistry {
+        async fn search(
+            &self,
+            _query: &str,
+        ) -> Result<crate::registry::SearchResults, RegistryError> {
+            unreachable!("not searched")
+        }
+        async fn get_versions(
+            &self,
+            _name: &str,
+        ) -> Result<Vec<crate::registry::RegistryEntry>, RegistryError> {
+            Ok(self.0.clone())
+        }
+        async fn get_version(
+            &self,
+            name: &str,
+            version: &str,
+        ) -> Result<crate::registry::RegistryEntry, RegistryError> {
+            self.0
+                .iter()
+                .find(|e| e.version == version)
+                .cloned()
+                .ok_or_else(|| RegistryError::VersionNotFound {
+                    name: name.to_string(),
+                    version: version.to_string(),
+                })
+        }
+        async fn refresh(&self) -> Result<(), RegistryError> {
+            Ok(())
+        }
+        fn name(&self) -> &str {
+            "fixed"
+        }
+    }
+
+    fn entry(version: &str, yanked: bool) -> crate::registry::RegistryEntry {
+        serde_json::from_value(serde_json::json!({
+            "name": "acme/tools",
+            "vers": version,
+            // Unreachable: a test that downloads fails.
+            "dl": "http://127.0.0.1:9/tools.zip",
+            "yanked": yanked,
+        }))
+        .unwrap()
+    }
+
+    /// "latest" is the highest non-yanked release. It used to take the
+    /// highest version outright, so a yanked 2.0.0 shadowed the installed
+    /// 1.0.0 and forced a download of the yanked release.
+    #[tokio::test]
+    async fn latest_skips_yanked_releases() {
+        let temp = TempDir::new().unwrap();
+        let storage = make_storage(&temp);
+        write_fake_package(
+            &storage,
+            "acme/tools",
+            "1.0.0",
+            "[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"1.0.0\"\n",
+        );
+        let mut registries = RegistrySet::new();
+        registries.add(Box::new(FixedRegistry(vec![
+            entry("1.0.0", false),
+            entry("2.0.0", true),
+        ])));
+
+        for latest in ["latest", ""] {
+            let manifest = fetch_manifest("acme/tools", latest, &registries, &storage)
+                .await
+                .expect("latest resolves to the installed 1.0.0");
+            assert_eq!(manifest.package.version, "1.0.0");
+        }
     }
 }

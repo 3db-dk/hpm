@@ -13,33 +13,6 @@ mod extract;
 
 use extract::extract_archive_sync;
 
-/// Compute the on-disk directory where `ArchiveFetcher` extracts a fetched
-/// package keyed by `(name, version)`. Slashes in `name` (e.g. scoped
-/// `creator/slug`) are replaced with `-` so the result is a single
-/// directory name.
-///
-/// This is the **staging** path — `hpm install` and friends fetch into
-/// `<.hpm>/fetch/<safe_name>-<version>/`, then copy into the canonical
-/// `StorageManager` CAS via `install_into_cas`. To find a package's
-/// canonical install location instead, see [`cas_install_dir`].
-pub fn fetcher_install_dir(packages_dir: &Path, name: &str, version: &str) -> PathBuf {
-    let safe_name = name.replace('/', "-");
-    packages_dir.join(format!("{}-{}", safe_name, version))
-}
-
-/// Compute the canonical `StorageManager` CAS path for a dependency
-/// referenced by `name` (the dependency key, possibly scoped as
-/// `creator/slug`) and `version`. The CAS keys by **bare slug**: scoped
-/// names are reduced to their last `/`-segment so the layout matches
-/// what `StorageManager::install_into_cas` writes.
-///
-/// Used by `LockFile::verify_checksums` and any consumer that needs to
-/// locate an installed package off the lockfile alone.
-pub fn cas_install_dir(packages_dir: &Path, name: &str, version: &str) -> PathBuf {
-    let slug = name.rsplit('/').next().unwrap_or(name);
-    packages_dir.join(format!("{}@{}", slug, version))
-}
-
 /// Compute a SHA-256 checksum of a directory's contents (blocking operation)
 /// via the shared [`crate::tree_hash::hash_tree`].
 ///
@@ -106,20 +79,28 @@ pub struct ArchiveFetcher {
     http_client: reqwest::Client,
     /// Directory for caching downloaded archives
     cache_dir: PathBuf,
-    /// Directory for extracted packages
-    packages_dir: PathBuf,
+    /// Directory downloads are extracted into before they are copied into
+    /// the store
+    staging_dir: PathBuf,
 }
 
 impl ArchiveFetcher {
-    /// Create a new archive fetcher.
-    ///
-    /// # Arguments
-    /// * `cache_dir` - Directory for caching downloaded archives
-    /// * `packages_dir` - Directory for extracted packages
-    pub fn new(cache_dir: PathBuf, packages_dir: PathBuf) -> Result<Self, FetchError> {
-        // Ensure directories exist
+    /// The fetcher for a store: archives cached in `[storage] cache_dir`,
+    /// extracted under `<home_dir>/fetch` (see [`crate::storage::StoreLayout`]).
+    pub fn for_storage(config: &hpm_config::StorageConfig) -> Result<Self, FetchError> {
+        let layout = crate::storage::StoreLayout::new(config);
+        Self::new(
+            layout.cache_dir().to_path_buf(),
+            layout.fetch_dir().to_path_buf(),
+        )
+    }
+
+    /// Create an archive fetcher caching archives in `cache_dir` and
+    /// extracting into `staging_dir`. Production code uses
+    /// [`Self::for_storage`].
+    pub fn new(cache_dir: PathBuf, staging_dir: PathBuf) -> Result<Self, FetchError> {
         std::fs::create_dir_all(&cache_dir).map_err(FetchError::CacheDirectoryError)?;
-        std::fs::create_dir_all(&packages_dir).map_err(FetchError::CacheDirectoryError)?;
+        std::fs::create_dir_all(&staging_dir).map_err(FetchError::CacheDirectoryError)?;
 
         // 5 min timeout for large packages
         let http_client =
@@ -128,7 +109,7 @@ impl ArchiveFetcher {
         Ok(Self {
             http_client,
             cache_dir,
-            packages_dir,
+            staging_dir,
         })
     }
 
@@ -184,14 +165,9 @@ impl ArchiveFetcher {
         package_name: &str,
         expected_sha256: Option<&str>,
     ) -> Result<FetchResult, FetchError> {
-        let package_dir = fetcher_install_dir(&self.packages_dir, package_name, version);
-        // The download cache file (a sibling, with the archive bytes) is
-        // keyed off the same dir name minus the parent.
-        let cache_key = package_dir
-            .file_name()
-            .expect("fetcher_install_dir always yields a filename")
-            .to_string_lossy()
-            .into_owned();
+        // The extracted copy and the cached archive share one key.
+        let cache_key = crate::storage::layout::download_key(package_name, version);
+        let package_dir = self.staging_dir.join(&cache_key);
 
         // Check if already extracted
         if tokio::fs::try_exists(&package_dir)
@@ -484,7 +460,9 @@ mod tests {
             "corrupt cached archive must be removed"
         );
         assert!(
-            !fetcher_install_dir(&packages_dir, "pkg", "1.0.0").exists(),
+            !packages_dir
+                .join(crate::storage::layout::download_key("pkg", "1.0.0"))
+                .exists(),
             "nothing may be extracted from an unverified archive"
         );
     }

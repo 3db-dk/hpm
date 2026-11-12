@@ -246,9 +246,9 @@ async fn remove_package_unlinks_symlink_entries() {
     write_source_package(&external, "creator/foo", "1.0.0", "external-marker");
 
     // Manually plant a symlink/junction at the registry CAS path that
-    // `remove_package` resolves to. `package_dir(name, version)` uses the
+    // `remove_package` resolves to. `get_package_path(name, version)` uses the
     // bare-slug layout, so the link lives at `<packages_dir>/<slug>@<v>/`.
-    let cas_path = storage_manager.config.package_dir("foo", "1.0.0");
+    let cas_path = storage_manager.get_package_path("foo", "1.0.0");
     std::fs::create_dir_all(cas_path.parent().unwrap()).unwrap();
     create_dev_link(&external, &cas_path).unwrap();
     assert!(cas_path.join("MARKER").exists());
@@ -1671,9 +1671,9 @@ mod store_layout {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(24))]
 
-        /// Every lookup by bare slug finds the directory `install_into_cas`
+        /// Every lookup by slug or scoped name finds the directory `install_into_cas`
         /// wrote: `get_package_path`, `package_exists`, `list_installed` and
-        /// the lockfile's `cas_install_dir` for the scoped name.
+        /// the lockfile's `layout::cas_dir`, for the bare and the scoped name.
         #[test]
         fn lookups_by_slug_agree_with_the_installed_directory(
             creator in slug(), slug in slug(), version in version()
@@ -1692,8 +1692,11 @@ mod store_layout {
 
             prop_assert_eq!(&storage.get_package_path(&slug, &version), &installed.install_path);
             prop_assert!(storage.package_exists(&slug, &version));
+            let scoped = format!("{creator}/{slug}");
+            prop_assert_eq!(&storage.get_package_path(&scoped, &version), &installed.install_path);
+            prop_assert!(storage.package_exists(&scoped, &version));
             prop_assert_eq!(
-                crate::archive_fetcher::cas_install_dir(
+                crate::storage::layout::cas_dir(
                     &storage.config.packages_dir,
                     &format!("{creator}/{slug}"),
                     &version
@@ -1709,4 +1712,41 @@ mod store_layout {
             prop_assert_eq!(listed, vec![installed.install_path]);
         }
     }
+}
+
+/// With `packages_dir` and `cache_dir` moved out of `home_dir`, staging stays
+/// under `home_dir/fetch`, archives go to `cache_dir`, and what older hpm
+/// versions left at `<packages_dir>/../fetch` and `<home_dir>/cache` is still
+/// swept and evicted.
+#[test]
+fn moved_store_keeps_one_staging_root_and_reclaims_the_old_ones() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    let storage = StorageManager::new(StorageConfig {
+        home_dir: home.clone(),
+        packages_dir: temp.path().join("disk/packages"),
+        cache_dir: temp.path().join("fast/cache"),
+        registry_cache_dir: home.join("registry"),
+    })
+    .unwrap();
+    let layout = storage.layout();
+    assert_eq!(layout.fetch_dir(), home.join("fetch"));
+    assert_eq!(layout.cache_dir(), temp.path().join("fast/cache"));
+    let fetcher = crate::archive_fetcher::ArchiveFetcher::for_storage(&storage.config).unwrap();
+    drop(fetcher);
+    assert!(
+        home.join("fetch").is_dir(),
+        "the fetcher stages under home_dir"
+    );
+
+    let old_staging = temp.path().join("disk/fetch/studio-tool-1.0.0");
+    std::fs::create_dir_all(&old_staging).unwrap();
+    assert_eq!(storage.sweep_fetch_staging(std::time::Duration::ZERO).0, 1);
+    assert!(!old_staging.exists());
+
+    let old_cache = home.join("cache");
+    std::fs::create_dir_all(&old_cache).unwrap();
+    std::fs::write(old_cache.join("studio-tool-1.0.0"), b"zip").unwrap();
+    std::fs::write(temp.path().join("fast/cache/studio-tool-1.0.0"), b"zip").unwrap();
+    assert_eq!(storage.evict_download("studio/tool", "1.0.0"), 2);
 }

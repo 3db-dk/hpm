@@ -4,7 +4,7 @@
 //! dependencies resolved during installation. This ensures reproducible builds
 //! across different machines and time.
 
-use crate::archive_fetcher::cas_install_dir;
+use crate::storage::layout::cas_dir;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -258,7 +258,7 @@ impl LockFile {
             let Some(expected_checksum) = &dep.checksum else {
                 continue;
             };
-            let package_dir = cas_install_dir(packages_dir, name, &dep.version);
+            let package_dir = cas_dir(packages_dir, name, &dep.version);
             if !package_dir.exists() {
                 return Err(LockError::PackageMissing {
                     package: name.clone(),
@@ -369,7 +369,7 @@ mod tests {
         version: &str,
         content: &[u8],
     ) -> PathBuf {
-        let dir = cas_install_dir(packages_dir, name, version);
+        let dir = cas_dir(packages_dir, name, version);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("file.txt"), content).unwrap();
         dir

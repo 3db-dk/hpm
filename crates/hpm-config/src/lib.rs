@@ -352,19 +352,6 @@ ignore_patterns = ["backup", ".cache", "temp"]
     }
 
     #[test]
-    fn storage_config_package_directory() {
-        let config = Config::default();
-        let pkg_dir = config.storage.package_dir("test-package", "1.0.0");
-        // Normalize path separators for cross-platform testing
-        let pkg_dir_str = pkg_dir.to_string_lossy().replace('\\', "/");
-        assert!(
-            pkg_dir_str.ends_with("packages/test-package@1.0.0"),
-            "Expected path to end with 'packages/test-package@1.0.0', got: {}",
-            pkg_dir_str
-        );
-    }
-
-    #[test]
     fn project_paths_package_manifest_path() {
         let project_root = PathBuf::from("/test/project");
         let project_paths = Config::project_paths(&project_root);

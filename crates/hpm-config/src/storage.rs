@@ -62,8 +62,4 @@ impl StorageConfig {
         std::fs::create_dir_all(&self.registry_cache_dir)?;
         Ok(())
     }
-
-    pub fn package_dir(&self, name: &str, version: &str) -> PathBuf {
-        self.packages_dir.join(format!("{}@{}", name, version))
-    }
 }

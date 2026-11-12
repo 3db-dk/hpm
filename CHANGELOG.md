@@ -9,10 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `fetch_manifest` (used by TumbleTrove Desktop) finds a package already in
+  the store when asked by its scoped `creator/slug` name. It looked in the
+  wrong directory, missed, and downloaded and re-copied the package over a
+  live store copy. It also stages downloads under `home_dir` like every
+  other install, instead of beside `packages_dir`.
+- `fetch_manifest` with `"latest"` picks the highest non-yanked release
+  instead of the highest version outright.
+
 - `hpm init` writes a valid `python/__init__.py`. It used to begin with an
   empty string literal followed by bare text, which Python rejects.
 
 ### Changed
+
+- `[storage] cache_dir` is honoured: downloaded archives are cached there.
+  They used to go to `<home_dir>/cache` whatever it said. Archives an older
+  hpm left in `<home_dir>/cache`, and extracted downloads left in
+  `<packages_dir>/../fetch` when `packages_dir` is outside `home_dir`, are
+  still reclaimed by the fetch-staging sweep and by `evict_download`.
 
 - `hpm init` no longer writes a root `package.json`. Nothing read it: hpm
   writes each dependency's Houdini package file at install time, and
@@ -39,6 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking (hpm-core API):** `ProjectManager::generate_houdini_manifests`.
   It emitted without the package's venv; `sync_dependencies` writes the
   manifests.
+- **Breaking (hpm-core / hpm-config API):** `archive_fetcher::cas_install_dir`,
+  `archive_fetcher::fetcher_install_dir`, `StorageConfig::package_dir` and
+  `FetchManifestError::NoVersionsAvailable`. Use `storage::StoreLayout`
+  (`StorageManager::layout()`) or `storage::layout::cas_dir` /
+  `download_key`; `StorageManager::get_package_path` and `package_exists`
+  are unchanged and now accept a scoped name too.
 
 ## [0.37.0] - 2026-11-11
 

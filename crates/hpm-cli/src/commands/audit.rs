@@ -164,7 +164,7 @@ fn audit_installed_files(
     let mut unrecorded = 0;
     let mut warnings = Vec::new();
     for (name, dep) in &lock.dependencies {
-        let dir = hpm_core::archive_fetcher::cas_install_dir(packages_dir, name, &dep.version);
+        let dir = hpm_core::storage::layout::cas_dir(packages_dir, name, &dep.version);
         if !dir.is_dir() {
             continue;
         }

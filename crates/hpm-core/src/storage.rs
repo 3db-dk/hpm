@@ -5,6 +5,7 @@
 //!
 //! - [`error`] — [`StorageError`]
 //! - [`types`] — [`InstalledPackage`]
+//! - [`layout`] — [`StoreLayout`], where every store and download path lives
 //! - [`dev_install`] — `_dev/` path-install primitives (link, copy, remove)
 //! - [`cleanup`] — the project-aware GC pipeline and
 //!   [`ComprehensiveCleanupResult`] aggregate
@@ -18,11 +19,13 @@ pub mod cleanup;
 pub mod dev_install;
 pub mod dev_users;
 pub mod error;
+pub mod layout;
 pub mod types;
 
 pub use cleanup::ComprehensiveCleanupResult;
 pub use dev_install::DevInstall;
 pub use error::StorageError;
+pub use layout::StoreLayout;
 pub use types::InstalledPackage;
 
 use dev_install::{
@@ -50,13 +53,23 @@ impl StorageManager {
         Ok(())
     }
 
-    pub fn package_exists(&self, name: &str, version: &str) -> bool {
-        let package_dir = self.config.package_dir(name, version);
-        package_dir.exists() && package_dir.join("hpm.toml").exists()
+    /// The layout of this store: where packages, dev containers and
+    /// downloads live.
+    pub fn layout(&self) -> StoreLayout {
+        StoreLayout::new(&self.config)
     }
 
+    /// Whether the store holds `name@version`. `name` is a dependency key
+    /// (`creator/slug`) or a bare slug; the store keys by slug.
+    pub fn package_exists(&self, name: &str, version: &str) -> bool {
+        self.get_package_path(name, version)
+            .join("hpm.toml")
+            .exists()
+    }
+
+    /// The store directory for `name@version` (see [`StoreLayout::cas_dir`]).
     pub fn get_package_path(&self, name: &str, version: &str) -> PathBuf {
-        self.config.package_dir(name, version)
+        self.layout().cas_dir(name, version)
     }
 
     /// Sweep every installed package for programs that lost their executable
@@ -99,17 +112,12 @@ impl StorageManager {
     }
 
     /// The directories downloads are extracted into before they are copied
-    /// into the store: `<home>/fetch`, where [`crate::ProjectManager`] puts
-    /// it, and `<packages_dir>/../fetch`, where `fetch_manifest` does. They are
-    /// the same directory unless `packages_dir` was moved out of `home_dir`.
+    /// into the store: the current one, and the one older hpm versions used
+    /// when it differs (see [`StoreLayout::legacy_fetch_dir`]).
     fn fetch_staging_dirs(&self) -> Vec<PathBuf> {
-        let mut dirs = vec![self.config.home_dir.join("fetch")];
-        if let Some(parent) = self.config.packages_dir.parent() {
-            let other = parent.join("fetch");
-            if !dirs.contains(&other) {
-                dirs.push(other);
-            }
-        }
+        let layout = self.layout();
+        let mut dirs = vec![layout.fetch_dir().to_path_buf()];
+        dirs.extend(layout.legacy_fetch_dir());
         dirs
     }
 
@@ -184,22 +192,18 @@ impl StorageManager {
     /// for a registry package). The store's own copy is not touched; removing
     /// that is the caller's decision.
     pub fn evict_download(&self, name: &str, version: &str) -> usize {
-        let key =
-            crate::archive_fetcher::fetcher_install_dir(std::path::Path::new(""), name, version);
+        let key = layout::download_key(name, version);
+        let layout = self.layout();
         let mut entries: Vec<PathBuf> = self
             .fetch_staging_dirs()
             .into_iter()
             .map(|dir| dir.join(&key))
             .collect();
-        let mut cache_dirs = vec![self.config.home_dir.join("cache")];
-        if !cache_dirs.contains(&self.config.cache_dir) {
-            cache_dirs.push(self.config.cache_dir.clone());
-        }
+        let mut cache_dirs = vec![layout.cache_dir().to_path_buf()];
+        cache_dirs.extend(layout.legacy_cache_dir());
         for dir in cache_dirs {
             entries.push(dir.join(&key));
-            let mut part = key.clone().into_os_string();
-            part.push(".part");
-            entries.push(dir.join(part));
+            entries.push(dir.join(format!("{key}.part")));
         }
 
         let mut removed = 0;
@@ -249,7 +253,7 @@ impl StorageManager {
         if !dir.starts_with(&self.config.packages_dir) {
             return None;
         }
-        let is_dev = dir.starts_with(self.config.packages_dir.join(DEV_INSTALL_DIR));
+        let is_dev = dir.starts_with(self.layout().dev_root());
         match self.parse_installed_package(dir.to_path_buf()) {
             Ok(Some(pkg)) => Some(InstalledPackage { is_dev, ..pkg }),
             _ => None,
@@ -454,15 +458,11 @@ impl StorageManager {
         // Dev styles share the `_dev/<slug>@<version>` container. A copy lands
         // at a content-addressed `<container>/<hash>` subdirectory; a link's
         // entry *is* the container path.
-        let dev_container = self
-            .config
-            .packages_dir
-            .join(DEV_INSTALL_DIR)
-            .join(format!("{}@{}", name, version));
+        let dev_container = self.layout().dev_container(name, version);
 
         match style {
             InstallStyle::CasCopy => {
-                let target_dir = self.config.package_dir(name, version);
+                let target_dir = self.get_package_path(name, version);
                 // Record what is being installed from the extracted archive
                 // itself, before the copy, so a copy cut short shows up as
                 // damage rather than as a smaller healthy package.
@@ -701,7 +701,7 @@ impl StorageManager {
     }
 
     pub async fn remove_package(&self, name: &str, version: &str) -> Result<(), StorageError> {
-        let package_dir = self.config.package_dir(name, version);
+        let package_dir = self.get_package_path(name, version);
 
         // `symlink_metadata` rather than `exists()` because `exists()` follows
         // links — a junction pointing at a missing target would falsely report
@@ -729,7 +729,7 @@ impl StorageManager {
     /// deleted workspace still surfaces here — that's exactly the case dev
     /// cleanup needs to reach.
     pub fn list_dev_installs(&self) -> Result<Vec<DevInstall>, StorageError> {
-        let dev_root = self.config.packages_dir.join(DEV_INSTALL_DIR);
+        let dev_root = self.layout().dev_root();
         if !dev_root.exists() {
             return Ok(Vec::new());
         }

@@ -54,10 +54,7 @@ pub async fn add_package(
     parse_package(name)?;
 
     let storage = StorageManager::new(config.storage.clone())?;
-    let fetcher = ArchiveFetcher::new(
-        config.storage.home_dir.join("cache"),
-        config.storage.home_dir.join("fetch"),
-    )?;
+    let fetcher = ArchiveFetcher::for_storage(&config.storage)?;
     let registries = RegistrySet::from_config(config)?;
 
     let installed = global::add(

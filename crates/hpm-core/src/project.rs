@@ -102,15 +102,7 @@ impl ProjectManager {
     ) -> Result<Self, ProjectError> {
         let project_paths = hpm_config::Config::project_paths(&project_root);
 
-        // Fetcher staging lives next to the global CAS under ~/.hpm/.
-        // Drive both directories off `storage.home_dir` directly — using
-        // `packages_dir.parent()` was wrong when the user overrode
-        // `packages_dir` to a path outside `home_dir` (the cache then
-        // landed at the wrong place; the cwd fallback to "." was worse).
-        let storage_root = &config.storage.home_dir;
-        let cache_dir = storage_root.join("cache");
-        let fetch_packages_dir = storage_root.join("fetch");
-        let fetcher = ArchiveFetcher::new(cache_dir, fetch_packages_dir)?;
+        let fetcher = ArchiveFetcher::for_storage(&config.storage)?;
 
         let manager = Self {
             config,
