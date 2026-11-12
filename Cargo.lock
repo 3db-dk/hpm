@@ -843,7 +843,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "walkdir",
  "zip",
 ]
 
