@@ -1475,4 +1475,77 @@ mod tests {
         assert_eq!(removed, 0);
         assert!(copy.is_dir());
     }
+
+    /// A project record is `{"manifest": "<absolute manifest path>"}`, the
+    /// shape records already on disk have.
+    #[test]
+    fn a_project_record_names_its_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('a'));
+        let manifest = tmp.path().join("proj/.hpm/packages/acme.rig.json");
+        record_project_user(&copy, &manifest).unwrap();
+        let dir = records_dir(&c, &hash('a'));
+        let files: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(files.len(), 1);
+        let expected = serde_json::to_vec(
+            &serde_json::json!({ "manifest": std::path::absolute(&manifest).unwrap() }),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&files[0]).unwrap(), expected);
+    }
+
+    /// A project record keeps its copy exactly while the manifest it names
+    /// points `hpath` at the copy, in either the string or the array form.
+    /// A manifest that is gone uses nothing; one that cannot be parsed, or a
+    /// record that names no manifest, is kept.
+    #[test]
+    fn project_record_liveness_reads_every_hpath_form() {
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('a'));
+        let other = tmp.path().join("elsewhere");
+        let manifest = tmp.path().join("proj/acme.rig.json");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        let record = |m: &Path| {
+            let dir = records_dir(&c, &hash('a'));
+            let _ = std::fs::remove_dir_all(&dir);
+            record_project_user(&copy, m).unwrap();
+        };
+        let live = || hash_in_use(&c, &hash('a'), &|_| ProcessState::Gone);
+        let cases: Vec<(serde_json::Value, bool)> = vec![
+            (serde_json::json!({ "hpath": copy.to_string_lossy() }), true),
+            (
+                serde_json::json!({ "hpath": [other.to_string_lossy(), copy.to_string_lossy()] }),
+                true,
+            ),
+            (
+                serde_json::json!({ "hpath": [other.to_string_lossy()] }),
+                false,
+            ),
+            (
+                serde_json::json!({ "hpath": other.to_string_lossy() }),
+                false,
+            ),
+            (serde_json::json!({ "env": [] }), false),
+        ];
+        for (json, expected) in cases {
+            std::fs::write(&manifest, serde_json::to_vec(&json).unwrap()).unwrap();
+            record(&manifest);
+            assert_eq!(live(), expected, "{json}");
+        }
+        std::fs::write(&manifest, b"not json").unwrap();
+        record(&manifest);
+        assert!(live(), "an unparseable manifest is kept");
+        std::fs::remove_file(&manifest).unwrap();
+        record(&manifest);
+        assert!(!live(), "a manifest that is gone uses nothing");
+
+        let dir = records_dir(&c, &hash('a'));
+        std::fs::write(dir.join("project-ffffffffffffffff.json"), b"{\"other\": 1}").unwrap();
+        assert!(live(), "a record naming no manifest is kept");
+    }
 }
