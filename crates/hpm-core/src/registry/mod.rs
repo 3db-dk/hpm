@@ -121,6 +121,23 @@ impl RegistrySet {
         Self::from_configs(&config.registries, &config.storage.registry_cache_dir)
     }
 
+    /// The registries a project resolves against: its manifest's
+    /// `[[registries]]` when it declares any, otherwise the user's
+    /// configured registries. Sync and `hpm add` both build their set here,
+    /// so a package is added from the same registries it is installed from.
+    pub fn for_project(
+        manifest_registries: &[hpm_package::RegistryConfig],
+        config: &hpm_config::Config,
+        auth_token: Option<&str>,
+    ) -> Result<Self, RegistryError> {
+        let sources: Vec<hpm_config::RegistrySourceConfig> = if manifest_registries.is_empty() {
+            config.registries.clone()
+        } else {
+            manifest_registries.iter().map(Into::into).collect()
+        };
+        Self::from_configs_with_auth(&sources, &config.storage.registry_cache_dir, auth_token)
+    }
+
     /// Build a `RegistrySet` from registry configurations.
     ///
     /// Use this when the registry list is overridden (e.g. by a project
@@ -761,6 +778,39 @@ mod set_tests {
             .await
             .unwrap();
         assert_eq!(pinned.version, "1.5.0");
+    }
+
+    /// A project's set is its manifest's `[[registries]]` when it declares
+    /// any, otherwise the configured registries.
+    #[test]
+    fn a_project_set_prefers_the_manifest_registries() {
+        let config = hpm_config::Config {
+            registries: vec![hpm_config::RegistrySourceConfig {
+                name: "configured".into(),
+                url: "https://configured.example/v1/registry".into(),
+                registry_type: hpm_config::RegistryType::Api,
+            }],
+            ..hpm_config::Config::default()
+        };
+        let manifest = vec![hpm_package::RegistryConfig {
+            name: "studio".into(),
+            url: "https://studio.example/v1/registry".into(),
+            registry_type: hpm_package::RegistryType::Api,
+        }];
+        let names = |set: RegistrySet| -> Vec<String> {
+            set.registries
+                .iter()
+                .map(|r| r.name().to_string())
+                .collect()
+        };
+        assert_eq!(
+            names(RegistrySet::for_project(&manifest, &config, None).unwrap()),
+            ["studio"]
+        );
+        assert_eq!(
+            names(RegistrySet::for_project(&[], &config, None).unwrap()),
+            ["configured"]
+        );
     }
 }
 

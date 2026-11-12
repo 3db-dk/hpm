@@ -162,27 +162,13 @@ impl ProjectManager {
         let manifest_registries = project_manifest.registries;
         let dependencies = project_manifest.dependencies;
 
-        // Build registry set once for any registry-resolved deps. A manifest
-        // [[registries]] override beats the user's [registries] from config.
-        // Wrapped in Arc so each spawned task can hold a cheap clone.
+        // Build the project's registry set once for any registry-resolved
+        // deps. Wrapped in Arc so each spawned task can hold a cheap clone.
         let registry_set: Option<Arc<crate::registry::RegistrySet>> =
             if dependencies.values().any(|spec| spec.is_registry()) {
-                let registry_configs: Vec<hpm_config::RegistrySourceConfig> =
-                    if !manifest_registries.is_empty() {
-                        manifest_registries
-                            .iter()
-                            .map(|r| hpm_config::RegistrySourceConfig {
-                                name: r.name.clone(),
-                                url: r.url.clone(),
-                                registry_type: r.registry_type.clone(),
-                            })
-                            .collect()
-                    } else {
-                        self.config.registries.clone()
-                    };
-                let set = crate::registry::RegistrySet::from_configs_with_auth(
-                    &registry_configs,
-                    &self.config.storage.registry_cache_dir,
+                let set = crate::registry::RegistrySet::for_project(
+                    &manifest_registries,
+                    &self.config,
                     self.auth_token.as_deref(),
                 )
                 .map_err(|e| ProjectError::RegistryConfiguration(Box::new(e)))?;

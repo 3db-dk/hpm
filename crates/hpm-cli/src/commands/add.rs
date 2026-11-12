@@ -100,8 +100,19 @@ pub async fn add_packages(
 
     // Validate the manifest before editing it. Edits below go through
     // toml_edit (formatting-preserving), not a serde round-trip.
-    load_manifest(&manifest_path)
+    let manifest = load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
+    // The project's registries (its `[[registries]]`, else the configured
+    // ones), built once: the same set `hpm install` resolves against.
+    let registry_set = if path.is_none() {
+        Some(RegistrySet::for_project(
+            &manifest.registries,
+            config,
+            None,
+        )?)
+    } else {
+        None
+    };
 
     // Add each package
     for package_name in &package_names {
@@ -118,7 +129,9 @@ pub async fn add_packages(
             // Parse name@version syntax
             let (pkg_name, requested_version) = parse_name_version(package_name);
 
-            let registry_set = RegistrySet::from_config(config)?;
+            let registry_set = registry_set
+                .as_ref()
+                .expect("built above for registry adds");
 
             if registry_set.is_empty() {
                 let example_pkg = package_names.first().unwrap();
