@@ -104,4 +104,23 @@ mod tests {
         write(&dir.path().join(CHECKSUM_CACHE_FILE), "deadbeef");
         assert_eq!(before, hash_tree(dir.path()).unwrap());
     }
+
+    /// `hash_tree` digests feed hpm.lock checksums, so the exact bytes are a
+    /// stored format: pinned for a fixed tree (nested dirs, an empty file,
+    /// non-ASCII names, binary content, and the excluded checksum cache).
+    #[test]
+    fn hash_tree_golden_digest() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write(&root.join("hpm.toml"), "[package]\n");
+        write(&root.join("otls/rig.hda"), "alpha");
+        write(&root.join("python/ø/日本.py"), "print('hi')\n");
+        write(&root.join("empty.txt"), "");
+        std::fs::write(root.join("bin.dat"), [0u8, 1, 2, 255, 254]).unwrap();
+        write(&root.join(CHECKSUM_CACHE_FILE), "ignored");
+        assert_eq!(
+            hash_tree(root).unwrap(),
+            "9d7e3976ec4826a559d46712856488be47a99d6f6779676efb4839232c00a9b4"
+        );
+    }
 }

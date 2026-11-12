@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 46ab93503d9f9ca07e2074ed00753ef5c88cd3189f25502f7d240529b3d4cf1d # shrinks to overlay = ConfigOverlay { install: None, storage: None, projects: None, registries: None, signing: Some(SigningOverlay { key_path: Some("-") }) }
+cc c726af7111031dbd8614ed56300a8e2a546428e69d8ec3e97cf182df34751da2 # shrinks to overlay = ConfigOverlay { install: None, storage: None, projects: None, registries: None, signing: Some(SigningOverlay { key_path: Some("_") }) }

@@ -4,11 +4,14 @@
 
 use proptest::prelude::*;
 
-use hpm_package::DependencySpec;
-use hpm_package::HoudiniEnvValue;
-use hpm_package::PackagePath;
-use hpm_package::PythonDependencySpec;
-use hpm_package::{CompatConfig, PackageInfo, PackageManifest};
+use hpm_package::manifest::operators::{OperatorDecl, OperatorKind, OperatorSource};
+use hpm_package::manifest::stage::{ProfileStaging, StageProfileRules};
+use hpm_package::{
+    CompatConfig, Condition, DependencySpec, EnvMethod, EnvValue, EnvValueBranch, HoudiniEnvValue,
+    HoudiniRange, InstallSource, ManifestEnvEntry, OsKey, PackageInfo, PackageManifest,
+    PackagePath, PackageScripts, PlaceRule, Platform, PlatformStaging, PythonDependencySpec,
+    RegistryConfig, RegistryType, ScriptEntry, ScriptEnv, StageConfig, StagePlatformRules,
+};
 
 /// Strategy to generate valid slug segments (kebab-case)
 pub fn slug_strategy() -> impl Strategy<Value = String> {
@@ -149,48 +152,357 @@ pub fn python_dependency_spec_strategy() -> impl Strategy<Value = PythonDependen
     ]
 }
 
-/// Strategy to generate package manifests
-pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
+/// Small key domains so generated maps collide and order matters.
+fn dep_key_strategy() -> impl Strategy<Value = String> {
+    prop::sample::select(vec!["acme/tools", "acme/rig", "other/tools", "studio/fx"])
+        .prop_map(str::to_string)
+}
+
+fn env_key_strategy() -> impl Strategy<Value = String> {
+    prop::sample::select(vec![
+        "PATH",
+        "PYTHONPATH",
+        "OCIO",
+        "MY_TOOL_ROOT",
+        "HOUDINI_PATH",
+    ])
+    .prop_map(str::to_string)
+}
+
+fn platform_strategy() -> impl Strategy<Value = Platform> {
+    prop::sample::select(vec![
+        Platform::LinuxX86_64,
+        Platform::LinuxAarch64,
+        Platform::MacosX86_64,
+        Platform::MacosAarch64,
+        Platform::WindowsX86_64,
+        Platform::WindowsAarch64,
+        Platform::Universal,
+    ])
+}
+
+fn os_key_strategy() -> impl Strategy<Value = OsKey> {
+    prop::sample::select(vec![OsKey::Linux, OsKey::Macos, OsKey::Windows])
+}
+
+/// Free text for values, including non-ASCII, quotes and backslashes,
+/// which TOML must escape.
+fn text_strategy() -> impl Strategy<Value = String> {
+    prop_oneof![
+        "[a-zA-Z0-9_ ./$-]{0,24}",
+        Just(String::new()),
+        Just("café/ø/日本".to_string()),
+        Just("quote\"back\\slash".to_string()),
+        Just("$HPM_PACKAGE_ROOT/python".to_string()),
+    ]
+}
+
+/// A `when` selector valid for `[runtime]` branches (every axis).
+fn runtime_condition_strategy() -> impl Strategy<Value = Condition> {
     (
-        package_path_strategy(),
-        package_name_strategy(),
-        version_strategy(),
-        prop::option::of("[A-Za-z0-9 ]{10,100}"),
-        prop::collection::vec(author_strategy(), 0..4),
-        prop::option::of(license_strategy()),
         prop::option::of(houdini_version_strategy()),
+        prop::option::of(os_key_strategy()),
+        prop::option::of(prop::sample::select(vec!["3.10", "3.11", "3.12"])),
+        prop::option::of(prop::sample::select(vec![
+            InstallSource::Dev,
+            InstallSource::Registry,
+        ])),
+    )
+        .prop_map(|(houdini, os, python, install_source)| Condition {
+            houdini: houdini.map(|r| HoudiniRange::parse(r).expect("strategy yields valid ranges")),
+            os,
+            python: python.map(str::to_string),
+            install_source,
+        })
+}
+
+fn env_value_strategy(cond: BoxedStrategy<Condition>) -> impl Strategy<Value = EnvValue> {
+    prop_oneof![
+        text_strategy().prop_map(EnvValue::Flat),
+        prop::collection::vec(
+            (cond, text_strategy()).prop_map(|(when, set)| EnvValueBranch { when, set }),
+            1..4
+        )
+        .prop_map(EnvValue::Conditional),
+    ]
+}
+
+fn runtime_entry_strategy() -> impl Strategy<Value = ManifestEnvEntry> {
+    (
+        prop::sample::select(vec![EnvMethod::Set, EnvMethod::Prepend, EnvMethod::Append]),
+        prop::option::of(env_value_strategy(runtime_condition_strategy().boxed())),
+        any::<bool>(),
+    )
+        .prop_map(|(method, value, required)| ManifestEnvEntry {
+            method,
+            // A missing value is only legal as a required placeholder.
+            required: required || value.is_none(),
+            value,
+        })
+}
+
+fn script_entry_strategy() -> impl Strategy<Value = ScriptEntry> {
+    let os_only = prop::option::of(os_key_strategy())
+        .prop_map(|os| Condition {
+            os,
+            ..Condition::default()
+        })
+        .boxed();
+    prop_oneof![
+        text_strategy().prop_map(ScriptEntry::Plain),
+        (
+            env_value_strategy(os_only),
+            prop::option::of(prop::sample::select(vec!["3.10", "3.11"])),
+            prop::collection::vec("[a-z]{2,8}(==1\\.[0-9])?", 0..3),
+            prop::option::of(text_strategy()),
+            prop::option::of(text_strategy()),
+            any::<bool>(),
+        )
+            .prop_map(
+                |(cmd, python, requirements, label, description, package_env)| {
+                    ScriptEntry::WithEnv(ScriptEnv {
+                        cmd,
+                        python: python.map(str::to_string),
+                        requirements,
+                        label,
+                        description,
+                        package_env,
+                    })
+                }
+            ),
+    ]
+}
+
+fn registry_config_strategy() -> impl Strategy<Value = RegistryConfig> {
+    (
+        prop::sample::select(vec!["tumbletrove", "studio", "mirror"]),
+        url_strategy(),
+        prop::sample::select(vec![RegistryType::Api, RegistryType::Git]),
+    )
+        .prop_map(|(name, url, registry_type)| RegistryConfig {
+            name: name.to_string(),
+            url,
+            registry_type,
+        })
+}
+
+fn non_blank_strategy() -> impl Strategy<Value = String> {
+    "[a-z][a-z0-9_/.]{0,16}"
+}
+
+fn place_rules_strategy() -> impl Strategy<Value = StagePlatformRules> {
+    prop::collection::vec(
+        (
+            non_blank_strategy(),
+            prop_oneof![Just("./".to_string()), non_blank_strategy()],
+        )
+            .prop_map(|(from, to)| PlaceRule { from, to }),
+        0..3,
+    )
+    .prop_map(|place| StagePlatformRules { place })
+}
+
+/// Per-platform staging keyed only by platforms in `declared`, so the
+/// manifest stays valid.
+fn platform_staging_strategy(declared: Vec<Platform>) -> BoxedStrategy<PlatformStaging> {
+    if declared.is_empty() {
+        return Just(PlatformStaging::default()).boxed();
+    }
+    prop::collection::vec(
+        (prop::sample::select(declared), place_rules_strategy()),
+        0..3,
+    )
+    .prop_map(|entries| PlatformStaging {
+        entries: entries
+            .into_iter()
+            .map(|(p, r)| (p.to_string(), r))
+            .collect(),
+    })
+    .boxed()
+}
+
+fn stage_strategy(declared: Vec<Platform>) -> impl Strategy<Value = StageConfig> {
+    let globs = || prop::collection::vec("[a-z*/.]{1,12}", 0..3);
+    let profile = (
+        globs(),
+        globs(),
+        globs(),
+        platform_staging_strategy(declared.clone()),
+    )
+        .prop_map(|(prepack, include, exclude, platform)| StageProfileRules {
+            prepack,
+            include,
+            exclude,
+            platform,
+        });
+    (
+        prop::option::of("[a-z]{1,8}"),
+        globs(),
+        globs(),
+        globs(),
+        platform_staging_strategy(declared),
+        prop::collection::vec(
+            (prop::sample::select(vec!["debug", "release"]), profile),
+            0..2,
+        ),
     )
         .prop_map(
-            |(path, name, version, description, authors, license, houdini_req)| PackageManifest {
-                package: PackageInfo {
+            |(output_dir, prepack, include, exclude, platform, profiles)| StageConfig {
+                output_dir,
+                prepack,
+                include,
+                exclude,
+                platform,
+                profile: ProfileStaging {
+                    entries: profiles
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v))
+                        .collect(),
+                },
+            },
+        )
+}
+
+fn operator_strategy(declared: Vec<Platform>) -> impl Strategy<Value = OperatorDecl> {
+    let per_platform = if declared.is_empty() {
+        Just(None).boxed()
+    } else {
+        prop::collection::vec(
+            (prop::sample::select(declared), "dso/[a-z]{1,8}\\.so"),
+            1..3,
+        )
+        .prop_map(|v| {
+            Some(OperatorSource::PerPlatform(
+                v.into_iter().map(|(p, s)| (p.to_string(), s)).collect(),
+            ))
+        })
+        .boxed()
+    };
+    (
+        prop::sample::select(vec![OperatorKind::Hda, OperatorKind::Dso]),
+        "[a-z][a-z0-9_:.]{0,20}",
+        prop::sample::select(vec!["Sop", "Lop", "Object", "Driver"]),
+        prop::option::of(text_strategy()),
+        prop::option::of(text_strategy()),
+        prop::option::of(text_strategy()),
+        prop_oneof![
+            Just(None),
+            "otls/[a-z]{1,8}\\.hda".prop_map(|s| Some(OperatorSource::Single(s))),
+            per_platform,
+        ],
+    )
+        .prop_map(
+            |(kind, type_name, category, label, tab_submenu, icon, source)| OperatorDecl {
+                kind,
+                type_name,
+                category: category.to_string(),
+                label,
+                tab_submenu,
+                icon,
+                source,
+            },
+        )
+}
+
+/// Strategy to generate package manifests covering every section.
+pub fn package_manifest_strategy() -> impl Strategy<Value = PackageManifest> {
+    prop::collection::vec(platform_strategy(), 0..4).prop_flat_map(|mut platforms| {
+        platforms.dedup();
+        let info = (
+            package_path_strategy(),
+            package_name_strategy(),
+            version_strategy(),
+            prop::option::of("[A-Za-z0-9 ]{10,100}"),
+            prop::collection::vec(author_strategy(), 0..4),
+            prop::option::of(license_strategy()),
+            prop::option::of(text_strategy()),
+            prop::option::of(url_strategy()),
+            prop::option::of(url_strategy()),
+            prop::option::of(url_strategy()),
+            prop::collection::vec("[a-z]{2,10}", 0..3),
+            prop::collection::vec("[a-z]{2,10}", 0..3),
+        )
+            .prop_map(
+                |(
                     path,
                     name,
                     version,
                     description,
                     authors,
                     license,
-                    readme: Some("README.md".to_string()),
-                    homepage: None,
-                    repository: None,
-                    documentation: None,
-                    keywords: vec!["houdini".to_string()],
-                    categories: Vec::new(),
+                    readme,
+                    homepage,
+                    repository,
+                    documentation,
+                    keywords,
+                    categories,
+                )| PackageInfo {
+                    path,
+                    name,
+                    version,
+                    description,
+                    authors,
+                    license,
+                    readme,
+                    homepage,
+                    repository,
+                    documentation,
+                    keywords,
+                    categories,
                 },
+            );
+        let sections = (
+            prop::option::of(houdini_version_strategy()),
+            stage_strategy(platforms.clone()),
+            prop::collection::vec(registry_config_strategy(), 0..3),
+            prop::collection::vec((dep_key_strategy(), dependency_spec_strategy()), 0..4),
+            prop::collection::vec(
+                (
+                    prop::sample::select(vec!["numpy", "requests", "pyyaml"]),
+                    python_dependency_spec_strategy(),
+                ),
+                0..3,
+            ),
+            prop::collection::vec((env_key_strategy(), runtime_entry_strategy()), 0..4),
+            prop::collection::vec(
+                (
+                    prop::sample::select(vec!["build", "test", "serve"]),
+                    script_entry_strategy(),
+                ),
+                0..3,
+            ),
+            prop::collection::vec(operator_strategy(platforms.clone()), 0..3),
+        );
+        (info, sections, Just(platforms)).prop_map(
+            |(
+                package,
+                (houdini, stage, registries, deps, py_deps, runtime, scripts, operators),
+                platforms,
+            )| PackageManifest {
+                package,
                 compat: CompatConfig {
-                    houdini: houdini_req.map(|r| {
-                        hpm_package::HoudiniRange::parse(r).expect("strategy yields valid ranges")
-                    }),
-                    platforms: Vec::new(),
+                    houdini: houdini
+                        .map(|r| HoudiniRange::parse(r).expect("strategy yields valid ranges")),
+                    platforms,
                 },
-                stage: Default::default(),
-                registries: Vec::new(),
-                dependencies: indexmap::IndexMap::new(),
-                python_dependencies: indexmap::IndexMap::new(),
-                runtime: indexmap::IndexMap::new(),
-                scripts: Default::default(),
-                operators: Vec::new(),
+                stage,
+                registries,
+                dependencies: deps.into_iter().collect(),
+                python_dependencies: py_deps
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect(),
+                runtime: runtime.into_iter().collect(),
+                scripts: PackageScripts {
+                    commands: scripts
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v))
+                        .collect(),
+                },
+                operators,
             },
         )
+    })
 }
 
 /// Strategy to generate malformed package paths
@@ -290,6 +602,12 @@ pub fn malformed_email_strategy() -> impl Strategy<Value = String> {
     ]
 }
 
+/// TOML needs a table at the top level; wrap a single value in one.
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Wrapped<T> {
+    dep: T,
+}
+
 // Property-based tests using the strategies above
 
 proptest! {
@@ -299,39 +617,52 @@ proptest! {
         prop_assert!(manifest.validate().is_ok());
     }
 
-    /// Test that manifest serialization/deserialization is consistent
+    /// hpm.toml round-trips exactly: every section, every field.
     #[test]
     fn prop_manifest_serialization_roundtrip(manifest in package_manifest_strategy()) {
         let toml_str = toml::to_string(&manifest).unwrap();
         let deserialized: PackageManifest = toml::from_str(&toml_str).unwrap();
-
-        prop_assert_eq!(manifest.package.path, deserialized.package.path);
-        prop_assert_eq!(manifest.package.name, deserialized.package.name);
-        prop_assert_eq!(manifest.package.version, deserialized.package.version);
-        prop_assert_eq!(manifest.package.description, deserialized.package.description);
+        prop_assert_eq!(deserialized, manifest);
     }
 
-    /// Test that dependency specifications serialize/deserialize correctly
+    /// A dependency spec round-trips through TOML, the format it is stored in.
     #[test]
     fn prop_dependency_spec_roundtrip(spec in dependency_spec_strategy()) {
-        let json_str = serde_json::to_string(&spec).unwrap();
-        let deserialized: DependencySpec = serde_json::from_str(&json_str).unwrap();
-
-        // Compare serialized forms since the enum variants might differ in structure
-        let original_json = serde_json::to_string(&spec).unwrap();
-        let roundtrip_json = serde_json::to_string(&deserialized).unwrap();
-        prop_assert_eq!(original_json, roundtrip_json);
+        let table = Wrapped { dep: spec };
+        let toml_str = toml::to_string(&table).unwrap();
+        let back: Wrapped<DependencySpec> = toml::from_str(&toml_str).unwrap();
+        prop_assert_eq!(back, table);
     }
 
-    /// Test that Python dependency specifications serialize/deserialize correctly
+    /// A Python dependency spec round-trips through TOML.
     #[test]
     fn prop_python_dependency_spec_roundtrip(spec in python_dependency_spec_strategy()) {
-        let json_str = serde_json::to_string(&spec).unwrap();
-        let deserialized: PythonDependencySpec = serde_json::from_str(&json_str).unwrap();
+        let table = Wrapped { dep: spec };
+        let toml_str = toml::to_string(&table).unwrap();
+        let back: Wrapped<PythonDependencySpec> = toml::from_str(&toml_str).unwrap();
+        prop_assert_eq!(back, table);
+    }
 
-        let original_json = serde_json::to_string(&spec).unwrap();
-        let roundtrip_json = serde_json::to_string(&deserialized).unwrap();
-        prop_assert_eq!(original_json, roundtrip_json);
+    /// The generated Houdini package JSON round-trips through serde_json.
+    #[test]
+    fn prop_houdini_package_json_roundtrip(manifest in package_manifest_strategy()) {
+        let pkg = manifest.generate_houdini_package().unwrap();
+        let json = serde_json::to_string(&pkg).unwrap();
+        let back: hpm_package::HoudiniPackage = serde_json::from_str(&json).unwrap();
+        prop_assert_eq!(back, pkg);
+    }
+
+    /// The native (hpackage-style) package JSON round-trips through serde_json
+    /// for both targets, whenever the manifest can produce one.
+    #[test]
+    fn prop_houdini_native_package_json_roundtrip(manifest in package_manifest_strategy()) {
+        for target in [hpm_package::NativePackageTarget::Generic, hpm_package::NativePackageTarget::SideFxHpackage] {
+            if let Ok((_, pkg)) = manifest.generate_houdini_native_package_for(target) {
+                let json = serde_json::to_string(&pkg).unwrap();
+                let back: hpm_package::HoudiniNativePackage = serde_json::from_str(&json).unwrap();
+                prop_assert_eq!(back, pkg);
+            }
+        }
     }
 
     /// Test that Houdini package generation is consistent and valid
@@ -470,23 +801,17 @@ proptest! {
         ],
         path in prop::string::string_regex(r"\.?\./[a-z0-9-/]{3,30}").unwrap()
     ) {
-        // Test URL dependency spec
-        let url_spec = DependencySpec::Url {
-            url: git_url.clone(),
-            version: "1.0.0".to_string(),
-            optional: true,
-        };
-        let url_json = serde_json::to_string(&url_spec);
-        prop_assert!(url_json.is_ok(), "URL spec serialization should always work");
-
-        // Test Path dependency spec
-        let path_spec = DependencySpec::Path {
-            path: path.clone(),
-            optional: false,
-            link: false,
-        };
-        let path_json = serde_json::to_string(&path_spec);
-        prop_assert!(path_json.is_ok(), "Path spec serialization should always work");
+        // Odd URLs and paths are stored verbatim: they round-trip through
+        // TOML unchanged (hpm does not normalise them).
+        for spec in [
+            DependencySpec::Url { url: git_url.clone(), version: "1.0.0".to_string(), optional: true },
+            DependencySpec::Path { path: path.clone(), optional: false, link: false },
+        ] {
+            let table = Wrapped { dep: spec };
+            let back: Wrapped<DependencySpec> =
+                toml::from_str(&toml::to_string(&table).unwrap()).unwrap();
+            prop_assert_eq!(back, table);
+        }
     }
 
     /// Test that Houdini package generation handles missing/invalid data.
@@ -609,10 +934,74 @@ proptest! {
             None,
         );
 
-        // Validation should not fail due to author format (it's not strictly validated)
-        // but serialization should work
-        let toml_result = toml::to_string(&manifest);
-        prop_assert!(toml_result.is_ok(),
-            "Manifest with author '{}' should serialize", author_string);
+        // Authors are free-form: any author string validates and is stored
+        // verbatim through a TOML round-trip.
+        prop_assert!(manifest.validate().is_ok());
+        let back: PackageManifest = toml::from_str(&toml::to_string(&manifest).unwrap()).unwrap();
+        prop_assert_eq!(back.package.authors, vec![author_string]);
     }
+}
+
+/// The manifest generator reaches every section often enough for the
+/// round-trip property to mean something.
+#[test]
+fn manifest_strategy_covers_every_section() {
+    use proptest::strategy::ValueTree;
+    use proptest::test_runner::TestRunner;
+
+    let mut runner = TestRunner::deterministic();
+    let strategy = package_manifest_strategy();
+    let n = 500;
+    let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+    for _ in 0..n {
+        let m = strategy.new_tree(&mut runner).unwrap().current();
+        let mut hit = |k| *counts.entry(k).or_default() += 1;
+        if m.compat.houdini.is_some() {
+            hit("houdini");
+        }
+        if !m.compat.platforms.is_empty() {
+            hit("platforms");
+        }
+        if !m.stage.platform.is_empty() {
+            hit("stage.platform");
+        }
+        if !m.stage.profile.is_empty() {
+            hit("stage.profile");
+        }
+        if !m.registries.is_empty() {
+            hit("registries");
+        }
+        if m.dependencies.len() >= 2 {
+            hit("dependencies>=2");
+        }
+        if !m.python_dependencies.is_empty() {
+            hit("python_dependencies");
+        }
+        if m.runtime
+            .values()
+            .any(|e| matches!(e.value, Some(EnvValue::Conditional(_))))
+        {
+            hit("runtime conditional");
+        }
+        if m.runtime.values().any(|e| e.value.is_none()) {
+            hit("runtime placeholder");
+        }
+        if m.scripts
+            .commands
+            .values()
+            .any(|e| matches!(e, ScriptEntry::WithEnv(_)))
+        {
+            hit("scripts table");
+        }
+        if m.operators
+            .iter()
+            .any(|o| matches!(o.source, Some(OperatorSource::PerPlatform(_))))
+        {
+            hit("operators per-platform");
+        }
+    }
+    for (k, c) in &counts {
+        assert!(*c * 10 >= n, "{k} generated only {c}/{n} times");
+    }
+    assert_eq!(counts.len(), 11, "some section never generated: {counts:?}");
 }

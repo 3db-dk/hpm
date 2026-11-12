@@ -1434,4 +1434,20 @@ mod tests {
             }
         }
     }
+
+    /// The project-record file name is keyed by the first 8 bytes of the
+    /// SHA-256 of the absolute manifest path; records already on disk carry
+    /// it, so it is pinned for a fixed path.
+    #[cfg(unix)]
+    #[test]
+    fn project_record_key_golden() {
+        let tmp = TempDir::new().unwrap();
+        let copy = make_copy(&tmp.path().join("_dev/rig@1.0.0"), &hash('a'));
+        assert!(record_project_user(&copy, Path::new("/studio/show/hpm.toml")).unwrap());
+        let names: Vec<String> = std::fs::read_dir(records_dir(copy.parent().unwrap(), &hash('a')))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["project-4f1ff7863d043dc6.json".to_string()]);
+    }
 }

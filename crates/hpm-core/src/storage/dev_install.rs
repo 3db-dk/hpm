@@ -661,4 +661,32 @@ mod tests {
             }
         }
     }
+
+    /// The dev-copy hash names `_dev/<slug>@<ver>/<hash>` directories and
+    /// user-record keys, so it is a stored format: pinned for a fixed source
+    /// with fixed sizes and modification times.
+    #[test]
+    fn dev_copy_image_hash_golden() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let src = tmp.path();
+        let manifest_text = "[package]\npath = \"acme/rig\"\nname = \"Rig\"\nversion = \"1.0.0\"\n";
+        std::fs::write(src.join("hpm.toml"), manifest_text).unwrap();
+        std::fs::create_dir_all(src.join("otls")).unwrap();
+        std::fs::write(src.join("otls/rig.hda"), "alpha").unwrap();
+        let t = std::time::UNIX_EPOCH + std::time::Duration::new(1_758_000_000, 123_456_789);
+        for f in ["hpm.toml", "otls/rig.hda"] {
+            std::fs::File::options()
+                .write(true)
+                .open(src.join(f))
+                .unwrap()
+                .set_modified(t)
+                .unwrap();
+        }
+        let manifest = PackageManifest::from_path(&src.join("hpm.toml")).unwrap();
+        let image = dev_copy_image(src, &manifest).unwrap();
+        assert_eq!(
+            image.hash,
+            "36d63191925feaada45fb035ac7a8b43b8bd6d6d15ec7f88d379e33013f7061a"
+        );
+    }
 }

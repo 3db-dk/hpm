@@ -815,7 +815,9 @@ dependencies = [
 name = "hpm-assets"
 version = "0.37.0"
 dependencies = [
+ "proptest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -850,6 +852,7 @@ name = "hpm-config"
 version = "0.37.0"
 dependencies = [
  "hpm-package",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",

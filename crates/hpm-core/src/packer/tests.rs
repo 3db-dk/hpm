@@ -919,3 +919,16 @@ mod properties {
         }
     }
 }
+
+/// The `key_id` (hex of the first 8 public-key bytes) and the signature go
+/// into `hpm pack --json` and the registry; pinned for a fixed key and input.
+#[test]
+fn signing_key_id_and_signature_golden() {
+    let key = signing::SigningKey::from_bytes(&[7u8; 32]);
+    let (signature, key_id) = signing::sign_bytes(b"archive bytes", &key);
+    assert_eq!(key_id, "ea4a6c63e29c520a");
+    assert_eq!(
+        signature,
+        "SqowQmqYEcTqZBcktGIoZWsQ9XngmoHlUopyLYUCi7pb5dqFrRereRSjQvT7n5969/ctERqcoJVvtD4tgHvkCw=="
+    );
+}
