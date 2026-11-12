@@ -52,6 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Stricter `hpm.toml`:** a dependency table with an unknown or misplaced
+  key is now an error that names it, instead of the key being dropped
+  (`registy = ...` and `optinal = true` used to give an unpinned, required
+  dependency; a path dependency's `version` vanished; `{}` parsed). The same
+  holds for `[python_dependencies]` tables, which must give `version` and/or
+  `extras`. Every installable published TumbleTrove package still parses.
+- `hpm list --output json`: a path or URL dependency's `spec` no longer
+  carries `"optional": false`.
+
 - `hpm.lock` no longer records `url = "unresolved"` for a registry
   dependency that was already installed when no previous lock entry knew
   its source. hpm now looks the download URL up in the project's registries
@@ -103,6 +112,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ProjectManager::lock_file` builds `hpm.lock` from a sync (the CLI's
   lock building moved into hpm-core), and `PythonDependencySpec::version_req`
   and `Platform::host_id` replace copies of the same logic.
+- **Breaking (hpm-package API):** `PythonDependencySpec::Detailed`'s
+  `optional` is a `bool` and `extras` a `Vec<String>` (they were `Option`s),
+  and `PythonDependencySpec::extras()` returns a slice.
 - **Breaking (hpm-package API):** the free functions in `env_value`
   (`compile_houdini_req`, `houdini_req_lower_bound`,
   `houdini_req_has_upper_bound`, `normalize_hpackage_houdini_req`). Use the

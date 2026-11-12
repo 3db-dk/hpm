@@ -26,7 +26,6 @@ exit: 0
       "optional": false,
       "spec": {
         "link": true,
-        "optional": false,
         "path": "../local"
       }
     },
@@ -34,7 +33,6 @@ exit: 0
       "name": "other/remote",
       "optional": false,
       "spec": {
-        "optional": false,
         "url": "https://example.com/remote-1.0.0.zip",
         "version": "1.0.0"
       }

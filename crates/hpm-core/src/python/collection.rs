@@ -121,12 +121,11 @@ fn convert_spec_to_dependency(
         } => {
             let mut dep = PythonDependency::new(name, VersionSpec::new(spec.version_req()));
 
-            if let Some(true) = optional {
+            if *optional {
                 dep = dep.optional();
             }
-
-            if let Some(extras_list) = extras {
-                dep = dep.with_extras(extras_list.clone());
+            if !extras.is_empty() {
+                dep = dep.with_extras(extras.clone());
             }
 
             Ok(dep)
@@ -197,8 +196,8 @@ mod tests {
             "requests".to_string(),
             PythonDependencySpec::Detailed {
                 version: Some(">=2.25.0".to_string()),
-                optional: Some(false),
-                extras: Some(vec!["security".to_string()]),
+                optional: false,
+                extras: vec!["security".to_string()],
             },
         );
 
@@ -404,8 +403,8 @@ mod tests {
         // Test detailed spec
         let detailed_spec = PythonDependencySpec::Detailed {
             version: Some("^2.0.0".to_string()),
-            optional: Some(true),
-            extras: Some(vec!["test".to_string(), "dev".to_string()]),
+            optional: true,
+            extras: vec!["test".to_string(), "dev".to_string()],
         };
         let dep = convert_spec_to_dependency("detailed-package", &detailed_spec).unwrap();
         assert_eq!(dep.name, "detailed-package");

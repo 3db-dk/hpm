@@ -23,8 +23,8 @@ async fn test_end_to_end_python_workflow() {
         "scipy".to_string(),
         PythonDependencySpec::Detailed {
             version: Some(">=1.7.0".to_string()),
-            optional: Some(false),
-            extras: None,
+            optional: false,
+            extras: Vec::new(),
         },
     );
 
@@ -65,8 +65,8 @@ async fn test_end_to_end_python_workflow() {
         "matplotlib".to_string(),
         PythonDependencySpec::Detailed {
             version: Some(">=3.5.0".to_string()),
-            optional: Some(false),
-            extras: Some(vec!["qt5".to_string()]),
+            optional: false,
+            extras: vec!["qt5".to_string()],
         },
     );
 

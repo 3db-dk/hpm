@@ -137,18 +137,22 @@ pub fn dependency_spec_strategy() -> impl Strategy<Value = DependencySpec> {
 pub fn python_dependency_spec_strategy() -> impl Strategy<Value = PythonDependencySpec> {
     prop_oneof![
         version_req_strategy().prop_map(PythonDependencySpec::Simple),
-        (
-            prop::option::of(version_req_strategy()),
-            prop::option::of(any::<bool>()),
-            prop::option::of(prop::collection::vec("[a-z]{3,10}", 0..3)),
-        )
-            .prop_map(|(version, optional, extras)| {
-                PythonDependencySpec::Detailed {
-                    version,
-                    optional,
-                    extras,
-                }
-            })
+        // A table gives `version`, `extras` or both.
+        prop_oneof![
+            (
+                version_req_strategy().prop_map(Some),
+                prop::collection::vec("[a-z]{3,10}", 0..3)
+            ),
+            (Just(None), prop::collection::vec("[a-z]{3,10}", 1..3)),
+        ]
+        .prop_flat_map(|(version, extras)| (Just(version), any::<bool>(), Just(extras)))
+        .prop_map(|(version, optional, extras)| {
+            PythonDependencySpec::Detailed {
+                version,
+                optional,
+                extras,
+            }
+        })
     ]
 }
 

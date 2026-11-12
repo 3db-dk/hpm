@@ -74,76 +74,34 @@ pub enum DependencySpec {
     },
 }
 
-/// Serde wire shape for [`DependencySpec`].
-///
-/// The bare-string shorthand is a distinct untagged variant here so
-/// `my-pkg = "1.0.0"` round-trips: it deserializes into the `Registry`
-/// public variant, and a `Registry` with no options serializes back to
-/// the bare string.
-#[derive(Serialize, Deserialize)]
+/// Serde shape [`DependencySpec`] is written as. The bare-string shorthand is
+/// its own variant so `my-pkg = "1.0.0"` round-trips: a `Registry` spec with
+/// no options serializes back to the bare string. Options that are off are
+/// not written.
+#[derive(Serialize)]
 #[serde(untagged)]
 enum DependencySpecRepr {
     Simple(String),
     Url {
         url: String,
         version: String,
-        #[serde(default)]
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
         optional: bool,
     },
     Path {
         path: String,
-        #[serde(default)]
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
         optional: bool,
-        // Omitted when false so existing manifests don't churn.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
         link: bool,
     },
     Registry {
         version: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         registry: Option<String>,
-        #[serde(default)]
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
         optional: bool,
     },
-}
-
-impl From<DependencySpecRepr> for DependencySpec {
-    fn from(repr: DependencySpecRepr) -> Self {
-        match repr {
-            DependencySpecRepr::Simple(version) => DependencySpec::Registry {
-                version,
-                registry: None,
-                optional: false,
-            },
-            DependencySpecRepr::Url {
-                url,
-                version,
-                optional,
-            } => DependencySpec::Url {
-                url,
-                version,
-                optional,
-            },
-            DependencySpecRepr::Path {
-                path,
-                optional,
-                link,
-            } => DependencySpec::Path {
-                path,
-                optional,
-                link,
-            },
-            DependencySpecRepr::Registry {
-                version,
-                registry,
-                optional,
-            } => DependencySpec::Registry {
-                version,
-                registry,
-                optional,
-            },
-        }
-    }
 }
 
 impl From<&DependencySpec> for DependencySpecRepr {
@@ -191,9 +149,105 @@ impl Serialize for DependencySpec {
     }
 }
 
+/// Every key a dependency table may carry. Which ones go together is
+/// decided by [`DependencyTable::into_spec`], so a misplaced key is named in
+/// the error rather than silently dropped.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DependencyTable {
+    url: Option<String>,
+    path: Option<String>,
+    version: Option<String>,
+    registry: Option<String>,
+    #[serde(default)]
+    optional: bool,
+    link: Option<bool>,
+}
+
+impl DependencyTable {
+    /// The spec this table describes: a `url` table (with `version`), a
+    /// `path` table, or a registry table (with `version`).
+    fn into_spec(self) -> Result<DependencySpec, String> {
+        let refuse =
+            |key: &str, kind: &str| Err(format!("`{key}` does not apply to a {kind} dependency"));
+        if let Some(url) = self.url {
+            if self.path.is_some() {
+                return Err("a dependency has either `url` or `path`, not both".into());
+            }
+            if self.registry.is_some() {
+                return refuse("registry", "url");
+            }
+            if self.link.is_some() {
+                return refuse("link", "url");
+            }
+            let version = self.version.ok_or("a url dependency needs a `version`")?;
+            return Ok(DependencySpec::Url {
+                url,
+                version,
+                optional: self.optional,
+            });
+        }
+        if let Some(path) = self.path {
+            if self.version.is_some() {
+                return Err(
+                    "`version` does not apply to a path dependency (its version is the one in its hpm.toml)"
+                        .into(),
+                );
+            }
+            if self.registry.is_some() {
+                return refuse("registry", "path");
+            }
+            return Ok(DependencySpec::Path {
+                path,
+                optional: self.optional,
+                link: self.link.unwrap_or(false),
+            });
+        }
+        if self.link.is_some() {
+            return refuse("link", "registry");
+        }
+        let version = self
+            .version
+            .ok_or("a dependency table needs `version`, `path` or `url`")?;
+        Ok(DependencySpec::Registry {
+            version,
+            registry: self.registry,
+            optional: self.optional,
+        })
+    }
+}
+
 impl<'de> Deserialize<'de> for DependencySpec {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        DependencySpecRepr::deserialize(deserializer).map(DependencySpec::from)
+        struct SpecVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for SpecVisitor {
+            type Value = DependencySpec;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a version string or a dependency table")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, version: &str) -> Result<Self::Value, E> {
+                Ok(DependencySpec::Registry {
+                    version: version.to_string(),
+                    registry: None,
+                    optional: false,
+                })
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let table = DependencyTable::deserialize(
+                    serde::de::value::MapAccessDeserializer::new(map),
+                )?;
+                table.into_spec().map_err(serde::de::Error::custom)
+            }
+        }
+
+        deserializer.deserialize_any(SpecVisitor)
     }
 }
 
@@ -350,7 +404,7 @@ my-pkg = { path = "../local" }
         }
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, Debug)]
     struct Wrapper {
         deps: indexmap::IndexMap<String, DependencySpec>,
     }
@@ -492,5 +546,82 @@ test = { version = "1.0.0" }
         assert!(registry_dep.is_optional());
         assert_eq!(registry_dep.version(), Some("2.0.0"));
         assert_eq!(registry_dep.registry_name(), Some("tumbletrove"));
+    }
+
+    /// Typos and misplaced keys in a dependency table are errors that name
+    /// the problem; they used to be dropped silently (`registy` and
+    /// `optinal` gave an unpinned, required dependency; a path dependency's
+    /// `version` vanished; `{}` parsed).
+    #[test]
+    fn misshapen_dependency_tables_are_refused_by_name() {
+        let parse = |table: &str| {
+            toml::from_str::<Wrapper>(&format!("[deps]\nx = {table}\n"))
+                .map(|w| w.deps["x"].clone())
+        };
+        for (table, says) in [
+            (
+                r#"{ version = "1.0.0", registy = "tumbletrove" }"#,
+                "registy",
+            ),
+            (r#"{ version = "1.0.0", optinal = true }"#, "optinal"),
+            (
+                r#"{ path = "../z", version = "2.0.0" }"#,
+                "`version` does not apply to a path",
+            ),
+            (
+                r#"{ path = "../z", url = "https://x/z.zip" }"#,
+                "either `url` or `path`",
+            ),
+            (r#"{ url = "https://x/z.zip" }"#, "needs a `version`"),
+            (
+                r#"{ url = "https://x/z.zip", version = "1.0.0", link = true }"#,
+                "`link` does not apply to a url",
+            ),
+            (
+                r#"{ version = "1.0.0", link = true }"#,
+                "`link` does not apply to a registry",
+            ),
+            (
+                r#"{ path = "../z", registry = "r" }"#,
+                "`registry` does not apply to a path",
+            ),
+            ("{}", "needs `version`, `path` or `url`"),
+        ] {
+            let err = parse(table).unwrap_err().to_string();
+            assert!(err.contains(says), "{table}: {err}");
+        }
+        assert_eq!(
+            parse(r#"{ path = "../z", link = true, optional = true }"#).unwrap(),
+            DependencySpec::Path {
+                path: "../z".into(),
+                optional: true,
+                link: true
+            }
+        );
+    }
+
+    mod strictness {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Any key outside a dependency table's vocabulary is refused,
+            /// whatever else the table holds.
+            #[test]
+            fn an_unknown_key_is_always_refused(
+                key in "[a-z_]{1,10}".prop_filter("not a known key", |k| {
+                    !["url", "path", "version", "registry", "optional", "link"].contains(&k.as_str())
+                }),
+                base in prop::sample::select(vec![
+                    r#"version = "1.0.0""#,
+                    r#"path = "../z""#,
+                    r#"url = "https://x/z.zip", version = "1.0.0""#,
+                ]),
+            ) {
+                let doc = format!("[deps]\nx = {{ {base}, {key} = true }}\n");
+                let err = toml::from_str::<Wrapper>(&doc).unwrap_err().to_string();
+                prop_assert!(err.contains(&key), "{}", err);
+            }
+        }
     }
 }
