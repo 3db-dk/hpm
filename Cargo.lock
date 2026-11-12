@@ -844,6 +844,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "walkdir",
+ "zip",
 ]
 
 [[package]]
