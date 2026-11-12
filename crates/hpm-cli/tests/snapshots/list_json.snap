@@ -62,5 +62,3 @@ exit: 0
   ]
 }
 --- stderr
-[TIME]  INFO Listing package dependencies
-[TIME]  INFO Using manifest: [WORK]/demo/hpm.toml

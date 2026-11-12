@@ -32,7 +32,7 @@ pub struct BuildOptions {
     /// Manifest or its containing directory. None = cwd.
     pub manifest: Option<PathBuf>,
     /// Target platform; defaults to host when `[compat].platforms` is declared.
-    pub platform: Option<String>,
+    pub platform: Option<Platform>,
     /// Override `[stage].output_dir`. Absolute paths are used verbatim;
     /// relative paths resolve against the manifest directory. Useful when
     /// running multiple Houdini sessions, each with its own staged image
@@ -70,14 +70,9 @@ pub async fn build(options: BuildOptions, console: &mut Console) -> Result<()> {
         anyhow::bail!("Package has no [stage] section — nothing to build");
     }
 
-    let requested = options
-        .platform
-        .as_deref()
-        .map(|p| p.parse::<Platform>().map_err(anyhow::Error::msg))
-        .transpose()?;
     let platform = manifest
         .compat
-        .resolve_target_platform(requested, Platform::current())?;
+        .resolve_target_platform(options.platform, Platform::current())?;
 
     // A non-default profile that names no declared table still sets
     // HPM_BUILD_PROFILE, but its absence is usually a typo worth surfacing.

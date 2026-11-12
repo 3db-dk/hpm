@@ -8,6 +8,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::info;
 
+/// Version control to set up in a new package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Vcs {
+    Git,
+    None,
+}
+
 pub struct InitOptions {
     pub name_or_path: Option<String>,
     pub description: Option<String>,
@@ -18,7 +25,7 @@ pub struct InitOptions {
     /// `">=20.5, <22"`). When `None`, the template default (`"^21"`) is kept.
     pub houdini: Option<String>,
     pub bare: bool,
-    pub vcs: String,
+    pub vcs: Vcs,
     /// Base directory where the package should be created. If None, uses current working directory.
     pub base_dir: Option<PathBuf>,
 }
@@ -103,7 +110,7 @@ pub async fn init_package(options: InitOptions, console: &mut Console) -> Result
     info!("Package structure created successfully");
 
     // Initialize version control
-    if options.vcs == "git" {
+    if options.vcs == Vcs::Git {
         init_git_repository(&target_dir).await?;
         info!("Initialized git repository");
     }
@@ -395,7 +402,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: Some(">=20.5".to_string()),
             bare: true,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -440,7 +447,7 @@ mod tests {
             license: "Apache-2.0".to_string(),
             houdini: Some(">=20.5, <=21.0".to_string()),
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -512,7 +519,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -548,7 +555,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -580,7 +587,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -607,7 +614,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(test_dir),
         };
 
@@ -631,7 +638,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(test_dir.clone()),
         };
 
@@ -658,7 +665,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -684,7 +691,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -715,7 +722,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -741,7 +748,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -770,7 +777,7 @@ mod tests {
             license: "MIT".to_string(),
             houdini: None,
             bare: false,
-            vcs: "none".to_string(),
+            vcs: Vcs::None,
             base_dir: Some(test_dir.clone()),
         };
 

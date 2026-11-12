@@ -6,7 +6,6 @@ args: --output json list
 exit: 1
 --- stdout
 --- stderr
-[TIME]  INFO Listing package dependencies
 {
   "elapsed_ms": [MS],
   "error": "Package error: No hpm.toml found in current directory: [WORK]. Use --manifest to specify a path.",

@@ -26,10 +26,8 @@ use hpm_package::PackagePath;
 /// Split `creator/slug@version` into its parts. A bare name resolves to the
 /// highest non-yanked version, matching `hpm add`.
 fn parse_spec(spec: &str) -> (&str, &str) {
-    match spec.split_once('@') {
-        Some((name, version)) if !version.is_empty() => (name, version),
-        _ => (spec, "*"),
-    }
+    let (name, version) = hpm_package::split_name_version(spec);
+    (name, version.unwrap_or("*"))
 }
 
 fn parse_package(name: &str) -> Result<PackagePath> {
@@ -38,18 +36,13 @@ fn parse_package(name: &str) -> Result<PackagePath> {
     })
 }
 
-fn parse_houdini(input: &str) -> Result<HoudiniVersion> {
-    Ok(HoudiniVersion::parse(input)?)
-}
-
 pub async fn add_package(
     config: &Config,
     spec: &str,
-    houdini: &str,
+    version: HoudiniVersion,
     registry: Option<&str>,
     console: &mut Console,
 ) -> Result<()> {
-    let version = parse_houdini(houdini)?;
     let (name, version_req) = parse_spec(spec);
     parse_package(name)?;
 
@@ -86,8 +79,11 @@ pub async fn add_package(
     Ok(())
 }
 
-pub async fn list_packages(config: &Config, houdini: &str, console: &mut Console) -> Result<()> {
-    let version = parse_houdini(houdini)?;
+pub async fn list_packages(
+    config: &Config,
+    version: HoudiniVersion,
+    console: &mut Console,
+) -> Result<()> {
     let installs = global::list(&config.storage.home_dir, version)?;
 
     if installs.is_empty() {
@@ -147,10 +143,9 @@ pub async fn list_packages(config: &Config, houdini: &str, console: &mut Console
 pub async fn remove_package(
     config: &Config,
     name: &str,
-    houdini: &str,
+    version: HoudiniVersion,
     console: &mut Console,
 ) -> Result<()> {
-    let version = parse_houdini(houdini)?;
     let package = parse_package(name)?;
 
     let manifest_path = global::remove(&config.storage.home_dir, version, &package)?;
@@ -196,11 +191,5 @@ mod tests {
     fn unscoped_names_are_rejected() {
         assert!(parse_package("tools").is_err());
         assert!(parse_package("acme/tools").is_ok());
-    }
-
-    #[test]
-    fn houdini_version_must_parse() {
-        assert!(parse_houdini("21.0").is_ok());
-        assert!(parse_houdini("houdini21").is_err());
     }
 }

@@ -1,5 +1,5 @@
 use crate::console::Console;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::Args;
 use hpm_config::Config;
 use hpm_core::StorageManager;
@@ -16,7 +16,7 @@ pub struct CleanArgs {
     pub yes: bool,
 
     /// Clean only Python virtual environments
-    #[arg(long)]
+    #[arg(long, conflicts_with = "comprehensive")]
     pub python_only: bool,
 
     /// Enable comprehensive cleanup including Python virtual environments
@@ -60,11 +60,13 @@ pub async fn execute_clean(config: &Config, args: &CleanArgs, console: &mut Cons
 
     let storage = StorageManager::new(config.storage.clone())?;
     let mode = Mode::from_flags(args.dry_run, args.yes);
-    let scope = match (args.python_only, args.comprehensive) {
-        (true, true) => bail!("Cannot specify both --python-only and --comprehensive options"),
-        (true, false) => Scope::Python,
-        (false, true) => Scope::Comprehensive,
-        (false, false) => Scope::Packages,
+    // clap refuses --python-only together with --comprehensive.
+    let scope = if args.python_only {
+        Scope::Python
+    } else if args.comprehensive {
+        Scope::Comprehensive
+    } else {
+        Scope::Packages
     };
 
     match scope {

@@ -122,9 +122,10 @@ See the [user guide](docs/user-guide.md) for the full manifest reference.
 | `hpm global <sub>` | Install into Houdini's user preferences, outside any project (`add`, `list`, `remove`; `--houdini <X.Y>` required) |
 | `hpm completions <shell>` | Generate shell completions |
 
-Every command accepts `-v` for verbose output, `-q` for quiet,
-`-C <dir>` to change working directory, and
-`--output {human,json,json-lines,json-compact}` for machine-readable output.
+Every command accepts `-v` for verbose output, `-q` for quiet and
+`-C <dir>` to run in another directory, on either side of the subcommand,
+and `--output {human,json,json-lines,json-compact}` before it for
+machine-readable output.
 
 ## Python dependencies
 

@@ -86,7 +86,7 @@ pub async fn remove_package(
     // file). A failure here leaves hpm.toml and hpm.lock out of sync, so
     // it fails the command rather than being downgraded to a warning.
     info!("Updating lock file...");
-    super::install::install_dependencies(config, Some(manifest_path), false)
+    super::install::install_dependencies(config, Some(manifest_path), false, console)
         .await
         .context(
             "Dependency removed from hpm.toml, but regenerating the lock file failed; \

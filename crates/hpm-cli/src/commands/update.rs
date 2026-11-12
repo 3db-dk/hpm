@@ -38,7 +38,6 @@ use hpm_core::{LockFile, registry::RegistrySet};
 use hpm_package::DependencySpec;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct UpdateOptions {
@@ -96,8 +95,14 @@ pub async fn update_packages(
 
     let filter: HashSet<&str> = options.packages.iter().map(|s| s.as_str()).collect();
 
-    let candidates =
-        collect_candidates(&registry_set, &manifest, existing_lock.as_ref(), &filter).await?;
+    let candidates = collect_candidates(
+        &registry_set,
+        &manifest,
+        existing_lock.as_ref(),
+        &filter,
+        console,
+    )
+    .await?;
 
     if candidates.is_empty() {
         if options.output.is_json() {
@@ -128,7 +133,7 @@ pub async fn update_packages(
     apply_updates(&manifest, &manifest_path, &candidates)
         .with_context(|| format!("Failed to write {}", manifest_path.display()))?;
 
-    super::install::install_dependencies(config, Some(manifest_path), false)
+    super::install::install_dependencies(config, Some(manifest_path), false, console)
         .await
         .context("Failed to install the updated dependency set")?;
 
@@ -147,6 +152,7 @@ async fn collect_candidates(
     manifest: &hpm_package::PackageManifest,
     existing_lock: Option<&LockFile>,
     filter: &HashSet<&str>,
+    console: &mut Console,
 ) -> Result<Vec<Candidate>> {
     if manifest.dependencies.is_empty() {
         return Ok(Vec::new());
@@ -172,10 +178,9 @@ async fn collect_candidates(
         let req = match VersionRequirement::parse(ver_req_str) {
             Ok(r) => r.as_update_range(),
             Err(e) => {
-                warn!(
-                    "Skipping {}: invalid version requirement '{}': {}",
-                    name, ver_req_str, e
-                );
+                console.warn(format!(
+                    "Skipping {name}: invalid version requirement '{ver_req_str}': {e}"
+                ));
                 continue;
             }
         };

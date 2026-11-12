@@ -10,6 +10,20 @@ pub enum RegistryType {
     Git,
 }
 
+impl std::str::FromStr for RegistryType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "api" => Ok(Self::Api),
+            "git" => Ok(Self::Git),
+            other => Err(format!(
+                "unknown registry type '{other}'; expected 'api' or 'git'"
+            )),
+        }
+    }
+}
+
 /// A registry declared in hpm.toml's `[[registries]]` array.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

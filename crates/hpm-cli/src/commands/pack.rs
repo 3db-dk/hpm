@@ -8,8 +8,8 @@ use crate::console::Console;
 
 /// Inputs to one `hpm pack` run.
 pub struct PackOptions {
-    /// Package directory (the one holding `hpm.toml`). None = cwd.
-    pub directory: Option<PathBuf>,
+    /// The package's `hpm.toml`, or the directory holding it. None = cwd.
+    pub manifest: Option<PathBuf>,
     /// Ed25519 signing key (PKCS#8 PEM), overriding config and
     /// `HPM_SIGNING_KEY`. None falls back to those.
     pub key: Option<PathBuf>,
@@ -18,7 +18,7 @@ pub struct PackOptions {
     /// Emit the single-line JSON payload CI consumes instead of prose.
     pub json: bool,
     /// Target platform; defaults to host when `[compat].platforms` is declared.
-    pub platform: Option<String>,
+    pub platform: Option<Platform>,
     /// Treat a declared `[[operators]]` `source` missing from the archive as
     /// fatal rather than a warning.
     pub verify_assets: bool,
@@ -33,7 +33,7 @@ pub struct PackOptions {
 /// [`packer::pack_package`], and report the archive.
 pub async fn execute(config: &Config, options: PackOptions, console: &mut Console) -> Result<()> {
     let PackOptions {
-        directory,
+        manifest,
         key,
         output,
         json,
@@ -42,13 +42,7 @@ pub async fn execute(config: &Config, options: PackOptions, console: &mut Consol
         sidefx,
     } = options;
 
-    let package_dir = match directory {
-        Some(dir) => dir,
-        None => std::env::current_dir().context("Failed to get current directory")?,
-    };
-    let platform = platform
-        .map(|p| p.parse::<Platform>().map_err(anyhow::Error::msg))
-        .transpose()?;
+    let package_dir = super::manifest_utils::package_dir(manifest)?;
 
     // CLI flag, then HPM_SIGNING_KEY (PEM content or a path), then config.
     let signing_key = if let Some(path) = key {

@@ -14,7 +14,7 @@ use hpm_config::Config;
 use hpm_core::{LockFile, ProjectManager, StorageManager};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::info;
 
 /// CLI entry for `hpm install`: sync, then report success. Internal callers
 /// (`add`/`remove`/`update`) use [`install_dependencies`] directly and own
@@ -25,7 +25,7 @@ pub async fn execute(
     frozen_lockfile: bool,
     console: &mut Console,
 ) -> Result<()> {
-    install_dependencies(config, manifest_path, frozen_lockfile).await?;
+    install_dependencies(config, manifest_path, frozen_lockfile, console).await?;
     console.success("Dependencies installed successfully");
     Ok(())
 }
@@ -35,10 +35,12 @@ pub async fn execute(
 /// * `config` — caller-loaded HPM configuration (shared with this process).
 /// * `manifest_path` — explicit `hpm.toml` path, or `None` for cwd lookup.
 /// * `frozen_lockfile` — fail instead of regenerating `hpm.lock`.
+/// * `console` — where warnings about the existing lockfile go.
 pub async fn install_dependencies(
     config: &Config,
     manifest_path: Option<PathBuf>,
     frozen_lockfile: bool,
+    console: &mut Console,
 ) -> Result<()> {
     info!("Starting dependency installation");
     if frozen_lockfile {
@@ -82,11 +84,10 @@ pub async fn install_dependencies(
                     && let Some(days) = metadata.days_since_generated()
                     && days > 90
                 {
-                    warn!(
-                        "Lock file is {} days old. \
-                                 Consider running 'hpm update' to check for newer versions.",
-                        days
-                    );
+                    console.warn(format!(
+                        "Lock file is {days} days old. \
+                         Consider running 'hpm update' to check for newer versions."
+                    ));
                 }
                 Some(lock)
             }
@@ -98,7 +99,7 @@ pub async fn install_dependencies(
                         e
                     );
                 }
-                warn!("Failed to load existing lock file: {}", e);
+                console.warn(format!("Failed to load existing lock file: {e}"));
                 None
             }
         }
@@ -207,7 +208,9 @@ houdini = ">=20.5"
         let _cwd = CwdGuard::enter(temp_dir.path());
 
         let config = Config::default();
-        install_dependencies(&config, None, false).await.unwrap();
+        install_dependencies(&config, None, false, &mut Console::new())
+            .await
+            .unwrap();
 
         assert!(temp_dir.path().join(".hpm/packages").exists());
         let lock_path = temp_dir.path().join("hpm.lock");
@@ -230,7 +233,7 @@ description = "Test custom manifest path"
         std::fs::write(&manifest_path, manifest_content).unwrap();
 
         let config = Config::default();
-        install_dependencies(&config, Some(manifest_path), false)
+        install_dependencies(&config, Some(manifest_path), false, &mut Console::new())
             .await
             .unwrap();
 
@@ -245,7 +248,12 @@ description = "Test custom manifest path"
         let rt = tokio::runtime::Runtime::new().unwrap();
         let config = Config::default();
         let err = rt
-            .block_on(install_dependencies(&config, Some(nonexistent), false))
+            .block_on(install_dependencies(
+                &config,
+                Some(nonexistent),
+                false,
+                &mut Console::new(),
+            ))
             .unwrap_err();
         assert!(err.to_string().contains("does not exist"));
     }

@@ -110,9 +110,9 @@ pub async fn audit_packages(
                 }
                 warnings.extend(problems);
                 if unrecorded > 0 {
-                    info!(
+                    console.info(format!(
                         "{unrecorded} installed package(s) predate install records and were not checked"
-                    );
+                    ));
                 }
             }
             Err(e) => {

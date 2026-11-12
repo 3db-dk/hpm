@@ -7,6 +7,7 @@
 //! ## Functions
 //!
 //! - [`determine_manifest_path`]: Resolves the path to the hpm.toml manifest file
+//! - [`package_dir`]: Resolves the package directory a `--manifest` argument names
 //! - [`load_manifest`]: Loads and validates a package manifest from disk
 //!
 //! ## Security
@@ -80,6 +81,22 @@ pub fn determine_manifest_path(provided_path: Option<PathBuf>) -> Result<PathBuf
                 );
             }
         }
+    }
+}
+
+/// The package directory a `--manifest` argument names, for commands that
+/// inspect the directory itself (`check`, `pack`): the file's parent for a
+/// path to `hpm.toml`, the directory itself otherwise, and the working
+/// directory when absent. Unlike [`determine_manifest_path`] this does not
+/// require `hpm.toml` to exist, so `check` can report its absence.
+pub fn package_dir(provided_path: Option<PathBuf>) -> Result<PathBuf> {
+    match provided_path {
+        Some(path) if path.is_file() => Ok(path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))),
+        Some(path) => Ok(path),
+        None => std::env::current_dir().context("Failed to get current directory"),
     }
 }
 

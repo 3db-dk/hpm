@@ -141,15 +141,21 @@ Without `registry`, HPM resolves through every configured registry in order.
 
 ### Global options
 
-Available on every command:
+Available on every command, before or after the subcommand name, except
+`--output`, which goes before it (`hpm --output json list`): `build` and
+`pack` have their own `--output <dir>`.
 
 | Option | Description |
 |--------|-------------|
-| `-v, --verbose` | Increase verbosity (repeat for more detail). |
+| `-v, --verbose` | Show progress logs on stderr (`-vv` for more). By default only warnings and errors appear there. |
 | `-q, --quiet` | Suppress non-error output. |
 | `--color <when>` | `auto`, `always`, or `never`. |
-| `--output <format>` | `human` (default), `json`, `json-lines`, `json-compact`. |
-| `-C, --directory <dir>` | Run as if invoked from `<dir>`. |
+| `--output <format>` | `human` (default), `json`, `json-lines`, `json-compact`. The JSON error document follows the same format. |
+| `-C, --directory <dir>` | Run as if invoked from `<dir>`: the project is found there, and relative paths in other arguments resolve against it. |
+
+Commands that work on a project (`add`, `remove`, `update`, `list`, `install`,
+`check`, `build`, `pack`, `run`, `audit`) also take `-m, --manifest <path>`,
+naming the project's `hpm.toml` or the directory holding it.
 
 ### `hpm init`
 
@@ -328,7 +334,7 @@ With no packages, updates all. With specific packages, updates only those.
 hpm update --dry-run
 hpm update
 hpm update studio/geometry-tools
-hpm update --yes --output json      # CI-friendly
+hpm --output json update --yes      # CI-friendly
 ```
 
 ### `hpm list`
@@ -1839,7 +1845,7 @@ hpm audit                                       # warn on security issues
 hpm pack --json                                 # produce archive + manifest
 ```
 
-`hpm update --dry-run --output json` is useful for nightly jobs that want to
+`hpm --output json update --dry-run` is useful for nightly jobs that want to
 detect available updates without applying them.
 
 ## Troubleshooting

@@ -15,7 +15,6 @@ use anyhow::{Result, bail};
 use console::style;
 use hpm_config::{Config, ConfigOverlay, RegistrySourceConfig, RegistryType};
 use hpm_core::registry::Registry;
-use tracing::info;
 
 // `RegistrySet` construction lives on the type itself
 // (`RegistrySet::from_config(&Config)` in hpm-core); this module owns the
@@ -40,15 +39,13 @@ fn load_user_overlay() -> Result<ConfigOverlay> {
 pub async fn add_registry(
     url: String,
     name: Option<String>,
-    registry_type: Option<String>,
+    registry_type: Option<RegistryType>,
     if_not_exists: bool,
     console: &mut Console,
 ) -> Result<()> {
     // Infer registry type from URL if not specified
-    let reg_type = match registry_type.as_deref() {
-        Some("api") => RegistryType::Api,
-        Some("git") => RegistryType::Git,
-        Some(other) => bail!("Unknown registry type '{}'. Use 'api' or 'git'.", other),
+    let reg_type = match registry_type {
+        Some(registry_type) => registry_type,
         None => {
             if url.ends_with(".git") || url.contains("github.com") || url.contains("gitea") {
                 RegistryType::Git
@@ -82,10 +79,6 @@ pub async fn add_registry(
             // there is nothing to do. Report the no-op rather than erroring so
             // automated provisioning can re-run `hpm registry add … --if-not-exists`
             // safely.
-            info!(
-                "Registry '{}' already exists; left unchanged (--if-not-exists)",
-                display_name
-            );
             console.stdout(format!(
                 "{} Registry '{}' already exists, left unchanged",
                 style("[=]").dim(),
@@ -101,7 +94,6 @@ pub async fn add_registry(
     registries.push(registry_config);
     overlay.save(&Config::user_config_path())?;
 
-    info!("Added registry '{}' at {}", display_name, url);
     console.stdout(format!(
         "{} Added registry '{}' ({})",
         style("[+]").green().bold(),

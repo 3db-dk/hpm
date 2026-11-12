@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `hpm add creator/slug@1.0.0` writes the dependency as `creator/slug`.
+  It wrote the key `"creator/slug@1.0.0"`, which nothing could install.
+
 - `hpm clean` no longer removes a version of a package that another kept
   package depends on when the project itself pins a different version of
   it; whether it was kept used to depend on the order of the project's
@@ -119,6 +122,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `hpm init` prints its package tree sorted, with correct `└──` /
   `│` connectors.
 - `hpm install` no longer draws a spinner (which ignored `--quiet`).
+- `-v`, `-q`, `--color` and `-C` work after the subcommand too
+  (`hpm update -v`). `--output <format>` still goes before it.
+- `-C <dir>` now means "run in `<dir>`" for every command: `add`,
+  `remove`, `update`, `list`, `install` and `audit` used to ignore it.
+  Relative paths in other arguments resolve against it, as with
+  `git -C`. `check`, `pack` and `run` take `-m/--manifest` like the
+  other project commands.
+- Without `-v`, stderr carries only warnings and errors: the timestamped
+  INFO lines that preceded every result (and the JSON error document) are
+  gone. Warnings the user should act on (an old or unreadable lockfile,
+  an existing dependency being replaced, a skipped update requirement)
+  go through the normal warning output.
+- Invalid values are refused with a usage error (exit 2) instead of
+  being accepted: `init --vcs` takes `git` or `none` (`--vcs gti` used
+  to skip git silently), `registry add --type` takes `api` or `git`,
+  `build`/`pack --platform` a known platform, `global --houdini` a
+  Houdini version, and `clean --python-only` conflicts with
+  `--comprehensive`.
+- The JSON error document honours `--output json-compact` and
+  `json-lines` (one line) instead of always being pretty-printed.
 - `hpm pack` refuses a host platform missing from `[compat].platforms`
   with the message `hpm build` gives, and both list the declared
   platforms by name (`linux-x86_64, macos-aarch64`). A package directory

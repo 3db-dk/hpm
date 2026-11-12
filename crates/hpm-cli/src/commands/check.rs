@@ -2,20 +2,17 @@
 
 use crate::console::Console;
 use crate::output::OutputFormat;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use hpm_core::check::{Report, Severity};
 
 /// CLI entry for `hpm check`: validate, display the results through the
 /// console (or as JSON), and fail when errors were found.
 pub fn check_package(
-    directory: Option<std::path::PathBuf>,
+    manifest: Option<std::path::PathBuf>,
     console: &mut Console,
     output: OutputFormat,
 ) -> Result<()> {
-    let directory = match directory {
-        Some(dir) => dir,
-        None => std::env::current_dir().context("Failed to get current directory")?,
-    };
+    let directory = super::manifest_utils::package_dir(manifest)?;
     let report = hpm_core::check::check_package(&directory);
     display_results(&report, console, output);
     if !report.is_valid() {

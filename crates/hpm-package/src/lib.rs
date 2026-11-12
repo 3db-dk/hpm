@@ -136,7 +136,7 @@ pub use manifest::{
     ScriptCommand, ScriptCondition, ScriptEntry, ScriptEnv, ScriptVariant, StageConfig,
     StagePlatformRules, TargetPlatformError, ValidationLevel, ValidationReport, parse_manifest_str,
 };
-pub use package_path::{PackagePath, PackagePathError};
+pub use package_path::{PackagePath, PackagePathError, split_name_version};
 pub use path_util::user_home;
 pub use platform::Platform;
 pub use python::PythonDependencySpec;

@@ -19,5 +19,3 @@ Python Dependencies:
   numpy >=1.24
   requests ^2.31 [socks]
 --- stderr
-[TIME]  INFO Listing package dependencies
-[TIME]  INFO Using manifest: [WORK]/demo/hpm.toml
