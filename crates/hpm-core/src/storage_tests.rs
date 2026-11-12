@@ -2016,3 +2016,48 @@ async fn dev_dry_run_agrees_with_the_real_run_and_writes_nothing() {
         assert_eq!(copy.is_dir(), user != "none", "{user}");
     }
 }
+
+/// What counts as an installed package in the store: a `<slug>@<version>`
+/// directory holding `hpm.toml`. The install record and exec-mode stamp
+/// beside it, `_dev`, staging and tombstone directories, and a directory
+/// without a manifest are not packages.
+#[test]
+fn only_slug_at_version_directories_are_packages() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    let packages = temp.path().join("packages");
+    let manifest = |slug: &str, v: &str| {
+        format!("[package]\npath = \"studio/{slug}\"\nname = \"{slug}\"\nversion = \"{v}\"\n")
+    };
+    for (slug, v) in [("tool", "1.0.0"), ("tool", "2.0.0"), ("rig", "0.1.0")] {
+        let dir = packages.join(format!("{slug}@{v}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("hpm.toml"), manifest(slug, v)).unwrap();
+    }
+    std::fs::write(packages.join("tool@1.0.0.files.json"), b"{}").unwrap();
+    std::fs::write(packages.join("tool@1.0.0.exec-modes"), b"1").unwrap();
+    std::fs::create_dir_all(packages.join("empty@1.0.0")).unwrap();
+    for hidden in [".stage-1-0", ".reclaim-x"] {
+        let dir = packages.join(hidden).join("x@1.0.0");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("hpm.toml"), manifest("x", "1.0.0")).unwrap();
+    }
+    let dev = packages.join("_dev").join("dev@1.0.0");
+    std::fs::create_dir_all(&dev).unwrap();
+    std::fs::write(dev.join("hpm.toml"), manifest("dev", "1.0.0")).unwrap();
+
+    let mut listed: Vec<String> = storage
+        .list_installed()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            p.install_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    listed.sort();
+    assert_eq!(listed, ["rig@0.1.0", "tool@1.0.0", "tool@2.0.0"]);
+}
