@@ -1,0 +1,22 @@
+---
+source: crates/hpm-package/tests/manifest_rejections.rs
+expression: out
+---
+prerelease version: ok
+two-part version: validate error: Package version must be valid semantic version
+word version: validate error: Package version must be valid semantic version
+runtime python ok: ok
+runtime python bad: validate error: runtime var 'X': invalid python identifier: 3.x
+runtime python empty: validate error: runtime var 'X': invalid python identifier: 
+script python bad: ok
+stage platform undeclared: validate error: [stage.platform.linux-x86_64] declared but 'linux-x86_64' not listed in [compat].platforms
+stage platform unknown: validate error: [stage.platform.beos-x86]: unknown platform 'beos-x86'; expected one of: linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64, windows-x86_64, windows-aarch64, universal
+profile platform undeclared: validate error: [stage.profile.dev.platform.macos-aarch64] declared but 'macos-aarch64' not listed in [compat].platforms
+operator platform undeclared: validate error: [[operators]][0].source: platform 'windows-x86_64' not listed in [compat].platforms
+operator platform unknown: validate error: [[operators]][0].source.amiga: unknown platform 'amiga'; expected one of: linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64, windows-x86_64, windows-aarch64, universal
+operator platform ok: ok
+script when houdini: validate error: script 'b': only the `os` axis is supported in script `when` selectors; `houdini`, `python`, and `install_source` axes have no meaning at `hpm run` time
+script when install_source: validate error: script 'b': only the `os` axis is supported in script `when` selectors; `houdini`, `python`, and `install_source` axes have no meaning at `hpm run` time
+script when unknown os: parse error: data did not match any variant of untagged enum ScriptEntry
+script empty cmd list: validate error: script 'b': conditional cmd list must not be empty
+script when os ok: ok
