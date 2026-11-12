@@ -623,7 +623,9 @@ mod tests {
 
     /// The dev-copy hash names `_dev/<slug>@<ver>/<hash>` directories and
     /// user-record keys, so it is a stored format: pinned for a fixed source
-    /// with fixed sizes and modification times.
+    /// with fixed sizes and modification times. The time is a multiple of
+    /// 100 ns, the resolution NTFS stores, so every platform reads it back
+    /// exactly.
     #[test]
     fn dev_copy_image_hash_golden() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -632,7 +634,7 @@ mod tests {
         std::fs::write(src.join("hpm.toml"), manifest_text).unwrap();
         std::fs::create_dir_all(src.join("otls")).unwrap();
         std::fs::write(src.join("otls/rig.hda"), "alpha").unwrap();
-        let t = std::time::UNIX_EPOCH + std::time::Duration::new(1_758_000_000, 123_456_789);
+        let t = std::time::UNIX_EPOCH + std::time::Duration::new(1_758_000_000, 123_456_700);
         for f in ["hpm.toml", "otls/rig.hda"] {
             std::fs::File::options()
                 .write(true)
@@ -645,7 +647,7 @@ mod tests {
         let image = dev_copy_image(src, &manifest).unwrap();
         assert_eq!(
             image.hash,
-            "36d63191925feaada45fb035ac7a8b43b8bd6d6d15ec7f88d379e33013f7061a"
+            "992535ccf765f57086f5cb097255debb5f963ab35d223834d5c4e159ec3fa302"
         );
     }
 }

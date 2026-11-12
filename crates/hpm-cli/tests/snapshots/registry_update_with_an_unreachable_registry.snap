@@ -6,7 +6,7 @@ args: registry update
 exit: 1
 --- stdout
 [~] Updating 1 registries...
-  * broken... FAILED Git operation failed: Git clone failed: fatal: repository '[WORK]/no-such-repo.git' does not exist
+  * broken... FAILED Git operation failed: Git clone failed: [git error]
 
 
 --- stderr

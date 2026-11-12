@@ -89,7 +89,8 @@ impl Env {
                 text = text.replace(&form.replace('\\', "\\\\"), label);
             }
         }
-        text.replace('\\', "/")
+        // JSON escapes a Windows separator as `\\`; both forms become `/`.
+        text.replace("\\\\", "/").replace('\\', "/")
     }
 }
 

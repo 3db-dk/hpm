@@ -86,7 +86,8 @@ impl Env {
                 text = text.replace(&form, label);
             }
         }
-        text.replace('\\', "/")
+        // JSON escapes a Windows separator as `\\`; both forms become `/`.
+        text.replace("\\\\", "/").replace('\\', "/")
     }
 
     fn write(&self, rel: &str, content: &str) -> PathBuf {
@@ -111,6 +112,8 @@ macro_rules! snapshot {
                 (r#""elapsed_ms": ?\d+"#, r#""elapsed_ms": [MS]"#),
                 (r"\b[0-9a-f]{64}\b", "[SHA256]"),
                 (r"127\.0\.0\.1:\d+", "[ADDR]"),
+                // git words a missing repository differently per platform.
+                (r"Git clone failed: fatal: [^\n]*", "Git clone failed: [git error]"),
             ],
             prepend_module_to_snapshot => false,
         }, {
