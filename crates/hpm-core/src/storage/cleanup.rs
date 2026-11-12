@@ -139,14 +139,13 @@ impl StorageManager {
     /// from another creator at the same version. Over-protection is the safe
     /// direction for a collector; under-protection deletes live files.
     fn global_roots(&self) -> Result<HashSet<PackageId>, StorageError> {
-        let (entries, failures) = crate::global::ledger::all_global_entries(&self.config.home_dir);
-
-        if let Some((_path, error)) = failures.into_iter().next() {
-            // LedgerError::Parse already names the file.
-            return Err(StorageError::GlobalLedger {
-                message: error.to_string(),
-            });
-        }
+        // LedgerError names the file or directory it could not read.
+        let entries =
+            crate::global::ledger::all_global_entries(&self.config.home_dir).map_err(|error| {
+                StorageError::GlobalLedger {
+                    message: error.to_string(),
+                }
+            })?;
 
         // The ledger keys installs by scoped `creator/slug`; the graph keys by
         // bare slug, so derive the slug from the ledger key rather than by

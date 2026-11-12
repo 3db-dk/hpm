@@ -170,12 +170,21 @@ pub(crate) fn hash_in_use(
     state_of: &impl Fn(u32) -> ProcessState,
 ) -> bool {
     let dir = records_dir(container, hash);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return false;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        // No records: nothing has claimed the copy.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return false,
+        // Records that cannot be listed cannot be judged: keep.
+        Err(_) => return true,
     };
     let copy = container.join(hash);
     let mut in_use = false;
-    for entry in entries.flatten() {
+    for entry in entries {
+        let Ok(entry) = entry else {
+            // An entry that cannot be read cannot be judged: keep.
+            in_use = true;
+            continue;
+        };
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         let live = match std::fs::read(&path) {
@@ -1441,5 +1450,29 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["project-4f1ff7863d043dc6.json".to_string()]);
+    }
+
+    /// Records that cannot be listed cannot be judged, so the copy is kept:
+    /// an unreadable `.users/<hash>` used to read as "no users" and the copy
+    /// was deleted under whoever recorded it.
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_whose_records_cannot_be_read_is_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('a'));
+        let records = records_dir(&c, &hash('a'));
+        std::fs::create_dir_all(&records).unwrap();
+        std::fs::write(records.join("project-0011223344556677.json"), b"{}").unwrap();
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let in_use = hash_in_use(&c, &hash('a'), &|_| ProcessState::Gone);
+        let removed = reclaim_dev_copies(&c, None, Unrecorded::Remove, |_| ProcessState::Gone);
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(in_use);
+        assert_eq!(removed, 0);
+        assert!(copy.is_dir());
     }
 }

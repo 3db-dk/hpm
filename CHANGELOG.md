@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `hpm clean` stops with an error, instead of deleting more, when it cannot
+  read something that decides what is in use: the global-install directory
+  or an entry in it, a dev copy's user records, or an entry in a project
+  search root. A dev copy whose records cannot be read is kept.
+
 - An install never replaces a store copy that is already there (a running
   Houdini may have it loaded); `hpm global add` used to. To repair a damaged
   copy, move it and its `.files.json` aside first, as TumbleTrove Desktop

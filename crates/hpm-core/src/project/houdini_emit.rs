@@ -51,8 +51,10 @@ impl ProjectManager {
         let entries = std::fs::read_dir(packages_dir)
             .map_err(|e| IoOp::wrap("read project packages directory", packages_dir, e))?;
 
-        for entry in entries.flatten() {
-            let path = entry.path();
+        for entry in entries {
+            let path = entry
+                .map_err(|e| IoOp::wrap("read project packages directory", packages_dir, e))?
+                .path();
             if !path.is_file() {
                 continue;
             }

@@ -535,8 +535,16 @@ impl ProjectManager {
             .map(|m| m.dependencies)
             .unwrap_or_default();
 
-        for entry in entries.flatten() {
-            let path = entry.path();
+        for entry in entries {
+            let path = entry
+                .map_err(|e| {
+                    IoOp::wrap(
+                        "read project packages directory",
+                        &self.project_paths.packages_dir,
+                        e,
+                    )
+                })?
+                .path();
             let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
@@ -652,7 +660,12 @@ async fn reuse_installed(pkg: &InstalledPackage) {
     let dir = pkg.install_path.clone();
     // A filesystem walk on the runtime's worker would stall the other installs
     // sharing it; this is the same reason extraction runs on the blocking pool.
-    let _ = tokio::task::spawn_blocking(move || crate::exec_mode::ensure_repaired(&dir)).await;
+    // A panic in the repair is a bug: re-raise it rather than drop it.
+    if let Err(e) =
+        tokio::task::spawn_blocking(move || crate::exec_mode::ensure_repaired(&dir)).await
+    {
+        std::panic::resume_unwind(e.into_panic());
+    }
 }
 
 /// Install a single dependency, short-circuiting if it's already in the

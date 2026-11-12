@@ -115,9 +115,6 @@ impl Ledger {
 /// A ledger entry paired with the scoped `creator/slug` it is filed under.
 pub type ScopedEntry = (String, GlobalEntry);
 
-/// A ledger that could not be read, and why.
-pub type LedgerFailure = (PathBuf, LedgerError);
-
 /// Every global entry across every Houdini version's ledger under `hpm_home`.
 ///
 /// `hpm clean` uses this: a globally installed package is referenced by no
@@ -125,22 +122,24 @@ pub type LedgerFailure = (PathBuf, LedgerError);
 /// directory as unreferenced and delete the bytes out from under a manifest
 /// that Houdini still loads.
 ///
-/// A ledger that fails to parse is skipped with the error returned alongside,
-/// never treated as empty — "no roots" and "unreadable roots" must not look
-/// the same to a garbage collector.
-pub fn all_global_entries(hpm_home: &Path) -> (Vec<ScopedEntry>, Vec<LedgerFailure>) {
+/// Only a missing `global` directory means "no entries". A directory or
+/// ledger that cannot be read is an error, never treated as empty: "no roots"
+/// and "unreadable roots" must not look the same to a garbage collector.
+pub fn all_global_entries(hpm_home: &Path) -> Result<Vec<ScopedEntry>, LedgerError> {
     let dir = hpm_home.join("global");
     let mut entries = Vec::new();
-    let mut failures = Vec::new();
 
     let read_dir = match std::fs::read_dir(&dir) {
         Ok(rd) => rd,
         // No global directory means nothing was ever installed globally.
-        Err(_) => return (entries, failures),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(entries),
+        Err(e) => return Err(IoOp::wrap("read global ledger directory", &dir, e).into()),
     };
 
-    for dir_entry in read_dir.flatten() {
-        let path = dir_entry.path();
+    for dir_entry in read_dir {
+        let path = dir_entry
+            .map_err(|e| IoOp::wrap("read global ledger directory", &dir, e))?
+            .path();
         // Only files this module writes are ledgers. Matching every `*.json`
         // would let an unrelated file dropped in this directory (an editor
         // backup, a user's notes) abort cleanup as an unreadable ledger.
@@ -151,13 +150,10 @@ pub fn all_global_entries(hpm_home: &Path) -> (Vec<ScopedEntry>, Vec<LedgerFailu
         if !is_ledger {
             continue;
         }
-        match Ledger::load(&path) {
-            Ok(ledger) => entries.extend(ledger.packages),
-            Err(e) => failures.push((path, e)),
-        }
+        entries.extend(Ledger::load(&path)?.packages);
     }
 
-    (entries, failures)
+    Ok(entries)
 }
 
 #[cfg(test)]
@@ -243,9 +239,7 @@ mod tests {
                 .unwrap();
         }
 
-        let (entries, failures) = all_global_entries(home);
-        assert_eq!(entries.len(), 2);
-        assert!(failures.is_empty());
+        assert_eq!(all_global_entries(home).unwrap().len(), 2);
     }
 
     /// An unreadable ledger is reported, not silently dropped — a GC that
@@ -257,9 +251,10 @@ mod tests {
         std::fs::create_dir_all(home.join("global")).unwrap();
         std::fs::write(home.join("global").join("houdini-21.0.json"), b"broken").unwrap();
 
-        let (entries, failures) = all_global_entries(home);
-        assert!(entries.is_empty());
-        assert_eq!(failures.len(), 1);
+        assert!(matches!(
+            all_global_entries(home),
+            Err(LedgerError::Parse { .. })
+        ));
     }
 
     /// Only files this module writes are ledgers. Treating every `*.json`
@@ -281,9 +276,8 @@ mod tests {
             ))
             .unwrap();
 
-        let (entries, failures) = all_global_entries(home);
+        let entries = all_global_entries(home).expect("stray json must not fail the scan");
         assert_eq!(entries.len(), 1);
-        assert!(failures.is_empty(), "stray json must not fail the scan");
     }
 
     #[test]
@@ -299,14 +293,28 @@ mod tests {
             ))
             .unwrap();
 
-        let (entries, _) = all_global_entries(home);
-        assert_eq!(entries[0].0, "acme/tools");
+        assert_eq!(all_global_entries(home).unwrap()[0].0, "acme/tools");
     }
 
     #[test]
-    fn no_global_dir_yields_no_entries_and_no_failures() {
+    fn no_global_dir_yields_no_entries() {
         let tmp = TempDir::new().unwrap();
-        let (entries, failures) = all_global_entries(tmp.path());
-        assert!(entries.is_empty() && failures.is_empty());
+        assert!(all_global_entries(tmp.path()).unwrap().is_empty());
+    }
+
+    /// A global directory that cannot be listed is an error, not "nothing
+    /// installed globally": `hpm clean` would otherwise delete global
+    /// installs.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_global_dir_is_an_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let global = tmp.path().join("global");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::set_permissions(&global, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = all_global_entries(tmp.path());
+        std::fs::set_permissions(&global, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(result, Err(LedgerError::Io(_))), "{result:?}");
     }
 }

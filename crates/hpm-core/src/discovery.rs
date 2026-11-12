@@ -91,8 +91,12 @@ impl ProjectDiscovery {
 
         let entries = std::fs::read_dir(dir).map_err(|e| IoOp::wrap("read search root", dir, e))?;
 
-        for entry in entries.flatten() {
-            let entry_path = entry.path();
+        for entry in entries {
+            // A project missed here makes its packages look orphaned to
+            // `hpm clean`, so an unreadable entry fails the scan.
+            let entry_path = entry
+                .map_err(|e| IoOp::wrap("read search root", dir, e))?
+                .path();
 
             if !entry_path.is_dir() {
                 continue;
