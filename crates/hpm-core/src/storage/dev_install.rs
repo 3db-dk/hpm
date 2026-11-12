@@ -309,7 +309,7 @@ pub(super) fn copy_dev_image(
     entries: &[(PathBuf, String)],
     target: &Path,
 ) -> Result<(), StorageError> {
-    std::fs::create_dir_all(target).map_err(|e| IoOp::wrap("create dev copy target", target, e))?;
+    create_staging_dir(target).map_err(|e| IoOp::wrap("create dev copy target", target, e))?;
     for (source, dest) in entries {
         let dest = target.join(dest);
         if let Some(parent) = dest.parent() {
@@ -319,6 +319,34 @@ pub(super) fn copy_dev_image(
         std::fs::copy(source, &dest).map_err(|e| IoOp::wrap("copy file to", &dest, e))?;
     }
     Ok(())
+}
+
+/// Create `target` and its container. A reclaim (in this process or another)
+/// removes a container it finds empty, and that can land between creating
+/// the container and creating `target` inside it. macOS then reports
+/// "Invalid argument" rather than "not found", so `create_dir_all(target)`
+/// neither recreates the container nor retries. The container and `target`
+/// are created again, in that order, until `target` exists: once it does,
+/// the container is no longer empty and stays.
+fn create_staging_dir(target: &Path) -> std::io::Result<()> {
+    const ATTEMPTS: usize = 50;
+    let container = target.parent().unwrap_or(target);
+    let mut attempt = 1;
+    loop {
+        let result = std::fs::create_dir_all(container).and_then(|()| std::fs::create_dir(target));
+        match result {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && target.is_dir() => {
+                return Ok(());
+            }
+            Err(_) if attempt < ATTEMPTS => {
+                // Give the remover's pass time to finish.
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// True when `name` is a content-hash directory name — 64 lowercase hex chars,
@@ -619,6 +647,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A reclaim removes an empty container (`remove_empty_container`), and
+    /// an install creates the container and then its staging directory
+    /// inside it: the removal can land between the two. Staging must survive
+    /// that, whoever (this process or another) removes the container.
+    #[test]
+    fn staging_survives_its_container_being_removed_as_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("payload");
+        std::fs::write(&file, "x").unwrap();
+        let entries = vec![(file, "otls/a.hda".to_string())];
+        let container = tmp.path().join("_dev").join("rig@1.0.0");
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let remover = {
+            let (container, stop) = (container.clone(), stop.clone());
+            std::thread::spawn(move || {
+                // Each pass of a reclaim removes a container once; a pause
+                // between removals stands for the rest of the pass.
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    crate::storage::dev_users::remove_empty_container(&container);
+                    std::thread::sleep(std::time::Duration::from_micros(50));
+                }
+            })
+        };
+        for i in 0..2000 {
+            let stage = container.join(format!(".stage-1-{i}"));
+            let result = copy_dev_image(&entries, &stage);
+            let _ = std::fs::remove_dir_all(&stage);
+            if let Err(e) = result {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                remover.join().unwrap();
+                panic!("staging failed on attempt {i}: {e}");
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        remover.join().unwrap();
     }
 
     /// The dev-copy hash names `_dev/<slug>@<ver>/<hash>` directories and
