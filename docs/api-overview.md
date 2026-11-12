@@ -116,7 +116,7 @@ codes and help hints.
 |------|---------|
 | `Config` | Top-level config (defaults < `~/.hpm/config.toml` < project config < env < flags). |
 | `StorageConfig` | `home_dir`, `cache_dir`, `packages_dir`, `registry_cache_dir`. |
-| `InstallConfig` | `path`, `parallel_downloads`. |
+| `InstallConfig` | `parallel_downloads` (`NonZeroUsize`): how many installs a sync runs at once. |
 | `ProjectsConfig` | `explicit_paths`, `search_roots`, `max_search_depth`, `ignore_patterns`. |
 | `RegistrySourceConfig`, `RegistryType` | Registry entries from `[[registries]]`. |
 | `SigningConfig` | `key_path` fallback for `hpm pack`. |

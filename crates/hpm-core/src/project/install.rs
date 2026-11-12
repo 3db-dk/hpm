@@ -50,14 +50,23 @@ impl ProjectManager {
         // Phase 1: spawn all installs in parallel via a JoinSet. Each task owns
         // a clone of (StorageManager, ArchiveFetcher, RegistrySet) and its dep
         // spec, so resolve→fetch→copy-into-CAS chains overlap across deps.
+        // At most `[install] parallel_downloads` installs run at once.
+        let slots = Arc::new(tokio::sync::Semaphore::new(
+            self.config.install.parallel_downloads.get(),
+        ));
         let mut tasks: JoinSet<(String, Result<InstallOutcome, ProjectError>)> = JoinSet::new();
         for (name, spec) in dependencies {
             let storage = self.storage_manager.clone();
             let fetcher = self.fetcher.clone();
             let registry_set = registry_set.clone();
             let all_installed = all_installed.clone();
+            let slots = slots.clone();
 
             tasks.spawn(async move {
+                let _slot = slots
+                    .acquire_owned()
+                    .await
+                    .expect("the install semaphore is never closed");
                 let result = install_one_dep(
                     &storage,
                     &fetcher,

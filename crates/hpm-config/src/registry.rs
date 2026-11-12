@@ -20,6 +20,7 @@ impl From<&hpm_package::RegistryConfig> for RegistrySourceConfig {
 
 /// Configuration for a single package registry.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegistrySourceConfig {
     /// Display name / alias for this registry
     pub name: String,

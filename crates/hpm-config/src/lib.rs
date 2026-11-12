@@ -184,8 +184,7 @@ mod tests {
     #[test]
     fn config_default_values() {
         let config = Config::default();
-        assert_eq!(config.install.path, "packages/hpm");
-        assert_eq!(config.install.parallel_downloads, 8);
+        assert_eq!(config.install.parallel_downloads.get(), 8);
         assert!(config.storage.home_dir.ends_with(".hpm"));
         assert!(config.storage.packages_dir.ends_with("packages"));
         assert_eq!(config.projects.max_search_depth, 3);
@@ -199,7 +198,7 @@ mod tests {
         let serialized = serde_json::to_string(&config).unwrap();
         let deserialized: Config = serde_json::from_str(&serialized).unwrap();
 
-        assert_eq!(config.install.path, deserialized.install.path);
+        assert_eq!(config.install, deserialized.install);
         assert_eq!(config.storage.home_dir, deserialized.storage.home_dir);
         assert_eq!(
             config.projects.max_search_depth,
@@ -220,9 +219,7 @@ parallel_downloads = 16
         std::fs::write(&config_path, config_content).unwrap();
 
         let config = Config::load_from_path(&config_path).unwrap();
-
-        assert_eq!(config.install.path, "custom/path");
-        assert_eq!(config.install.parallel_downloads, 16);
+        assert_eq!(config.install.parallel_downloads.get(), 16);
     }
 
     #[test]
@@ -239,10 +236,9 @@ path = "custom/hpm"
 
         let config = Config::load_from_path(&config_path).unwrap();
 
-        // Custom value
-        assert_eq!(config.install.path, "custom/hpm");
-        // Default values for unspecified fields
-        assert_eq!(config.install.parallel_downloads, 8);
+        // An old file's `path` is accepted and ignored; unspecified fields
+        // take their defaults.
+        assert_eq!(config.install.parallel_downloads.get(), 8);
     }
 
     #[test]
@@ -254,9 +250,7 @@ path = "custom/hpm"
         std::fs::write(&config_path, "").unwrap();
 
         let config = Config::load_from_path(&config_path).unwrap();
-
-        assert_eq!(config.install.path, "packages/hpm");
-        assert_eq!(config.install.parallel_downloads, 8);
+        assert_eq!(config.install.parallel_downloads.get(), 8);
     }
 
     #[test]
@@ -265,15 +259,13 @@ path = "custom/hpm"
         let config_path = temp_dir.path().join("config.toml");
 
         let mut config = Config::default();
-        config.install.path = "custom/install/path".to_string();
-        config.install.parallel_downloads = 4;
+        config.install.parallel_downloads = std::num::NonZeroUsize::new(4).unwrap();
 
         config.save(&config_path).unwrap();
 
         let loaded_config = Config::load_from_path(&config_path).unwrap();
 
-        assert_eq!(loaded_config.install.path, "custom/install/path");
-        assert_eq!(loaded_config.install.parallel_downloads, 4);
+        assert_eq!(loaded_config.install.parallel_downloads.get(), 4);
     }
 
     #[test]

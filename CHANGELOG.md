@@ -52,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `[install] parallel_downloads` now bounds how many packages a sync
+  installs at once (it was read but never used). `[install] path`, which
+  was never used, is gone from the config; an existing file holding it
+  still loads, with a warning. Any other unknown key in a config file is
+  now an error that names it (a misspelt `[registry]` or
+  `paralel_downloads` used to be ignored). Config files written by
+  `Config::save` (TumbleTrove Desktop) still load.
+
 - More of `hpm.toml` is checked when it is read rather than by
   `validate()` later: the package version must be semver, a `python`
   selector must be a Python version (a script's `python` pin was never
@@ -121,6 +129,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ProjectManager::lock_file` builds `hpm.lock` from a sync (the CLI's
   lock building moved into hpm-core), and `PythonDependencySpec::version_req`
   and `Platform::host_id` replace copies of the same logic.
+- **Breaking (hpm-config API):** `InstallConfig::path` is removed and
+  `parallel_downloads` is a `NonZeroUsize`.
 - **Breaking (hpm-package API):** `Condition::python` and
   `ScriptEnv::python` are `PythonTag`s; `PlatformStaging::entries` and
   `OperatorSource::PerPlatform` are keyed by `Platform`; `ScriptEnv::cmd`

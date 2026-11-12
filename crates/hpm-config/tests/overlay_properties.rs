@@ -42,12 +42,14 @@ fn registry_strategy() -> impl Strategy<Value = RegistrySourceConfig> {
 }
 
 fn overlay_strategy() -> impl Strategy<Value = ConfigOverlay> {
-    let install = (opt("[a-z./]{1,12}"), opt(0usize..64)).prop_map(|(path, parallel_downloads)| {
-        InstallOverlay {
-            path,
+    // `path` is a legacy key that is read but never written, so a written
+    // overlay never holds it.
+    let install = opt((1usize..64).prop_map(|n| std::num::NonZeroUsize::new(n).unwrap())).prop_map(
+        |parallel_downloads| InstallOverlay {
+            path: None,
             parallel_downloads,
-        }
-    });
+        },
+    );
     let storage = (
         opt(path_strategy()),
         opt(path_strategy()),
@@ -99,7 +101,7 @@ fn overlay_strategy() -> impl Strategy<Value = ConfigOverlay> {
 fn set_fields(o: &ConfigOverlay) -> usize {
     let mut n = 0;
     if let Some(i) = &o.install {
-        n += 1 + i.path.is_some() as usize + i.parallel_downloads.is_some() as usize;
+        n += 1 + i.parallel_downloads.is_some() as usize;
     }
     if let Some(s) = &o.storage {
         n += 1
@@ -171,4 +173,34 @@ fn a_config_written_by_config_save_still_loads() {
     assert_eq!(config.registries.len(), 1);
     assert_eq!(config.registries[0].name, "tumbletrove");
     assert_eq!(config.projects.max_search_depth, 3);
+}
+
+/// A key hpm never wrote, in any section, fails the load and is named; the
+/// legacy `[install] path` (written by older hpm, never read) is accepted.
+#[test]
+fn unknown_config_keys_are_refused_and_the_legacy_install_path_is_accepted() {
+    for (doc, key) in [
+        ("[registry]\nname = \"x\"\n", "registry"),
+        ("[install]\nparalel_downloads = 4\n", "paralel_downloads"),
+        ("[storage]\nhome = \"/x\"\n", "home"),
+        ("[projects]\nsearch_root = []\n", "search_root"),
+        ("[signing]\nkey = \"/k\"\n", "key"),
+        (
+            "[[registries]]\nname = \"x\"\nurl = \"u\"\ntype = \"api\"\ntoken = \"t\"\n",
+            "token",
+        ),
+    ] {
+        let err = ConfigOverlay::parse(doc, Path::new("config.toml")).unwrap_err();
+        let source = std::error::Error::source(&err).unwrap().to_string();
+        assert!(source.contains(key), "{doc}: {source}");
+    }
+    let legacy =
+        ConfigOverlay::parse("[install]\npath = \"packages/hpm\"\n", Path::new("c.toml")).unwrap();
+    assert_eq!(
+        legacy.install.unwrap().path.as_deref(),
+        Some("packages/hpm")
+    );
+    assert!(
+        ConfigOverlay::parse("[install]\nparallel_downloads = 0\n", Path::new("c.toml")).is_err()
+    );
 }

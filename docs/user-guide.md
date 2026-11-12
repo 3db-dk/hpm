@@ -1658,8 +1658,7 @@ hard error, not a silent fallback to defaults.
 
 ```toml
 [install]
-path = "packages/hpm"        # relative install path inside projects
-parallel_downloads = 8
+parallel_downloads = 8       # packages a sync fetches and installs at once
 
 [storage]
 home_dir = "/Users/me/.hpm"                # default: $HOME/.hpm
@@ -1689,11 +1688,13 @@ key_path = "/Users/me/.hpm/signing.pem"    # fallback for `hpm pack`
 ### What each section controls
 
 **`[install]`**
-- `path`, `parallel_downloads` — **accepted but currently inert.** Both
-  deserialize and validate, but no code outside `hpm-config` reads them.
-  The per-project package directory is hardcoded to `<project>/.hpm/packages`
-  (`Config::project_paths`), so overriding `path` has no effect. Left in the
-  schema for compatibility; do not rely on either.
+- `parallel_downloads` — the most registry or URL packages a sync fetches
+  and installs at once (default 8; must be at least 1).
+- `path` — written by older hpm versions but never used (projects always
+  install into `<project>/.hpm/packages`). It is still accepted, with a
+  warning, so an existing config keeps loading; remove it.
+
+Any other key in a config file is an error that names it.
 
 **`[storage]`**
 - `home_dir` — HPM's root on disk. Default `$HOME/.hpm` on every platform (Linux, macOS, Windows). All other storage paths derive from this by default.

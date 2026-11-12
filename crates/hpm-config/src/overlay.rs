@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install: Option<InstallOverlay>,
@@ -27,14 +28,20 @@ pub struct ConfigOverlay {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InstallOverlay {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// `[install] path`, which earlier hpm versions wrote (TumbleTrove
+    /// Desktop saved it into users' config files) but never read: projects
+    /// always install into `.hpm/packages`. Accepted so those files keep
+    /// loading, reported by [`ConfigOverlay::load`], never written.
+    #[serde(default, skip_serializing)]
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parallel_downloads: Option<usize>,
+    pub parallel_downloads: Option<std::num::NonZeroUsize>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StorageOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub home_dir: Option<PathBuf>,
@@ -47,6 +54,7 @@ pub struct StorageOverlay {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectsOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explicit_paths: Option<Vec<PathBuf>>,
@@ -59,6 +67,7 @@ pub struct ProjectsOverlay {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SigningOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_path: Option<PathBuf>,
@@ -69,7 +78,14 @@ impl ConfigOverlay {
     pub fn load(path: &Path) -> Result<Self, TomlFileError> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| hpm_package::IoOp::wrap("read TOML file", path, e))?;
-        Self::parse(&content, path)
+        let overlay = Self::parse(&content, path)?;
+        if overlay.install.as_ref().is_some_and(|i| i.path.is_some()) {
+            tracing::warn!(
+                "{}: `[install] path` is not used by hpm and is ignored; it can be removed",
+                path.display()
+            );
+        }
+        Ok(overlay)
     }
 
     /// Parse an overlay from a TOML string.
@@ -94,13 +110,10 @@ impl ConfigOverlay {
 
     /// Apply every value this overlay sets onto `config`.
     pub fn apply_to(&self, config: &mut Config) {
-        if let Some(install) = &self.install {
-            if let Some(path) = &install.path {
-                config.install.path = path.clone();
-            }
-            if let Some(parallel_downloads) = install.parallel_downloads {
-                config.install.parallel_downloads = parallel_downloads;
-            }
+        if let Some(install) = &self.install
+            && let Some(parallel_downloads) = install.parallel_downloads
+        {
+            config.install.parallel_downloads = parallel_downloads;
         }
 
         if let Some(storage) = &self.storage {
@@ -157,8 +170,7 @@ mod tests {
     #[test]
     fn overlay_only_applies_set_fields() {
         let mut config = Config::default();
-        config.install.path = "user/path".to_string();
-        config.install.parallel_downloads = 4;
+        config.install.parallel_downloads = std::num::NonZeroUsize::new(4).unwrap();
 
         // A project config that never mentions [install] must not touch it.
         let overlay = ConfigOverlay::parse(
@@ -170,9 +182,7 @@ max_search_depth = 5
         )
         .unwrap();
         overlay.apply_to(&mut config);
-
-        assert_eq!(config.install.path, "user/path");
-        assert_eq!(config.install.parallel_downloads, 4);
+        assert_eq!(config.install.parallel_downloads.get(), 4);
         assert_eq!(config.projects.max_search_depth, 5);
     }
 

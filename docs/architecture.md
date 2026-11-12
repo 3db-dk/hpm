@@ -788,7 +788,7 @@ config.add_registry(RegistrySourceConfig {
     url: "https://api.tumbletrove.com/v1/registry".into(),
     registry_type: RegistryType::Api,
 });
-config.install.path = "packages/hpm".into();
+config.install.parallel_downloads = std::num::NonZeroUsize::new(4).unwrap();
 ```
 
 ### Registry trait
