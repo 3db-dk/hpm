@@ -30,7 +30,8 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
-use tracing::{debug, warn};
+use tracing::debug;
+use tracing::warn;
 
 /// Suffix of the sibling file recording that a tree has been swept. Written
 /// next to the package directory rather than inside it: [`crate::tree_hash`]
