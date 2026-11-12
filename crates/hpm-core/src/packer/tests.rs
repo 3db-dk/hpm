@@ -475,7 +475,7 @@ fn platform_archive_name_includes_platform() {
         result.archive_path.file_name().unwrap(),
         "test-pkg-1.0.0-linux-x86_64.zip"
     );
-    assert_eq!(result.platform.as_deref(), Some("linux-x86_64"));
+    assert_eq!(result.platform, Some(Platform::LinuxX86_64));
 }
 
 #[test]

@@ -15,12 +15,14 @@ use hpm_package::platform::Platform;
 use std::path::Path;
 
 mod archive;
+mod package;
 #[cfg(test)]
 pub(crate) mod prop_support;
 mod signing;
 mod stage_filter;
 
 pub use archive::{PackResult, create_archive};
+pub use package::{PackOutcome, PackRequest, PackWarning, pack_package};
 pub use signing::{
     SigningKey, compute_archive_checksum, compute_bytes_checksum, load_signing_key,
     load_signing_key_from_pem, sign_archive, sign_bytes,
@@ -45,6 +47,79 @@ pub enum PackError {
 
     #[error("Invalid glob pattern: {0}")]
     GlobPattern(String),
+
+    #[error(
+        "Package validation failed with {} error(s):\n  - {}",
+        errors.len(),
+        errors.join("\n  - ")
+    )]
+    Validation { errors: Vec<String> },
+
+    #[error(transparent)]
+    Manifest(#[from] hpm_package::ManifestLoadError),
+
+    #[error(transparent)]
+    TargetPlatform(#[from] hpm_package::TargetPlatformError),
+
+    #[error(
+        "SideFX's hpackage uploader reads `README.md` by that exact name and this \
+         package has {found}. Rename it to README.md."
+    )]
+    SidefxReadmeCase { found: String },
+
+    #[error(
+        "SideFX's hpackage uploader requires a README.md in the package directory and \
+         sends its text as the published description; it refuses the upload when the \
+         file is absent. Add {}.",
+        path.display()
+    )]
+    SidefxReadmeMissing { path: std::path::PathBuf },
+
+    #[error(
+        "README.md still contains the placeholder line hpackage's scaffold writes \
+         (`<enter a one-line description`), and its uploader refuses that. Write the \
+         package description there."
+    )]
+    SidefxReadmePlaceholder,
+
+    #[error("Failed to generate the Houdini package.json for the archive: {0}")]
+    DescriptorGeneration(String),
+
+    #[error("Failed to serialize Houdini native package JSON: {0}")]
+    DescriptorJson(serde_json::Error),
+
+    #[error("The Houdini descriptor {filename} is not valid JSON: {error}")]
+    DescriptorNotJson {
+        filename: String,
+        error: serde_json::Error,
+    },
+
+    /// An authored descriptor hpackage would refuse; the message names what
+    /// to change.
+    #[error("{0}")]
+    DescriptorRefused(String),
+
+    /// A descriptor hpm generated and then refused: the generator and the
+    /// check encode the same rules from opposite ends, so one of them is
+    /// wrong and there is no file for the author to edit.
+    #[error(
+        "hpm generated this descriptor from hpm.toml and then refused it, which \
+         is a bug in hpm rather than something to fix in the package — please \
+         report it. The check said: {0}"
+    )]
+    GeneratedDescriptorRefused(String),
+
+    #[error("Failed to build the asset index for the packed archive: {0}")]
+    AssetIndex(crate::asset_index::AssetIndexError),
+
+    #[error(
+        "operator source(s) declared in [[operators]] but missing from the packed archive:\n  - {}\n\n\
+         `source` must name the file's path inside the package (after [stage] placement). \
+         Build the package first if these are compiled artifacts, fix the path, or declare a \
+         per-platform `source` table. The archive was removed.",
+        sources.join("\n  - ")
+    )]
+    MissingOperatorSources { sources: Vec<String> },
 }
 
 /// Archive layout inputs: root-level injected files and the hpackage
@@ -105,7 +180,7 @@ pub fn pack(
         checksum,
         signature,
         key_id,
-        platform: platform.map(|p| p.to_string()),
+        platform: platform.copied(),
     })
 }
 

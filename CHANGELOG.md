@@ -119,6 +119,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `hpm init` prints its package tree sorted, with correct `└──` /
   `│` connectors.
 - `hpm install` no longer draws a spinner (which ignored `--quiet`).
+- `hpm pack` refuses a host platform missing from `[compat].platforms`
+  with the message `hpm build` gives, and both list the declared
+  platforms by name (`linux-x86_64, macos-aarch64`). A package directory
+  that cannot be listed while looking for `{slug}.json` or `README.md` is
+  now an error instead of counting as "not there".
 
 - `hpm init` no longer writes a root `package.json`. Nothing read it: hpm
   writes each dependency's Houdini package file at install time, and
@@ -165,6 +170,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   methods of `HoudiniRange`. **Breaking (hpm-core API):**
   `python::collect_python_dependencies` is no longer `async`; a Houdini
   version with a non-numeric minor (`21.x`) is now an error.
+- `hpm_core::packer::pack_package` does everything `hpm pack` does except
+  signing-key resolution and rendering, so embedders get the same
+  archive, gates and warnings; `CompatConfig::resolve_target_platform`
+  (hpm-package) picks the target platform for pack and build.
+  **Breaking (hpm-core API):** `PackResult::platform` is an
+  `Option<Platform>` (it was a string; it serializes the same).
 - Package validation moved into `hpm_core::check` (`check_package` returns
   a `Report` of typed findings), for pack and TumbleTrove Desktop to share.
 - **Breaking (hpm-core API):** `python::get_venvs_dir`. The Python

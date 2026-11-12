@@ -26,7 +26,7 @@ pub mod scripts;
 pub mod stage;
 pub mod validation;
 
-pub use compat::CompatConfig;
+pub use compat::{CompatConfig, DeclaredPlatforms, TargetPlatformError};
 pub use env::{EnvMethod, ManifestEnvEntry};
 pub use error::ManifestLoadError;
 pub use info::PackageInfo;

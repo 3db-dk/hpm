@@ -131,10 +131,10 @@ pub use houdini::{
 };
 pub use io_error::IoOp;
 pub use manifest::{
-    CompatConfig, EnvMethod, ManifestEnvEntry, ManifestLoadError, PackageInfo, PackageManifest,
-    PackageScripts, PlaceRule, PlatformStaging, RegistryConfig, RegistryType, ScriptCommand,
-    ScriptCondition, ScriptEntry, ScriptEnv, ScriptVariant, StageConfig, StagePlatformRules,
-    ValidationLevel, ValidationReport, parse_manifest_str,
+    CompatConfig, DeclaredPlatforms, EnvMethod, ManifestEnvEntry, ManifestLoadError, PackageInfo,
+    PackageManifest, PackageScripts, PlaceRule, PlatformStaging, RegistryConfig, RegistryType,
+    ScriptCommand, ScriptCondition, ScriptEntry, ScriptEnv, ScriptVariant, StageConfig,
+    StagePlatformRules, TargetPlatformError, ValidationLevel, ValidationReport, parse_manifest_str,
 };
 pub use package_path::{PackagePath, PackagePathError};
 pub use path_util::user_home;
