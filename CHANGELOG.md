@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `hpm clean` no longer removes a version of a package that another kept
+  package depends on when the project itself pins a different version of
+  it; whether it was kept used to depend on the order of the project's
+  dependencies. A package depending on another version of a package
+  already in its chain is also kept now.
+- `hpm add` resolves against the project's `[[registries]]` when it
+  declares any, as `hpm install` does, instead of always the configured
+  registries.
+
 - A `[compat].houdini` range semver cannot read (`==21`, or an operand with
   a leading zero such as `22.00`) no longer counts as matching every
   Houdini. `hpm global add` and dependency solving now judge a range the way

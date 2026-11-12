@@ -170,12 +170,7 @@ impl DependencyResolver {
 
         // Process each project
         for project in projects {
-            self.process_project_dependencies(
-                project,
-                &installed_packages,
-                &mut graph,
-                &mut HashSet::new(), // visited set for cycle detection
-            )?;
+            self.process_project_dependencies(project, &installed_packages, &mut graph)?;
         }
 
         // Detect and warn about cycles
@@ -204,14 +199,14 @@ impl DependencyResolver {
         project: &'a DiscoveredProject,
         installed_map: &'a [InstalledPackage],
         graph: &mut DependencyGraph,
-        visited: &mut HashSet<&'a str>,
     ) -> Result<(), DependencyError> {
+        // Every dependency, direct or transitive, is walked whatever the
+        // order: the graph decides what `hpm clean` keeps, and keeping a
+        // version a package depends on is the safe answer even when the
+        // project pins another version of the same name. (A shared "seen"
+        // set used to let a direct pin hide a transitive dependency's other
+        // version, or not, depending on which was listed first.)
         for (dep_name, dep_spec) in &project.manifest.dependencies {
-            if visited.contains(dep_name.as_str()) {
-                continue;
-            }
-            visited.insert(dep_name.as_str());
-
             let (package_id, installed_package) =
                 self.resolve_dependency(dep_name, dep_spec, installed_map);
 
@@ -233,12 +228,15 @@ impl DependencyResolver {
                 continue;
             }
 
-            // Recursively process transitive dependencies
+            // Walk its dependencies; `path` guards against cycles along
+            // one chain only, by name and version, so another version of a
+            // package already on the chain is still walked.
+            let mut path = HashSet::from([package_id.clone()]);
             self.process_transitive_dependencies(
-                installed_package.unwrap(),
+                installed_package.expect("checked above"),
                 installed_map,
                 graph,
-                visited,
+                &mut path,
                 &package_id,
             )?;
         }
@@ -251,15 +249,14 @@ impl DependencyResolver {
         package: &'a InstalledPackage,
         installed_map: &'a [InstalledPackage],
         graph: &mut DependencyGraph,
-        visited: &mut HashSet<&'a str>,
+        path: &mut HashSet<PackageId>,
         parent_id: &PackageId,
     ) -> Result<(), DependencyError> {
         for (dep_name, dep_spec) in &package.manifest.dependencies {
-            if visited.contains(dep_name.as_str()) {
+            let (dep_id, dep_package) = self.resolve_dependency(dep_name, dep_spec, installed_map);
+            if path.contains(&dep_id) {
                 continue;
             }
-
-            let (dep_id, dep_package) = self.resolve_dependency(dep_name, dep_spec, installed_map);
 
             // Add node if not exists (transitive deps are not roots). Node
             // must exist before add_dependency, which silently skips edges
@@ -275,15 +272,9 @@ impl DependencyResolver {
 
             if let Some(dep_pkg) = dep_package {
                 // Recursively process with cycle prevention
-                visited.insert(dep_name.as_str());
-                self.process_transitive_dependencies(
-                    dep_pkg,
-                    installed_map,
-                    graph,
-                    visited,
-                    &dep_id,
-                )?;
-                visited.remove(dep_name.as_str());
+                path.insert(dep_id.clone());
+                self.process_transitive_dependencies(dep_pkg, installed_map, graph, path, &dep_id)?;
+                path.remove(&dep_id);
             } else {
                 debug!(
                     "Package {} requires {} but it's not installed",

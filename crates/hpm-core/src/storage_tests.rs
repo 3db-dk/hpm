@@ -1848,6 +1848,41 @@ mod cleanup_plan {
             })
     }
 
+    /// The project pins `a@2.0.0` and also uses `d@1.0.0`, which depends
+    /// on `a@1.0.0`: both versions of `a` are kept, in either listing order.
+    /// The graph used to keep `a@1.0.0` only when `d` was listed first.
+    #[test]
+    fn a_direct_pin_does_not_hide_a_dependency_on_another_version() {
+        let fixture = Fixture {
+            installed: [((0, 0), None), ((3, 0), Some((0, 0)))]
+                .into_iter()
+                .collect(),
+            roots: [(3, 0), (0, 1)].into_iter().collect(),
+        };
+        let (dry, real, model) = run(&fixture);
+        assert!(model.is_empty());
+        assert_eq!((dry, real), (model.clone(), model));
+    }
+
+    /// `b@1.0.0` depending on `b@2.0.0` keeps `b@2.0.0`: the cycle guard is
+    /// by name and version, not by name.
+    #[test]
+    fn a_dependency_on_another_version_of_itself_is_kept() {
+        let fixture = Fixture {
+            installed: [
+                ((0, 1), Some((1, 0))),
+                ((1, 0), Some((1, 1))),
+                ((1, 1), None),
+            ]
+            .into_iter()
+            .collect(),
+            roots: [(0, 1)].into_iter().collect(),
+        };
+        let (dry, real, model) = run(&fixture);
+        assert!(model.is_empty());
+        assert_eq!((dry, real), (model.clone(), model));
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(48))]
 
@@ -1860,12 +1895,15 @@ mod cleanup_plan {
             prop_assert_eq!(&real, &model);
         }
 
-        /// With any versions (the graph keeps the first version of a name it
-        /// meets), the dry run still names exactly what the real run removes.
+        /// With any versions, including a project pinning one version of a
+        /// package that another package depends on at a different version,
+        /// both runs still equal the model: every version reachable from the
+        /// project is kept, whatever order the dependencies are listed in.
         #[test]
-        fn dry_run_equals_real_run_with_any_versions(fixture in mixed_version_fixture()) {
-            let (dry, real, _) = run(&fixture);
-            prop_assert_eq!(dry, real);
+        fn dry_and_real_run_equal_the_model_with_any_versions(fixture in mixed_version_fixture()) {
+            let (dry, real, model) = run(&fixture);
+            prop_assert_eq!(&dry, &model);
+            prop_assert_eq!(&real, &model);
         }
     }
 }
