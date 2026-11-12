@@ -836,14 +836,9 @@ impl StorageManager {
                 Some(n) => n,
                 None => continue,
             };
-            // `<slug>@<version>` — split on the *last* `@` for defensiveness
-            // even though install never produces multiple separators.
-            let Some((slug, version)) = name.rsplit_once('@') else {
+            let Some((slug, version)) = layout::parse_coordinate(name) else {
                 continue;
             };
-            if slug.is_empty() || version.is_empty() {
-                continue;
-            }
 
             out.push(DevInstall {
                 slug: slug.to_string(),

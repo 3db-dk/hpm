@@ -655,7 +655,7 @@ pub(crate) fn sibling_containers(container: &Path) -> Vec<PathBuf> {
         container
             .file_name()
             .and_then(|n| n.to_str())
-            .and_then(|n| n.rsplit_once('@'))
+            .and_then(super::layout::parse_coordinate)
             .map(|(slug, _)| slug.to_string()),
     ) else {
         return Vec::new();
@@ -670,8 +670,8 @@ pub(crate) fn sibling_containers(container: &Path) -> Vec<PathBuf> {
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .and_then(|n| n.rsplit_once('@'))
-                .is_some_and(|(s, v)| s == slug && !v.is_empty())
+                .and_then(super::layout::parse_coordinate)
+                .is_some_and(|(s, _)| s == slug)
         })
         .filter(|p| is_copy_container(p))
         .collect()

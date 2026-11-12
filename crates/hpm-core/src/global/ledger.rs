@@ -48,17 +48,21 @@ pub struct GlobalEntry {
     /// than recomputed so that a naming-scheme change in a later hpm still
     /// removes the file this install actually created.
     pub manifest_file: String,
-    /// CAS directory backing this install, used as a `hpm clean` GC root.
+    /// The store directory this install's manifest points Houdini at.
+    /// Informational: `hpm clean` protects the install by its package and
+    /// `version`, not by this path.
     pub install_path: PathBuf,
 }
 
 /// Contents of one `~/.hpm/global/houdini-<X.Y>.json`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Ledger {
-    /// Keyed by scoped `creator/slug`, so one package cannot be globally
-    /// installed twice at different versions for the same Houdini.
+    /// Keyed by scoped `creator/slug` (stored as that string), so one
+    /// package cannot be globally installed twice at different versions for
+    /// the same Houdini. A key that is not a package path fails
+    /// [`Ledger::load`].
     #[serde(default)]
-    pub packages: BTreeMap<String, GlobalEntry>,
+    pub packages: BTreeMap<PackagePath, GlobalEntry>,
 }
 
 impl Ledger {
@@ -99,21 +103,21 @@ impl Ledger {
     /// globally replaces the first rather than accumulating, matching the
     /// single manifest file on disk.
     pub fn insert(&mut self, package: &PackagePath, entry: GlobalEntry) -> Option<GlobalEntry> {
-        self.packages.insert(package.as_str().to_string(), entry)
+        self.packages.insert(package.clone(), entry)
     }
 
     pub fn remove(&mut self, package: &PackagePath) -> Option<GlobalEntry> {
-        self.packages.remove(package.as_str())
+        self.packages.remove(package)
     }
 
-    /// Entries as `(scoped creator/slug, entry)` pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &GlobalEntry)> {
+    /// Entries as `(package, entry)` pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&PackagePath, &GlobalEntry)> {
         self.packages.iter()
     }
 }
 
-/// A ledger entry paired with the scoped `creator/slug` it is filed under.
-pub type ScopedEntry = (String, GlobalEntry);
+/// A ledger entry paired with the package it is filed under.
+pub type ScopedEntry = (PackagePath, GlobalEntry);
 
 /// Every global entry across every Houdini version's ledger under `hpm_home`.
 ///
@@ -202,7 +206,7 @@ mod tests {
 
         let loaded = Ledger::load(&path).unwrap();
         let (name, entry) = loaded.iter().next().unwrap();
-        assert_eq!(name, "acme/tools");
+        assert_eq!(name.as_str(), "acme/tools");
         assert_eq!(entry.version, "1.2.3");
     }
 
@@ -293,7 +297,10 @@ mod tests {
             ))
             .unwrap();
 
-        assert_eq!(all_global_entries(home).unwrap()[0].0, "acme/tools");
+        assert_eq!(
+            all_global_entries(home).unwrap()[0].0.as_str(),
+            "acme/tools"
+        );
     }
 
     #[test]
@@ -316,6 +323,22 @@ mod tests {
         let result = all_global_entries(tmp.path());
         std::fs::set_permissions(&global, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(result, Err(LedgerError::Io(_))), "{result:?}");
+    }
+
+    /// A key that is not a package path fails the load, naming the ledger,
+    /// so `hpm global` and `hpm clean` both stop on it rather than skipping it.
+    #[test]
+    fn a_key_that_is_not_a_package_path_fails_the_load() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("houdini-21.0.json");
+        let json = serde_json::json!({ "packages": { "not a path": {
+            "version": "1.0.0", "manifest_file": "hpm-x.json", "install_path": "/store/x@1.0.0"
+        } } });
+        std::fs::write(&path, json.to_string()).unwrap();
+        match Ledger::load(&path) {
+            Err(LedgerError::Parse { path: p, .. }) => assert_eq!(p, path),
+            other => panic!("expected a parse error, got {other:?}"),
+        }
     }
 
     mod format {

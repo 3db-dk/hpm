@@ -21,7 +21,7 @@ use std::str::FromStr;
 ///
 /// Stored as a single string with the `/` index cached so `creator()` and
 /// `slug()` are O(1) substring slices.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PackagePath {
     full: String,
     /// Index of the `/` separator inside `full`. Cached at construction.

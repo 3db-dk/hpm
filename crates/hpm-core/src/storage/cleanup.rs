@@ -175,25 +175,12 @@ impl StorageManager {
                 }
             })?;
 
-        // The ledger keys installs by scoped `creator/slug`; the graph keys by
-        // bare slug, so derive the slug from the ledger key rather than by
-        // parsing the install path — a path whose shape we fail to recognise
-        // would otherwise drop a root silently and delete a live package.
-        let mut roots = HashSet::new();
-        for (name, entry) in entries {
-            let slug = match hpm_package::PackagePath::new(name.clone()) {
-                Ok(path) => path.slug().to_string(),
-                Err(e) => {
-                    // Same reasoning as an unreadable ledger: a root we cannot
-                    // interpret must stop the collector, not vanish from it.
-                    return Err(StorageError::GlobalLedger {
-                        message: format!("global ledger entry '{name}' is not a package path: {e}"),
-                    });
-                }
-            };
-            roots.insert(PackageId::new(slug, entry.version.clone()));
-        }
-        Ok(roots)
+        // The ledger keys installs by package (a key that is not one fails
+        // the load above); the graph keys by bare slug.
+        Ok(entries
+            .into_iter()
+            .map(|(package, entry)| PackageId::new(package.slug().to_string(), entry.version))
+            .collect())
     }
 
     /// Remove orphaned packages. Returns identifiers of the packages actually removed.

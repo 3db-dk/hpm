@@ -81,8 +81,15 @@ fn write_stamp(package_dir: &Path) {
 /// Delete the stamp for `package_dir`, if any. Called when the package
 /// directory is removed so a stale sibling doesn't outlive its tree.
 pub fn forget_repair(package_dir: &Path) {
-    if let Some(path) = stamp_path(package_dir) {
-        let _ = std::fs::remove_file(path);
+    if let Some(path) = stamp_path(package_dir)
+        && let Err(e) = std::fs::remove_file(&path)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(
+            "Could not remove executable-mode stamp {}: {}",
+            path.display(),
+            e
+        );
     }
 }
 

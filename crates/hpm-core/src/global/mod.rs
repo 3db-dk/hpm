@@ -145,7 +145,7 @@ pub fn list(hpm_home: &Path, version: HoudiniVersion) -> Result<Vec<GlobalInstal
         .map(|(name, entry)| {
             let manifest_path = packages_dir.join(&entry.manifest_file);
             GlobalInstall {
-                package: name.clone(),
+                package: name.to_string(),
                 version: entry.version.clone(),
                 registry: entry.registry.clone(),
                 manifest_present: manifest_path.exists(),

@@ -30,6 +30,14 @@ fn coordinate(name: &str, version: &str) -> String {
     format!("{}@{}", slug_of(name), version)
 }
 
+/// The `(slug, version)` a store or dev-container directory name
+/// (`<slug>@<version>`) names, or `None` when `name` is not one. Splits on
+/// the last `@`; both parts must be non-empty.
+pub fn parse_coordinate(name: &str) -> Option<(&str, &str)> {
+    name.rsplit_once('@')
+        .filter(|(slug, version)| !slug.is_empty() && !version.is_empty())
+}
+
 /// The store directory for `name@version` under `packages_dir`. `name` is a
 /// dependency key (`creator/slug`) or a bare slug.
 pub fn cas_dir(packages_dir: &Path, name: &str, version: &str) -> PathBuf {
@@ -165,6 +173,36 @@ mod tests {
             l.dev_container("acme/tools", "1.0.0"),
             PathBuf::from("/h/packages/_dev/tools@1.0.0")
         );
+    }
+
+    mod coordinates {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// A directory name made from a slug and version parses back to
+            /// them, whether the name was given scoped or bare.
+            #[test]
+            fn coordinate_round_trips(
+                creator in prop::option::of("[a-z][a-z0-9-]{0,6}"),
+                slug in "[a-z][a-z0-9-]{0,8}",
+                version in "[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{1,2}(-[a-z0-9.]{1,6})?",
+            ) {
+                let name = match &creator {
+                    Some(c) => format!("{c}/{slug}"),
+                    None => slug.clone(),
+                };
+                let dir = coordinate(&name, &version);
+                prop_assert_eq!(parse_coordinate(&dir), Some((slug.as_str(), version.as_str())));
+            }
+        }
+
+        #[test]
+        fn names_without_both_parts_are_not_coordinates() {
+            for bad in ["tool", "@1.0.0", "tool@", "_dev", ".stage-1-0"] {
+                assert_eq!(parse_coordinate(bad), None, "{bad}");
+            }
+        }
     }
 
     #[test]
