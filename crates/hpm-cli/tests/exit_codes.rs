@@ -208,3 +208,22 @@ fn update_dry_run_in_json() {
     );
     snapshot!("update_dry_run_in_json", report);
 }
+
+/// In JSON mode, `update` without `--yes` or `--dry-run` refuses rather
+/// than applying unasked; a corrupt lock file and an unknown package name
+/// are errors. None of them touches hpm.toml.
+#[test]
+fn update_refusals() {
+    let env = Env::new();
+    let app = update_project(&env);
+    let before = std::fs::read_to_string(app.join("hpm.toml")).unwrap();
+    let mut report = env.run(&app, &["--output", "json-compact", "update"]);
+    report += &env.run(&app, &["update", "--dry-run", "acme/nope"]);
+    std::fs::write(app.join("hpm.lock"), "[dependencies\n").unwrap();
+    report += &env.run(&app, &["update", "--dry-run"]);
+    assert_eq!(
+        std::fs::read_to_string(app.join("hpm.toml")).unwrap(),
+        before
+    );
+    snapshot!("update_refusals", report);
+}

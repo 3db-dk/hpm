@@ -781,6 +781,11 @@ Audit checks:
 - **Lock file presence** — warns if `hpm.lock` is missing.
 - **Lock file staleness** — warns if `hpm.lock` is older than 90 days.
 - **Checksum verification** — verifies every cached package in `~/.hpm/packages/` matches the checksum stored in `hpm.lock`.
+- **Installed files** — compares each locked package's installed files with the record its install wrote (missing, truncated or changed files).
+
+The first three are advisories: they print `WARN` and the audit still
+succeeds. Checksum and installed-file failures, and an `hpm.lock` that cannot
+be read, are integrity failures: they print `FAIL` and `hpm audit` exits 1.
 
 See [Security](security.md) for more.
 
@@ -1841,7 +1846,7 @@ A typical CI recipe:
 ```sh
 set -e
 hpm install --frozen-lockfile                 # fail if lock is stale
-hpm audit                                       # warn on security issues
+hpm audit                                       # fail on integrity problems
 hpm pack --json                                 # produce archive + manifest
 ```
 

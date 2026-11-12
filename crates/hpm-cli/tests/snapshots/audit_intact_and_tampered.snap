@@ -24,7 +24,7 @@ HPM Security Audit
 Found 1 warning(s).
 --- stderr
 args: audit
-exit: 0
+exit: 1
 --- stdout
 
 HPM Security Audit
@@ -33,8 +33,8 @@ HPM Security Audit
   PASS Lock file exists (hpm.lock)
   PASS Lock file is recent
   WARN local/dep: Uses insecure HTTP URL
-  WARN Checksum verification failed: Checksum mismatch for local/dep: expected [SHA256], got [SHA256]
-  WARN local/dep@1.0.0: otls/a.hda differs from what was installed
+  FAIL Checksum verification failed: Checksum mismatch for local/dep: expected [SHA256], got [SHA256]
+  FAIL local/dep@1.0.0: otls/a.hda differs from what was installed
 
-Found 3 warning(s).
 --- stderr
+error: Package error: Audit found 2 integrity failure(s) and 1 warning(s): installed packages differ from hpm.lock

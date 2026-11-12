@@ -14,7 +14,6 @@ use crate::console::Console;
 use anyhow::{Result, bail};
 use console::style;
 use hpm_config::{Config, ConfigOverlay, RegistrySourceConfig, RegistryType};
-use hpm_core::registry::Registry;
 
 // `RegistrySet` construction lives on the type itself
 // (`RegistrySet::from_config(&Config)` in hpm-core); this module owns the
@@ -167,7 +166,8 @@ pub async fn remove_registry(name: &str, console: &mut Console) -> Result<()> {
     Ok(())
 }
 
-/// Update (refresh) all registry caches.
+/// Update (refresh) all registry caches. Fails when any registry could not
+/// be refreshed, after reporting every one.
 pub async fn update_registries(config: &Config, console: &mut Console) -> Result<()> {
     if config.registries.is_empty() {
         console.stdout(style("No registries configured.").dim().to_string());
@@ -180,30 +180,37 @@ pub async fn update_registries(config: &Config, console: &mut Console) -> Result
         config.registries.len()
     ));
 
-    for reg in &config.registries {
-        let prefix = format!("  {} {}...", style("*").dim(), style(&reg.name).cyan());
-        match reg.registry_type {
-            RegistryType::Api => {
-                // API registries don't need cache update
-                console.stdout(format!("{prefix} {}", style("OK (live)").green()));
+    let registries = hpm_core::registry::RegistrySet::from_config(config)?;
+    let results = registries.refresh_all().await;
+    let mut failed = 0;
+    // The set holds the configured registries in order.
+    for (reg, (name, result)) in config.registries.iter().zip(&results) {
+        let prefix = format!("  {} {}...", style("*").dim(), style(name).cyan());
+        match (result, &reg.registry_type) {
+            (Ok(()), RegistryType::Api) => {
+                console.stdout(format!("{prefix} {}", style("OK (live)").green()))
             }
-            RegistryType::Git => {
-                let cache_dir = config.registry_cache_path(&reg.name);
-                let git_reg =
-                    hpm_core::registry::git::GitRegistry::new(&reg.name, &reg.url, &cache_dir);
-                match git_reg.refresh().await {
-                    Ok(()) => console.stdout(format!("{prefix} {}", style("OK").green())),
-                    Err(e) => console.stdout(format!(
-                        "{prefix} {} {}",
-                        style("FAILED").red(),
-                        style(e).dim()
-                    )),
-                }
+            (Ok(()), RegistryType::Git) => {
+                console.stdout(format!("{prefix} {}", style("OK").green()))
+            }
+            (Err(e), _) => {
+                failed += 1;
+                console.stdout(format!(
+                    "{prefix} {} {}",
+                    style("FAILED").red(),
+                    style(e).dim()
+                ));
             }
         }
     }
 
     console.stdout("");
+    if failed > 0 {
+        bail!(
+            "{failed} of {} registries could not be updated",
+            results.len()
+        );
+    }
     console.stdout(
         style("Registry update complete.")
             .green()

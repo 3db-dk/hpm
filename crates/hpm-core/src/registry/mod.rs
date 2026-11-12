@@ -321,6 +321,16 @@ impl RegistrySet {
         })
     }
 
+    /// Refresh every registry's local cache, in set order: one result per
+    /// registry, named. A failure does not stop the others.
+    pub async fn refresh_all(&self) -> Vec<(&str, Result<(), RegistryError>)> {
+        let mut results = Vec::with_capacity(self.registries.len());
+        for registry in &self.registries {
+            results.push((registry.name(), registry.refresh().await));
+        }
+        results
+    }
+
     pub fn is_empty(&self) -> bool {
         self.registries.is_empty()
     }

@@ -140,6 +140,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `build`/`pack --platform` a known platform, `global --houdini` a
   Houdini version, and `clean --python-only` conflicts with
   `--comprehensive`.
+- **Exit codes:** `hpm audit` exits 1 when a checksum or installed-file
+  check fails, or `hpm.lock` cannot be read (printed as `FAIL`; the
+  advisories still only warn). `hpm registry update` exits 1 when a
+  registry could not be refreshed, after reporting each one; it used to
+  print "complete" and exit 0. `hpm --output json update` needs
+  `--dry-run` or `--yes`; it used to apply the updates without asking.
+  Scripts that relied on exit 0 from these now see the failure.
+- `hpm update` stops on an `hpm.lock` it cannot read instead of treating
+  the project as unlocked, and on a package name that is not a
+  dependency instead of ignoring it.
 - The JSON error document honours `--output json-compact` and
   `json-lines` (one line) instead of always being pretty-printed.
 - `hpm pack` refuses a host platform missing from `[compat].platforms`
