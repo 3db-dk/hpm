@@ -6,7 +6,7 @@ use hpm_package::{EnvMethod, EnvValue, HoudiniPackage, IoOp, ManifestEnvEntry};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use super::{ProjectError, ProjectManager};
 
@@ -97,11 +97,8 @@ impl ProjectManager {
         venv_site_packages: Option<&Path>,
         project_env_overrides: &IndexMap<String, ManifestEnvEntry>,
     ) -> Result<(), ProjectError> {
-        let houdini_package = self.create_houdini_package_with_python(
-            installed_package,
-            venv_site_packages,
-            project_env_overrides,
-        )?;
+        let houdini_package =
+            build_houdini_package(installed_package, venv_site_packages, project_env_overrides)?;
         let manifest_path = self
             .project_paths
             .package_manifest_path(&installed_package.manifest.package.path);
@@ -226,23 +223,6 @@ impl ProjectManager {
         }
         Ok(())
     }
-
-    #[cfg(test)]
-    pub(super) fn create_houdini_package(
-        &self,
-        installed_package: &InstalledPackage,
-    ) -> Result<HoudiniPackage, ProjectError> {
-        self.create_houdini_package_with_python(installed_package, None, &IndexMap::new())
-    }
-
-    pub(super) fn create_houdini_package_with_python(
-        &self,
-        installed_package: &InstalledPackage,
-        venv_site_packages: Option<&Path>,
-        project_env_overrides: &IndexMap<String, ManifestEnvEntry>,
-    ) -> Result<HoudiniPackage, ProjectError> {
-        build_houdini_package(installed_package, venv_site_packages, project_env_overrides)
-    }
 }
 
 /// Build the Houdini package description hpm emits for an installed package.
@@ -257,198 +237,166 @@ pub fn build_houdini_package(
     venv_site_packages: Option<&Path>,
     project_env_overrides: &IndexMap<String, ManifestEnvEntry>,
 ) -> Result<HoudiniPackage, ProjectError> {
+    let package_path = &installed_package.install_path;
+
+    // Point hpath at the package root so Houdini auto-discovers convention
+    // subdirs (otls/, desktop/, toolbar/, python_panels/, viewer_states/,
+    // python3.11libs/, etc.). See sidefx.com/docs/houdini/ref/plugins.html.
+    let hpath = vec![package_path.to_string_lossy().to_string()];
+
+    // Build environment variables
+    let mut env = vec![];
+
+    // Inject venv site-packages for packages that declare python_dependencies
+    if let Some(site_packages) = venv_site_packages
+        && !installed_package.manifest.python_dependencies.is_empty()
     {
-        let package_path = &installed_package.install_path;
+        let mut python_env = HashMap::new();
+        python_env.insert(
+            "PYTHONPATH".to_string(),
+            hpm_package::HoudiniEnvValue::prepend(site_packages.to_string_lossy()),
+        );
+        env.push(python_env);
+    }
 
-        // Point hpath at the package root so Houdini auto-discovers convention
-        // subdirs (otls/, desktop/, toolbar/, python_panels/, viewer_states/,
-        // python3.11libs/, etc.). See sidefx.com/docs/houdini/ref/plugins.html.
-        let hpath = vec![package_path.to_string_lossy().to_string()];
+    // Package's own python/ directory
+    if package_path.join("python").exists() {
+        let mut python_env = HashMap::new();
+        python_env.insert(
+            "PYTHONPATH".to_string(),
+            hpm_package::HoudiniEnvValue::prepend(package_path.join("python").to_string_lossy()),
+        );
+        env.push(python_env);
+    }
 
-        // Build environment variables
-        let mut env = vec![];
+    // Scripts path
+    if package_path.join("scripts").exists() {
+        let mut scripts_env = HashMap::new();
+        scripts_env.insert(
+            "HOUDINI_SCRIPT_PATH".to_string(),
+            hpm_package::HoudiniEnvValue::prepend(package_path.join("scripts").to_string_lossy()),
+        );
+        env.push(scripts_env);
+    }
 
-        // Inject venv site-packages for packages that declare python_dependencies
-        if let Some(site_packages) = venv_site_packages
-            && !installed_package.manifest.python_dependencies.is_empty()
-        {
-            let mut python_env = HashMap::new();
-            python_env.insert(
-                "PYTHONPATH".to_string(),
-                hpm_package::HoudiniEnvValue::prepend(site_packages.to_string_lossy()),
-            );
-            env.push(python_env);
-        }
+    // Append user-defined env vars from [runtime], reconciling each
+    // package entry with any project-level [runtime] override of the
+    // same key. The override itself is NOT emitted here — it lives in
+    // the project overrides manifest (PROJECT_OVERRIDES_FILE), which
+    // Houdini processes after every per-package file. Emitting it per
+    // declaring package would apply it once per package that declares
+    // the var. Per key:
+    //
+    // * no override — emit the package's own entry.
+    // * `set` override — the package's entry is suppressed; the
+    //   overrides manifest carries the value (a flat string for a
+    //   plain `set`) that would win anyway, since it processes last.
+    // * `append` / `prepend` override — the package's entry is
+    //   emitted; the overrides manifest merges the project value in
+    //   after all package contributions.
+    //
+    // Each entry's conditional variants are filtered by `is_dev` —
+    // branches gated to a non-matching `install_source` drop out, so
+    // dev-only contributions never reach a registry consumer's Houdini
+    // manifest and registry-only contributions never reach a dev
+    // install. A required-but-unsupplied placeholder (no value from the
+    // package and none from the project) surfaces as `MissingRequiredEnv`.
+    if !installed_package.manifest.runtime.is_empty() {
+        let pkg_root = package_path.to_string_lossy().into_owned();
+        let user_runtime = &installed_package.manifest.runtime;
+        let slug = installed_package.manifest.package.slug().to_string();
+        let is_dev = installed_package.is_dev;
 
-        // Package's own python/ directory
-        if package_path.join("python").exists() {
-            let mut python_env = HashMap::new();
-            python_env.insert(
-                "PYTHONPATH".to_string(),
-                hpm_package::HoudiniEnvValue::prepend(
-                    package_path.join("python").to_string_lossy(),
-                ),
-            );
-            env.push(python_env);
-        }
+        // Lower one entry and, unless it is inert in this install
+        // context (every variant install-source-filtered out), push it
+        // onto `env` under `key`.
+        let emit = |key: &str,
+                    entry: &ManifestEnvEntry,
+                    env: &mut Vec<HashMap<String, hpm_package::HoudiniEnvValue>>|
+         -> Result<(), ProjectError> {
+            let lowered = entry
+                .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)], is_dev)
+                .map_err(|e| ProjectError::InvalidEnvExpression {
+                    var: key.to_string(),
+                    package: slug.clone(),
+                    message: e.to_string(),
+                })?;
+            if let Some(houdini_value) = lowered {
+                let mut env_map = HashMap::new();
+                env_map.insert(key.to_string(), houdini_value);
+                env.push(env_map);
+            }
+            Ok(())
+        };
 
-        // Scripts path
-        if package_path.join("scripts").exists() {
-            let mut scripts_env = HashMap::new();
-            scripts_env.insert(
-                "HOUDINI_SCRIPT_PATH".to_string(),
-                hpm_package::HoudiniEnvValue::prepend(
-                    package_path.join("scripts").to_string_lossy(),
-                ),
-            );
-            env.push(scripts_env);
-        }
+        for key in user_runtime.keys() {
+            let pkg_entry = user_runtime
+                .get(key)
+                .expect("key originates from package's [runtime]");
+            let project_override = project_env_overrides.get(key);
 
-        // Append user-defined env vars from [runtime], reconciling each
-        // package entry with any project-level [runtime] override of the
-        // same key. The override itself is NOT emitted here — it lives in
-        // the project overrides manifest (PROJECT_OVERRIDES_FILE), which
-        // Houdini processes after every per-package file. Emitting it per
-        // declaring package would apply it once per package that declares
-        // the var. Per key:
-        //
-        // * no override — emit the package's own entry.
-        // * `set` override — the package's entry is suppressed; the
-        //   overrides manifest carries the value (a flat string for a
-        //   plain `set`) that would win anyway, since it processes last.
-        // * `append` / `prepend` override — the package's entry is
-        //   emitted; the overrides manifest merges the project value in
-        //   after all package contributions.
-        //
-        // Each entry's conditional variants are filtered by `is_dev` —
-        // branches gated to a non-matching `install_source` drop out, so
-        // dev-only contributions never reach a registry consumer's Houdini
-        // manifest and registry-only contributions never reach a dev
-        // install. A required-but-unsupplied placeholder (no value from the
-        // package and none from the project) surfaces as `MissingRequiredEnv`.
-        if !installed_package.manifest.runtime.is_empty() {
-            let pkg_root = package_path.to_string_lossy().into_owned();
-            let user_runtime = &installed_package.manifest.runtime;
-            let slug = installed_package.manifest.package.slug().to_string();
-            let is_dev = installed_package.is_dev;
-
-            // Lower one entry and, unless it is inert in this install
-            // context (every variant install-source-filtered out), push it
-            // onto `env` under `key`.
-            let emit = |key: &str,
-                        entry: &ManifestEnvEntry,
-                        env: &mut Vec<HashMap<String, hpm_package::HoudiniEnvValue>>|
-             -> Result<(), ProjectError> {
-                let lowered = entry
-                    .lower(&[("$HPM_PACKAGE_ROOT", &pkg_root)], is_dev)
-                    .map_err(|e| ProjectError::InvalidEnvExpression {
-                        var: key.to_string(),
-                        package: slug.clone(),
-                        message: e.to_string(),
-                    })?;
-                if let Some(houdini_value) = lowered {
-                    let mut env_map = HashMap::new();
-                    env_map.insert(key.to_string(), houdini_value);
-                    env.push(env_map);
+            match project_override {
+                // No project override: emit the package's own entry. A
+                // valueless entry here is an unsatisfied required
+                // placeholder.
+                None => {
+                    if pkg_entry.value.is_none() {
+                        return Err(ProjectError::MissingRequiredEnv {
+                            var: key.clone(),
+                            package: slug.clone(),
+                        });
+                    }
+                    emit(key, pkg_entry, &mut env)?;
                 }
-                Ok(())
-            };
-
-            for key in user_runtime.keys() {
-                let pkg_entry = user_runtime
-                    .get(key)
-                    .expect("key originates from package's [runtime]");
-                let project_override = project_env_overrides.get(key);
-
-                match project_override {
-                    // No project override: emit the package's own entry. A
-                    // valueless entry here is an unsatisfied required
-                    // placeholder.
-                    None => {
-                        if pkg_entry.value.is_none() {
-                            return Err(ProjectError::MissingRequiredEnv {
-                                var: key.clone(),
-                                package: slug.clone(),
-                            });
-                        }
+                // `set` replaces the package's contribution wholesale:
+                // suppress the package entry; the overrides manifest
+                // carries the project value (emitted flat, so it
+                // overwrites even a path-registered variable).
+                Some(over) if over.method == EnvMethod::Set => {
+                    if over.value.is_none() {
+                        return Err(ProjectError::MissingRequiredEnv {
+                            var: key.clone(),
+                            package: slug.clone(),
+                        });
+                    }
+                }
+                // `append` / `prepend` combine with the package value:
+                // emit the package's entry; the overrides manifest
+                // merges the project value in after it. A valueless
+                // package entry (required placeholder) contributes
+                // nothing and is satisfied by the project's value.
+                Some(over) => {
+                    if pkg_entry.value.is_none() && over.value.is_none() {
+                        return Err(ProjectError::MissingRequiredEnv {
+                            var: key.clone(),
+                            package: slug.clone(),
+                        });
+                    }
+                    if pkg_entry.value.is_some() {
                         emit(key, pkg_entry, &mut env)?;
                     }
-                    // `set` replaces the package's contribution wholesale:
-                    // suppress the package entry; the overrides manifest
-                    // carries the project value (emitted flat, so it
-                    // overwrites even a path-registered variable).
-                    Some(over) if over.method == EnvMethod::Set => {
-                        if over.value.is_none() {
-                            return Err(ProjectError::MissingRequiredEnv {
-                                var: key.clone(),
-                                package: slug.clone(),
-                            });
-                        }
-                    }
-                    // `append` / `prepend` combine with the package value:
-                    // emit the package's entry; the overrides manifest
-                    // merges the project value in after it. A valueless
-                    // package entry (required placeholder) contributes
-                    // nothing and is satisfied by the project's value.
-                    Some(over) => {
-                        if pkg_entry.value.is_none() && over.value.is_none() {
-                            return Err(ProjectError::MissingRequiredEnv {
-                                var: key.clone(),
-                                package: slug.clone(),
-                            });
-                        }
-                        if pkg_entry.value.is_some() {
-                            emit(key, pkg_entry, &mut env)?;
-                        }
-                    }
                 }
             }
         }
-
-        // Generate enable condition from [compat].houdini. The range is a
-        // `HoudiniRange` newtype that validated at parse time, so emitting
-        // the expression is infallible here.
-        let enable = installed_package
-            .manifest
-            .compat
-            .houdini
-            .as_ref()
-            .map(hpm_package::HoudiniRange::to_enable_expression);
-
-        Ok(HoudiniPackage {
-            hpath: if hpath.is_empty() { None } else { Some(hpath) },
-            env: if env.is_empty() { None } else { Some(env) },
-            enable,
-            requires: None,
-            recommends: None,
-        })
     }
-}
 
-impl ProjectManager {
-    pub fn generate_houdini_manifests(&self) -> Result<(), ProjectError> {
-        info!("Regenerating all Houdini manifests");
+    // Generate enable condition from [compat].houdini. The range is a
+    // `HoudiniRange` newtype that validated at parse time, so emitting
+    // the expression is infallible here.
+    let enable = installed_package
+        .manifest
+        .compat
+        .houdini
+        .as_ref()
+        .map(hpm_package::HoudiniRange::to_enable_expression);
 
-        let dependencies = self.list_dependencies()?;
-        let project_env_overrides = self
-            .load_project_manifest()?
-            .map(|m| m.runtime)
-            .unwrap_or_default();
-
-        for dep in dependencies {
-            if let Some(installed_package) = dep.installed_package {
-                self.generate_houdini_manifest_with_python(
-                    &installed_package,
-                    None,
-                    &project_env_overrides,
-                )?;
-            }
-        }
-        self.write_project_overrides_manifest(&project_env_overrides)?;
-
-        info!("Successfully regenerated all Houdini manifests");
-        Ok(())
-    }
+    Ok(HoudiniPackage {
+        hpath: if hpath.is_empty() { None } else { Some(hpath) },
+        env: if env.is_empty() { None } else { Some(env) },
+        enable,
+        requires: None,
+        recommends: None,
+    })
 }
 
 #[cfg(test)]

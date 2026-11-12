@@ -1,6 +1,6 @@
 //! CLI error types with categorized exit codes and help text.
 //!
-//! - `Config`, `Package`, `Network`, `Io` — user errors, exit code 1.
+//! - `Config`, `Package`, `Network` — user errors, exit code 1.
 //! - [`ExitStatus::External`] — preserves a child process exit code.
 
 use console::style;
@@ -29,13 +29,6 @@ pub enum CliError {
         source: anyhow::Error,
         help: Option<String>,
     },
-
-    #[error("I/O error")]
-    Io {
-        #[source]
-        source: anyhow::Error,
-        help: Option<String>,
-    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,10 +51,9 @@ impl From<ExitStatus> for ExitCode {
 impl From<&CliError> for ExitStatus {
     fn from(error: &CliError) -> Self {
         match error {
-            CliError::Config { .. }
-            | CliError::Package { .. }
-            | CliError::Network { .. }
-            | CliError::Io { .. } => ExitStatus::Failure,
+            CliError::Config { .. } | CliError::Package { .. } | CliError::Network { .. } => {
+                ExitStatus::Failure
+            }
         }
     }
 }
@@ -92,8 +84,7 @@ impl CliError {
         match self {
             CliError::Config { help, .. }
             | CliError::Package { help, .. }
-            | CliError::Network { help, .. }
-            | CliError::Io { help, .. } => help.as_deref(),
+            | CliError::Network { help, .. } => help.as_deref(),
         }
     }
 
@@ -109,7 +100,6 @@ impl CliError {
             CliError::Config { source, .. } => format!("Configuration error: {source:#}"),
             CliError::Package { source, .. } => format!("Package error: {source:#}"),
             CliError::Network { source, .. } => format!("Network error: {source:#}"),
-            CliError::Io { source, .. } => format!("I/O error: {source:#}"),
         }
     }
 

@@ -643,15 +643,6 @@ proptest! {
         prop_assert_eq!(back, table);
     }
 
-    /// The generated Houdini package JSON round-trips through serde_json.
-    #[test]
-    fn prop_houdini_package_json_roundtrip(manifest in package_manifest_strategy()) {
-        let pkg = manifest.generate_houdini_package().unwrap();
-        let json = serde_json::to_string(&pkg).unwrap();
-        let back: hpm_package::HoudiniPackage = serde_json::from_str(&json).unwrap();
-        prop_assert_eq!(back, pkg);
-    }
-
     /// The native (hpackage-style) package JSON round-trips through serde_json
     /// for both targets, whenever the manifest can produce one.
     #[test]
@@ -665,33 +656,20 @@ proptest! {
         }
     }
 
-    /// Test that Houdini package generation is consistent and valid
+    /// The bundled `{slug}.json` exists for every valid manifest, is named
+    /// for the slug, roots `hpath` at `$HOUDINI_PACKAGE_PATH/{slug}`, carries
+    /// the version, and has an `enable` exactly when `[compat].houdini` is set.
     #[test]
     fn prop_houdini_package_generation(manifest in package_manifest_strategy()) {
-        let houdini_pkg = manifest
-            .generate_houdini_package()
+        let (file, pkg) = manifest
+            .generate_houdini_native_package()
             .expect("strategy yields valid manifests");
-
-        // Generated package should always have hpath and env
-        prop_assert!(houdini_pkg.hpath.is_some());
-        prop_assert!(houdini_pkg.env.is_some());
-
-        // If [compat].houdini is set, the enable expression should be derived.
-        if manifest.compat.houdini.is_some() {
-            prop_assert!(houdini_pkg.enable.is_some());
-        }
-
-        // hpath should be exactly the package root so Houdini auto-discovers
-        // convention subdirs (otls/, desktop/, toolbar/, etc.)
-        let hpath = houdini_pkg.hpath.unwrap();
-        prop_assert_eq!(hpath, vec!["$HPM_PACKAGE_ROOT".to_string()]);
-
-        // env should contain PYTHONPATH and HOUDINI_SCRIPT_PATH
-        let env = houdini_pkg.env.unwrap();
-        let has_python_path = env.iter().any(|env_map| env_map.contains_key("PYTHONPATH"));
-        let has_script_path = env.iter().any(|env_map| env_map.contains_key("HOUDINI_SCRIPT_PATH"));
-        prop_assert!(has_python_path);
-        prop_assert!(has_script_path);
+        let slug = manifest.package.path.slug();
+        prop_assert_eq!(file, format!("{slug}.json"));
+        prop_assert_eq!(&pkg.name, slug);
+        prop_assert_eq!(pkg.hpath, format!("$HOUDINI_PACKAGE_PATH/{slug}"));
+        prop_assert_eq!(&pkg.hpackage.version, &manifest.package.version);
+        prop_assert_eq!(pkg.enable.is_some(), manifest.compat.houdini.is_some());
     }
 
     // prop_package_path_validation removed: PackagePath::new enforces
@@ -854,38 +832,31 @@ proptest! {
                 operators: Vec::new(),
         };
 
-        // Houdini package generation either succeeds with a well-formed
-        // shape (always with hpath + env) or returns Err for malformed
-        // [compat].houdini — the latter is also a documented outcome so
-        // we accept both branches here. The strategy mixes malformed
+        // Generation either succeeds or returns Err for a manifest it
+        // cannot lower; both are documented outcomes. The strategy mixes malformed
         // versions in for robustness coverage.
-        let Ok(houdini_pkg) = manifest.generate_houdini_package() else {
+        let Ok((_, houdini_pkg)) = manifest.generate_houdini_native_package() else {
             return Ok(());
         };
 
-        prop_assert!(houdini_pkg.hpath.is_some());
-        prop_assert!(houdini_pkg.env.is_some());
-
         // Environment variables should be properly formatted
-        if let Some(env) = &houdini_pkg.env {
-            for env_map in env {
-                for (key, value) in env_map {
-                    prop_assert!(!key.is_empty(), "Environment variable key should not be empty");
-                    match value {
-                        HoudiniEnvValue::Simple(s) => {
-                            prop_assert!(!s.is_empty(), "Simple env value should not be empty");
-                        }
-                        // `method` is a typed enum (HoudiniMethod), so only the
-                        // value shape needs checking here.
-                        HoudiniEnvValue::Detailed { value, .. } => {
-                            prop_assert!(!value.is_empty(), "Detailed env value should not be empty");
-                        }
-                        HoudiniEnvValue::DetailedConditional { value, .. } => {
-                            prop_assert!(
-                                !value.is_empty(),
-                                "Conditional env value list should not be empty"
-                            );
-                        }
+        for env_map in &houdini_pkg.env {
+            for (key, value) in env_map {
+                prop_assert!(!key.is_empty(), "Environment variable key should not be empty");
+                match value {
+                    HoudiniEnvValue::Simple(s) => {
+                        prop_assert!(!s.is_empty(), "Simple env value should not be empty");
+                    }
+                    // `method` is a typed enum (HoudiniMethod), so only the
+                    // value shape needs checking here.
+                    HoudiniEnvValue::Detailed { value, .. } => {
+                        prop_assert!(!value.is_empty(), "Detailed env value should not be empty");
+                    }
+                    HoudiniEnvValue::DetailedConditional { value, .. } => {
+                        prop_assert!(
+                            !value.is_empty(),
+                            "Conditional env value list should not be empty"
+                        );
                     }
                 }
             }

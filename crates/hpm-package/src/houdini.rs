@@ -134,16 +134,6 @@ impl HoudiniEnvValue {
         }
     }
 
-    /// Create a `replace` environment value. Used for the list form of a
-    /// conditional `set`; flat/unconditional `set` emits [`Self::simple`]
-    /// instead (see [`ManifestEnvEntry::lower`][crate::manifest::env]).
-    pub fn replace(value: impl Into<String>) -> Self {
-        HoudiniEnvValue::Detailed {
-            method: HoudiniMethod::Replace,
-            value: vec![value.into()],
-        }
-    }
-
     // No conditional() constructor on purpose: conditional-object arrays
     // must go through `lower_conditional`, which compiles the branch
     // expressions to be mutually exclusive. A hand-built array would
@@ -553,7 +543,6 @@ mod tests {
     fn houdini_env_value_constructors() {
         let simple = HoudiniEnvValue::simple("value");
         let prepend = HoudiniEnvValue::prepend("value");
-        let replace = HoudiniEnvValue::replace("value");
 
         match simple {
             HoudiniEnvValue::Simple(v) => assert_eq!(v, "value"),
@@ -563,14 +552,6 @@ mod tests {
         match prepend {
             HoudiniEnvValue::Detailed { method, value } => {
                 assert_eq!(method, HoudiniMethod::Prepend);
-                assert_eq!(value, vec!["value"]);
-            }
-            _ => panic!("Expected Detailed variant"),
-        }
-
-        match replace {
-            HoudiniEnvValue::Detailed { method, value } => {
-                assert_eq!(method, HoudiniMethod::Replace);
                 assert_eq!(value, vec!["value"]);
             }
             _ => panic!("Expected Detailed variant"),

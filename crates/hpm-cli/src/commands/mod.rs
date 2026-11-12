@@ -16,5 +16,3 @@ pub mod search;
 #[cfg(test)]
 pub(crate) mod test_fixtures;
 pub mod update;
-
-pub use init::init_package;

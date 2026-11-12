@@ -10,7 +10,6 @@ config/.gitkeep
 hpm.toml
 otls
 otls/.gitkeep
-package.json
 presets
 presets/.gitkeep
 python
@@ -32,31 +31,6 @@ keywords = ["houdini"]
 [compat]
 houdini = "^21"
 
---- package.json
-{
-  "hpath": [
-    "$HPM_PACKAGE_ROOT"
-  ],
-  "env": [
-    {
-      "PYTHONPATH": {
-        "method": "prepend",
-        "value": [
-          "$HPM_PACKAGE_ROOT/python"
-        ]
-      }
-    },
-    {
-      "HOUDINI_SCRIPT_PATH": {
-        "method": "prepend",
-        "value": [
-          "$HPM_PACKAGE_ROOT/scripts"
-        ]
-      }
-    }
-  ],
-  "enable": "houdini_version >= '21' and houdini_version < '22'"
-}
 --- README.md
 # demo-pkg
 

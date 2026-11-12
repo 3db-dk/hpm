@@ -84,7 +84,7 @@ fn test_init_workflow() {
     let package_path = temp_dir.path().join("test-integration-package");
     assert!(package_path.exists());
     assert!(package_path.join("hpm.toml").exists());
-    assert!(package_path.join("package.json").exists());
+    assert!(!package_path.join("package.json").exists());
     assert!(package_path.join("README.md").exists());
     assert!(package_path.join("python").is_dir());
     assert!(package_path.join("otls").is_dir());

@@ -281,42 +281,6 @@ impl DependencySpec {
             _ => None,
         }
     }
-
-    /// Validate the dependency spec.
-    pub fn validate(&self) -> Result<(), String> {
-        match self {
-            DependencySpec::Registry { version, .. } => {
-                if version.is_empty() {
-                    return Err("Version cannot be empty".to_string());
-                }
-                if version.starts_with('.') || version.ends_with('.') {
-                    return Err(format!("Version has invalid format: {}", version));
-                }
-                Ok(())
-            }
-            DependencySpec::Url { url, version, .. } => {
-                if url.is_empty() {
-                    return Err("URL cannot be empty".to_string());
-                }
-                if !url.starts_with("https://") && !url.starts_with("http://") {
-                    return Err(format!("URL must start with https:// or http://: {}", url));
-                }
-                if version.is_empty() {
-                    return Err("Version cannot be empty".to_string());
-                }
-                if version.starts_with('.') || version.ends_with('.') {
-                    return Err(format!("Version has invalid format: {}", version));
-                }
-                Ok(())
-            }
-            DependencySpec::Path { path, .. } => {
-                if path.is_empty() {
-                    return Err("Path cannot be empty".to_string());
-                }
-                Ok(())
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -489,75 +453,6 @@ test = { version = "1.0.0" }
         let spec = &parsed.deps["test"];
         // This should match Registry (not Url, which requires `url` field)
         assert!(matches!(spec, DependencySpec::Registry { version, .. } if version == "1.0.0"));
-    }
-
-    #[test]
-    fn url_dependency_validation() {
-        let valid = DependencySpec::url("https://example.com/pkg.zip", "1.0.0");
-        assert!(valid.validate().is_ok());
-
-        let empty_url = DependencySpec::Url {
-            url: "".to_string(),
-            version: "1.0.0".to_string(),
-            optional: false,
-        };
-        assert!(empty_url.validate().is_err());
-
-        let invalid_url = DependencySpec::Url {
-            url: "not-a-url".to_string(),
-            version: "1.0.0".to_string(),
-            optional: false,
-        };
-        assert!(invalid_url.validate().is_err());
-
-        let empty_version = DependencySpec::Url {
-            url: "https://example.com/pkg.zip".to_string(),
-            version: "".to_string(),
-            optional: false,
-        };
-        assert!(empty_version.validate().is_err());
-
-        let invalid_version_start = DependencySpec::Url {
-            url: "https://example.com/pkg.zip".to_string(),
-            version: ".1.0.0".to_string(),
-            optional: false,
-        };
-        assert!(invalid_version_start.validate().is_err());
-
-        let invalid_version_end = DependencySpec::Url {
-            url: "https://example.com/pkg.zip".to_string(),
-            version: "1.0.0.".to_string(),
-            optional: false,
-        };
-        assert!(invalid_version_end.validate().is_err());
-    }
-
-    #[test]
-    fn path_dependency_validation() {
-        let valid = DependencySpec::path("../local-package");
-        assert!(valid.validate().is_ok());
-
-        let empty = DependencySpec::Path {
-            path: "".to_string(),
-            optional: false,
-            link: false,
-        };
-        assert!(empty.validate().is_err());
-    }
-
-    #[test]
-    fn registry_dependency_validation() {
-        let valid = DependencySpec::registry("1.0.0", None);
-        assert!(valid.validate().is_ok());
-
-        let empty = DependencySpec::registry("", None);
-        assert!(empty.validate().is_err());
-
-        let invalid_start = DependencySpec::registry(".1.0.0", None);
-        assert!(invalid_start.validate().is_err());
-
-        let registry = DependencySpec::registry("2.0.0", Some("tumbletrove".to_string()));
-        assert!(registry.validate().is_ok());
     }
 
     #[test]

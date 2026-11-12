@@ -521,7 +521,7 @@ impl ProjectManager {
     /// package the store scan met first: a project on TumblePipe 1.76.0
     /// with 1.40.1 also in the store was handed 1.40.1, so TumbleTrove
     /// Desktop ran that release's `tt_*` hooks (or none, as it declared
-    /// none), and `generate_houdini_manifests` could point Houdini at it.
+    /// none), and manifest generation could point Houdini at it.
     pub fn list_dependencies(&self) -> Result<Vec<ProjectDependency>, ProjectError> {
         let mut dependencies = vec![];
 

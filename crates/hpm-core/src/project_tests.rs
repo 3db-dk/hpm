@@ -1,3 +1,4 @@
+use super::houdini_emit::build_houdini_package;
 use super::*;
 use hpm_package::{ManifestEnvEntry, PackagePath};
 use indexmap::IndexMap;
@@ -81,13 +82,8 @@ fn list_dependencies_empty_project() {
 }
 
 #[test]
-fn create_houdini_package_basic() {
+fn build_houdini_package_basic() {
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     let manifest = hpm_package::PackageManifest::new(
         PackagePath::new("studio/test-package").unwrap(),
@@ -109,9 +105,8 @@ fn create_houdini_package_basic() {
         is_dev: false,
     };
 
-    let houdini_package = project_manager
-        .create_houdini_package(&installed_package)
-        .unwrap();
+    let houdini_package =
+        build_houdini_package(&installed_package, None, &IndexMap::new()).unwrap();
     assert_eq!(
         houdini_package.hpath,
         Some(vec![package_path.to_string_lossy().to_string()])
@@ -120,13 +115,8 @@ fn create_houdini_package_basic() {
 }
 
 #[test]
-fn create_houdini_package_with_project_env_overrides() {
+fn build_houdini_package_with_project_env_overrides() {
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     // Create a manifest with an env var
     let mut manifest = hpm_package::PackageManifest::new(
@@ -159,9 +149,8 @@ fn create_houdini_package_with_project_env_overrides() {
     };
 
     // Without override: should use package default
-    let houdini_package = project_manager
-        .create_houdini_package(&installed_package)
-        .unwrap();
+    let houdini_package =
+        build_houdini_package(&installed_package, None, &IndexMap::new()).unwrap();
     assert_eq!(
         houdini_package.hpath,
         Some(vec![package_path.to_string_lossy().to_string()])
@@ -193,9 +182,8 @@ fn create_houdini_package_with_project_env_overrides() {
         },
     );
 
-    let houdini_package = project_manager
-        .create_houdini_package_with_python(&installed_package, None, &project_overrides)
-        .unwrap();
+    let houdini_package =
+        build_houdini_package(&installed_package, None, &project_overrides).unwrap();
     assert!(
         find_env_entry(&houdini_package, "MY_CONFIG").is_none(),
         "a `set` override must suppress the package's own entry"
@@ -213,12 +201,8 @@ fn create_houdini_package_with_project_env_overrides() {
 }
 
 #[tokio::test]
-async fn create_houdini_package_required_env_without_override_errors() {
+async fn build_houdini_package_required_env_without_override_errors() {
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     let mut manifest = hpm_package::PackageManifest::new(
         PackagePath::new("studio/needs-config").unwrap(),
@@ -250,9 +234,7 @@ async fn create_houdini_package_required_env_without_override_errors() {
     };
 
     // No project override: required placeholder must trigger MissingRequiredEnv.
-    let err = project_manager
-        .create_houdini_package(&installed_package)
-        .unwrap_err();
+    let err = build_houdini_package(&installed_package, None, &IndexMap::new()).unwrap_err();
     match err {
         ProjectError::MissingRequiredEnv { var, package } => {
             assert_eq!(var, "PROJECT_ROOT");
@@ -273,9 +255,7 @@ async fn create_houdini_package_required_env_without_override_errors() {
             required: false,
         },
     );
-    let pkg = project_manager
-        .create_houdini_package_with_python(&installed_package, None, &overrides)
-        .unwrap();
+    let pkg = build_houdini_package(&installed_package, None, &overrides).unwrap();
     assert!(
         find_env_entry(&pkg, "PROJECT_ROOT").is_none(),
         "a valueless placeholder has nothing to emit in the package file"
@@ -320,10 +300,6 @@ fn dev_only_runtime_entry(value: &str) -> ManifestEnvEntry {
 #[test]
 fn runtime_install_source_dev_gates_emission() {
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     let mut manifest = hpm_package::PackageManifest::new(
         PackagePath::new("studio/hdk-plugin").unwrap(),
@@ -351,7 +327,7 @@ fn runtime_install_source_dev_gates_emission() {
         install_path: package_path.clone(),
         is_dev: false,
     };
-    let pkg = project_manager.create_houdini_package(&non_dev).unwrap();
+    let pkg = build_houdini_package(&non_dev, None, &IndexMap::new()).unwrap();
     assert!(
         find_env_entry(&pkg, "HOUDINI_DSO_PATH").is_none(),
         "install_source = 'dev' must not be emitted for non-dev installs"
@@ -364,7 +340,7 @@ fn runtime_install_source_dev_gates_emission() {
         install_path: package_path.clone(),
         is_dev: true,
     };
-    let pkg = project_manager.create_houdini_package(&dev).unwrap();
+    let pkg = build_houdini_package(&dev, None, &IndexMap::new()).unwrap();
     let entry = find_env_entry(&pkg, "HOUDINI_DSO_PATH")
         .expect("dev-gated variant must be emitted for dev installs");
     // An install-source-only gate is unconditional at runtime (the axis is
@@ -399,10 +375,6 @@ fn collect_env_entries<'a>(
 #[test]
 fn project_prepend_override_combines_with_dev_variant() {
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     let mut manifest = hpm_package::PackageManifest::new(
         PackagePath::new("studio/overridable").unwrap(),
@@ -438,9 +410,7 @@ fn project_prepend_override_combines_with_dev_variant() {
             required: false,
         },
     );
-    let pkg = project_manager
-        .create_houdini_package_with_python(&installed, None, &overrides)
-        .unwrap();
+    let pkg = build_houdini_package(&installed, None, &overrides).unwrap();
 
     // A `prepend` override combines: the package's own (dev-gated)
     // contribution stays in the package file; the project's prepend is
@@ -480,10 +450,6 @@ fn project_append_override_combines_with_package_value() {
     // package-provided env var must extend it, emitting both the package's
     // value and the project's, not replace the package's contribution.
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     let mut manifest = hpm_package::PackageManifest::new(
         PackagePath::new("studio/lib").unwrap(),
@@ -523,9 +489,7 @@ fn project_append_override_combines_with_package_value() {
             required: false,
         },
     );
-    let pkg = project_manager
-        .create_houdini_package_with_python(&installed, None, &overrides)
-        .unwrap();
+    let pkg = build_houdini_package(&installed, None, &overrides).unwrap();
 
     let entries = collect_env_entries(&pkg, "PYTHONPATH");
     assert_eq!(
@@ -557,10 +521,6 @@ fn project_append_override_combines_with_package_value() {
 fn project_set_override_still_replaces_package_value() {
     // `set` keeps replace semantics: only the project's value is emitted.
     let temp_dir = TempDir::new().unwrap();
-    let (config, storage_manager) = test_setup(temp_dir.path());
-    let project_root = temp_dir.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-    let project_manager = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
     let mut manifest = hpm_package::PackageManifest::new(
         PackagePath::new("studio/lib").unwrap(),
@@ -600,9 +560,7 @@ fn project_set_override_still_replaces_package_value() {
             required: false,
         },
     );
-    let pkg = project_manager
-        .create_houdini_package_with_python(&installed, None, &overrides)
-        .unwrap();
+    let pkg = build_houdini_package(&installed, None, &overrides).unwrap();
 
     let entries = collect_env_entries(&pkg, "MY_CONFIG");
     assert_eq!(
@@ -1046,10 +1004,6 @@ proptest! {
         ),
     ) {
         let temp_dir = TempDir::new().unwrap();
-        let (config, storage_manager) = test_setup(temp_dir.path());
-        let project_root = temp_dir.path().join("project");
-        std::fs::create_dir_all(&project_root).unwrap();
-        let pm = ProjectManager::new(project_root, storage_manager, config).unwrap();
 
         let mut with_dev = hpm_package::PackageManifest::new(
             PackagePath::new("studio/inertness").unwrap(),
@@ -1068,18 +1022,18 @@ proptest! {
         let pkg_path = temp_dir.path().join("inertness@1.0.0");
         std::fs::create_dir_all(&pkg_path).unwrap();
 
-        let a = pm.create_houdini_package(&InstalledPackage {
+        let a = build_houdini_package(&InstalledPackage {
             version: "1.0.0".to_string(),
             manifest: with_dev,
             install_path: pkg_path.clone(),
             is_dev: false,
-        });
-        let b = pm.create_houdini_package(&InstalledPackage {
+        }, None, &IndexMap::new());
+        let b = build_houdini_package(&InstalledPackage {
             version: "1.0.0".to_string(),
             manifest: without,
             install_path: pkg_path,
             is_dev: false,
-        });
+        }, None, &IndexMap::new());
 
         // Compare via Debug — HoudiniPackage / HoudiniEnvValue don't
         // implement PartialEq, and a regression that fires the dev
@@ -1095,7 +1049,7 @@ proptest! {
 /// It previously trimmed `.json` and compared the result against the bare
 /// slug, which after the rename can never match — every dependency came back
 /// with `installed_package: None` and a dotted name, silently turning
-/// `generate_houdini_manifests` into a no-op.
+/// every consumer of the listing into a no-op.
 #[test]
 fn list_dependencies_resolves_creator_scoped_manifests() {
     let temp_dir = TempDir::new().unwrap();

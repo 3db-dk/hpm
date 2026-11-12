@@ -8,7 +8,6 @@
 //!
 //! - [`determine_manifest_path`]: Resolves the path to the hpm.toml manifest file
 //! - [`load_manifest`]: Loads and validates a package manifest from disk
-//! - [`save_manifest`]: Serializes and writes a package manifest to disk
 //!
 //! ## Security
 //!
@@ -137,49 +136,10 @@ pub fn load_manifest(manifest_path: &Path) -> Result<PackageManifest> {
     Ok(manifest)
 }
 
-/// Save a package manifest to disk.
-///
-/// This function serializes the manifest to TOML format and writes it to the
-/// specified path, overwriting any existing file.
-///
-/// # Arguments
-///
-/// * `manifest` - The manifest to save
-/// * `manifest_path` - Path where the manifest should be written
-///
-/// # Returns
-///
-/// `Ok(())` on success, or an error if serialization or writing fails.
-///
-/// # Examples
-///
-/// ```ignore
-/// let manifest = PackageManifest::new(...);
-/// save_manifest(&manifest, Path::new("/project/hpm.toml"))?;
-/// ```
-pub fn save_manifest(manifest: &PackageManifest, manifest_path: &Path) -> Result<()> {
-    let toml_content =
-        toml::to_string_pretty(manifest).context("Failed to serialize manifest to TOML")?;
-
-    if let Some(parent) = manifest_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!("Failed to create manifest directory: {}", parent.display())
-        })?;
-    }
-    hpm_package::atomic_write(manifest_path, toml_content)
-        .with_context(|| format!("Failed to write manifest file: {}", manifest_path.display()))?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::test_fixtures::{CwdGuard, TestManifestOpts, write_test_manifest};
-    use hpm_package::{DependencySpec, PackagePath};
-    use indexmap::IndexMap;
     use tempfile::TempDir;
 
     #[test]
@@ -252,46 +212,6 @@ mod tests {
         let result = load_manifest(&manifest_path);
 
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_save_and_load_manifest_roundtrip() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create initial manifest
-        let mut manifest = PackageManifest::new(
-            PackagePath::new("studio/test-package").unwrap(),
-            "Test Package".to_string(),
-            "1.0.0".to_string(),
-            Some("Test description".to_string()),
-            vec!["Author <test@example.com>".to_string()],
-            Some("MIT".to_string()),
-        );
-
-        // Add a dependency
-        let mut dependencies = IndexMap::new();
-        dependencies.insert(
-            "test-dep".to_string(),
-            DependencySpec::Url {
-                url: "https://example.com/packages/test-dep/1.0.0/test-dep-1.0.0.zip".to_string(),
-                version: "1.0.0".to_string(),
-                optional: false,
-            },
-        );
-        manifest.dependencies = dependencies;
-
-        let manifest_path = temp_dir.path().join("hpm.toml");
-
-        // Save and reload
-        let save_result = save_manifest(&manifest, &manifest_path);
-        assert!(save_result.is_ok());
-
-        let loaded_manifest = load_manifest(&manifest_path).unwrap();
-
-        assert_eq!(loaded_manifest.package.name, manifest.package.name);
-        assert_eq!(loaded_manifest.package.version, manifest.package.version);
-        assert!(!loaded_manifest.dependencies.is_empty());
-        assert!(loaded_manifest.dependencies.contains_key("test-dep"));
     }
 
     #[test]

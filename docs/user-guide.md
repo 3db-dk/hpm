@@ -80,7 +80,6 @@ my-first-package/
 ├── hpm.toml           # HPM manifest
 ├── README.md
 ├── .gitignore
-├── package.json       # Houdini-native package file
 ├── otls/              # HDAs / .otl files
 ├── python/            # Python modules (python/__init__.py is pre-created)
 ├── scripts/           # Shelf tools and script hooks
@@ -354,7 +353,6 @@ hpm check
 Check runs:
 
 - `hpm.toml` exists, parses, and passes manifest validation (scoped `creator/slug` path, semver version, `[compat].houdini` parseable, `[stage]` and `[[operators]]` per-platform consistency with `[compat].platforms`).
-- Generated Houdini `package.json` serializes cleanly.
 - Soft warnings for: missing description, missing authors, missing keywords, missing `[compat].houdini`, missing README or license file, missing `.gitignore` when a `.git` directory is present, packages larger than 100 MB, and individual files larger than 10 MB.
 
 Check is advisory — warnings do not fail the command.

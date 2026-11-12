@@ -189,7 +189,6 @@ pub async fn add_packages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::manifest_utils::save_manifest;
     use crate::commands::test_fixtures::{TestManifestOpts, write_test_manifest};
     use hpm_package::{PackageManifest, PackagePath};
     use proptest::prelude::*;
@@ -363,9 +362,7 @@ mod tests {
 
             let manifest_path = test_path.join("hpm.toml");
 
-            // Save manifest
-            let save_result = save_manifest(&manifest, &manifest_path);
-            prop_assert!(save_result.is_ok(), "Should save manifest at any valid path");
+            std::fs::write(&manifest_path, toml::to_string(&manifest).unwrap()).unwrap();
 
             // Load manifest
             let load_result = load_manifest(&manifest_path);
@@ -458,43 +455,6 @@ mod tests {
 
             let path_json = serde_json::to_string(&path_spec);
             prop_assert!(path_json.is_ok(), "Path dependency spec should always serialize");
-        }
-
-        /// Test that manifest operations are atomic and don't leave partial files
-        #[test]
-        fn prop_manifest_operations_atomic(
-            package_name in edge_case_package_name_strategy(),
-            version in r"[0-9]+\.[0-9]+\.[0-9]+"
-        ) {
-            let temp_dir = TempDir::new().unwrap();
-            let manifest_path = temp_dir.path().join("hpm.toml");
-
-            let manifest = PackageManifest::new(
-                PackagePath::new(format!("studio/{}", package_name)).unwrap(),
-                package_name.clone(),
-                version.clone(),
-                Some("Test package".to_string()),
-                Vec::new(),
-                None,
-            );
-
-            // Save manifest
-            let save_result = save_manifest(&manifest, &manifest_path);
-
-            if save_result.is_ok() {
-                // File should exist and be complete
-                prop_assert!(manifest_path.exists(), "Manifest file should exist after successful save");
-
-                // Should be able to read back immediately
-                let content = std::fs::read_to_string(&manifest_path);
-                prop_assert!(content.is_ok(), "Should be able to read saved manifest");
-
-                if let Ok(content_str) = content {
-                    prop_assert!(!content_str.is_empty(), "Manifest content should not be empty");
-                    prop_assert!(content_str.contains(&package_name), "Should contain package name");
-                    prop_assert!(content_str.contains(&version), "Should contain version");
-                }
-            }
         }
 
         /// Test error handling consistency for file operations

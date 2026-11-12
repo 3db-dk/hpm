@@ -81,7 +81,7 @@
 //! manifest.python_dependencies = py_deps;
 //! ```
 //!
-//! ## Generating Houdini package.json
+//! ## Generating the bundled `{slug}.json`
 //!
 //! ```rust
 //! use hpm_package::{PackageManifest, PackagePath};
@@ -95,9 +95,11 @@
 //!     None,
 //! );
 //!
-//! // Generate Houdini-compatible package.json
-//! let houdini_package = manifest.generate_houdini_package()
+//! // The Houdini package file `hpm pack` ships at the archive root
+//! let (file_name, houdini_package) = manifest
+//!     .generate_houdini_native_package()
 //!     .expect("validated manifest produces a Houdini package");
+//! assert_eq!(file_name, "my-package.json");
 //!
 //! let json = serde_json::to_string_pretty(&houdini_package)
 //!     .expect("Should serialize to JSON");

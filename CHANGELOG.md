@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `hpm init` writes a valid `python/__init__.py`. It used to begin with an
   empty string literal followed by bare text, which Python rejects.
 
+### Changed
+
+- `hpm init` no longer writes a root `package.json`. Nothing read it: hpm
+  writes each dependency's Houdini package file at install time, and
+  `hpm pack` generates the shipped `{slug}.json`. Existing files are left
+  alone, and `hpm init` in a directory that has one still works.
+- `hpm check` no longer reports the two "[OK] Generated ... package.json"
+  lines in `info`; they checked output from an emitter nothing else used.
+
 ### Removed
 
 - **Breaking (hpm-core API):** `ProjectManager::add_dependency` and
@@ -22,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   versions, and read a bare version as `^x.y.z`. Edit dependencies with
   `project::manifest_edit` (what `hpm add` / `hpm remove` use) and run
   `sync_dependencies`.
+- **Breaking (hpm-package API):** `PackageManifest::generate_houdini_package`,
+  `ManifestEnvEntry::to_houdini_env_value`, `HoudiniEnvValue::replace` and
+  `DependencySpec::validate`. `generate_houdini_package` emitted a
+  different file from the one hpm installs; use
+  `generate_houdini_native_package(_for)` for the shipped `{slug}.json`.
+- **Breaking (hpm-core API):** `ProjectManager::generate_houdini_manifests`.
+  It emitted without the package's venv; `sync_dependencies` writes the
+  manifests.
 
 ## [0.37.0] - 2026-11-11
 

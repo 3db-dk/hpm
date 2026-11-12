@@ -42,9 +42,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::dependency::DependencySpec;
-use crate::env_value::{EnvValue, ExpressionError, HoudiniRange};
+use crate::env_value::{EnvValue, HoudiniRange};
 use crate::houdini::{
-    HoudiniEnvValue, HoudiniNativePackage, HoudiniPackage, HpackageMetadata, NativePackageTarget,
+    HoudiniEnvValue, HoudiniNativePackage, HpackageMetadata, NativePackageTarget,
     normalize_hpackage_version,
 };
 use crate::package_path::PackagePath;
@@ -405,62 +405,6 @@ impl PackageManifest {
         }
     }
 
-    /// Generate Houdini package.json from manifest
-    pub fn generate_houdini_package(&self) -> Result<HoudiniPackage, ExpressionError> {
-        let mut hpath = vec![];
-        let mut env = vec![];
-
-        // Point hpath at the package root so Houdini auto-discovers convention
-        // subdirs (otls/, desktop/, toolbar/, python_panels/, viewer_states/,
-        // python3.11libs/, etc.). See sidefx.com/docs/houdini/ref/plugins.html.
-        hpath.push("$HPM_PACKAGE_ROOT".to_string());
-
-        // Python path environment
-        let mut python_env = HashMap::new();
-        python_env.insert(
-            "PYTHONPATH".to_string(),
-            HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/python"),
-        );
-        env.push(python_env);
-
-        // Scripts path environment
-        let mut scripts_env = HashMap::new();
-        scripts_env.insert(
-            "HOUDINI_SCRIPT_PATH".to_string(),
-            HoudiniEnvValue::prepend("$HPM_PACKAGE_ROOT/scripts"),
-        );
-        env.push(scripts_env);
-
-        // Append user-defined env vars from [runtime]. The standalone
-        // generator has no install context, so it filters as a published
-        // (non-dev) consumer would: `install_source = "dev"` branches drop
-        // out, the rest go through. Required-but-unsupplied placeholders
-        // are skipped — project sync supplies them via `[runtime]`
-        // overrides and errors if any remain unsupplied.
-        for (key, entry) in &self.runtime {
-            let Some(houdini_value) = entry.to_houdini_env_value()? else {
-                continue;
-            };
-            let mut env_map = HashMap::new();
-            env_map.insert(key.clone(), houdini_value);
-            env.push(env_map);
-        }
-
-        let enable = self
-            .compat
-            .houdini
-            .as_ref()
-            .map(HoudiniRange::to_enable_expression);
-
-        Ok(HoudiniPackage {
-            hpath: Some(hpath),
-            env: Some(env),
-            enable,
-            requires: None,
-            recommends: None,
-        })
-    }
-
     /// Generate a Houdini-native package.json for direct use by Houdini's package system.
     ///
     /// Returns `(filename, package)` where filename is `{slug}.json`.
@@ -506,8 +450,8 @@ impl PackageManifest {
         // User-defined env vars with $HPM_PACKAGE_ROOT replaced. This
         // generator emits the bundled `{slug}.json` shipped inside a packed
         // archive, so it filters as a published consumer would (is_dev=false).
-        // Required-but-unsupplied placeholders are skipped (see
-        // generate_houdini_package). Conditional value branches each get the
+        // Required-but-unsupplied placeholders are skipped: project sync
+        // supplies them via `[runtime]` overrides. Conditional value branches each get the
         // same substitution applied before the conditional-object array is
         // emitted.
         for (key, entry) in &self.runtime {
@@ -561,7 +505,7 @@ impl PackageManifest {
         // `recommends` keeps the information and the diagnostic — Houdini
         // warns, naming the missing package — while letting whatever the
         // package does ship actually load. HPM-managed installs are unaffected
-        // either way: `generate_houdini_package` emits neither field, because
+        // either way: `build_houdini_package` (hpm-core) emits neither field, because
         // HPM guarantees the dependency is installed before Houdini starts.
         // Verified against Houdini 21.0.729 with hconfig.
         let recommends = if self.dependencies.is_empty() {

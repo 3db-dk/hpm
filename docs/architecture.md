@@ -647,7 +647,7 @@ on a Windows junction would recurse into and delete the user's workspace
 on the next sync or orphan sweep.
 
 Both styles set `InstalledPackage::is_dev = true`. That flag flows
-through to `create_houdini_package_with_python`, which forwards it to
+through to `build_houdini_package`, which forwards it to
 `ManifestEnvEntry::lower(.., is_dev)`. The `install_source` axis on each
 conditional `[runtime]` variant is filtered there: variants gated to
 `"dev"` only survive for path-installed packages, variants gated to

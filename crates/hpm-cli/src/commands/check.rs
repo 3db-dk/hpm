@@ -236,39 +236,6 @@ async fn validate_otls_directory(project_dir: &Path, result: &mut ValidationResu
 }
 
 fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut ValidationResult) {
-    let houdini_package = match manifest.generate_houdini_package() {
-        Ok(pkg) => pkg,
-        Err(e) => {
-            result.add_error(format!(
-                "Failed to lower [runtime] / [compat] into Houdini package.json: {}",
-                e
-            ));
-            return;
-        }
-    };
-
-    // Validate generated package.json structure
-    match serde_json::to_string_pretty(&houdini_package) {
-        Ok(json) => {
-            result.add_info("[OK] Generated Houdini package.json is valid".to_string());
-
-            // Validate JSON can be parsed back
-            match serde_json::from_str::<serde_json::Value>(&json) {
-                Ok(_) => {
-                    result.add_info(
-                        "[OK] Generated package.json can be parsed by Houdini".to_string(),
-                    );
-                }
-                Err(e) => {
-                    result.add_error(format!("Generated package.json is invalid: {}", e));
-                }
-            }
-        }
-        Err(e) => {
-            result.add_error(format!("Failed to generate Houdini package.json: {}", e));
-        }
-    }
-
     // `[compat].houdini` is a `HoudiniRange` newtype that validates at
     // deserialize time, so the manifest can't load with a malformed
     // range. Here we just surface the compiled expression on the happy

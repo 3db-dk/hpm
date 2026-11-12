@@ -26,10 +26,8 @@ clap_complete = "4.6"
 tokio.workspace = true
 anyhow.workspace = true
 async-trait = "0.1"
-indexmap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-toml.workspace = true
 walkdir.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -43,6 +41,7 @@ semver.workspace = true
 
 
 [dev-dependencies]
+toml.workspace = true
 proptest.workspace = true
 insta.workspace = true
 tempfile.workspace = true

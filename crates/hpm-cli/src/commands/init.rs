@@ -460,7 +460,7 @@ mod tests {
 
         // Verify all expected files exist
         assert!(package_path.join("hpm.toml").exists());
-        assert!(package_path.join("package.json").exists());
+        assert!(!package_path.join("package.json").exists());
         assert!(package_path.join("README.md").exists());
         assert!(package_path.join(".gitignore").exists());
         assert!(package_path.join("python").join("__init__.py").exists());
@@ -481,16 +481,6 @@ mod tests {
         assert!(hpm_toml_content.contains("Test Author <test@example.com>"));
         assert!(hpm_toml_content.contains("license = \"Apache-2.0\""));
         assert!(hpm_toml_content.contains("houdini = \">=20.5, <=21.0\""));
-
-        // Validate package.json content (Houdini package manifest)
-        let package_json_content = fs::read_to_string(package_path.join("package.json")).unwrap();
-        let package_json: serde_json::Value = serde_json::from_str(&package_json_content).unwrap();
-        assert_eq!(package_json["env"].as_array().unwrap().len(), 2);
-        assert!(package_json_content.contains("PYTHONPATH"));
-        assert!(package_json_content.contains("HOUDINI_SCRIPT_PATH"));
-        assert!(package_json_content.contains("houdini_version >= '20.5'"));
-        assert!(package_json_content.contains("houdini_version <= '21.0'"));
-        assert!(package_json["hpath"].as_array().is_some());
 
         // Validate README.md content
         let readme_content = fs::read_to_string(package_path.join("README.md")).unwrap();

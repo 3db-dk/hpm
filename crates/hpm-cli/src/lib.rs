@@ -401,7 +401,6 @@ pub async fn run() -> ExitCode {
                         CliError::Config { .. } => "config",
                         CliError::Package { .. } => "package",
                         CliError::Network { .. } => "network",
-                        CliError::Io { .. } => "io",
                     },
                     "elapsed_ms": start_time.elapsed().as_millis()
                 });

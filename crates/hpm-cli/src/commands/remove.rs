@@ -104,10 +104,7 @@ pub async fn remove_package(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::manifest_utils::save_manifest;
     use crate::commands::test_fixtures::{CwdGuard, TestManifestOpts, write_test_manifest};
-    use hpm_package::{DependencySpec, PackagePath};
-    use indexmap::IndexMap;
     use tempfile::TempDir;
 
     #[test]
@@ -131,60 +128,6 @@ mod tests {
         assert_eq!(manifest.package.version, "1.0.0");
         assert!(!manifest.dependencies.is_empty());
         assert_eq!(manifest.dependencies.len(), 2);
-    }
-
-    #[test]
-    fn test_save_and_load_manifest_after_removal() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create manifest with dependencies
-        let mut manifest = hpm_package::PackageManifest::new(
-            PackagePath::new("studio/test-package").unwrap(),
-            "Test Package".to_string(),
-            "1.0.0".to_string(),
-            Some("Test description".to_string()),
-            vec!["Author <test@example.com>".to_string()],
-            Some("MIT".to_string()),
-        );
-
-        // Add dependencies
-        let mut dependencies = IndexMap::new();
-        dependencies.insert(
-            "keep-me".to_string(),
-            DependencySpec::Url {
-                url: "https://example.com/packages/keep-me/1.0.0/keep-me-1.0.0.zip".to_string(),
-                version: "1.0.0".to_string(),
-                optional: false,
-            },
-        );
-        dependencies.insert(
-            "remove-me".to_string(),
-            DependencySpec::Path {
-                path: "../remove-me".to_string(),
-                optional: false,
-                link: false,
-            },
-        );
-        manifest.dependencies = dependencies;
-
-        let manifest_path = temp_dir.path().join("hpm.toml");
-
-        // Save initial manifest
-        save_manifest(&manifest, &manifest_path).unwrap();
-
-        // Load, remove dependency, and save again
-        let mut loaded_manifest = load_manifest(&manifest_path).unwrap();
-        loaded_manifest.dependencies.shift_remove("remove-me");
-
-        save_manifest(&loaded_manifest, &manifest_path).unwrap();
-
-        // Load again and verify
-        let final_manifest = load_manifest(&manifest_path).unwrap();
-        let final_deps = final_manifest.dependencies;
-
-        assert!(final_deps.contains_key("keep-me"));
-        assert!(!final_deps.contains_key("remove-me"));
-        assert_eq!(final_deps.len(), 1);
     }
 
     #[tokio::test]

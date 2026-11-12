@@ -833,7 +833,6 @@ dependencies = [
  "hpm-config",
  "hpm-core",
  "hpm-package",
- "indexmap",
  "indicatif",
  "insta",
  "proptest",
