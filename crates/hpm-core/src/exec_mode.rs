@@ -521,11 +521,13 @@ mod tests {
             slug in "[a-z][a-z0-9_-]{0,20}",
             version in "[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}(-[a-z0-9.]{1,8})?",
         ) {
-            // The shape `StorageConfig::package_dir` actually builds. An
-            // unconstrained name generator here would spend its cases on
-            // paths no install can produce — and on `.`/`..`, which are not
-            // names at all (see the example test below).
-            let pkg = Path::new("/packages").join(&scope).join(format!("{slug}@{version}"));
+            // The shape the store actually builds (`layout::cas_dir`), for a
+            // scoped or bare name. An unconstrained name generator here
+            // would spend its cases on paths no install can produce — and on
+            // `.`/`..`, which are not names at all (see the example test
+            // below).
+            let name = if scope.len() % 2 == 0 { format!("{scope}/{slug}") } else { slug.clone() };
+            let pkg = crate::storage::layout::cas_dir(Path::new("/packages"), &name, &version);
             let stamp = stamp_path(&pkg).expect("a package directory has a name");
 
             prop_assert_eq!(stamp.parent(), pkg.parent());
