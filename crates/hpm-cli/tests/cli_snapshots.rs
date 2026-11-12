@@ -137,6 +137,70 @@ fn check_json_compact() {
     );
 }
 
+/// `hpm check` across layouts that reach every finding: no manifest, a
+/// manifest that does not parse, and a package with a missing README, an
+/// empty `otls`, git without `.gitignore`, scripts, and large files (one of
+/// them ignored by `.gitignore`).
+#[test]
+fn check_findings_by_layout() {
+    let env = Env::new();
+    let mut report = String::new();
+
+    let empty = env.work.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    report += &env.run(&empty, &["--output", "json-compact", "check"]);
+
+    let broken = env.work.path().join("broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("hpm.toml"), "[package\n").unwrap();
+    report += &env.run(&broken, &["--output", "json-compact", "check"]);
+
+    let full = env.work.path().join("full");
+    for sub in ["otls", "scripts", ".git", "build"] {
+        std::fs::create_dir_all(full.join(sub)).unwrap();
+    }
+    std::fs::write(
+        full.join("hpm.toml"),
+        r#"[package]
+path = "acme/full"
+name = "Full"
+version = "1.0.0"
+description = "Every finding"
+license = "MIT"
+readme = "docs/README.md"
+keywords = ["x"]
+
+[compat]
+houdini = ">=21"
+platforms = ["linux-x86_64"]
+
+[scripts]
+build = "make"
+
+[scripts.setup]
+cmd = "python setup.py"
+label = "Set up"
+description = "Prepare the workspace"
+"#,
+    )
+    .unwrap();
+    std::fs::write(full.join("LICENSE"), "MIT").unwrap();
+    let big = std::fs::File::create(full.join("scripts/big.bin")).unwrap();
+    big.set_len(11 * 1024 * 1024).unwrap();
+    report += &env.run(&full, &["--output", "json-compact", "check"]);
+    report += &env.run(&full, &["check"]);
+
+    std::fs::write(full.join(".gitignore"), "build/\n").unwrap();
+    let ignored = std::fs::File::create(full.join("build/huge.bin")).unwrap();
+    ignored.set_len(120 * 1024 * 1024).unwrap();
+    std::fs::create_dir_all(full.join("docs")).unwrap();
+    std::fs::write(full.join("docs/README.md"), "# Full").unwrap();
+    report += &env.run(&full, &["--output", "json-compact", "check"]);
+    report += &env.run(&full, &["--quiet", "check"]);
+
+    snapshot!("check_findings_by_layout", report);
+}
+
 #[test]
 fn search_json_without_registries() {
     let env = Env::new();
