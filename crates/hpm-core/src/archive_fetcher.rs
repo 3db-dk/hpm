@@ -657,4 +657,9 @@ mod tests {
             .expect("verified archive should extract");
         assert!(result.package_path.join("hpm.toml").exists());
     }
+
+    #[test]
+    fn compute_file_sha256_sync_meets_the_digest_spec() {
+        crate::digest_spec::check_file_hasher(|p| compute_file_sha256_sync(p).unwrap());
+    }
 }

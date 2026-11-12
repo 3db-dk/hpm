@@ -273,3 +273,12 @@ proptest! {
         prop_assert_eq!(actual, expected);
     }
 }
+
+#[test]
+fn hash_file_meets_the_digest_spec() {
+    crate::digest_spec::check_file_hasher(|p| {
+        let (size, hex) = hash_file(p).unwrap();
+        assert_eq!(size, std::fs::metadata(p).unwrap().len());
+        hex
+    });
+}

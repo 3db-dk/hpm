@@ -932,3 +932,12 @@ fn signing_key_id_and_signature_golden() {
         "SqowQmqYEcTqZBcktGIoZWsQ9XngmoHlUopyLYUCi7pb5dqFrRereRSjQvT7n5969/ctERqcoJVvtD4tgHvkCw=="
     );
 }
+
+#[test]
+fn compute_archive_checksum_meets_the_digest_spec() {
+    crate::digest_spec::check_file_hasher(|p| compute_archive_checksum(p).unwrap());
+    assert_eq!(
+        compute_bytes_checksum(b"abc"),
+        crate::digest_spec::reference_hex(b"abc")
+    );
+}
