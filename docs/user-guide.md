@@ -268,9 +268,11 @@ bytes identify it as a program — an ELF or Mach-O object, or a `#!` script —
 install restores the executable bit, mirroring the read bits (`0644` becomes
 `0755`, `0640` becomes `0750`). The repair is additive: a mode the archive does
 declare is applied untouched, and a file that is not a program is never made
-executable. Archives are checksum- and signature-verified before any of this,
-and hpm already runs `[scripts]` programs out of the installed tree, so this
-grants nothing a well-formed archive could not claim for itself.
+executable. hpm already runs `[scripts]` programs out of the installed tree, so
+this grants nothing a well-formed archive could not claim for itself. (A
+registry archive is checked against the entry's SHA-256 when the registry
+supplies one; signatures are not verified yet, and URL dependencies are not
+checked. See the security page.)
 
 The same repair reaches trees that are already installed. A package at a version
 you already have is never re-extracted, so a tree installed by an older hpm

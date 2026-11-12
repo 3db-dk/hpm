@@ -294,8 +294,6 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
     let file = std::fs::File::open(archive_path)?;
     let gz = GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
-    archive.set_preserve_permissions(true);
-    archive.set_overwrite(true);
 
     for entry in archive
         .entries()

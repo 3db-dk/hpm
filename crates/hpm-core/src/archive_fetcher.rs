@@ -108,7 +108,8 @@ pub enum FetchError {
 pub struct FetchResult {
     /// Path to the extracted package directory
     pub package_path: PathBuf,
-    /// SHA-256 checksum of the package contents
+    /// Tree hash of the extracted package ([`crate::tree_hash::hash_tree`]),
+    /// the value hpm.lock records — not the archive's SHA-256
     pub checksum: String,
     /// Whether the package was fetched from cache
     pub from_cache: bool,
@@ -319,7 +320,7 @@ impl ArchiveFetcher {
             return Ok(archive_path);
         }
 
-        let response = self.http_client.get(url).send().await?;
+        let mut response = self.http_client.get(url).send().await?;
 
         if !response.status().is_success() {
             return Err(FetchError::DownloadFailed {
@@ -328,16 +329,21 @@ impl ArchiveFetcher {
             });
         }
 
-        // Stream the response to a file
-        let bytes = response.bytes().await?;
-
+        // Stream the body to `<key>.part` chunk by chunk, so an archive is
+        // never held whole in memory. A download cut short leaves the `.part`
+        // file behind; the next attempt truncates it, and only a complete
+        // file is renamed into place.
         let partial_path = self.cache_dir.join(format!("{}.part", cache_key));
         let mut file = tokio::fs::File::create(&partial_path)
             .await
             .map_err(FetchError::WriteError)?;
-        file.write_all(&bytes)
-            .await
-            .map_err(FetchError::WriteError)?;
+        let mut downloaded: u64 = 0;
+        while let Some(chunk) = response.chunk().await? {
+            downloaded += chunk.len() as u64;
+            file.write_all(&chunk)
+                .await
+                .map_err(FetchError::WriteError)?;
+        }
         // `write_all` alone doesn't get the bytes to disk — flush drains
         // tokio's buffer into the OS and `sync_all` makes the file durable
         // before anyone can observe it under its final name.
@@ -358,7 +364,7 @@ impl ArchiveFetcher {
             return Err(FetchError::WriteError(e));
         }
 
-        info!("Downloaded {} bytes to {:?}", bytes.len(), archive_path);
+        info!("Downloaded {} bytes to {:?}", downloaded, archive_path);
 
         Ok(archive_path)
     }
@@ -380,14 +386,6 @@ mod tests {
         );
         assert!(fetcher.is_ok());
     }
-
-    // Path-source tests removed: path dependencies bypass the fetcher
-    // entirely and copy straight into the dev CAS via
-    // `StorageManager::install_as_dev_copy`.
-
-    // Unit tests for PackageSource git/version validation removed -
-    // covered by prop_release_asset_url_structure, prop_cache_key_uniqueness,
-    // and prop_source_type_exclusive in package_source.rs
 
     /// Build a small in-memory zip archive with one file.
     fn make_test_zip() -> Vec<u8> {

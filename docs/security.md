@@ -32,7 +32,7 @@ version = "1.0.0"
 
 [dependencies."studio/utility-nodes"]
 version = "1.2.0"
-checksum = "sha256:a3f2b8c9..."
+checksum = "a3f2b8c9..."
 
 [dependencies."studio/utility-nodes".source]
 type = "url"

@@ -39,7 +39,9 @@ pub struct LockPackageInfo {
 /// A locked HPM dependency with exact version and verification data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockedDependency {
-    /// Exact resolved version
+    /// The version requirement from `[python_dependencies]` (`"*"` when the
+    /// manifest gives none) — not a resolved version; uv resolves at venv
+    /// creation.
     pub version: String,
 
     /// SHA256 checksum of the package contents
@@ -533,10 +535,7 @@ version = ">=1.20"
 
     /// Strategy to generate checksums
     fn checksum_strategy() -> impl Strategy<Value = Option<String>> {
-        prop_oneof![
-            Just(None),
-            "[a-f0-9]{64}".prop_map(|s| Some(format!("sha256:{}", s))),
-        ]
+        prop_oneof![Just(None), "[a-f0-9]{64}".prop_map(Some),]
     }
 
     /// Strategy to generate LockedDependency (Url or Path)
