@@ -1794,3 +1794,140 @@ fn store_stages_of_gone_installs_are_swept_and_never_listed() {
     assert!(!gone.exists());
     assert!(live.exists());
 }
+
+// ------------------------------------------------------------------
+// Cleanup plan: dry run equals real run
+// ------------------------------------------------------------------
+
+mod cleanup_plan {
+    use super::*;
+    use proptest::prelude::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    const SLUGS: [&str; 4] = ["a", "b", "c", "d"];
+    const VERSIONS: [&str; 2] = ["1.0.0", "2.0.0"];
+
+    /// A package coordinate: indices into `SLUGS` and `VERSIONS`.
+    type Coord = (usize, usize);
+
+    /// A store (each installed coordinate with at most one dependency) and
+    /// the project's direct dependencies.
+    #[derive(Debug)]
+    struct Fixture {
+        installed: BTreeMap<Coord, Option<Coord>>,
+        roots: BTreeMap<usize, usize>,
+    }
+
+    /// Plant an installed package where installs put it,
+    /// `<packages>/<slug>@<version>`.
+    fn plant_in_store(home: &std::path::Path, (s, v): Coord, dep: Option<Coord>) {
+        let (slug, version) = (SLUGS[s], VERSIONS[v]);
+        let dir = home.join("packages").join(format!("{slug}@{version}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut manifest = format!(
+            "[package]\npath = \"studio/{slug}\"\nname = \"{slug}\"\nversion = \"{version}\"\n"
+        );
+        if let Some((ds, dv)) = dep {
+            manifest.push_str(&format!(
+                "\n[dependencies]\n\"studio/{}\" = \"{}\"\n",
+                SLUGS[ds], VERSIONS[dv]
+            ));
+        }
+        std::fs::write(dir.join("hpm.toml"), manifest).unwrap();
+    }
+
+    /// Run the dry and the real cleanup on `fixture`, returning both id sets
+    /// and the model's: installed minus everything reachable from the roots.
+    fn run(fixture: &Fixture) -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let temp = TempDir::new().unwrap();
+        let storage = test_storage(&temp);
+        for (coord, dep) in &fixture.installed {
+            plant_in_store(temp.path(), *coord, *dep);
+        }
+        let project = temp.path().join("project");
+        let names: Vec<(String, &str)> = fixture
+            .roots
+            .iter()
+            .map(|(s, v)| (format!("studio/{}", SLUGS[*s]), VERSIONS[*v]))
+            .collect();
+        let refs: Vec<(&str, &str)> = names.iter().map(|(n, v)| (n.as_str(), *v)).collect();
+        write_project(&project, &refs);
+        let config = projects_config_with(vec![project]);
+
+        let mut reachable = BTreeSet::new();
+        let mut stack: Vec<Coord> = fixture.roots.iter().map(|(s, v)| (*s, *v)).collect();
+        while let Some(c) = stack.pop() {
+            if let Some(dep) = fixture.installed.get(&c)
+                && reachable.insert(c)
+            {
+                stack.extend(*dep);
+            }
+        }
+        let model = fixture
+            .installed
+            .keys()
+            .filter(|c| !reachable.contains(c))
+            .map(|(s, v)| format!("{}@{}", SLUGS[*s], VERSIONS[*v]))
+            .collect();
+
+        let dry = rt
+            .block_on(storage.cleanup_unused_dry_run(&config))
+            .unwrap();
+        let real = rt.block_on(storage.cleanup_unused(&config)).unwrap();
+        (dry.into_iter().collect(), real.into_iter().collect(), model)
+    }
+
+    /// One version per package: every coordinate of slug `s` is at
+    /// `version_of[s]`, so the graph's one-version-per-name rule never bites.
+    fn single_version_fixture() -> impl Strategy<Value = Fixture> {
+        (
+            prop::collection::vec(0..VERSIONS.len(), SLUGS.len()),
+            prop::collection::vec((0..SLUGS.len(), prop::option::of(0..SLUGS.len())), 1..6),
+            prop::collection::btree_set(0..SLUGS.len(), 0..3),
+        )
+            .prop_map(|(version_of, store, roots)| Fixture {
+                installed: store
+                    .into_iter()
+                    .map(|(s, dep)| ((s, version_of[s]), dep.map(|d| (d, version_of[d]))))
+                    .collect(),
+                roots: roots.into_iter().map(|s| (s, version_of[s])).collect(),
+            })
+    }
+
+    /// Any versions, including one package named at two versions.
+    fn mixed_version_fixture() -> impl Strategy<Value = Fixture> {
+        let coord = (0..SLUGS.len(), 0..VERSIONS.len());
+        (
+            prop::collection::vec((coord.clone(), prop::option::of(coord.clone())), 1..8),
+            prop::collection::vec(coord, 0..3),
+        )
+            .prop_map(|(store, roots)| Fixture {
+                installed: store.into_iter().collect(),
+                roots: roots.into_iter().collect(),
+            })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        /// With one version per package, the dry run names exactly what the
+        /// real run removes, and both are installed minus reachable.
+        #[test]
+        fn dry_and_real_run_both_equal_the_model(fixture in single_version_fixture()) {
+            let (dry, real, model) = run(&fixture);
+            prop_assert_eq!(&dry, &model);
+            prop_assert_eq!(&real, &model);
+        }
+
+        /// With any versions (the graph keeps the first version of a name it
+        /// meets), the dry run still names exactly what the real run removes.
+        #[test]
+        fn dry_run_equals_real_run_with_any_versions(fixture in mixed_version_fixture()) {
+            let (dry, real, _) = run(&fixture);
+            prop_assert_eq!(dry, real);
+        }
+    }
+}
