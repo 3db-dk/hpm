@@ -1,0 +1,2198 @@
+[package]
+path = "tumblehead/tumblerig"
+name = "TumbleRig"
+version = "1.20.2"
+description = "APEX-based character rigging toolkit + CUDA deformer SOP suite for Houdini"
+authors = ["Tumblehead <info@tumblehead.com>"]
+license = "LicenseRef-Proprietary"
+readme = "README.md"
+keywords = ["houdini", "apex", "rigging", "character", "animation", "vfx", "cuda", "skinning", "deformation", "wrinkles"]
+
+[compat]
+# Manifest 2.0 compat gate (hpm >= 0.16). The Cargo-style version requirement
+# below compiles to the Houdini package `enable` expression at pack time.
+# ">=22.0" admits all of Houdini 22.x and any later major — a faithful
+# translation of the pre-2.0 `[houdini] min_version = "22.0"` (lower bound
+# only, no cap).
+#
+# NOTE on capping: TumbleRig only ships native binaries for the major.minor
+# it actually builds (today bin/22.0/), and [runtime] routes HOUDINI_DSO_PATH
+# at bin/$HOUDINI_MAJOR_RELEASE.$HOUDINI_MINOR_RELEASE/dso. A user on a
+# Houdini build you have NOT shipped a matching bin/<ver>/ tree for installs
+# cleanly and then silently fails to load the SOPs. If you want to fence that
+# off, add an EXCLUSIVE upper bound, e.g. ">=22.0, <23". The cap is the first
+# UNSUPPORTED major, not the last supported one — a bare "<22" would disable
+# all of 22.x (that exact off-by-one was the TumblePipe H22 regression).
+houdini = ">=22.0"
+
+# Native platforms this package ships binaries for. Each per-platform CI
+# worker (.woodpecker/build-<os>.yml) builds only its own platform's DSOs
+# into bin/<major.minor>/ and packs with `hpm pack --platform <id>`, so an
+# archive carries exactly that platform's binaries as ordinary tree content.
+# This replaces the pre-2.0 [native]/[native.<platform>].files tagging.
+#
+# macos-aarch64 ships from 1.13. .woodpecker/build-macos.yml compiles on the
+# Apple silicon worker -- every verb, the GPU ones on their OpenCL backend only
+# (macOS has no CUDA; src/cmake/TumbleRigCuda.cmake; Apple's OpenCL compiler is
+# stricter than NVIDIA's and has no fp64) -- and release.yml waits for it.
+# (The only CUDA-only DSO, the Wobl solver, is its own package since
+# 2026-10-18: tumblehead/wobl.) After a platform change, regenerate the
+# [[operators]] index (scripts/gen_operators.py writes the per-platform
+# .dll / .so / .dylib paths).
+#
+# LINUX .so RE-INCLUDE: the .so binaries are gitignored (.gitignore: `*.so`),
+# whereas the .dll under bin/ are tracked. Pre-2.0, `[native.linux-x86_64].files`
+# force-included the gitignored .so into the linux archive. The 2.0 schema has
+# no such glob, so the built .so are re-included explicitly via package/.hpmignore
+# (`!bin/**/*.so`, alongside the .dll rule) — otherwise the linux archive would
+# ship without its native SOPs.
+platforms = ["windows-x86_64", "linux-x86_64", "macos-aarch64"]
+
+# Houdini env. hpm packs these into the generated `tumblerig.json` package
+# manifest, which Houdini's package loader parses at startup. Two layers of
+# expansion happen:
+#   - $HPM_PACKAGE_ROOT is rewritten by hpm at pack time to a Houdini-side
+#     reference into the package install dir.
+#   - $HOUDINI_MAJOR_RELEASE / $HOUDINI_MINOR_RELEASE pass through hpm
+#     verbatim and are expanded by Houdini's package loader at startup.
+#
+# This is what lets the same archive route H22.0 to bin/22.0/dso, H22.5 to
+# bin/22.5/dso, etc. The package dir itself is auto-added to HOUDINI_PATH by
+# Houdini via the JSON's `hpath` field — no need to declare it here.
+#
+# Previously these entries lived in a hand-authored package/TumbleRig.json
+# that was outside the hpm pipeline; the desktop launcher couldn't expand
+# $HOUDINI_MAJOR_RELEASE in that path, so HDK plugins under bin/22.0/dso/
+# silently failed to register. Moving them into [runtime] (was [env] pre-2.0)
+# routes them through the manifest Houdini parses, where the variables
+# resolve correctly.
+[runtime]
+TUMBLERIG = { method = "set", value = "$HPM_PACKAGE_ROOT" }
+HOUDINI_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/bin/$HOUDINI_MAJOR_RELEASE.$HOUDINI_MINOR_RELEASE" }
+HOUDINI_DSO_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/bin/$HOUDINI_MAJOR_RELEASE.$HOUDINI_MINOR_RELEASE/dso" }
+
+[stage]
+# hpm owns the build. `hpm build` (LOCAL dev) runs both prepack scripts:
+#   build-sops        — cmake-build the APEX callback DSO + CUDA SOP suite
+#                       (HDK; no Houdini license needed) into package/bin/.
+#   compile-subgraphs — hython-compile the .apex subgraph sources into
+#                       package/apexgraph/*.bgeo (LAUNCHES hython, needs a
+#                       license — fine on dev machines). Runs after build-sops
+#                       so the freshly built th:: DSOs are registered. Skips
+#                       itself when the freshness manifest verifies clean.
+# Release CI does NOT run compile-subgraphs: the compiled .bgeo + manifest.json
+# are committed (compiled submitter-side via `tr-hda compile`), and
+# .ci/build_platform.py runs `hpm run build-sops` + `hpm run verify-subgraphs`
+# instead — a license-free digest check. So release runners need no Houdini
+# license at all. `hpm pack` does NOT run prepack — only build/run do.
+prepack = ["build-sops", "compile-subgraphs"]
+
+# build-sops ports the per-platform cmake loop + arch verification out of the
+# .woodpecker/build-*.yml workers into one script. hpm runs [scripts] from the
+# manifest directory (package/), so the paths reach up into the repo:
+# ../.ci/build_sops.py drives the build, ../src is the cmake source, and the
+# output lands in package/bin/ (build_sops.py resolves the repo root via git).
+# A [scripts] `when` only supports the `os` axis, so the os->platform mapping
+# lives here. The table form pins the interpreter to a uv-managed 3.11 so the
+# script does not depend on a `python` on the runner's PATH; cmake/CUDA/Houdini
+# are still taken from the system.
+# Debug build variant (hpm >= 0.20): `hpm build --profile debug` runs the SAME
+# base prepack (no prepack override here, so it inherits [stage].prepack and
+# stays in sync with it) with HPM_BUILD_PROFILE=debug, which build_sops.py maps
+# to a RelWithDebInfo cmake config — optimized + release CRT (never /MDd; a
+# debug-CRT DSO crashes Houdini on load) + .pdb symbols. The CMakeLists
+# per-config output dirs drop each .pdb next to its .dll under
+# bin/<major.minor>/, where the TumbleTrove dev-override launch syncs them and
+# a debugger auto-finds them. PDBs are gitignored, so release archives never
+# ship them (hpm staging treats .gitignore as authoritative). NOTE: hpm pack /
+# the registry have no profile axis — the debug variant is build-from-source
+# for local dev-override debugging only (see the houdini-dso-debug skill).
+[stage.profile.debug]
+
+[scripts.build-sops]
+cmd = [
+    { when = { os = "windows" }, set = "python ../.ci/build_sops.py --platform windows-x86_64" },
+    { when = { os = "linux" }, set = "python ../.ci/build_sops.py --platform linux-x86_64" },
+    { when = { os = "macos" }, set = "python ../.ci/build_sops.py --platform macos-aarch64" },
+]
+python = "3.11"
+
+# compile-subgraphs wraps scripts/compile_subgraphs.py (which runs under hython)
+# for LOCAL builds. ../.ci/build_subgraphs.py resolves the same pinned HFS as
+# build-sops and launches $HFS/bin/hython. The uv-managed 3.11 here is only for
+# the thin wrapper; the actual compile runs in Houdini's interpreter.
+[scripts.compile-subgraphs]
+cmd = [
+    { when = { os = "windows" }, set = "python ../.ci/build_subgraphs.py --platform windows-x86_64" },
+    { when = { os = "linux" }, set = "python ../.ci/build_subgraphs.py --platform linux-x86_64" },
+    { when = { os = "macos" }, set = "python ../.ci/build_subgraphs.py --platform macos-aarch64" },
+]
+python = "3.11"
+
+# verify-subgraphs is the RELEASE-CI replacement for compile-subgraphs: a
+# license-free check that the committed apexgraph/*.bgeo + manifest.json match
+# their .apex sources, the project.json build pin, and a green picker probe.
+# No hython, no Houdini install touched. See scripts/subgraph_manifest.py.
+[scripts.verify-subgraphs]
+cmd = "python ../.ci/verify_subgraphs.py"
+python = "3.11"
+
+# --- BEGIN GENERATED OPERATORS (scripts/gen_operators.py) ---
+# Regenerate with: scripts/tr-hython scripts/gen_operators.py
+# Do not hand-edit — `.ci/release_preflight.py` fails on drift.
+# Lists only operators that actually SHIP: release.json's
+# hda_exclude / file_exclude are applied at generation time.
+
+[[operators]]
+kind = "hda"
+type_name = "th::addFitJoint::1"
+category = "Sop"
+label = "TH Add Fit Joint"
+tab_submenu = "_TumbleRig/utility"
+icon = "th-addFitJoint"
+source = "otls/sop_th--addFitJoint-1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_attach_joint_geo::1.0"
+category = "Sop"
+label = "TH Apex Attach Joint Geo"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_attach_joint_geo"
+source = "otls/sop_th--apex_attach_joint_geo-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_attach_joint_geo::1.1"
+category = "Sop"
+label = "TH Apex Attach Joint Geo"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_attach_joint_geo"
+source = "otls/sop_th--apex_attach_joint_geo-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_attrib_copy::1.0"
+category = "Sop"
+label = "APEX Attribute Copy"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_attrib_copy"
+source = "otls/sop_th--apex_attrib_copy-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_attrib_math::1.0"
+category = "Sop"
+label = "TH Apex Attrib Math"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_attrib_math"
+source = "otls/sop_th--apex_attrib_math-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_blendshapes::2.1"
+category = "Sop"
+label = "TH Apex Blendshapes"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_blendshapes"
+source = "otls/sop_th--apex_blendshapes-2.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_blendshapes::2.2"
+category = "Sop"
+label = "TH Apex Blendshapes"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_blendshapes"
+source = "otls/sop_th--apex_blendshapes-2.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_blendshapes::2.3"
+category = "Sop"
+label = "TH Apex Blendshapes"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_blendshapes"
+source = "otls/sop_th--apex_blendshapes-2.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_blendshapes::2.4"
+category = "Sop"
+label = "TH Apex Blendshapes"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_blendshapes"
+source = "otls/sop_th--apex_blendshapes-2.4.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_blendshapes::3.0"
+category = "Sop"
+label = "TH Apex Blendshapes"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_blendshapes"
+source = "otls/sop_th--apex_blendshapes-3.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_blendshapes::3.1"
+category = "Sop"
+label = "TH Apex Blendshapes"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_blendshapes"
+source = "otls/sop_th--apex_blendshapes-3.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_bonedeform::2.2"
+category = "Sop"
+label = "TH Apex Bonedeform"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_bonedeform"
+source = "otls/sop_th--apex_bonedeform-2.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_boxit::1.0"
+category = "Sop"
+label = "TH Apex Boxit"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_boxit"
+source = "otls/sop_th--apex_boxit-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_boxit::1.1"
+category = "Sop"
+label = "TH Apex Boxit"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_boxit"
+source = "otls/sop_th--apex_boxit-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_brow_rig::1.0"
+category = "Sop"
+label = "TH Apex Brow Rig"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_brow_rig"
+source = "otls/sop_th--apex_brow_rig-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_brow_rig::1.1"
+category = "Sop"
+label = "TH Apex Brow Rig"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_brow_rig"
+source = "otls/sop_th--apex_brow_rig-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_camera::1.0"
+category = "Sop"
+label = "TH Apex Camera"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_camera"
+source = "otls/sop_th--apex_camera-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_camera::1.1"
+category = "Sop"
+label = "TH Apex Camera"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_camera"
+source = "otls/sop_th--apex_camera-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_camera::1.2"
+category = "Sop"
+label = "TH Apex Camera"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_camera"
+source = "otls/sop_th--apex_camera-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_collisions::1.0"
+category = "Sop"
+label = "TH Apex Collisions"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_collisions"
+source = "otls/sop_th--apex_collisions-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_collisions::1.1"
+category = "Sop"
+label = "TH Apex Collisions"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_collisions"
+source = "otls/sop_th--apex_collisions-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_collisions::1.2"
+category = "Sop"
+label = "TH Apex Collisions"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_collisions"
+source = "otls/sop_th--apex_collisions-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_constraints::1.3"
+category = "Sop"
+label = "TH Apex Constraints"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_constraints"
+source = "otls/sop_th--apex_constraints-1.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_constraints::2.0"
+category = "Sop"
+label = "TH Apex Constraints"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_constraints"
+source = "otls/sop_th--apex_constraints-2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_constraints::2.1"
+category = "Sop"
+label = "TH Apex Constraints"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_constraints"
+source = "otls/sop_th--apex_constraints-2.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_constraints::2.2"
+category = "Sop"
+label = "TH Apex Constraints"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_constraints"
+source = "otls/sop_th--apex_constraints-2.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ctrls::1.0"
+category = "Sop"
+label = "TH Apex Ctrls"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ctrls"
+source = "otls/sop_th--apex_ctrls-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ctrls::2.0"
+category = "Sop"
+label = "TH Apex Ctrls"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ctrls"
+source = "otls/sop_th--apex_ctrls-2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_deltamush::1.0"
+category = "Sop"
+label = "TH Apex Deltamush"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_deltamush"
+source = "otls/sop_th--apex_deltamush-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_distance_mask::1.0"
+category = "Sop"
+label = "TH Apex Distance Mask"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_distance_mask"
+source = "otls/sop_th--apex_distance_mask-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_duplicate::1.0"
+category = "Sop"
+label = "TH Apex Duplicate"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_duplicate"
+source = "otls/sop_th--apex_duplicate-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_elastic_deltamush::1.0"
+category = "Sop"
+label = "TH Apex Elastic Deltamush"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_elastic_deltamush"
+source = "otls/sop_th--apex_elastic_deltamush-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_eye_rig::1.0"
+category = "Sop"
+label = "TH Apex Eye Rig"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_eye_rig"
+source = "otls/sop_th--apex_eye_rig-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_eye_rig::1.1"
+category = "Sop"
+label = "TH Apex Eye Rig"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_eye_rig"
+source = "otls/sop_th--apex_eye_rig-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_eye_rig::1.2"
+category = "Sop"
+label = "TH Apex Eye Rig"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_eye_rig"
+source = "otls/sop_th--apex_eye_rig-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_eye_rig::1.3"
+category = "Sop"
+label = "TH Apex Eye Rig"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_eye_rig"
+source = "otls/sop_th--apex_eye_rig-1.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_eye_rig::2.0"
+category = "Sop"
+label = "TH Apex Eye Rig"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_eye_rig"
+source = "otls/sop_th--apex_eye_rig-2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_eye_rig::2.1"
+category = "Sop"
+label = "TH Apex Eye Rig"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_eye_rig"
+source = "otls/sop_th--apex_eye_rig-2.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_follow_ctrls::1.0"
+category = "Sop"
+label = "TH Apex Follow Ctrls"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_follow_ctrls"
+source = "otls/sop_th--apex_follow_ctrls-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_groom::1.0"
+category = "Sop"
+label = "TH Apex Groom"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_groom"
+source = "otls/sop_th--apex_groom-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_groom::1.1"
+category = "Sop"
+label = "TH Apex Groom"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_groom"
+source = "otls/sop_th--apex_groom-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.10"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.10.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.11"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.11.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.12"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.12.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.13"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.13.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.14"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.14.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.2"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.3"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.4"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.4.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.5"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.5.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.6"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.6.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.7"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.7.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.8"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.8.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_chains::2.9"
+category = "Sop"
+label = "TH Apex IK Chains"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_chains"
+source = "otls/sop_th--apex_ik_chains-2.9.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_spline::1.0"
+category = "Sop"
+label = "TH Apex IK Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_spline"
+source = "otls/sop_th--apex_ik_spline-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_spline::1.1"
+category = "Sop"
+label = "TH Apex IK Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_spline"
+source = "otls/sop_th--apex_ik_spline-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_spline::1.10"
+category = "Sop"
+label = "TH Apex IK Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_spline"
+source = "otls/sop_th--apex_ik_spline-1.10.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_spline::1.11"
+category = "Sop"
+label = "TH Apex IK Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_spline"
+source = "otls/sop_th--apex_ik_spline-1.11.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_spline::1.2"
+category = "Sop"
+label = "TH Apex IK Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_spline"
+source = "otls/sop_th--apex_ik_spline-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_spline::1.3"
+category = "Sop"
+label = "TH Apex IK Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_spline"
+source = "otls/sop_th--apex_ik_spline-1.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_spline::1.4"
+category = "Sop"
+label = "TH Apex IK Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_spline"
+source = "otls/sop_th--apex_ik_spline-1.4.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_spline::1.5"
+category = "Sop"
+label = "TH Apex IK Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_spline"
+source = "otls/sop_th--apex_ik_spline-1.5.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_spline::1.6"
+category = "Sop"
+label = "TH Apex IK Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_spline"
+source = "otls/sop_th--apex_ik_spline-1.6.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_spline::1.7"
+category = "Sop"
+label = "TH Apex IK Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_spline"
+source = "otls/sop_th--apex_ik_spline-1.7.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_spline::1.8"
+category = "Sop"
+label = "TH Apex IK Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_spline"
+source = "otls/sop_th--apex_ik_spline-1.8.hda"
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ik_spline::1.9"
+category = "Sop"
+label = "TH Apex IK Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ik_spline"
+source = "otls/sop_th--apex_ik_spline-1.9.hda"
+
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_inverse_foot::1.0"
+category = "Sop"
+label = "TH Apex Inverse Foot"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_inverse_foot"
+source = "otls/sop_th--apex_inverse_foot-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_inverse_foot::1.1"
+category = "Sop"
+label = "TH Apex Inverse Foot"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_inverse_foot"
+source = "otls/sop_th--apex_inverse_foot-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_inverse_foot::1.2"
+category = "Sop"
+label = "TH Apex Inverse Foot"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_inverse_foot"
+source = "otls/sop_th--apex_inverse_foot-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_inverse_foot::1.3"
+category = "Sop"
+label = "TH Apex Inverse Foot"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_inverse_foot"
+source = "otls/sop_th--apex_inverse_foot-1.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_joints::7.0"
+category = "Sop"
+label = "TH Apex Joints"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_joints"
+source = "otls/sop_th--apex_joints-7.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_joints::8.0"
+category = "Sop"
+label = "TH Apex Joints"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_joints"
+source = "otls/sop_th--apex_joints-8.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_joints::8.1"
+category = "Sop"
+label = "TH Apex Joints"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_joints"
+source = "otls/sop_th--apex_joints-8.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_joysticks::1.0"
+category = "Sop"
+label = "TH Apex Joysticks"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_joysticks"
+source = "otls/sop_th--apex_joysticks-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_lattice::1.2"
+category = "Sop"
+label = "TH Apex Lattice"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_lattice"
+source = "otls/sop_th--apex_lattice-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_lattice::1.3"
+category = "Sop"
+label = "TH Apex Lattice"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_lattice"
+source = "otls/sop_th--apex_lattice-1.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_lattice::1.4"
+category = "Sop"
+label = "TH Apex Lattice"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_lattice"
+source = "otls/sop_th--apex_lattice-1.4.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_merge_graph::1.0"
+category = "Sop"
+label = "th apex merge graph"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_merge_graph"
+source = "otls/sop_th--apex_merge_graph-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_merge_skel::1.0"
+category = "Sop"
+label = "th apex merge skel"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_merge_skel"
+source = "otls/sop_th--apex_merge_skel-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_normals::1.0"
+category = "Sop"
+label = "TH Apex Normals"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_normals"
+source = "otls/sop_th--apex_normals-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_parent::1.0"
+category = "Sop"
+label = "TH Apex Parent"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_parent"
+source = "otls/sop_th--apex_parent-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_peak::1.0"
+category = "Sop"
+label = "TH Apex Peak"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_peak"
+source = "otls/sop_th--apex_peak-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_primitives::1.0"
+category = "Sop"
+label = "TH Apex Primitives"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_primitives"
+source = "otls/sop_th--apex_primitives-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_primitives::1.1"
+category = "Sop"
+label = "TH Apex Primitives"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_primitives"
+source = "otls/sop_th--apex_primitives-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_primitives::1.2"
+category = "Sop"
+label = "TH Apex Primitives"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_primitives"
+source = "otls/sop_th--apex_primitives-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_proxy::2.0"
+category = "Sop"
+label = "TH Apex Proxy"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_add_proxy_shp"
+source = "otls/sop_th--apex_proxy-2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_push::1.0"
+category = "Sop"
+label = "TH Apex Push"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_push"
+source = "otls/sop_th--apex_push-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ragdoll_setup::1.0"
+category = "Sop"
+label = "TH Apex Ragdoll Setup"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ragdoll_setup"
+source = "otls/sop_th--apex_ragdoll_setup-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_ragdoll_setup::1.1"
+category = "Sop"
+label = "TH Apex Ragdoll Setup"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_ragdoll_setup"
+source = "otls/sop_th--apex_ragdoll_setup-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rig_defaults::1.0"
+category = "Sop"
+label = "TH Apex Rig Defaults"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_rig_defaults"
+source = "otls/sop_th--apex_rig_defaults-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rigExample_figure::1.0"
+category = "Sop"
+label = "TH Apex Rig Example Figure"
+tab_submenu = "_TumbleRig/Rigs"
+icon = "th-apex_rigExample_figure"
+source = "otls/sop_th--apex_rigExample_figure-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rigExample_figure::1.1"
+category = "Sop"
+label = "TH Apex Rig Example Figure"
+tab_submenu = "_TumbleRig/Rigs"
+icon = "th-apex_rigExample_figure"
+source = "otls/sop_th--apex_rigExample_figure-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rigExample_noodle::1.0"
+category = "Sop"
+label = "TH Apex Rig Example Noodle"
+tab_submenu = "_TumbleRig/Rigs"
+icon = "th-apex_rigExample_noodle"
+source = "otls/sop_th--apex_rigExample_noodle-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rigExample_noodle::1.1"
+category = "Sop"
+label = "TH Apex Rig Example Noodle"
+tab_submenu = "_TumbleRig/Rigs"
+icon = "th-apex_rigExample_noodle"
+source = "otls/sop_th--apex_rigExample_noodle-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rigExample_noodle::1.2"
+category = "Sop"
+label = "TH Apex Rig Example Noodle"
+tab_submenu = "_TumbleRig/Rigs"
+icon = "th-apex_rigExample_noodle"
+source = "otls/sop_th--apex_rigExample_noodle-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rigExample_noodle::1.3"
+category = "Sop"
+label = "TH Apex Rig Example Noodle"
+tab_submenu = "_TumbleRig/Rigs"
+icon = "th-apex_rigExample_noodle"
+source = "otls/sop_th--apex_rigExample_noodle-1.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rigExample_noodle::1.4"
+category = "Sop"
+label = "TH Apex Rig Example Noodle"
+tab_submenu = "_TumbleRig/Rigs"
+icon = "th-apex_rigExample_noodle"
+source = "otls/sop_th--apex_rigExample_noodle-1.4.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rigExample_noodle::1.5"
+category = "Sop"
+label = "TH Apex Rig Example Noodle"
+tab_submenu = "_TumbleRig/Rigs"
+icon = "th-apex_rigExample_noodle"
+source = "otls/sop_th--apex_rigExample_noodle-1.5.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rigExample_noodle::1.6"
+category = "Sop"
+label = "TH Apex Rig Example Noodle"
+tab_submenu = "_TumbleRig/Rigs"
+icon = "th-apex_rigExample_noodle"
+source = "otls/sop_th--apex_rigExample_noodle-1.6.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rigExample_spider::1.0"
+category = "Sop"
+label = "TH Apex Rig Example Spider"
+tab_submenu = "_TumbleRig/Rigs"
+icon = "th-apex_rigExample_spider"
+source = "otls/sop_th--apex_rigExample_spider-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rigExample_spider::1.1"
+category = "Sop"
+label = "TH Apex Rig Example Spider"
+tab_submenu = "_TumbleRig/Rigs"
+icon = "th-apex_rigExample_spider"
+source = "otls/sop_th--apex_rigExample_spider-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rivet::1.0"
+category = "Sop"
+label = "TH Apex Rivet"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_rivet"
+source = "otls/sop_th--apex_rivet-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_rivet::1.1"
+category = "Sop"
+label = "TH Apex Rivet"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_rivet"
+source = "otls/sop_th--apex_rivet-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_selectionSets::1.0"
+category = "Sop"
+label = "TH Apex Selection Sets"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_selectionSets"
+source = "otls/sop_th--apex_selectionSets-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_selectionSets::1.1"
+category = "Sop"
+label = "TH Apex Selection Sets"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_selectionSets"
+source = "otls/sop_th--apex_selectionSets-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_set_driven_keys::1.0"
+category = "Sop"
+label = "TH Apex Set Driven Keys"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_set_driven_keys"
+source = "otls/sop_th--apex_set_driven_keys-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_shrinkwrap::1.0"
+category = "Sop"
+label = "TH Apex Shrinkwrap"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_shrinkwrap"
+source = "otls/sop_th--apex_shrinkwrap-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_shrinkwrap::1.1"
+category = "Sop"
+label = "TH Apex Shrinkwrap"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_shrinkwrap"
+source = "otls/sop_th--apex_shrinkwrap-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_sim_switch::1.0"
+category = "Sop"
+label = "TH Apex Sim Switch"
+tab_submenu = "_TumbleRig/apex"
+source = "otls/sop_th--apex_sim_switch-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_skeleton::1.0"
+category = "Sop"
+label = "TH Apex Skeleton"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_primitives"
+source = "otls/sop_th--apex_skeleton-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_skeleton::1.1"
+category = "Sop"
+label = "TH Apex Skeleton"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_primitives"
+source = "otls/sop_th--apex_skeleton-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_skeleton::1.2"
+category = "Sop"
+label = "TH Apex Skeleton"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_primitives"
+source = "otls/sop_th--apex_skeleton-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_skeleton::1.3"
+category = "Sop"
+label = "TH Apex Skeleton"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_primitives"
+source = "otls/sop_th--apex_skeleton-1.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_skeleton::1.4"
+category = "Sop"
+label = "TH Apex Skeleton"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_primitives"
+source = "otls/sop_th--apex_skeleton-1.4.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_skeleton::1.5"
+category = "Sop"
+label = "TH Apex Skeleton"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_primitives"
+source = "otls/sop_th--apex_skeleton-1.5.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_skeleton_output::1.0"
+category = "Sop"
+label = "TH Apex Skeleton Output"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_skeleton_output"
+source = "otls/sop_th--apex_skeleton_output-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_skinning::2.0"
+category = "Sop"
+label = "TH Apex Skinning"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_skinning"
+source = "otls/sop_th--apex_skinning-2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_slide_on_surface::1.0"
+category = "Sop"
+label = "TH Apex Slide On Surface"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_slide_on_surface"
+source = "otls/sop_th--apex_slide_on_surface-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_slide_on_surface::1.1"
+category = "Sop"
+label = "TH Apex Slide On Surface"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_slide_on_surface"
+source = "otls/sop_th--apex_slide_on_surface-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_sliders::2.0"
+category = "Sop"
+label = "TH Apex Sliders"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_sliders"
+source = "otls/sop_th--apex_sliders-2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_smooth::1.0"
+category = "Sop"
+label = "TH Apex Smooth"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_smooth"
+source = "otls/sop_th--apex_smooth-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_solidify::1.0"
+category = "Sop"
+label = "TH Apex Solidify"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_solidify"
+source = "otls/sop_th--apex_solidify-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_sop_block::1.0"
+category = "Sop"
+label = "TH Apex SOP Block"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_sop_block"
+source = "otls/sop_th--apex_sop_block-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_space_switcher::1.0"
+category = "Sop"
+label = "TH Apex Space Switcher"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_space_switcher"
+source = "otls/sop_th--apex_space_switcher-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_space_switcher::1.1"
+category = "Sop"
+label = "TH Apex Space Switcher"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_space_switcher"
+source = "otls/sop_th--apex_space_switcher-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_space_switcher::1.2"
+category = "Sop"
+label = "TH Apex Space Switcher"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_space_switcher"
+source = "otls/sop_th--apex_space_switcher-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::2.2"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-2.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::3.2"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-3.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::4.0"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-4.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::5.0"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-5.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::5.1"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-5.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::6.0"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-6.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::6.1"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-6.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::6.2"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-6.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::6.3"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-6.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::6.4"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-6.4.hda"
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::6.5"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-6.5.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::6.6"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-6.6.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_spline::6.7"
+category = "Sop"
+label = "TH Apex Spline"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_spline"
+source = "otls/sop_th--apex_spline-6.7.hda"
+
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_subdivide::1.0"
+category = "Sop"
+label = "TH Apex Subdivide"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_subdivide"
+source = "otls/sop_th--apex_subdivide-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_subdivide::1.1"
+category = "Sop"
+label = "TH Apex Subdivide"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_subdivide"
+source = "otls/sop_th--apex_subdivide-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_tags::1.0"
+category = "Sop"
+label = "Apex Tags"
+icon = "th-apex_tags"
+source = "otls/sop_th--apex_tags-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_tags::1.1"
+category = "Sop"
+label = "Apex Tags"
+icon = "th-apex_tags"
+source = "otls/sop_th--apex_tags-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_temporal::1.0"
+category = "Sop"
+label = "TH Apex Temporal"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_temporal"
+source = "otls/sop_th--apex_temporal-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_temporal::1.1"
+category = "Sop"
+label = "TH Apex Temporal"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_temporal"
+source = "otls/sop_th--apex_temporal-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_transfer_attribute::1.0"
+category = "Sop"
+label = "TH Apex Transfer Attribute"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_transfer_attribute"
+source = "otls/sop_th--apex_transfer_attribute-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_view::1.0"
+category = "Sop"
+label = "TH Apex View"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_view"
+source = "otls/sop_th--apex_view-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_visibility::1.1"
+category = "Sop"
+label = "TH Apex Visibility"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_visibility"
+source = "otls/sop_th--apex_visibility-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_visibility::1.2"
+category = "Sop"
+label = "th Apex visibility"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_visibility"
+source = "otls/sop_th--apex_visibility-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_visibility::1.3"
+category = "Sop"
+label = "TH Apex Visibility"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_visibility"
+source = "otls/sop_th--apex_visibility-1.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_visibility::2.0"
+category = "Sop"
+label = "TH Apex Visibility"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_visibility"
+source = "otls/sop_th--apex_visibility-2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_visibility::2.1"
+category = "Sop"
+label = "TH Apex Visibility"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_visibility"
+source = "otls/sop_th--apex_visibility-2.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_wrap::1.3"
+category = "Sop"
+label = "TH Apex Wrap"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_wrap"
+source = "otls/sop_th--apex_wrap-1.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_wrap::1.5"
+category = "Sop"
+label = "TH Apex Wrap"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_wrap"
+source = "otls/sop_th--apex_wrap-1.5.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_wrap::1.6"
+category = "Sop"
+label = "TH Apex Wrap"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_wrap"
+source = "otls/sop_th--apex_wrap-1.6.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_wrap::1.7"
+category = "Sop"
+label = "TH Apex Wrap"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_wrap"
+source = "otls/sop_th--apex_wrap-1.7.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_wrap::1.8"
+category = "Sop"
+label = "TH Apex Wrap"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_wrap"
+source = "otls/sop_th--apex_wrap-1.8.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_wrinkles::1.0"
+category = "Sop"
+label = "TH Apex Wrinkles"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_wrinkles"
+source = "otls/sop_th--apex_wrinkles-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_wrinkles::1.1"
+category = "Sop"
+label = "TH Apex Wrinkles"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_wrinkles"
+source = "otls/sop_th--apex_wrinkles-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_zipper::2.0"
+category = "Sop"
+label = "TH Apex Zipper"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_zipper"
+source = "otls/sop_th--apex_zipper-2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_zipper::3.0"
+category = "Sop"
+label = "TH Apex Zipper"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_zipper"
+source = "otls/sop_th--apex_zipper-3.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_zipper::3.1"
+category = "Sop"
+label = "TH Apex Zipper"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_zipper"
+source = "otls/sop_th--apex_zipper-3.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_zipper::3.2"
+category = "Sop"
+label = "TH Apex Zipper"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_zipper"
+source = "otls/sop_th--apex_zipper-3.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::apex_zipper::3.3"
+category = "Sop"
+label = "TH Apex Zipper"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-apex_zipper"
+source = "otls/sop_th--apex_zipper-3.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::blendshape_embed::1.0"
+category = "Sop"
+label = "TH Blendshape Embed"
+icon = "th-blendshape_embed"
+source = "otls/sop_th--blendshape_embed-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::blendshape_sculpt_base::1.0"
+category = "Sop"
+label = "TH Blendshape Sculpt Base"
+icon = "th-blendshape_sculpt_base"
+source = "otls/sop_th--blendshape_sculpt_base-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::capture_blur::1.0"
+category = "Sop"
+label = "TH Capture Blur"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-capture_blur"
+source = "otls/sop_th--capture_blur-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::capture_blur::1.1"
+category = "Sop"
+label = "TH Capture Blur"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-capture_blur"
+source = "otls/sop_th--capture_blur-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::capture_blur::1.2"
+category = "Sop"
+label = "TH Capture Blur"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-capture_blur"
+source = "otls/sop_th--capture_blur-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::capture_transfer::1.0"
+category = "Sop"
+label = "Capture Transfer"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-capture_transfer"
+source = "otls/sop_th--capture_transfer-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::chain_name_resolver::1.0"
+category = "Sop"
+label = "TH Chain Name Resolver"
+icon = "th-chain_name_resolver"
+source = "otls/sop_th--chain_name_resolver-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::ctrl_shapes::1.0"
+category = "Sop"
+label = "TH Ctrl Shapes"
+tab_submenu = "_TumbleRig/utility"
+icon = "th-ctrl_shapes"
+source = "otls/sop_th--ctrl_shapes-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::cuda_joint_capture::1.0"
+category = "Sop"
+label = "CUDA Joint Capture"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-cuda_joint_capture"
+source = "otls/sop_th--cuda_joint_capture-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::cuda_joint_capture::1.1"
+category = "Sop"
+label = "CUDA Joint Capture"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-cuda_joint_capture"
+source = "otls/sop_th--cuda_joint_capture-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::cuda_joint_capture::1.2"
+category = "Sop"
+label = "CUDA Joint Capture"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-cuda_joint_capture"
+source = "otls/sop_th--cuda_joint_capture-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::deform_mask::1.0"
+category = "Sop"
+label = "TH Deform Mask"
+icon = "SOP_attribpaint"
+source = "otls/sop_th--deform_mask-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::edge_to_skeleton::1.0"
+category = "Sop"
+label = "Edge to Skeleton"
+tab_submenu = "Digital Assets"
+icon = "th-edge_to_skeleton"
+source = "otls/sop_th--edge_to_skeleton-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::fit_skeleton::2.0"
+category = "Sop"
+label = "TH Fit Skeleton"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-fit_skeleton"
+source = "otls/sop_th--fit_skeleton-2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::fit_skeleton::3.0"
+category = "Sop"
+label = "TH Fit Skeleton"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-fit_skeleton"
+source = "otls/sop_th--fit_skeleton-3.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::fit_skeleton::3.1"
+category = "Sop"
+label = "TH Fit Skeleton"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-fit_skeleton"
+source = "otls/sop_th--fit_skeleton-3.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::fit_skeleton::3.2"
+category = "Sop"
+label = "TH Fit Skeleton"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-fit_skeleton"
+source = "otls/sop_th--fit_skeleton-3.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::fit_skeleton_markers::1.0"
+category = "Sop"
+label = "TH Fit Skeleton Markers"
+tab_submenu = "_TumbleRig/apex"
+source = "otls/sop_th--fit_skeleton_markers-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::fit_skeleton_markers::1.1"
+category = "Sop"
+label = "TH Fit Skeleton Markers"
+tab_submenu = "_TumbleRig/apex"
+source = "otls/sop_th--fit_skeleton_markers-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::fit_skeleton_markers::1.2"
+category = "Sop"
+label = "TH Fit Skeleton Markers"
+tab_submenu = "_TumbleRig/apex"
+source = "otls/sop_th--fit_skeleton_markers-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::fit_skeleton_markers::1.3"
+category = "Sop"
+label = "TH Fit Skeleton Markers"
+tab_submenu = "_TumbleRig/apex"
+source = "otls/sop_th--fit_skeleton_markers-1.3.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::fit_skeleton_markers::1.4"
+category = "Sop"
+label = "TH Fit Skeleton Markers"
+tab_submenu = "_TumbleRig/apex"
+source = "otls/sop_th--fit_skeleton_markers-1.4.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::joint_cages::1.0"
+category = "Sop"
+label = "TH Joint Cages"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-joint_cages"
+source = "otls/sop_th--joint_cages-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::mirror_position::1.0"
+category = "Sop"
+label = "TH Mirror Position"
+tab_submenu = "_TumbleRig/utility"
+icon = "th-mirror_position"
+source = "otls/sop_th--mirror_position-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::name_from_path::1.0"
+category = "Sop"
+label = "TH Name From Path"
+tab_submenu = "_TumbleRig/utility"
+icon = "th-name_from_path"
+source = "otls/sop_th--name_from_path-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::orient_joints::1.0"
+category = "Sop"
+label = "TH Orient Joints"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-orient_joints"
+source = "otls/sop_th--orient_joints-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::orient_joints::1.1"
+category = "Sop"
+label = "TH Orient Joints"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-orient_joints"
+source = "otls/sop_th--orient_joints-1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::orient_joints::1.2"
+category = "Sop"
+label = "TH Orient Joints"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-orient_joints"
+source = "otls/sop_th--orient_joints-1.2.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::selection_pattern::1.0"
+category = "Sop"
+label = "TH Selection Pattern"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-selection_pattern"
+source = "otls/sop_th--selection_pattern-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::set_path_from_ref::1.0"
+category = "Sop"
+label = "TH Set Path From Ref"
+tab_submenu = "_TumbleRig/utility"
+icon = "th-set_path_from_ref"
+source = "otls/sop_th--set_path_from_ref-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::skel_add_fit_joint::1.0"
+category = "Sop"
+label = "TH Skel Add Fit Joint"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-skel_add_fit_joint"
+source = "otls/sop_th--skel_add_fit_joint-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::skeleton_doctor::3.0"
+category = "Sop"
+label = "TH Skeleton Doctor"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-skeleton_doctor"
+source = "otls/sop_th--skeleton_doctor-3.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::skeleton_validator::1.0"
+category = "Sop"
+label = "TH Skeleton Validator"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-skeleton_validator"
+source = "otls/sop_th--skeleton_validator-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::skin_layer::1.0"
+category = "Sop"
+label = "TH Skin Layer"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-skin_layer"
+source = "otls/sop_th--skin_layer-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::sop_block_in::1.0"
+category = "Sop"
+label = "TH SOP Block In"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-sop_block_in"
+source = "otls/sop_th--sop_block_in-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::th_spline_prepper::1.0"
+category = "Sop"
+label = "TH Spline Prepper"
+tab_submenu = "_TumbleRig/apex"
+icon = "th-th_spline_prepper"
+source = "otls/sop_th--th_spline_prepper-1.0.hda"
+
+[[operators]]
+kind = "dso"
+type_name = "th::arap_deform::1.0"
+category = "Sop"
+label = "ARAP Deform"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_ARAPDeform.so", macos-aarch64 = "bin/22.0/dso/SOP_ARAPDeform.dylib", windows-x86_64 = "bin/22.0/dso/SOP_ARAPDeform.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::attach_joint_geo::1.0"
+category = "Sop"
+label = "Attach Joint Geo"
+tab_submenu = "_TumbleRig/utility"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_AttachJointGeo.so", macos-aarch64 = "bin/22.0/dso/SOP_AttachJointGeo.dylib", windows-x86_64 = "bin/22.0/dso/SOP_AttachJointGeo.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::capture_merge::1.0"
+category = "Sop"
+label = "TH Capture Merge"
+tab_submenu = "_TumbleRig/apex"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CaptureMerge.so", macos-aarch64 = "bin/22.0/dso/SOP_CaptureMerge.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CaptureMerge.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_attrib_copy::1.0"
+category = "Sop"
+label = "CUDA Attribute Copy"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaAttribCopy.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaAttribCopy.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaAttribCopy.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_attrib_math::1.0"
+category = "Sop"
+label = "CUDA Attribute Math"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaAttribMath.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaAttribMath.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaAttribMath.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_attrib_transfer::1.0"
+category = "Sop"
+label = "CUDA Attrib Transfer"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaAttribTransfer.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaAttribTransfer.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaAttribTransfer.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_bonecapture::1.0"
+category = "Sop"
+label = "CUDA Bone Capture"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaBoneCapture.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaBoneCapture.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaBoneCapture.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_bonedeform::1.0"
+category = "Sop"
+label = "CUDA Bone Deform"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaBoneDeform.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaBoneDeform.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaBoneDeform.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_capture_blur::1.0"
+category = "Sop"
+label = "CUDA Capture Blur"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaCaptureBlur.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaCaptureBlur.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaCaptureBlur.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_capture_transfer::1.0"
+category = "Sop"
+label = "CUDA Capture Transfer"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaCaptureTransfer.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaCaptureTransfer.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaCaptureTransfer.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_deltamush::1.0"
+category = "Sop"
+label = "CUDA Delta Mush"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaDeltaMush.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaDeltaMush.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaDeltaMush.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_distance_from_geometry::1.0"
+category = "Sop"
+label = "CUDA Distance from Geometry"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaDistFromGeo.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaDistFromGeo.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaDistFromGeo.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_geo_merge::1.0"
+category = "Sop"
+label = "CUDA Geo Merge"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaGeoMerge.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaGeoMerge.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaGeoMerge.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_lattice::1.0"
+category = "Sop"
+label = "CUDA Lattice"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaLattice.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaLattice.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaLattice.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_noise::1.0"
+category = "Sop"
+label = "CUDA Noise"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaNoise.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaNoise.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaNoise.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_normals::1.0"
+category = "Sop"
+label = "CUDA Normals"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaNormals.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaNormals.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaNormals.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_peak::1.0"
+category = "Sop"
+label = "CUDA Peak"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaPeak.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaPeak.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaPeak.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_register_positions::1.0"
+category = "Sop"
+label = "CUDA Register Positions"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaRegisterPositions.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaRegisterPositions.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaRegisterPositions.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_rivet::1.0"
+category = "Sop"
+label = "CUDA Rivet"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaRivet.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaRivet.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaRivet.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_shrinkwrap::1.0"
+category = "Sop"
+label = "CUDA Shrinkwrap"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaShrinkwrap.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaShrinkwrap.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaShrinkwrap.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_smooth::1.0"
+category = "Sop"
+label = "CUDA Smooth"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaSmooth.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaSmooth.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaSmooth.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_wrap::1.0"
+category = "Sop"
+label = "CUDA Wrap"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaWrap.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaWrap.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaWrap.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::cuda_wrinkles::1.0"
+category = "Sop"
+label = "Cuda Wrinkles"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_CudaWrinkles.so", macos-aarch64 = "bin/22.0/dso/SOP_CudaWrinkles.dylib", windows-x86_64 = "bin/22.0/dso/SOP_CudaWrinkles.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::edges_to_curves::1.0"
+category = "Sop"
+label = "Edges to Curves"
+tab_submenu = "_TumbleRig/utility"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_EdgesToCurves.so", macos-aarch64 = "bin/22.0/dso/SOP_EdgesToCurves.dylib", windows-x86_64 = "bin/22.0/dso/SOP_EdgesToCurves.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::elastic_deltamush::1.0"
+category = "Sop"
+label = "Elastic Delta Mush"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_ElasticDeltaMush.so", macos-aarch64 = "bin/22.0/dso/SOP_ElasticDeltaMush.dylib", windows-x86_64 = "bin/22.0/dso/SOP_ElasticDeltaMush.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::follow_frames::1.0"
+category = "Sop"
+label = "TH Follow Frames"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_FollowFrames.so", macos-aarch64 = "bin/22.0/dso/SOP_FollowFrames.dylib", windows-x86_64 = "bin/22.0/dso/SOP_FollowFrames.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::follow_sample::1.0"
+category = "Sop"
+label = "TH Follow Sample"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_FollowFrames.so", macos-aarch64 = "bin/22.0/dso/SOP_FollowFrames.dylib", windows-x86_64 = "bin/22.0/dso/SOP_FollowFrames.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::lean_strip::1.0"
+category = "Sop"
+label = "TH Lean Strip"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_LeanStrip.so", macos-aarch64 = "bin/22.0/dso/SOP_LeanStrip.dylib", windows-x86_64 = "bin/22.0/dso/SOP_LeanStrip.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::primitives::1.0"
+category = "Sop"
+label = "TH Primitives"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_Primitives.so", macos-aarch64 = "bin/22.0/dso/SOP_Primitives.dylib", windows-x86_64 = "bin/22.0/dso/SOP_Primitives.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::rig_edit_cache::1.0"
+category = "Sop"
+label = "TH Rig Edit Cache"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_RigEditCache.so", macos-aarch64 = "bin/22.0/dso/SOP_RigEditCache.dylib", windows-x86_64 = "bin/22.0/dso/SOP_RigEditCache.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::match_visibility::1.0"
+category = "Sop"
+label = "TH Match Visibility"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_ThMatchVisibility.so", macos-aarch64 = "bin/22.0/dso/SOP_ThMatchVisibility.dylib", windows-x86_64 = "bin/22.0/dso/SOP_ThMatchVisibility.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::subdivide::1.0"
+category = "Sop"
+label = "CUDA Subdivide"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_Subdivide.so", macos-aarch64 = "bin/22.0/dso/SOP_Subdivide.dylib", windows-x86_64 = "bin/22.0/dso/SOP_Subdivide.dll" }
+
+[[operators]]
+kind = "dso"
+type_name = "th::visibility::1.0"
+category = "Sop"
+label = "TH Visibility"
+tab_submenu = "_TumbleRig/verbs"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_ThVisibility.so", macos-aarch64 = "bin/22.0/dso/SOP_ThVisibility.dylib", windows-x86_64 = "bin/22.0/dso/SOP_ThVisibility.dll" }
+
+# --- END GENERATED OPERATORS ---

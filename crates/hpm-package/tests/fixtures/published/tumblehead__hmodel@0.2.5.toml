@@ -1,0 +1,59 @@
+[package]
+path = "tumblehead/hmodel"
+name = "hModel"
+version = "0.2.5"
+description = "Modelling tools for Houdini: Quad Remesh (AutoRemesher) to start"
+authors = ["Tumblehead <info@tumblehead.com>"]
+license = "LicenseRef-Proprietary"
+readme = "README.md"
+keywords = ["houdini", "modelling", "modeling", "retopology", "quad remesh", "remesh", "topology"]
+
+[compat]
+# Bounded: hModel ships native binaries for the major.minor it builds
+# (bin/22.0/), and [runtime] routes HOUDINI_DSO_PATH at
+# bin/$HOUDINI_MAJOR_RELEASE.$HOUDINI_MINOR_RELEASE/dso. The cap is the first
+# unsupported major.
+houdini = ">=22.0, <23"
+# CPU only (AutoRemesher + TBB). macOS builds once CI has a mac step for it.
+platforms = ["windows-x86_64", "linux-x86_64"]
+
+[runtime]
+HMODEL = { method = "set", value = "$HPM_PACKAGE_ROOT" }
+HOUDINI_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT" }
+HOUDINI_DSO_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/bin/$HOUDINI_MAJOR_RELEASE.$HOUDINI_MINOR_RELEASE/dso" }
+
+[stage]
+# `hpm build` (local dev) builds the DSO into package/bin/.
+prepack = ["build-sops"]
+
+[scripts.build-sops]
+cmd = [
+    { when = { os = "windows" }, set = "python ../.ci/build_sops.py --platform windows-x86_64" },
+    { when = { os = "linux" }, set = "python ../.ci/build_sops.py --platform linux-x86_64" },
+]
+python = "3.11"
+
+[[operators]]
+kind = "hda"
+type_name = "th::quad_remesh::1.0"
+category = "Sop"
+label = "Quad Remesh"
+tab_submenu = "hModel"
+icon = "th-quad_remesh"
+source = "otls/sop_th--quad_remesh-1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::bridge::1.0"
+category = "Sop"
+label = "Bridge (Alpha)"
+tab_submenu = "hModel"
+source = "otls/sop_th--bridge-1.0.hda"
+
+[[operators]]
+kind = "dso"
+type_name = "th::quad_remesh_core::1.0"
+category = "Sop"
+label = "Quad Remesh Core"
+tab_submenu = "hModel"
+source = { linux-x86_64 = "bin/22.0/dso/SOP_hModel.so", windows-x86_64 = "bin/22.0/dso/SOP_hModel.dll" }

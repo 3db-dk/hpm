@@ -1,0 +1,878 @@
+# Rationale for the non-obvious entries below: docs/development.md,
+# "The package manifest".
+
+[package]
+path = "tumblehead/tumblepipe"
+name = "TumblePipe"
+version = "1.99.0"
+description = "A small studio pipeline for animation and VFX projects in Houdini"
+readme = "README.md"
+documentation = "https://tumblepipe.readthedocs.io"
+keywords = ["houdini"]
+
+[compat]
+# The upper bound is EXCLUSIVE (the first unsupported major). Raise it only
+# together with HPM_HOUDINI_MAJORS in .woodpecker/build-*.yml, which builds
+# the per-major resolver and VRAM hook the package loads.
+houdini = ">=22, <23"
+# One archive per platform; each CI worker builds and packs its own natively.
+platforms = ["windows-x86_64", "linux-x86_64", "macos-aarch64"]
+
+[runtime]
+TH_PIPELINE_PATH = { method = "set", value = "$HPM_PACKAGE_ROOT" }
+# The importable `tumblepipe` package, in Houdini, hython and farm tasks alike.
+# python3.13libs/ is found through the package root on HOUDINI_PATH; python/
+# is not.
+PYTHONPATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/python" }
+# Required placeholder, deliberately with NO `value`: the consuming project
+# must supply it (tt_setup's Configure emits it), and an install without it
+# fails rather than launching with rootless /_config, /export, /library paths.
+# The farm's synthetic job manifest (tumblepipe.farm.deadline) satisfies it
+# too; keep the two in step.
+TH_PROJECT_PATH = { method = "set", required = true }
+TH_CONFIG_PATH = { method = "set", value = "$TH_PROJECT_PATH/_config" }
+TH_EXPORT_PATH = { method = "set", value = "$TH_PROJECT_PATH/export" }
+# Pipeline user = the TumbleTrove account. $TT_USER_NAME passes through hpm and
+# is expanded by Houdini from the Desktop launcher's environment; outside a
+# Desktop launch it is blank, deliberately with no OS-username fallback. The
+# Python side reads TH_USER only.
+TH_USER = { method = "set", value = "$TT_USER_NAME" }
+# TumbleTrove's asset-browser downloads land project-local, under
+# <project>/library/<catalog>.
+TT_DOWNLOADS_PATH = { method = "set", value = "$TH_PROJECT_PATH/library" }
+# Project HDAs: TumblePipe ▸ Create Project HDA... saves to <project>/otls/
+# (tumblepipe.pipe.houdini.project_hda). Houdini's package loader keeps the
+# default scan path behind a prepend, so the package's own otls/ still loads.
+# tt_prepare creates the folder at launch, so the path never names a missing one.
+HOUDINI_OTLSCAN_PATH = { method = "prepend", value = "$TH_PROJECT_PATH/otls" }
+# The color config belongs to the project (scaffolded from
+# scripts/project_template/_config/ocio/), not to the package.
+OCIO = { method = "set", value = "$TH_CONFIG_PATH/ocio/tumblehead.ocio" }
+# tumbleResolver registration. Package env edits apply before USD's plugin
+# registry first scans, which is the only in-process timing that works.
+# $HOUDINI_MAJOR_RELEASE passes through hpm and is expanded by Houdini, so
+# each Houdini picks its own resolver/houdini<major>/. The library-path
+# entries serve child processes (husk, hython, farm tasks); in-process
+# loading relies on the resolver's rpath.
+# The same variable registers hdThPlayblast, the Hydra render delegate farm
+# playblasts render with (husk -R HdThPlayblastRendererPlugin;
+# farm/workers/playblast.py). A var takes one value, so the two paths share
+# it, joined by the OS's path separator. The delegate needs no library-path
+# entry: its only dependencies are Houdini's own USD libs.
+PXR_PLUGINPATH_NAME = { method = "prepend", value = [
+    { when = { os = "windows" }, set = "$HPM_PACKAGE_ROOT/resolver/houdini$HOUDINI_MAJOR_RELEASE/tumbleResolver/resources;$HPM_PACKAGE_ROOT/plugins/houdini$HOUDINI_MAJOR_RELEASE/hdThPlayblast/resources" },
+    { set = "$HPM_PACKAGE_ROOT/resolver/houdini$HOUDINI_MAJOR_RELEASE/tumbleResolver/resources:$HPM_PACKAGE_ROOT/plugins/houdini$HOUDINI_MAJOR_RELEASE/hdThPlayblast/resources" },
+] }
+PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/resolver/houdini$HOUDINI_MAJOR_RELEASE/tumbleResolver/lib" }
+LD_LIBRARY_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/resolver/houdini$HOUDINI_MAJOR_RELEASE/tumbleResolver/lib" }
+DYLD_LIBRARY_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/resolver/houdini$HOUDINI_MAJOR_RELEASE/tumbleResolver/lib" }
+# The VRAM Inspector's viewport hook. An HDK DSO must match the Houdini
+# major.minor it loads into, hence dso/<major>.<minor>/.
+HOUDINI_DSO_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/dso/$HOUDINI_MAJOR_RELEASE.$HOUDINI_MINOR_RELEASE" }
+
+# The asset browser catalog, documentation, workfile context and package menu
+# are TumbleTrove's SDK; the network menus are Radial's. TumblePipe calls both
+# directly, so it requires the versions whose API it is written against.
+[dependencies]
+"tumbletrove/tumbletrove" = ">=0.57"
+"tumbletrove/radial" = ">=0.8"
+
+[python_dependencies]
+dictdiffer = ">=0.9.0"
+# Writes the farm-job hpm.toml manifest (tumblepipe.farm.deadline).
+tomli-w = ">=1.0"
+
+[stage]
+# Build the artifacts the archive ships, before staging. Only `hpm build` (and
+# `hpm run <script>`) runs these; `hpm pack` does not. The outputs are
+# gitignored, so .hpmignore re-includes them.
+#   build-resolver — tumbleResolver USD plugin -> resolver/houdini<major>/
+#   build-delegate — hdThPlayblast render delegate -> plugins/houdini<major>/
+#   build-wizard   — tt_setup + tt_prepare hook apps -> bin/<platform>/
+#   build-player   — th_player sequence player + its FFmpeg -> bin/<platform>/
+#   build-vramhook — VRAM Inspector hook DSO -> dso/<major>.<minor>/
+#   compile-hdas   — expanded otls/<name>/ -> otls/<name>.hda
+prepack = ["build-resolver", "build-delegate", "build-wizard", "build-player", "build-vramhook", "compile-hdas"]
+
+# Archive contents: an allowlist. It is also the public source mirror's list,
+# plus .ci/_packaging.py MIRROR_EXTRAS (src/ and repo metadata).
+include = [
+    "README.md",
+    "CHANGELOG.md",              # docs/changelog.md links to it in the installed package
+    "LICENSE",
+    "hpm.toml",
+    # The user documentation, rendered offline by TumbleTrove ▸ Documentation
+    # (docs/index.md is the front page and sidebar).
+    "docs/**",
+    "radial_menus/**",
+    # Stock department radials: TumbleTrove's lowest radial layer. Not under
+    # radial_menus/, which is read as the package layer.
+    "stock/**",
+    "otls/**",
+    "OPmenu.xml",                # the node right-click menu's TumblePipe entries
+    # hdThPlayblast in the Solaris viewer's renderer menu: label, place, and
+    # the purposes and procedurals a farm playblast draws. Houdini merges
+    # every UsdRenderers.json on HOUDINI_PATH, so Karma's and VK's stay.
+    "UsdRenderers.json",
+    "python/tumblepipe/**",
+    "python3.13libs/**",
+    "desktop/TumblePipe.desk",
+    "scripts/**",
+    "resources/**",
+    # Built native artifacts (prepack); their sources under src/ do not ship.
+    "resolver/**",
+    "plugins/**",
+    "bin/**",
+    "dso/**",
+]
+# Carve-outs within the included dirs.
+exclude = [
+    "otls/*/**",                 # expanded HDA sources — the collapsed .hda ships
+    "scripts/verify_*.py",       # dev-only verification harnesses
+    "docs/conf.py",              # the readthedocs (Sphinx) build, not part of the offline book
+    "docs/requirements.txt",
+    "docs/_static/**",
+    "docs/_build/**",
+    "**/__pycache__/**",         # tt_setup copies the project_template scaffold wholesale
+]
+
+# The prepack scripts. `when.os` is the only [scripts] axis, so each routes to
+# its worker's platform id; the per-Houdini-major loops (resolver, VRAM hook)
+# live in the scripts and follow $HPM_HOUDINI_MAJORS, which they require.
+[scripts.build-resolver]
+cmd = [
+    { when = { os = "windows" }, set = "python .ci/build_resolver.py --platform windows-x86_64" },
+    { when = { os = "linux" }, set = "python .ci/build_resolver.py --platform linux-x86_64" },
+    { when = { os = "macos" }, set = "python .ci/build_resolver.py --platform macos-aarch64" },
+]
+python = "3.11"
+
+[scripts.build-delegate]
+cmd = [
+    { when = { os = "windows" }, set = "python .ci/build_delegate.py --platform windows-x86_64" },
+    { when = { os = "linux" }, set = "python .ci/build_delegate.py --platform linux-x86_64" },
+    { when = { os = "macos" }, set = "python .ci/build_delegate.py --platform macos-aarch64" },
+]
+python = "3.11"
+
+[scripts.build-wizard]
+cmd = [
+    { when = { os = "windows" }, set = "python .ci/build_wizard.py --platform windows-x86_64" },
+    { when = { os = "linux" }, set = "python .ci/build_wizard.py --platform linux-x86_64" },
+    { when = { os = "macos" }, set = "python .ci/build_wizard.py --platform macos-aarch64" },
+]
+python = "3.11"
+
+[scripts.build-player]
+cmd = [
+    { when = { os = "windows" }, set = "python .ci/build_player.py --platform windows-x86_64" },
+    { when = { os = "linux" }, set = "python .ci/build_player.py --platform linux-x86_64" },
+    { when = { os = "macos" }, set = "python .ci/build_player.py --platform macos-aarch64" },
+]
+python = "3.11"
+
+[scripts.build-vramhook]
+cmd = [
+    { when = { os = "windows" }, set = "python .ci/build_vramhook.py --platform windows-x86_64" },
+    { when = { os = "linux" }, set = "python .ci/build_vramhook.py --platform linux-x86_64" },
+    { when = { os = "macos" }, set = "python .ci/build_vramhook.py --platform macos-aarch64" },
+]
+python = "3.11"
+
+[scripts.compile-hdas]
+cmd = [
+    { when = { os = "windows" }, set = "python .ci/compile_hdas.py" },
+    { when = { os = "linux" }, set = "python .ci/compile_hdas.py" },
+    { when = { os = "macos" }, set = "python .ci/compile_hdas.py" },
+]
+python = "3.11"
+
+# Desktop hooks. Program paths are absolute ($HPM_PACKAGE_ROOT) and quoted:
+# Windows resolves a relative program against the desktop app's cwd, and the
+# package root can contain spaces or `@`. They run the prebuilt binaries
+# directly, with no managed Python. No label: a label would list them as
+# buttons in the desktop's Scripts panel.
+#
+# tt_setup: the Configure button — points at or scaffolds a project and emits
+# {"envVars": {"TH_PROJECT_PATH": ...}}.
+[scripts.tt_setup]
+cmd = [
+    { when = { os = "windows" }, set = "\"$HPM_PACKAGE_ROOT/bin/windows-x86_64/tt_setup.exe\" --template-dir \"$HPM_PACKAGE_ROOT/scripts/project_template\"" },
+    { when = { os = "linux" }, set = "\"$HPM_PACKAGE_ROOT/bin/linux-x86_64/tt_setup\" --template-dir \"$HPM_PACKAGE_ROOT/scripts/project_template\"" },
+    { when = { os = "macos" }, set = "\"$HPM_PACKAGE_ROOT/bin/macos-aarch64/tt_setup\" --template-dir \"$HPM_PACKAGE_ROOT/scripts/project_template\"" },
+]
+
+# tt_prepare: runs on every project launch (the only hook that fires after a
+# package upgrade) and offers to bring the project's _config forward.
+[scripts.tt_prepare]
+cmd = [
+    { when = { os = "windows" }, set = "\"$HPM_PACKAGE_ROOT/bin/windows-x86_64/tt_prepare.exe\" --template-dir \"$HPM_PACKAGE_ROOT/scripts/project_template\"" },
+    { when = { os = "linux" }, set = "\"$HPM_PACKAGE_ROOT/bin/linux-x86_64/tt_prepare\" --template-dir \"$HPM_PACKAGE_ROOT/scripts/project_template\"" },
+    { when = { os = "macos" }, set = "\"$HPM_PACKAGE_ROOT/bin/macos-aarch64/tt_prepare\" --template-dir \"$HPM_PACKAGE_ROOT/scripts/project_template\"" },
+]
+
+# Scripts-panel buttons (the label is what lists them). Desktop scripts run in
+# the project dir, so the script path goes through $HPM_PACKAGE_ROOT.
+#
+# migrate-config: the same tt_prepare migration, on demand, for
+# $TH_PROJECT_PATH. Writes a .bak first; idempotent.
+[scripts.migrate-config]
+cmd = "python \"$HPM_PACKAGE_ROOT/scripts/migrate_config.py\""
+python = "3.11"
+label = "Migrate Project Config"
+description = "Bring this project's _config layout up to the current pipeline version"
+
+# farm: the Farm Submit grid without a Houdini session. The stdlib-only
+# launcher finds a matching Houdini and starts the window in its bundled
+# Python.
+[scripts.farm]
+cmd = "python \"$HPM_PACKAGE_ROOT/scripts/farm_launcher.py\""
+python = "3.11"
+label = "Farm Submit"
+description = "Publish, playblast and render shots on the farm, without opening Houdini"
+
+# archive / unarchive: the project archive window (tumblepipe.archive.app),
+# started the same way as Farm Submit. The same library runs headless as
+# `python -m tumblepipe.archive plan|create|verify|restore`.
+[scripts.archive]
+cmd = "python \"$HPM_PACKAGE_ROOT/scripts/farm_launcher.py\" --app archive"
+python = "3.11"
+label = "Archive Project"
+description = "Pack the project's workfiles and the exports they load into a zip archive, for the client or cold storage"
+
+# farm-manager: the Farm Manager — this machine's local farm jobs and the
+# Deadline farm's, their tasks, progress and logs — started like Farm Submit.
+[scripts.farm-manager]
+cmd = "python \"$HPM_PACKAGE_ROOT/scripts/farm_launcher.py\" --app manager"
+python = "3.11"
+label = "Farm Manager"
+description = "Follow farm and local render jobs: queued, progress, logs and errors"
+
+[scripts.unarchive]
+cmd = "python \"$HPM_PACKAGE_ROOT/scripts/farm_launcher.py\" --app restore"
+python = "3.11"
+label = "Restore Archive"
+description = "Check a TumblePipe archive and unpack it into a folder"
+
+# prune-exports: the Prune Old Exports window (tumblepipe.prune_app): lists
+# the export versions it would delete, then deletes them when confirmed. The
+# same library runs headless as `python -m tumblepipe.prune exports`.
+[scripts.prune-exports]
+cmd = "python \"$HPM_PACKAGE_ROOT/scripts/farm_launcher.py\" --app prune"
+python = "3.11"
+label = "Prune Old Exports"
+description = "Delete old export versions of shots and assets, keeping the newest few and anything a staged build or latest workfile still loads"
+
+# edits: the editor (th_player) on the project, an empty untitled edit;
+# Open… and the asset browser's Edits section open saved ones. Started like
+# Farm Submit, so $OCIO and $TH_PROJECT_PATH are a Houdini session's.
+[scripts.edits]
+cmd = "python \"$HPM_PACKAGE_ROOT/scripts/farm_launcher.py\" --app edits"
+python = "3.11"
+label = "Edits"
+description = "Cut the film: open the editor on this project's shots and media, without opening Houdini"
+
+[scripts.rebuild-caches]
+cmd = "python \"$HPM_PACKAGE_ROOT/scripts/farm_launcher.py\" --app rebuild"
+python = "3.11"
+label = "Rebuild Caches"
+description = "In a project restored from an archive, re-make the caches the archive left out by re-running their workfiles in hython (needs a Houdini licence)"
+
+# Operator index. Declares every HDA node type this package bundles so
+# `hpm pack` can emit a searchable asset index for registry-level node
+# discovery without downloading the archive. Generated from the otls/
+# expanded-HDA INDEX__SECTION + Tools.shelf (.ci/gen_operators.py is the
+# generator); regenerate when operators are added, removed, or retyped.
+# `source` is the collapsed otls/<name>.hda that compile-hdas produces at
+# pack time (Recipes.hda ships as a tracked binary). `icon` is omitted:
+# hpm's icon is a Houdini icon identifier, but ours are
+# $TH_PIPELINE_PATH/resources/*.png paths. The same namespaced type_name in
+# two tables (e.g. th::cache::1.0 as both Sop and Lop) is two operators.
+
+[[operators]]
+kind = "hda"
+type_name = "th::a_b_slider::1.0"
+label = "th a b slider"
+category = "Cop"
+tab_submenu = "_TumblePipe/comp"
+source = "otls/cop_th.a_b_slider.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::cop_material::1.0"
+label = "th cop material"
+category = "Cop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/cop_th.cop_material.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::cop_paint::1.0"
+label = "th cop paint"
+category = "Cop"
+tab_submenu = "_TumblePipe/comp"
+source = "otls/cop_th.cop_paint.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::depth_cull::1.0"
+label = "th depth cull"
+category = "Cop"
+tab_submenu = "_TumblePipe/comp"
+source = "otls/cop_th.depth_cull.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::export_comp::1.0"
+label = "th export comp"
+category = "Cop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/cop_th.export_comp.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::export_texture::1.0"
+label = "th export texture"
+category = "Cop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/cop_th.export_texture.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::gradient_map::1.0"
+label = "th gradient map"
+category = "Cop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/cop_th.gradient_map.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::import_lop_camera::1.0"
+label = "th import lop camera"
+category = "Cop"
+tab_submenu = "_TumblePipe/comp"
+source = "otls/cop_th.import_lop_camera.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::import_render::1.0"
+label = "th import render"
+category = "Cop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/cop_th.import_render.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::import_scene::1.0"
+label = "th import scene"
+category = "Cop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/cop_th.import_scene.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::light_mix::1.0"
+label = "th light mix"
+category = "Cop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/cop_th.light_mix.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::lop_import::1.0"
+label = "th lop import"
+category = "Cop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/cop_th.lop_import.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::mask_painter::1.0"
+label = "th mask painter"
+category = "Cop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/cop_th.mask_painter.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::paint_scatter::1.0"
+label = "th paint scatter"
+category = "Cop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/cop_th.paint_scatter.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::roto_mask::1.0"
+label = "th roto mask"
+category = "Cop"
+tab_submenu = "_TumblePipe/comp"
+source = "otls/cop_th.roto_mask.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::tileable_texture::1.0"
+label = "th tileable texture"
+category = "Cop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/cop_th.tileable_texture.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::th_configure_forest_gobo"
+label = "th configure forest gobo"
+category = "Data"
+source = "otls/Recipes.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::th_configure_grass"
+label = "th configure grass"
+category = "Data"
+source = "otls/Recipes.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::th_configure_lop_import"
+label = "th configure lop import"
+category = "Data"
+source = "otls/Recipes.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::th_configure_material_override"
+label = "th configure material override"
+category = "Data"
+source = "otls/Recipes.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::animate::2.0"
+label = "th animate"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.animate.2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::archive::1.0"
+label = "th archive"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.archive.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::asset_payload::1.0"
+label = "th asset payload"
+category = "Lop"
+tab_submenu = "_TumblePipe/utils"
+source = "otls/lop_th.asset_payload.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::asset_thumbnail::1.0"
+label = "th asset thumbnail"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.asset_thumbnail.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::cache::1.0"
+label = "th cache"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.cache.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::cop_material_library::1.0"
+label = "th cop material library"
+category = "Lop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/lop_th.cop_material_library.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::create_asset::1.0"
+label = "th create asset"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.create_asset.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::create_asset_lookdev::1.0"
+label = "th create asset lookdev"
+category = "Lop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/lop_th.create_asset_lookdev.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::create_asset_model::1.0"
+label = "th create asset model"
+category = "Lop"
+tab_submenu = "_TumblePipe/model"
+source = "otls/lop_th.create_asset_model.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::create_model::1.0"
+label = "th create model"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.create_model.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::export_asset::1.0"
+label = "th export asset"
+category = "Lop"
+tab_submenu = "_TumblePipe/utils"
+source = "otls/lop_th.export_asset.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::export_layer::1.0"
+label = "th export layer"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.export_layer.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::image_card::1.0"
+label = "th image card"
+category = "Lop"
+tab_submenu = "_TumblePipe/lighting"
+source = "otls/lop_th.image_card.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::image_plane_painter::1.1"
+label = "th image plane painter"
+category = "Lop"
+tab_submenu = "_TumblePipe/utils"
+source = "otls/lop_th.image_plane_painter.1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::import_asset::1.0"
+label = "th import asset"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.import_asset.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::import_assets::2.0"
+label = "th import assets"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.import_assets.2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::import_layer::1.0"
+label = "th import layer"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.import_layer.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::import_shot::1.0"
+label = "th import shot"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.import_shot.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::import_texture::1.0"
+label = "th import texture"
+category = "Lop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/lop_th.import_texture.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::karmafogbox::1.0"
+label = "th karma fog box"
+category = "Lop"
+tab_submenu = "_TumblePipe/lighting"
+source = "otls/lop_th.karmafogbox.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::layer_split::1.0"
+label = "th layer split"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.layer_split.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::layout_rigs::1.0"
+label = "TH Layout Rigs"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.layout_rigs.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::light_blocker::1.0"
+label = "th light blocker"
+category = "Lop"
+tab_submenu = "_TumblePipe/lighting"
+source = "otls/lop_th.light_blocker.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::light_streaks::1.4"
+label = "th light streaks"
+category = "Lop"
+tab_submenu = "_TumblePipe/lighting"
+source = "otls/lop_th.light_streaks.1.4.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::lookdev_studio::2.0"
+label = "th lookdev studio"
+category = "Lop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/lop_th.lookdev_studio.2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::lpe_tags::1.0"
+label = "th lpe tags"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.lpe_tags.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::material::1.0"
+label = "th material"
+category = "Lop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/lop_th.material.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::material_assigner::1.0"
+label = "th material assigner"
+category = "Lop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/lop_th.material_assigner.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::mattes::1.0"
+label = "th mattes"
+category = "Lop"
+tab_submenu = "_TumblePipe/rendering"
+source = "otls/lop_th.mattes.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::mesh_outline::1.0"
+label = "th mesh outline"
+category = "Lop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/lop_th.mesh_outline.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::playblast::1.0"
+label = "th playblast"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.playblast.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::projection_mapping::1.1"
+label = "th projection mapping"
+category = "Lop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/lop_th.projection_mapping.1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::render_debug::1.0"
+label = "th render debug"
+category = "Lop"
+tab_submenu = "_TumblePipe/debug"
+source = "otls/lop_th.render_debug.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::render_settings::1.0"
+label = "th render settings"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.render_settings.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::render_vars::1.1"
+label = "th render vars"
+category = "Lop"
+tab_submenu = "_TumblePipe/rendering"
+source = "otls/lop_th.render_vars.1.1.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::set_kinds::1.0"
+label = "th set kinds"
+category = "Lop"
+tab_submenu = "_TumblePipe/utils"
+source = "otls/lop_th.set_kinds.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::shot_sequencer::1.0"
+label = "th shot sequencer"
+category = "Lop"
+tab_submenu = "_TumblePipe/utils"
+source = "otls/lop_th.shot_sequencer.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::sop_modify::1.0"
+label = "th sop modify"
+category = "Lop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/lop_th.sop_modify.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::cache::1.0"
+label = "th cache"
+category = "Sop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/sop_th.cache.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::copy_parms::1.0"
+label = "th copy parms"
+category = "Sop"
+tab_submenu = "_TumblePipe/utils"
+source = "otls/sop_th.copy_parms.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::export_rig::1.0"
+label = "th export rig"
+category = "Sop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/sop_th.export_rig.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::geo_path_builder::1.0"
+label = "th geo path builder"
+category = "Sop"
+tab_submenu = "_TumblePipe/utils"
+source = "otls/sop_th.geo_path_builder.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::import_asset::1.0"
+label = "th import asset"
+category = "Sop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/sop_th.import_asset.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::import_model::1.0"
+label = "th import model"
+category = "Sop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/sop_th.import_model.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::import_rig::1.0"
+label = "th import rig"
+category = "Sop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/sop_th.import_rig.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::import_rigs::2.0"
+label = "th import rigs"
+category = "Sop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/sop_th.import_rigs.2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::layout_keys::1.0"
+label = "TH Layout Keys"
+category = "Sop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/sop_th.layout_keys.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::maps_baker::1.0"
+label = "th maps baker"
+category = "Sop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/sop_th.maps_baker.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::mesh_blender::1.0"
+label = "th mesh blender"
+category = "Sop"
+tab_submenu = "_TumblePipe/model"
+source = "otls/sop_th.mesh_blender.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::mesh_carver::1.0"
+label = "th mesh carver"
+category = "Sop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/sop_th.mesh_carver.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::mesh_lasso::1.0"
+label = "th mesh lasso"
+category = "Sop"
+tab_submenu = "_TumblePipe/model"
+source = "otls/sop_th.mesh_lasso.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::playblast::2.0"
+label = "th playblast"
+category = "Sop"
+tab_submenu = "_TumblePipe/pipeline"
+source = "otls/sop_th.playblast.2.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::rename_packed::1.0"
+label = "th rename packed"
+category = "Sop"
+tab_submenu = "_TumblePipe/utils"
+source = "otls/sop_th.rename_packed.1.0.hda"
+
+[[operators]]
+kind = "hda"
+type_name = "th::triplanar_projection::1.0"
+label = "th triplanar projection"
+category = "Vop"
+tab_submenu = "_TumblePipe/lookdev"
+source = "otls/vop_th.triplanar_projection.1.0.hda"

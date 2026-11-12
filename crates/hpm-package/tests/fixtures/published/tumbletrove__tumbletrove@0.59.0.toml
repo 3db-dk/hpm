@@ -1,0 +1,25 @@
+[package]
+path = "tumbletrove/tumbletrove"
+name = "TumbleTrove"
+version = "0.59.0"
+description = "Tumblehead's Houdini toolset container (Asset Browser, main-menu system, Desktop session bridge)."
+readme = "README.md"
+keywords = ["houdini", "asset-browser", "main-menu", "pipeline", "python-panel", "session-bridge"]
+
+[compat]
+# Manifest 2.0 schema (hpm 0.16+). Cargo-style version requirement, replacing
+# the pre-2.0 `[houdini] min_version`. The bound is open-ended on the upper
+# end: this is a pure-Python package (no native resolver, no per-major build
+# artifact), so it runs on any Houdini >= 21 — there is nothing to cap against
+# the way TumblePipe caps at the highest major its CI builds a resolver for.
+#
+# NB: hpm upper bounds are EXCLUSIVE and name the first UNSUPPORTED major, so
+# never write `<21` thinking it means "21 and below" — that would compile to
+# `houdini_version < '21'` and silently disable the entire package (the H22
+# "package not registering" bug that hit TumblePipe's `max_version = "22"`).
+houdini = ">=21"
+
+# No [compat].platforms / [runtime] / [stage]: TumbleTrove ships a single
+# universal archive of pure Python (staged by scripts/_tumbletrove_build.py),
+# registers no env edits, and TumbleTrove Desktop adds the package root to
+# HOUDINI_PATH directly.
