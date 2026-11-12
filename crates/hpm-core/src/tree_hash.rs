@@ -59,11 +59,7 @@ pub fn hash_tree(dir: &Path) -> Result<String, IoOp> {
         }
     }
 
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect())
+    Ok(crate::digest::finish_hex(hasher))
 }
 
 #[cfg(test)]

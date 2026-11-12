@@ -5,36 +5,22 @@ pub use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{Signer, VerifyingKey};
 use hpm_package::IoOp;
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
 use super::PackError;
 
-/// Compute SHA-256 checksum of a file, returning hex-encoded string.
+/// Compute the hex SHA-256 of a file, streamed.
 pub fn compute_archive_checksum(path: &Path) -> Result<String, PackError> {
-    let bytes = fs::read(path).map_err(|e| IoOp::wrap("read archive for checksum", path, e))?;
-    Ok(compute_bytes_checksum(&bytes))
+    crate::digest::sha256_file(path)
+        .map_err(|e| IoOp::wrap("read archive for checksum", path, e).into())
 }
 
-/// Compute SHA-256 checksum of an in-memory byte slice. Use when you already
+/// Compute the hex SHA-256 of an in-memory byte slice. Use when you already
 /// hold the archive bytes (e.g. after re-shaping for a third-party hosting
 /// target) and don't want a disk round-trip.
 pub fn compute_bytes_checksum(bytes: &[u8]) -> String {
-    let hash = Sha256::digest(bytes);
-    hex::encode(hash)
-}
-
-/// Hex encoding without external dep (sha2 re-exports what we need, but let's
-/// just do it inline).
-mod hex {
-    pub fn encode(bytes: impl AsRef<[u8]>) -> String {
-        bytes
-            .as_ref()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect()
-    }
+    crate::digest::sha256_bytes(bytes)
 }
 
 /// Load an Ed25519 signing key from a PKCS#8 PEM file.
@@ -69,7 +55,7 @@ pub fn sign_bytes(bytes: &[u8], signing_key: &SigningKey) -> (String, String) {
 
     let verifying_key: VerifyingKey = signing_key.verifying_key();
     let pub_bytes = verifying_key.to_bytes();
-    let key_id = hex::encode(&pub_bytes[..8]);
+    let key_id = crate::digest::to_hex(&pub_bytes[..8]);
 
     (sig_b64, key_id)
 }

@@ -43,6 +43,7 @@
 
 pub mod archive_fetcher;
 pub mod asset_index;
+pub(crate) mod digest;
 pub mod discovery;
 pub mod disk_full;
 pub mod exec_mode;

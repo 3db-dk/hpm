@@ -4,8 +4,6 @@
 //! direct URLs provided by the registry.
 
 use crate::package_source::{PackageSource, PackageSourceError};
-use sha2::{Digest, Sha256};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -40,23 +38,6 @@ pub fn fetcher_install_dir(packages_dir: &Path, name: &str, version: &str) -> Pa
 pub fn cas_install_dir(packages_dir: &Path, name: &str, version: &str) -> PathBuf {
     let slug = name.rsplit('/').next().unwrap_or(name);
     packages_dir.join(format!("{}@{}", slug, version))
-}
-
-/// SHA-256 of a file's bytes, streamed (blocking operation). Used to verify
-/// a downloaded archive against the registry entry's `cksum`.
-fn compute_file_sha256_sync(path: &Path) -> Result<String, FetchError> {
-    let mut hasher = Sha256::new();
-    let mut file = std::fs::File::open(path)?;
-    let mut buffer = [0u8; 8192];
-    loop {
-        let bytes_read = file.read(&mut buffer)?;
-        if bytes_read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..bytes_read]);
-    }
-    let result = hasher.finalize();
-    Ok(result.iter().map(|b| format!("{:02x}", b)).collect())
 }
 
 /// Compute a SHA-256 checksum of a directory's contents (blocking operation)
@@ -246,7 +227,7 @@ impl ArchiveFetcher {
             let expected = expected.to_string();
             let path_for_verify = archive_path.clone();
             let actual =
-                tokio::task::spawn_blocking(move || compute_file_sha256_sync(&path_for_verify))
+                tokio::task::spawn_blocking(move || crate::digest::sha256_file(&path_for_verify))
                     .await
                     .map_err(|e| {
                         FetchError::ExtractionError(format!("Checksum task join error: {}", e))
@@ -402,13 +383,7 @@ mod tests {
     }
 
     fn sha256_hex(bytes: &[u8]) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(bytes);
-        hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect()
+        crate::digest::sha256_bytes(bytes)
     }
 
     /// Installing a download leaves no copy of it in staging. Every install
@@ -559,7 +534,7 @@ mod tests {
         let path = fetcher.download_archive(&url, "pkg-1.0.0").await.unwrap();
 
         assert_eq!(
-            compute_file_sha256_sync(&path).unwrap(),
+            crate::digest::sha256_file(&path).unwrap(),
             sha256_hex(&bytes),
             "archive contents must be durable before download_archive returns"
         );
@@ -656,10 +631,5 @@ mod tests {
             .await
             .expect("verified archive should extract");
         assert!(result.package_path.join("hpm.toml").exists());
-    }
-
-    #[test]
-    fn compute_file_sha256_sync_meets_the_digest_spec() {
-        crate::digest_spec::check_file_hasher(|p| compute_file_sha256_sync(p).unwrap());
     }
 }

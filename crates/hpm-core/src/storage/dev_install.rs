@@ -292,7 +292,7 @@ pub(super) fn dev_copy_image(
 
     Ok(DevCopyImage {
         entries,
-        hash: hex_digest(hasher),
+        hash: crate::digest::finish_hex(hasher),
     })
 }
 
@@ -319,14 +319,6 @@ pub(super) fn copy_dev_image(
         std::fs::copy(source, &dest).map_err(|e| IoOp::wrap("copy file to", &dest, e))?;
     }
     Ok(())
-}
-
-fn hex_digest(hasher: Sha256) -> String {
-    hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect()
 }
 
 /// True when `name` is a content-hash directory name — 64 lowercase hex chars,

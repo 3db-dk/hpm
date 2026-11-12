@@ -117,14 +117,7 @@ pub(crate) fn record_project_user(install_path: &Path, manifest_path: &Path) -> 
         return Ok(false);
     };
     let manifest = std::path::absolute(manifest_path)?;
-    let key = {
-        let digest = Sha256::digest(manifest.to_string_lossy().as_bytes());
-        digest
-            .iter()
-            .take(8)
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    };
+    let key = crate::digest::to_hex(&Sha256::digest(manifest.to_string_lossy().as_bytes())[..8]);
     let json = serde_json::to_vec(&serde_json::json!({ "manifest": manifest }))
         .map_err(io::Error::other)?;
     write_record(

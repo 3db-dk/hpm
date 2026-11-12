@@ -324,12 +324,9 @@ impl ResolvedDependencySet {
         for (name, version) in &self.packages {
             hasher.update(format!("{}:{}", name, version));
         }
-        hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>()[..16]
-            .to_string()
+        let mut hex = crate::digest::finish_hex(hasher);
+        hex.truncate(16);
+        hex
     }
 }
 

@@ -30,8 +30,6 @@
 use hpm_package::IoOp;
 use hpm_package::path_util::relative_path_to_forward_slash;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use tracing::warn;
 
@@ -146,7 +144,7 @@ pub fn record_tree(dir: &Path) -> Result<InstallManifest, IoOp> {
             continue;
         }
         let relative = entry.path().strip_prefix(dir).unwrap_or(entry.path());
-        let (size, sha256) = hash_file(entry.path())
+        let (size, sha256) = crate::digest::sha256_file_sized(entry.path())
             .map_err(|e| IoOp::wrap("read file to record", entry.path(), e))?;
         files.push(FileRecord {
             path: relative_path_to_forward_slash(relative),
@@ -284,7 +282,7 @@ fn check_file(dir: &Path, record: &FileRecord) -> Option<ProblemKind> {
     if actual > record.size {
         return Some(ProblemKind::Changed);
     }
-    match hash_file(&path) {
+    match crate::digest::sha256_file_sized(&path) {
         Ok((_, sha256)) if sha256 == record.sha256 => None,
         Ok(_) => Some(ProblemKind::Changed),
         Err(e) => Some(ProblemKind::Unreadable {
@@ -299,28 +297,6 @@ fn is_inside(path: &str) -> bool {
     !path.is_empty()
         && !path.contains('\\')
         && p.components().all(|c| matches!(c, Component::Normal(_)))
-}
-
-/// Size and SHA-256 of a file, streamed.
-fn hash_file(path: &Path) -> std::io::Result<(u64, String)> {
-    let mut hasher = Sha256::new();
-    let mut file = std::fs::File::open(path)?;
-    let mut buffer = [0u8; 64 * 1024];
-    let mut size = 0u64;
-    loop {
-        let n = file.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        size += n as u64;
-        hasher.update(&buffer[..n]);
-    }
-    let hex = hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    Ok((size, hex))
 }
 
 #[cfg(test)]
