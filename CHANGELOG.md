@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-11-12
+
 ### Fixed
 
 - `hpm add creator/slug@1.0.0` writes the dependency as `creator/slug`.
