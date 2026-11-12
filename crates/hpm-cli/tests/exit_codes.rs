@@ -112,8 +112,9 @@ macro_rules! snapshot {
                 (r#""elapsed_ms": ?\d+"#, r#""elapsed_ms": [MS]"#),
                 (r"\b[0-9a-f]{64}\b", "[SHA256]"),
                 (r"127\.0\.0\.1:\d+", "[ADDR]"),
-                // git words a missing repository differently per platform.
-                (r"Git clone failed: fatal: [^\n]*", "Git clone failed: [git error]"),
+                // git words a missing repository differently per platform,
+                // over one line on macOS and several on Windows.
+                (r"(?s)Git clone failed: fatal: .*?\n--- stderr", "Git clone failed: [git error]\n\n\n--- stderr"),
             ],
             prepend_module_to_snapshot => false,
         }, {
