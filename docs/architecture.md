@@ -809,8 +809,7 @@ mutating one in place. Git registries currently ignore the token.
 `ProjectManager` mirrors that contract via
 `ProjectManager::new_with_auth(.., Option<String>)`. The token is
 stashed on the manager and forwarded to every `RegistrySet` it builds
-internally — `sync_dependencies` for registry-form deps and
-`add_dependency`'s registry-resolved path both go through
+internally — `sync_dependencies` for registry-form deps goes through
 `from_configs_with_auth` with the stashed token. `ProjectManager::new`
 delegates with `None`, so anonymous use is unchanged. As with the
 `RegistrySet` variant, refreshing tokens are handled by rebuilding the

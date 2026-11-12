@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `hpm init` writes a valid `python/__init__.py`. It used to begin with an
+  empty string literal followed by bare text, which Python rejects.
+
+### Removed
+
+- **Breaking (hpm-core API):** `ProjectManager::add_dependency` and
+  `ProjectManager::remove_dependency`, `storage::PackageSpec`,
+  `storage::VersionReq`, `InstalledPackage::is_compatible_with` and
+  `ProjectError::NoMatchingVersion`. Nothing called them; they also
+  wrote ranges into `hpm.toml` that install then looked up as exact
+  versions, and read a bare version as `^x.y.z`. Edit dependencies with
+  `project::manifest_edit` (what `hpm add` / `hpm remove` use) and run
+  `sync_dependencies`.
+
 ## [0.37.0] - 2026-11-11
 
 ### Fixed

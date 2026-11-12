@@ -760,8 +760,7 @@ async fn install_one_dep_repairs_a_lost_executable_bit_on_reuse() {
 /// short-circuit, with no registries configured, must fail as
 /// `NoRegistriesConfigured` (pointing the user at `hpm registry add`) rather
 /// than resolving against the empty set and surfacing a misleading
-/// `VersionNotFound`. This is the `hpm install` analogue of the
-/// single-package `resolve_and_install_from_registry` check.
+/// `VersionNotFound`.
 #[tokio::test]
 async fn install_one_dep_no_registries_reports_not_configured() {
     let temp_dir = TempDir::new().unwrap();

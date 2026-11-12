@@ -22,7 +22,7 @@ pub enum ProjectError {
 
     /// hpm.toml could not be parsed as an editable TOML document. Distinct
     /// from `Manifest(ManifestLoadError::Parse)` because the edit paths
-    /// (`update_project_manifest`, `remove_from_project_manifest`) use
+    /// (`project::manifest_edit`) use
     /// `toml_edit::DocumentMut`, which carries its own error type.
     #[error("Failed to parse {} as editable TOML", path.display())]
     ManifestEdit {
@@ -81,10 +81,6 @@ pub enum ProjectError {
     /// this is a configuration problem, not a lookup failure.
     #[error("Invalid registry configuration")]
     RegistryConfiguration(#[source] Box<RegistryError>),
-
-    /// Registry returned versions, but none satisfied the requirement.
-    #[error("No version of {name} matches requirement {version_req}")]
-    NoMatchingVersion { name: String, version_req: String },
 
     /// Python dependency collection / resolution / venv creation failed.
     /// `python` returns [`crate::python::PythonError`]; the source stays

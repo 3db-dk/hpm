@@ -13,13 +13,13 @@ use crate::lock::{LockFile, LockedSource};
 use crate::package_source::PackageSource;
 use crate::python::resolver::resolve_combined;
 use crate::python::{VenvManager, collect_python_dependencies, resolve_dependencies, venv_bin_dir};
-use crate::storage::{InstalledPackage, PackageSpec, StorageManager};
+use crate::storage::{InstalledPackage, StorageManager};
 use hpm_config::{Config, ProjectPaths};
 use hpm_package::{IoOp, ManifestLoadError, PackageManifest};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::task::JoinSet;
-use tracing::{debug, info};
+use tracing::info;
 
 pub mod error;
 pub(crate) mod houdini_emit;
@@ -83,10 +83,9 @@ impl ProjectManager {
     /// Like [`Self::new`], but stashes a bearer token that is forwarded to
     /// every `RegistrySet` the manager builds internally.
     ///
-    /// `sync_dependencies` and `add_dependency`'s registry-resolved path both
-    /// construct their own `RegistrySet` from the supplied [`Config`] (or the
-    /// project manifest's `[[registries]]` override). With `auth_token =
-    /// Some(...)`, those internal sets are built via
+    /// `sync_dependencies` constructs its own `RegistrySet` from the supplied
+    /// [`Config`] (or the project manifest's `[[registries]]` override). With
+    /// `auth_token = Some(...)`, those internal sets are built via
     /// [`crate::registry::RegistrySet::from_configs_with_auth`] so the token
     /// reaches the API-registry HTTP client. `None` is identical to
     /// [`Self::new`].
@@ -148,124 +147,12 @@ impl ProjectManager {
         }
     }
 
-    pub async fn add_dependency(&self, spec: &PackageSpec) -> Result<(), ProjectError> {
-        info!("Adding dependency: {} {}", spec.name, spec.version_req);
-
-        let installed_packages = self.storage_manager.list_installed()?;
-
-        let installed_package = if let Some(pkg) = installed_packages.iter().find(|p| {
-            Self::matches_spec_name(p, &spec.name) && p.is_compatible_with(&spec.version_req)
-        }) {
-            info!(
-                "Package {} already installed with compatible version {}",
-                spec.name, pkg.version
-            );
-            reuse_installed(pkg).await;
-            pkg.clone()
-        } else {
-            self.resolve_and_install_from_registry(spec).await?
-        };
-
-        // Respect the project's [runtime] overrides like sync does, so a
-        // freshly added dep doesn't emit un-reconciled entries until the
-        // next full sync.
-        let project_env_overrides = self
-            .load_project_manifest()?
-            .map(|m| m.runtime)
-            .unwrap_or_default();
-        self.generate_houdini_manifest_with_python(
-            &installed_package,
-            None,
-            &project_env_overrides,
-        )?;
-        self.write_project_overrides_manifest(&project_env_overrides)?;
-        self.update_project_manifest(spec)?;
-
-        info!("Successfully added dependency: {}", spec.name);
-        Ok(())
-    }
-
     /// Match an installed package against a spec name, handling both scoped
     /// (`creator/slug`) and bare (`slug`) forms. The canonical identifier
     /// is `manifest.package.path`; the slug is the kebab segment after `/`.
     fn matches_spec_name(pkg: &InstalledPackage, spec_name: &str) -> bool {
         let path = &pkg.manifest.package.path;
         path.as_str() == spec_name || path.slug() == spec_name
-    }
-
-    /// Resolve a package spec against configured registries and install it.
-    async fn resolve_and_install_from_registry(
-        &self,
-        spec: &PackageSpec,
-    ) -> Result<InstalledPackage, ProjectError> {
-        let registry_set = crate::registry::RegistrySet::from_configs_with_auth(
-            &self.config.registries,
-            &self.config.storage.registry_cache_dir,
-            self.auth_token.as_deref(),
-        )
-        .map_err(|e| ProjectError::RegistryConfiguration(Box::new(e)))?;
-
-        if registry_set.is_empty() {
-            return Err(ProjectError::NoRegistriesConfigured {
-                name: spec.name.clone(),
-                version_req: spec.version_req.as_str().to_string(),
-            });
-        }
-
-        let entry = self.resolve_registry_entry(&registry_set, spec).await?;
-        let version = entry.version.clone();
-        let source = PackageSource::url(entry.dl.clone(), entry.version.clone())?
-            .with_registry_checksum(entry.cksum.as_deref())?;
-        self.fetch_and_install_pkg(&spec.name, &version, source)
-            .await
-    }
-
-    /// Resolve a `PackageSpec` to a concrete `RegistryEntry` via
-    /// [`crate::registry::RegistrySet::resolve`].
-    async fn resolve_registry_entry(
-        &self,
-        registry_set: &crate::registry::RegistrySet,
-        spec: &PackageSpec,
-    ) -> Result<crate::registry::RegistryEntry, ProjectError> {
-        let req_str = spec.version_req.as_str();
-        registry_set
-            .resolve(&spec.name, req_str)
-            .await
-            .map_err(|source| match source {
-                crate::registry::RegistryError::VersionNotFound { .. } => {
-                    ProjectError::NoMatchingVersion {
-                        name: spec.name.clone(),
-                        version_req: req_str.to_string(),
-                    }
-                }
-                other => ProjectError::RegistryResolution {
-                    name: spec.name.clone(),
-                    version_req: req_str.to_string(),
-                    source: Box::new(other),
-                },
-            })
-    }
-
-    pub async fn remove_dependency(&self, name: &str) -> Result<(), ProjectError> {
-        info!("Removing dependency: {}", name);
-
-        // 1. Remove from project manifest (hpm.toml)
-        self.remove_from_project_manifest(name)?;
-
-        // 2. Remove Houdini package manifest from project. `name` is the
-        //    dependency key, i.e. a scoped `creator/slug`; a key that isn't a
-        //    well-formed package path never had a manifest emitted for it.
-        if let Ok(path) = hpm_package::PackagePath::new(name) {
-            let manifest_path = self.project_paths.package_manifest_path(&path);
-            if manifest_path.exists() {
-                std::fs::remove_file(&manifest_path)
-                    .map_err(|e| IoOp::wrap("remove Houdini manifest at", &manifest_path, e))?;
-                debug!("Removed Houdini manifest: {:?}", manifest_path);
-            }
-        }
-
-        info!("Successfully removed dependency: {}", name);
-        Ok(())
     }
 
     pub async fn sync_dependencies(&self) -> Result<Vec<(String, InstallOutcome)>, ProjectError> {
@@ -378,20 +265,6 @@ impl ProjectManager {
 
         info!("Successfully synced project dependencies");
         Ok(outcomes)
-    }
-
-    /// Fetch a remote package and install it to global storage, returning the InstalledPackage.
-    /// Used by single-package paths like `add_dependency` that don't need the checksum.
-    async fn fetch_and_install_pkg(
-        &self,
-        name: &str,
-        version: &str,
-        source: PackageSource,
-    ) -> Result<InstalledPackage, ProjectError> {
-        let (package, _checksum) =
-            fetch_and_install_pkg(&self.storage_manager, &self.fetcher, name, version, source)
-                .await?;
-        Ok(package)
     }
 
     /// Collect and resolve Python pip dependencies from installed packages.
@@ -633,26 +506,6 @@ impl ProjectManager {
         Ok(packages)
     }
 
-    fn update_project_manifest(&self, spec: &PackageSpec) -> Result<(), ProjectError> {
-        let manifest_path = &self.project_paths.manifest_file;
-        if !manifest_path.exists() {
-            return Err(ProjectError::Manifest(ManifestLoadError::NotFound {
-                path: manifest_path.clone(),
-            }));
-        }
-        manifest_edit::upsert_dependency(
-            manifest_path,
-            &spec.name,
-            &hpm_package::DependencySpec::registry(spec.version_req.as_str(), None),
-        )?;
-        Ok(())
-    }
-
-    fn remove_from_project_manifest(&self, name: &str) -> Result<(), ProjectError> {
-        manifest_edit::remove_dependency(&self.project_paths.manifest_file, name)?;
-        Ok(())
-    }
-
     /// The project's dependencies, each with the installed copy it uses.
     ///
     /// The copy is the install the package's emitted Houdini manifest
@@ -855,8 +708,7 @@ async fn install_one_dep(
             // A registry-resolved dep with no registries configured is its own
             // failure, distinct from "package not found": resolving against an
             // empty set would otherwise surface a misleading VersionNotFound.
-            // Mirror the single-package `resolve_and_install_from_registry`
-            // path so `hpm install` points the user at `hpm registry add`.
+            // Point the user at `hpm registry add`.
             if rs.is_empty() {
                 return Err(ProjectError::NoRegistriesConfigured {
                     name: name.to_string(),

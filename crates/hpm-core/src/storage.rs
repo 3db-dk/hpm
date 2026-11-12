@@ -4,7 +4,7 @@
 //! and the cleanup pipeline. The supporting types live in submodules:
 //!
 //! - [`error`] — [`StorageError`]
-//! - [`types`] — [`InstalledPackage`], [`PackageSpec`], [`VersionReq`]
+//! - [`types`] — [`InstalledPackage`]
 //! - [`dev_install`] — `_dev/` path-install primitives (link, copy, remove)
 //! - [`cleanup`] — the project-aware GC pipeline and
 //!   [`ComprehensiveCleanupResult`] aggregate
@@ -23,7 +23,7 @@ pub mod types;
 pub use cleanup::ComprehensiveCleanupResult;
 pub use dev_install::DevInstall;
 pub use error::StorageError;
-pub use types::{InstalledPackage, PackageSpec, VersionReq};
+pub use types::InstalledPackage;
 
 use dev_install::{
     DEV_INSTALL_DIR, InstallStyle, clear_container_link, clear_existing_install,
