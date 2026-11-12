@@ -1651,3 +1651,62 @@ async fn store_installs_carry_an_install_record_through_their_lifecycle() {
     storage.remove_package("bar", "2.0.0").await.unwrap();
     assert!(!record.exists(), "removal takes the record with the tree");
 }
+
+// ------------------------------------------------------------------
+// Store layout: one directory per (slug, version)
+// ------------------------------------------------------------------
+
+mod store_layout {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn slug() -> impl Strategy<Value = String> {
+        "[a-z][a-z0-9-]{0,10}[a-z0-9]"
+    }
+
+    fn version() -> impl Strategy<Value = String> {
+        (0u32..20, 0u32..20, 0u32..20).prop_map(|(a, b, c)| format!("{a}.{b}.{c}"))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+
+        /// Every lookup by bare slug finds the directory `install_into_cas`
+        /// wrote: `get_package_path`, `package_exists`, `list_installed` and
+        /// the lockfile's `cas_install_dir` for the scoped name.
+        #[test]
+        fn lookups_by_slug_agree_with_the_installed_directory(
+            creator in slug(), slug in slug(), version in version()
+        ) {
+            let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+            let temp = TempDir::new().unwrap();
+            let storage = test_storage(&temp);
+            let source = temp.path().join("src");
+            std::fs::create_dir_all(&source).unwrap();
+            std::fs::write(
+                source.join("hpm.toml"),
+                format!("[package]\npath = \"{creator}/{slug}\"\nname = \"x\"\nversion = \"{version}\"\n"),
+            )
+            .unwrap();
+            let installed = rt.block_on(storage.install_into_cas(&source)).unwrap();
+
+            prop_assert_eq!(&storage.get_package_path(&slug, &version), &installed.install_path);
+            prop_assert!(storage.package_exists(&slug, &version));
+            prop_assert_eq!(
+                crate::archive_fetcher::cas_install_dir(
+                    &storage.config.packages_dir,
+                    &format!("{creator}/{slug}"),
+                    &version
+                ),
+                installed.install_path.clone()
+            );
+            let listed: Vec<_> = storage
+                .list_installed()
+                .unwrap()
+                .into_iter()
+                .map(|p| p.install_path)
+                .collect();
+            prop_assert_eq!(listed, vec![installed.install_path]);
+        }
+    }
+}
