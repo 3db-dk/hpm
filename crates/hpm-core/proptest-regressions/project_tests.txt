@@ -1,9 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 6d6fc5d5dfbb68430450e00189a185cd6a6b52629bef0d76f93f2178ebc68b42 # shrinks to steps = [Sync(0), Edit]
-cc f187d27ecc79b9210ea1a0df8cbbf5bb6f0b4fc722e1d85d7e00d4c9b6af251d # shrinks to steps = [Bump, Sync(1), Bump, Sync(1)]
-cc 97c9c710073e2d27be2179e1c8de9c329408543101b467ddab07e3296eba918f # shrinks to installed = [false, false, false, true], dev_present = false, emitted = Registry("0.9.0"), declared = NoManifest

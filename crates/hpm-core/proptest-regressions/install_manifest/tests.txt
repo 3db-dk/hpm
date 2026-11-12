@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc b351a98efc0aef0f405d9abe45ad3fac229cbcd5f9b6b40defa7d8de8b840b69 # shrinks to files = {"hpm.toml": [0]}, mutations = [FlipByte(0), Keep, Keep, Keep, Keep, Keep, Keep], strays = []

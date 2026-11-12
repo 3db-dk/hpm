@@ -107,6 +107,7 @@ pub async fn fetch_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::test_support::{FakeRegistry, entry};
     use hpm_config::StorageConfig;
     use tempfile::TempDir;
 
@@ -193,55 +194,6 @@ description = "test"
         assert_eq!(manifest.package.path.as_str(), "acme/tools");
     }
 
-    struct FixedRegistry(Vec<crate::registry::RegistryEntry>);
-
-    #[async_trait::async_trait]
-    impl crate::registry::Registry for FixedRegistry {
-        async fn search(
-            &self,
-            _query: &str,
-        ) -> Result<crate::registry::SearchResults, RegistryError> {
-            unreachable!("not searched")
-        }
-        async fn get_versions(
-            &self,
-            _name: &str,
-        ) -> Result<Vec<crate::registry::RegistryEntry>, RegistryError> {
-            Ok(self.0.clone())
-        }
-        async fn get_version(
-            &self,
-            name: &str,
-            version: &str,
-        ) -> Result<crate::registry::RegistryEntry, RegistryError> {
-            self.0
-                .iter()
-                .find(|e| e.version == version)
-                .cloned()
-                .ok_or_else(|| RegistryError::VersionNotFound {
-                    name: name.to_string(),
-                    version: version.to_string(),
-                })
-        }
-        async fn refresh(&self) -> Result<(), RegistryError> {
-            Ok(())
-        }
-        fn name(&self) -> &str {
-            "fixed"
-        }
-    }
-
-    fn entry(version: &str, yanked: bool) -> crate::registry::RegistryEntry {
-        serde_json::from_value(serde_json::json!({
-            "name": "acme/tools",
-            "vers": version,
-            // Unreachable: a test that downloads fails.
-            "dl": "http://127.0.0.1:9/tools.zip",
-            "yanked": yanked,
-        }))
-        .unwrap()
-    }
-
     /// "latest" is the highest non-yanked release. It used to take the
     /// highest version outright, so a yanked 2.0.0 shadowed the installed
     /// 1.0.0 and forced a download of the yanked release.
@@ -256,10 +208,13 @@ description = "test"
             "[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"1.0.0\"\n",
         );
         let mut registries = RegistrySet::new();
-        registries.add(Box::new(FixedRegistry(vec![
-            entry("1.0.0", false),
-            entry("2.0.0", true),
-        ])));
+        registries.add(Box::new(FakeRegistry::with_entries(
+            "fixed",
+            vec![
+                entry("acme/tools", "1.0.0", false),
+                entry("acme/tools", "2.0.0", true),
+            ],
+        )));
 
         for latest in ["latest", ""] {
             let manifest = fetch_manifest("acme/tools", latest, &registries, &storage)

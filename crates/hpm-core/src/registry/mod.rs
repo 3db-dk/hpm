@@ -12,6 +12,9 @@ pub mod git;
 pub mod solve;
 pub mod types;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 use async_trait::async_trait;
 use hpm_package::IoOp;
 use std::collections::HashMap;
@@ -660,86 +663,7 @@ mod dedupe_tests {
 mod set_tests {
     use super::*;
 
-    /// A registry holding a fixed set of entries, used to observe which
-    /// registry a lookup actually reached.
-    struct FakeRegistry {
-        name: String,
-        entries: Vec<RegistryEntry>,
-    }
-
-    impl FakeRegistry {
-        fn new(name: &str, packages: &[(&str, &str)]) -> Self {
-            Self {
-                name: name.to_string(),
-                entries: packages
-                    .iter()
-                    .map(|(pkg, version)| RegistryEntry {
-                        name: (*pkg).to_string(),
-                        version: (*version).to_string(),
-                        cksum: None,
-                        dl: format!("https://{}/{}-{}.tar.gz", name, pkg, version),
-                        sig: None,
-                        kid: None,
-                        houdini_compat: None,
-                        platform: None,
-                        yanked: false,
-                        description: None,
-                        author: None,
-                        created_at: None,
-                        deps: Vec::new(),
-                    })
-                    .collect(),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl Registry for FakeRegistry {
-        async fn search(&self, _query: &str) -> Result<SearchResults, RegistryError> {
-            Ok(SearchResults {
-                packages: self.entries.clone(),
-                total: self.entries.len(),
-            })
-        }
-
-        async fn get_versions(&self, name: &str) -> Result<Vec<RegistryEntry>, RegistryError> {
-            let found: Vec<_> = self
-                .entries
-                .iter()
-                .filter(|e| e.name == name)
-                .cloned()
-                .collect();
-            if found.is_empty() {
-                return Err(RegistryError::PackageNotFound {
-                    name: name.to_string(),
-                });
-            }
-            Ok(found)
-        }
-
-        async fn get_version(
-            &self,
-            name: &str,
-            version: &str,
-        ) -> Result<RegistryEntry, RegistryError> {
-            self.entries
-                .iter()
-                .find(|e| e.name == name && e.version == version)
-                .cloned()
-                .ok_or_else(|| RegistryError::VersionNotFound {
-                    name: name.to_string(),
-                    version: version.to_string(),
-                })
-        }
-
-        async fn refresh(&self) -> Result<(), RegistryError> {
-            Ok(())
-        }
-
-        fn name(&self) -> &str {
-            &self.name
-        }
-    }
+    use super::test_support::FakeRegistry;
 
     /// Two registries both carrying the same package at the same version;
     /// only the download URL reveals which one answered.
@@ -833,5 +757,71 @@ mod set_tests {
             .await
             .unwrap();
         assert_eq!(pinned.version, "1.5.0");
+    }
+}
+
+#[cfg(test)]
+mod requirement_tests {
+    use super::test_support::{FakeRegistry, entry};
+    use super::*;
+    use proptest::prelude::*;
+
+    const VERSIONS: &[&str] = &["0.4.0", "1.0.0", "1.2.0", "1.2.5", "2.0.0", "2.1.0"];
+    const REQUIREMENTS: &[&str] = &[
+        "1.2.0", "2.1.0", "0.4.0", "3.0.0", "1.2", "^1.2", "~1.2", ">=1, <2", "*", "=1.2.0",
+        ">2.0.0", "<1", "^0.4",
+    ];
+
+    /// The rule every resolution follows: a full version is exactly that
+    /// version, yanked or not; anything else is Cargo's grammar, and picks
+    /// the highest non-yanked version it admits.
+    fn model(req: &str, listed: &[(&str, bool)]) -> Option<String> {
+        if let Ok(exact) = semver::Version::parse(req) {
+            return listed
+                .iter()
+                .find(|(v, _)| semver::Version::parse(v).unwrap() == exact)
+                .map(|(v, _)| v.to_string());
+        }
+        let range = semver::VersionReq::parse(req).unwrap();
+        listed
+            .iter()
+            .filter(|(_, yanked)| !yanked)
+            .map(|(v, _)| semver::Version::parse(v).unwrap())
+            .filter(|v| range.matches(v))
+            .max()
+            .map(|v| v.to_string())
+    }
+
+    fn listing() -> impl Strategy<Value = Vec<(&'static str, bool)>> {
+        prop::sample::subsequence(VERSIONS, 1..=VERSIONS.len()).prop_flat_map(|vs| {
+            let n = vs.len();
+            (Just(vs), prop::collection::vec(any::<bool>(), n))
+                .prop_map(|(vs, yanked)| vs.into_iter().zip(yanked).collect())
+        })
+    }
+
+    proptest! {
+        /// `resolve_in` picks what the model picks, and a requirement admits
+        /// a version (as the solver and the installed-copy lookup read it)
+        /// exactly when the model would select that version alone.
+        #[test]
+        fn resolution_follows_one_rule(
+            req in prop::sample::select(REQUIREMENTS),
+            listed in listing(),
+        ) {
+            let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+            let mut set = RegistrySet::new();
+            set.add(Box::new(FakeRegistry::with_entries(
+                "r",
+                listed.iter().map(|(v, y)| entry("acme/tools", v, *y)).collect(),
+            )));
+            let resolved = rt.block_on(set.resolve_in("acme/tools", req, None)).ok().map(|e| e.version);
+            prop_assert_eq!(resolved, model(req, &listed), "{}", req);
+
+            for v in VERSIONS {
+                let admits = solve::requirement(req).is_some_and(|r| r.matches(&semver::Version::parse(v).unwrap()));
+                prop_assert_eq!(admits, model(req, &[(v, false)]).is_some(), "{} admits {}", req, v);
+            }
+        }
     }
 }
