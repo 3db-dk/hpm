@@ -276,36 +276,6 @@ impl LockFile {
         }
         Ok(())
     }
-
-    /// Check if dependencies have changed compared to another lock file
-    pub fn has_changes(&self, other: &LockFile) -> bool {
-        if self.package.name != other.package.name || self.package.version != other.package.version
-        {
-            return true;
-        }
-
-        if self.dependencies.len() != other.dependencies.len()
-            || self.python_dependencies.len() != other.python_dependencies.len()
-        {
-            return true;
-        }
-
-        for (name, dep) in &self.dependencies {
-            match other.dependencies.get(name) {
-                Some(other_dep) if dep.version == other_dep.version => {}
-                _ => return true,
-            }
-        }
-
-        for (name, dep) in &self.python_dependencies {
-            match other.python_dependencies.get(name) {
-                Some(other_dep) if dep.version == other_dep.version => {}
-                _ => return true,
-            }
-        }
-
-        false
-    }
 }
 
 impl LockedPythonDependency {
@@ -659,27 +629,6 @@ version = ">=1.20"
                 let loaded_dep = loaded_dep.unwrap();
                 prop_assert_eq!(&dep.version, &loaded_dep.version);
                 prop_assert_eq!(&dep.checksum, &loaded_dep.checksum);
-            }
-        }
-
-        /// Test has_changes correctly detects identical lock files (reflexive property)
-        #[test]
-        fn prop_has_changes_reflexive(lock in lock_file_strategy()) {
-            prop_assert!(!lock.has_changes(&lock));
-        }
-
-        /// Test has_changes detects added dependencies
-        #[test]
-        fn prop_has_changes_detects_additions(
-            lock in lock_file_strategy(),
-            new_dep_name in package_name_strategy(),
-            new_dep in locked_dependency_strategy()
-        ) {
-            let mut modified = lock.clone();
-            modified.add_dependency(new_dep_name.clone(), new_dep);
-
-            if !lock.dependencies.contains_key(&new_dep_name) {
-                prop_assert!(lock.has_changes(&modified));
             }
         }
 

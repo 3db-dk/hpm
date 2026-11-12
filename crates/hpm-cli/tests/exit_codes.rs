@@ -10,8 +10,14 @@ use tempfile::TempDir;
 /// Serve `routes` (path suffix -> body) to every request until the test ends;
 /// the first route whose suffix matches the request path answers.
 fn serve(routes: Vec<(String, Vec<u8>)>) -> String {
+    serve_with(|_| routes)
+}
+
+/// [`serve`], with routes built from the server's own base URL.
+fn serve_with(routes: impl FnOnce(&str) -> Vec<(String, Vec<u8>)>) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
+    let routes = routes(&format!("http://{addr}"));
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
@@ -226,4 +232,86 @@ fn update_refusals() {
         before
     );
     snapshot!("update_refusals", report);
+}
+
+/// `hpm install --frozen-lockfile` checks the lock against what the store
+/// already holds and needs no registry: a lock whose source is an older
+/// hpm's `"unresolved"` placeholder passes with the registry unreachable,
+/// and a second frozen run passes too.
+#[test]
+fn frozen_install_needs_no_registry() {
+    let env = Env::new();
+    let archive = {
+        let dep = env.work.path().join("tools");
+        env.write("tools/otls/a.hda", "hda");
+        env.write(
+            "tools/hpm.toml",
+            "[package]\npath = \"acme/tools\"\nname = \"tools\"\nversion = \"1.0.0\"\ndescription = \"d\"\nauthors = [\"a\"]\nkeywords = [\"k\"]\n",
+        );
+        env.run(
+            &dep,
+            &[
+                "pack",
+                "--output",
+                env.work.path().join("srv").to_str().unwrap(),
+            ],
+        );
+        std::fs::read(env.work.path().join("srv/tools-1.0.0.zip")).unwrap()
+    };
+    let url = serve_with(|base| {
+        let entry =
+            format!(r#"{{"name":"acme/tools","vers":"1.0.0","dl":"{base}/tools-1.0.0.zip"}}"#);
+        vec![
+            (
+                "/packages/acme/tools/1.0.0".into(),
+                format!(r#"{{"builds":[{entry}]}}"#).into_bytes(),
+            ),
+            (
+                "/packages/acme/tools".into(),
+                format!(r#"{{"versions":[{entry}]}}"#).into_bytes(),
+            ),
+            ("/tools-1.0.0.zip".into(), archive),
+        ]
+    });
+    env.config(&format!(
+        "[[registries]]\nname = \"fake\"\nurl = \"{url}\"\ntype = \"api\"\n"
+    ));
+    let app = env.work.path().join("app");
+    env.write(
+        "app/hpm.toml",
+        "[package]\npath = \"local/app\"\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"acme/tools\" = \"1.0.0\"\n",
+    );
+    let first = env.run(&app, &["install"]);
+    assert!(first.contains("exit: 0"), "{first}");
+
+    // An older hpm's placeholder source, and a registry nobody answers.
+    let lock = std::fs::read_to_string(app.join("hpm.lock")).unwrap();
+    let dl = format!("{url}/tools-1.0.0.zip");
+    assert!(lock.contains(&dl), "{lock}");
+    std::fs::write(app.join("hpm.lock"), lock.replace(&dl, "unresolved")).unwrap();
+    env.config("[[registries]]\nname = \"fake\"\nurl = \"http://127.0.0.1:9\"\ntype = \"api\"\n");
+
+    let lock_before = std::fs::read_to_string(app.join("hpm.lock")).unwrap();
+    for _ in 0..2 {
+        let frozen = env.run(&app, &["install", "--frozen-lockfile"]);
+        assert!(frozen.contains("exit: 0"), "{frozen}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(app.join("hpm.lock")).unwrap(),
+        lock_before
+    );
+
+    // A resolved set the lock does not record is refused (here, another
+    // version of the project itself).
+    let manifest = std::fs::read_to_string(app.join("hpm.toml")).unwrap();
+    std::fs::write(
+        app.join("hpm.toml"),
+        manifest.replace("version = \"0.1.0\"", "version = \"0.2.0\""),
+    )
+    .unwrap();
+    let frozen = env.run(&app, &["install", "--frozen-lockfile"]);
+    assert!(
+        frozen.contains("exit: 1") && frozen.contains("differs from hpm.lock"),
+        "{frozen}"
+    );
 }

@@ -95,8 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependency that was already installed when no previous lock entry knew
   its source. hpm now looks the download URL up in the project's registries
   (only in that case), and stops with an error when it cannot. Existing
-  lockfiles holding `"unresolved"` still pass `--frozen-lockfile` (which
-  compares versions), and the next lock rewrite replaces the placeholder.
+  lockfiles holding `"unresolved"` still pass `--frozen-lockfile`, which
+  compares versions only and never contacts a registry, and the next lock
+  rewrite replaces the placeholder.
 
 - `hpm clean` stops with an error, instead of deleting more, when it cannot
   read something that decides what is in use: the global-install directory
@@ -211,6 +212,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Option<Platform>` (it was a string; it serializes the same).
 - Package validation moved into `hpm_core::check` (`check_package` returns
   a `Report` of typed findings), for pack and TumbleTrove Desktop to share.
+- **Breaking (hpm-core API):** `LockFile::has_changes`. What it checked
+  (`--frozen-lockfile`) is `ProjectManager::lock_is_current`, which compares
+  a sync's outcomes with the lock without building a new one.
 - **Breaking (hpm-core API):** `python::get_venvs_dir`. The Python
   subsystem takes a `python::PythonHome` (`PythonHome::for_storage(&config.storage)`,
   or `PythonHome::of_user()` for `~/.hpm`): `initialize`,

@@ -120,25 +120,24 @@ pub async fn install_dependencies(
         .await
         .context("Failed to sync project dependencies")?;
 
-    // Generate (or refuse to update) the lockfile from sync outcomes.
-    let new_lock = project_manager
-        .lock_file(&manifest, &outcomes, existing_lock.as_ref())
-        .await
-        .context("Failed to build the lock file")?;
     if frozen_lockfile {
-        // --frozen-lockfile: the new lockfile must equal the existing one.
-        // has_changes() compares dependencies + python_dependencies only,
-        // ignoring metadata.generated_at which always differs.
-        if let Some(ref existing) = existing_lock
-            && new_lock.has_changes(existing)
-        {
+        // The lock must already record what the sync resolved. Checked
+        // without building a new lock, which may need the registry.
+        let existing = existing_lock
+            .as_ref()
+            .expect("--frozen-lockfile loaded hpm.lock above");
+        if !ProjectManager::lock_is_current(&manifest, &outcomes, existing) {
             bail!(
                 "--frozen-lockfile is set but the resolved dependency set differs from hpm.lock. \
-                     Re-run without --frozen-lockfile to regenerate it."
+                 Re-run without --frozen-lockfile to regenerate it."
             );
         }
         info!("Skipping lock file update (--frozen-lockfile)");
     } else {
+        let new_lock = project_manager
+            .lock_file(&manifest, &outcomes, existing_lock.as_ref())
+            .await
+            .context("Failed to build the lock file")?;
         new_lock
             .save(&lock_path)
             .with_context(|| format!("Failed to write lock file: {}", lock_path.display()))?;

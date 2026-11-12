@@ -93,4 +93,29 @@ impl ProjectManager {
         }
         Ok(lock)
     }
+    /// Whether `existing` already records what a sync resolved: the same
+    /// package, the same dependency versions and the same Python
+    /// requirements. Sources, checksums and metadata are not compared, so
+    /// this needs no network; it is the check `--frozen-lockfile` makes.
+    pub fn lock_is_current(
+        manifest: &PackageManifest,
+        outcomes: &[(String, InstallOutcome)],
+        existing: &LockFile,
+    ) -> bool {
+        existing.package.name == manifest.package.name
+            && existing.package.version == manifest.package.version
+            && existing.dependencies.len() == outcomes.len()
+            && outcomes.iter().all(|(name, outcome)| {
+                existing
+                    .get_dependency(name)
+                    .is_some_and(|locked| locked.version == outcome.package.version)
+            })
+            && existing.python_dependencies.len() == manifest.python_dependencies.len()
+            && manifest.python_dependencies.iter().all(|(name, spec)| {
+                existing
+                    .python_dependencies
+                    .get(name)
+                    .is_some_and(|locked| locked.version == spec.version_req())
+            })
+    }
 }
