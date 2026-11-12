@@ -1,0 +1,16 @@
+---
+source: crates/hpm-core/src/project/houdini_emit.rs
+expression: render(name)
+---
+--- is_dev=false venv=None overrides=STUDIO_LICENSE
+{
+  "hpath": [
+    "/store/minimal@1.0.0"
+  ]
+}
+--- is_dev=true venv=Some("/venvs/0123abcd/site-packages") overrides=STUDIO_LICENSE
+{
+  "hpath": [
+    "/store/minimal@1.0.0"
+  ]
+}

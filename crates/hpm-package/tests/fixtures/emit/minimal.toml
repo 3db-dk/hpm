@@ -1,0 +1,4 @@
+[package]
+path = "acme/minimal"
+name = "Minimal"
+version = "1.0.0"

@@ -450,3 +450,56 @@ impl ProjectManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod build_snapshots {
+    //! Characterization of the Houdini package JSON hpm writes for an
+    //! installed package (project installs and `hpm global`), over the same
+    //! fixture corpus as hpm-package's native descriptor snapshots.
+
+    use super::*;
+    use hpm_package::PackageManifest;
+
+    const CORPUS: &[&str] = &["minimal", "runtime", "platforms", "deps_scripts"];
+
+    fn render(name: &str) -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../hpm-package/tests/fixtures/emit")
+            .join(format!("{name}.toml"));
+        let manifest = PackageManifest::from_path(&path).unwrap();
+        let slug = manifest.package.slug().to_string();
+        let version = manifest.package.version.clone();
+        let mut overrides = IndexMap::new();
+        overrides.insert(
+            "STUDIO_LICENSE".to_string(),
+            toml::from_str::<ManifestEnvEntry>("method = \"set\"\nvalue = \"5053@licsrv\"")
+                .unwrap(),
+        );
+        let mut out = String::new();
+        for (is_dev, venv) in [
+            (false, None),
+            (true, Some(Path::new("/venvs/0123abcd/site-packages"))),
+        ] {
+            let installed = InstalledPackage {
+                version: version.clone(),
+                manifest: manifest.clone(),
+                install_path: std::path::PathBuf::from(format!("/store/{slug}@{version}")),
+                is_dev,
+            };
+            out += &format!("--- is_dev={is_dev} venv={venv:?} overrides=STUDIO_LICENSE\n");
+            match build_houdini_package(&installed, venv, &overrides) {
+                Ok(pkg) => out += &serde_json::to_string_pretty(&pkg).unwrap(),
+                Err(e) => out += &format!("error: {e}"),
+            }
+            out += "\n";
+        }
+        out.replace('\\', "/")
+    }
+
+    #[test]
+    fn houdini_package_json() {
+        for name in CORPUS {
+            insta::assert_snapshot!(format!("build_{name}"), render(name));
+        }
+    }
+}

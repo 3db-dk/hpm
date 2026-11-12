@@ -1,0 +1,27 @@
+---
+source: crates/hpm-package/tests/native_package_snapshots.rs
+expression: render(name)
+---
+--- Generic
+file: deps.json
+{
+  "name": "deps",
+  "hpath": "$HOUDINI_PACKAGE_PATH/deps",
+  "load_package_once": true,
+  "show": true,
+  "enable": "houdini_version == '21.0'",
+  "env": [
+    {
+      "PKG_DEPS": "$HOUDINI_PACKAGE_PATH/deps"
+    }
+  ],
+  "recommends": [
+    "rig",
+    "tools"
+  ],
+  "hpackage": {
+    "version": "1.0.0-beta.1"
+  }
+}
+--- SideFxHpackage
+error: houdini version requirement `=21.0` leaves SideFX's hpackage repository no bound it can read: it takes a package's Houdini version from `>=` and `<=` clauses only, and this range compiles to neither. Express the lower bound with `>=`.

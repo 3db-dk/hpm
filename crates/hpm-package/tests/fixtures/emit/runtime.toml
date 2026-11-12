@@ -1,0 +1,36 @@
+[package]
+path = "acme/runtime"
+name = "Runtime"
+version = "2.3.4"
+description = "Every [runtime] form"
+
+[compat]
+houdini = ">=20.5, <22"
+
+[python_dependencies]
+numpy = ">=1.24"
+
+[runtime.MY_ROOT]
+method = "set"
+value = "$HPM_PACKAGE_ROOT/data"
+
+[runtime.PATH]
+method = "prepend"
+value = "$HPM_PACKAGE_ROOT/bin"
+
+[runtime.HOUDINI_OTLSCAN_PATH]
+method = "append"
+value = "$HPM_PACKAGE_ROOT/extra_otls"
+
+[runtime.OCIO]
+method = "set"
+value = [
+  { when = { houdini = ">=21", os = "linux" }, set = "/opt/ocio/linux21.ocio" },
+  { when = { python = "3.11" }, set = "/opt/ocio/py311.ocio" },
+  { when = { install_source = "dev" }, set = "$HPM_PACKAGE_ROOT/dev.ocio" },
+  { set = "/opt/ocio/default.ocio" },
+]
+
+[runtime.STUDIO_LICENSE]
+method = "set"
+required = true

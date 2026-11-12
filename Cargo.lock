@@ -876,6 +876,7 @@ dependencies = [
  "hpm-package",
  "ignore",
  "indexmap",
+ "insta",
  "junction",
  "petgraph",
  "proptest",
@@ -903,6 +904,7 @@ name = "hpm-package"
 version = "0.37.0"
 dependencies = [
  "indexmap",
+ "insta",
  "proptest",
  "semver",
  "serde",
