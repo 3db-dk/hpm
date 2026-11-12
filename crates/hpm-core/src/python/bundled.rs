@@ -423,6 +423,18 @@ mod tests {
         assert!(keys.contains(&"UV_PYTHON_DOWNLOADS"));
     }
 
+    /// Everything uv keeps lives under the hpm home: its cache, its config
+    /// and the managed CPython it downloads; venvs sit beside them.
+    #[test]
+    fn uv_state_and_venvs_live_under_the_hpm_home() {
+        let home = hpm_package::user_home().unwrap().join(".hpm");
+        let env: std::collections::HashMap<_, _> = uv_env().unwrap().into_iter().collect();
+        assert_eq!(env["UV_CACHE_DIR"], home.join("uv-cache"));
+        assert_eq!(env["UV_CONFIG_FILE"], home.join("uv-config/uv.toml"));
+        assert_eq!(env["UV_PYTHON_INSTALL_DIR"], home.join("uv-python"));
+        assert_eq!(super::super::get_venvs_dir().unwrap(), home.join("venvs"));
+    }
+
     #[test]
     fn test_uv_download_url() {
         let url = uv_download_url();
