@@ -317,4 +317,39 @@ mod tests {
         std::fs::set_permissions(&global, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(result, Err(LedgerError::Io(_))), "{result:?}");
     }
+
+    mod format {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn package() -> impl Strategy<Value = PackagePath> {
+            ("[a-c]{1,2}", "[a-c][a-c-]{0,3}[a-c]")
+                .prop_map(|(creator, slug)| pkg(&format!("{creator}/{slug}")))
+        }
+
+        proptest! {
+            /// A ledger round-trips through disk, and its JSON keys are the
+            /// scoped `creator/slug` strings ledgers already on disk use.
+            #[test]
+            fn ledger_round_trips_with_scoped_string_keys(
+                installs in prop::collection::vec((package(), "[0-9]\\.[0-9]\\.[0-9]"), 0..6)
+            ) {
+                let tmp = TempDir::new().unwrap();
+                let path = tmp.path().join("global").join("houdini-21.0.json");
+                let mut ledger = Ledger::default();
+                for (package, version) in &installs {
+                    ledger.insert(package, entry(version, &format!("hpm-{}.json", package.file_stem())));
+                }
+                ledger.save(&path).unwrap();
+
+                let loaded = Ledger::load(&path).unwrap();
+                prop_assert_eq!(&loaded.packages, &ledger.packages);
+                let json: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                let keys: Vec<&str> = json["packages"].as_object().unwrap().keys().map(String::as_str).collect();
+                let expected: Vec<String> = ledger.iter().map(|(k, _)| k.to_string()).collect();
+                prop_assert_eq!(keys, expected);
+            }
+        }
+    }
 }
