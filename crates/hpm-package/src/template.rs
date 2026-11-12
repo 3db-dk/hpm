@@ -223,7 +223,7 @@ Thumbs.db
     }
 
     fn generate_python_init(&self) -> String {
-        r#"""
+        r#""""
 Houdini package Python module.
 """
 
@@ -407,5 +407,10 @@ mod tests {
             std::fs::read_to_string(package_path.join("python").join("__init__.py")).unwrap();
         assert!(python_init_content.contains("Houdini package Python module"));
         assert!(python_init_content.contains("__version__ = \"1.0.0\""));
+        // The module docstring is a balanced triple-quoted string, so the
+        // file is valid Python.
+        assert!(
+            python_init_content.starts_with("\"\"\"\nHoudini package Python module.\n\"\"\"\n")
+        );
     }
 }
