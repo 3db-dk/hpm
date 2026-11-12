@@ -119,7 +119,7 @@ pub async fn init_package(options: InitOptions, console: &mut Console) -> Result
     }
 
     console.status(format!("\n{}", style("Package structure:").bold()));
-    print_directory_tree(&target_dir, 0, console)?;
+    print_directory_tree(&target_dir, console)?;
 
     if !options.bare {
         console.status(format!("\n{}", style("Next steps:").bold()));
@@ -328,48 +328,46 @@ async fn init_git_repository(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn print_directory_tree(dir: &Path, depth: usize, console: &mut Console) -> Result<()> {
-    if depth > 3 {
-        // Limit recursion depth
-        return Ok(());
+/// Print the tree under `dir`, sorted by name, without hidden entries
+/// other than `.gitignore`, at most four levels deep.
+fn print_directory_tree(dir: &Path, console: &mut Console) -> Result<()> {
+    for line in directory_tree_lines(dir, "", 0)? {
+        console.status(line);
     }
+    Ok(())
+}
 
-    let entries = fs::read_dir(dir)
-        .context("Failed to read directory")?
-        .collect::<Result<Vec<_>, _>>()
-        .context("Failed to collect directory entries")?;
-
-    for (i, entry) in entries.iter().enumerate() {
-        let is_last = i == entries.len() - 1;
-        let prefix = if depth == 0 {
-            if is_last {
-                "└── ".to_string()
-            } else {
-                "├── ".to_string()
-            }
-        } else {
-            let mut p = "    ".repeat(depth);
-            p.push_str(if is_last { "└── " } else { "├── " });
-            p
-        };
-
-        let file_name_os = entry.file_name();
-        let file_name = file_name_os.to_string_lossy();
-
-        // Skip hidden files and directories
-        if file_name.starts_with('.') && file_name != ".gitignore" {
+fn directory_tree_lines(dir: &Path, indent: &str, depth: usize) -> Result<Vec<String>> {
+    const MAX_DEPTH: usize = 3;
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(dir).with_context(|| format!("Failed to read {}", dir.display()))? {
+        let entry = entry.with_context(|| format!("Failed to read {}", dir.display()))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') && name != ".gitignore" {
             continue;
         }
+        let is_dir = entry
+            .file_type()
+            .with_context(|| format!("Failed to stat {}", entry.path().display()))?
+            .is_dir();
+        entries.push((name, entry.path(), is_dir));
+    }
+    entries.sort();
 
-        console.status(format!("{}{}", prefix, file_name));
-
-        // Recursively print subdirectories
-        if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-            print_directory_tree(&entry.path(), depth + 1, console)?;
+    let mut lines = Vec::new();
+    let count = entries.len();
+    for (i, (name, path, is_dir)) in entries.into_iter().enumerate() {
+        let is_last = i + 1 == count;
+        lines.push(format!(
+            "{indent}{}{name}",
+            if is_last { "└── " } else { "├── " }
+        ));
+        if is_dir && depth < MAX_DEPTH {
+            let child_indent = format!("{indent}{}", if is_last { "    " } else { "│   " });
+            lines.extend(directory_tree_lines(&path, &child_indent, depth + 1)?);
         }
     }
-
-    Ok(())
+    Ok(lines)
 }
 
 #[cfg(test)]

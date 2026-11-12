@@ -313,7 +313,11 @@ fn init_writes() {
         })
         .collect();
     paths.sort();
-    let mut report = format!("paths:\n{}\n", paths.join("\n"));
+    let mut report = format!(
+        "stdout:\n{}\npaths:\n{}\n",
+        String::from_utf8_lossy(&out.stdout),
+        paths.join("\n")
+    );
     for file in [
         "hpm.toml",
         "package.json",

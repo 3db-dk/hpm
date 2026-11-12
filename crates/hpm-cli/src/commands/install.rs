@@ -9,7 +9,6 @@
 
 use super::manifest_utils::{determine_manifest_path, load_manifest};
 use crate::console::Console;
-use crate::progress::OperationProgress;
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
 use hpm_core::{LockFile, ProjectManager, StorageManager};
@@ -46,13 +45,9 @@ pub async fn install_dependencies(
         info!("Using frozen lockfile mode - lock file must exist and not change");
     }
 
-    let mut progress = OperationProgress::new();
-    progress.start("Installing dependencies");
-
     let manifest_path = determine_manifest_path(manifest_path)?;
     info!("Using manifest: {}", manifest_path.display());
 
-    progress.set_message("Loading manifest");
     let manifest = load_manifest(&manifest_path)
         .with_context(|| format!("Failed to load manifest from {}", manifest_path.display()))?;
     info!(
@@ -77,7 +72,6 @@ pub async fn install_dependencies(
     let existing_lock = if lock_path.exists() {
         match LockFile::load(&lock_path) {
             Ok(lock) => {
-                progress.set_message("Verifying cached packages");
                 lock.verify_checksums(&config.storage.packages_dir)
                     .context(
                         "Package integrity check failed. \
@@ -114,7 +108,6 @@ pub async fn install_dependencies(
 
     // Sync via ProjectManager. The manager owns all the install mechanics —
     // parallel fetch, CAS install, Houdini manifest emission, stale sweep.
-    progress.set_message("Installing dependencies");
     let storage_manager = Arc::new(
         StorageManager::new(config.storage.clone())
             .context("Failed to initialize storage manager")?,
@@ -145,14 +138,12 @@ pub async fn install_dependencies(
         }
         info!("Skipping lock file update (--frozen-lockfile)");
     } else {
-        progress.set_message("Generating lock file");
         new_lock
             .save(&lock_path)
             .with_context(|| format!("Failed to write lock file: {}", lock_path.display()))?;
         info!("Lock file generated: {}", lock_path.display());
     }
 
-    progress.finish_success("Dependencies installed");
     info!("Dependency installation completed successfully");
     Ok(())
 }

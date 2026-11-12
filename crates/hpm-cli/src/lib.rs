@@ -31,7 +31,6 @@ pub mod commands;
 pub mod console;
 pub mod error;
 pub mod output;
-pub mod progress;
 pub mod script_sink;
 pub use console::{ColorChoice, Console, Verbosity};
 use error::{CliError, CliResult, CliResultExt, ExitStatus};
@@ -544,9 +543,7 @@ async fn run_command(
                 .cli_package("install")?;
         }
         Commands::Check => {
-            commands::check::check_package(directory, console, output)
-                .await
-                .cli_package("check")?;
+            commands::check::check_package(directory, console, output).cli_package("check")?;
         }
         Commands::Build {
             manifest,

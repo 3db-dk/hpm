@@ -1,415 +1,79 @@
+//! `hpm check`: render [`hpm_core::check::check_package`]'s report.
+
 use crate::console::Console;
 use crate::output::OutputFormat;
 use anyhow::{Context, Result};
-use hpm_package::PackageManifest;
-use std::fs;
-use std::path::Path;
-
-#[derive(Debug, Clone)]
-pub struct ValidationResult {
-    pub is_valid: bool,
-    pub errors: Vec<String>,
-    pub warnings: Vec<String>,
-    pub info_messages: Vec<String>,
-}
-
-impl Default for ValidationResult {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ValidationResult {
-    pub fn new() -> Self {
-        Self {
-            is_valid: true,
-            errors: Vec::new(),
-            warnings: Vec::new(),
-            info_messages: Vec::new(),
-        }
-    }
-
-    pub fn add_error(&mut self, message: String) {
-        self.errors.push(message);
-        self.is_valid = false;
-    }
-
-    pub fn add_warning(&mut self, message: String) {
-        self.warnings.push(message);
-    }
-
-    pub fn add_info(&mut self, message: String) {
-        self.info_messages.push(message);
-    }
-}
+use hpm_core::check::{Report, Severity};
 
 /// CLI entry for `hpm check`: validate, display the results through the
 /// console (or as JSON), and fail when errors were found.
-pub async fn check_package(
+pub fn check_package(
     directory: Option<std::path::PathBuf>,
     console: &mut Console,
     output: OutputFormat,
 ) -> Result<()> {
-    let result = validate_package(directory).await?;
-    display_results(&result, console, output);
-    if !result.is_valid {
+    let directory = match directory {
+        Some(dir) => dir,
+        None => std::env::current_dir().context("Failed to get current directory")?,
+    };
+    let report = hpm_core::check::check_package(&directory);
+    display_results(&report, console, output);
+    if !report.is_valid() {
         anyhow::bail!(
             "Package validation failed with {} error(s)",
-            result.errors.len()
+            report.messages(Severity::Error).count()
         );
     }
     Ok(())
 }
 
-/// Run every validation pass and collect the findings without displaying
-/// them. Also used by `hpm pack`, which must keep its stdout clean for
-/// `--json` and surfaces warnings/errors on its own terms.
-pub async fn validate_package(directory: Option<std::path::PathBuf>) -> Result<ValidationResult> {
-    let current_dir = match directory {
-        Some(dir) => dir,
-        None => std::env::current_dir().context("Failed to get current directory")?,
-    };
-    let mut result = ValidationResult::new();
-
-    // Check for hpm.toml existence and parse it
-    let manifest_path = current_dir.join("hpm.toml");
-    let manifest = match validate_manifest_file(&manifest_path, &mut result).await {
-        Ok(Some(manifest)) => manifest,
-        Ok(None) => return Ok(result),
-        Err(e) => {
-            result.add_error(format!("Failed to validate manifest: {}", e));
-            return Ok(result);
-        }
-    };
-
-    // Validate manifest structure
-    validate_manifest_content(&manifest, &mut result);
-
-    // Validate project structure
-    validate_project_structure(&current_dir, &manifest, &mut result).await;
-
-    // Validate Houdini package compatibility
-    validate_houdini_compatibility(&manifest, &mut result);
-
-    // Check for best practices
-    validate_best_practices(&current_dir, &manifest, &mut result).await;
-
-    Ok(result)
-}
-
-async fn validate_manifest_file(
-    manifest_path: &Path,
-    result: &mut ValidationResult,
-) -> Result<Option<PackageManifest>> {
-    if !manifest_path.exists() {
-        result.add_error("No hpm.toml found in current directory".to_string());
-        return Ok(None);
-    }
-
-    result.add_info("[OK] hpm.toml found".to_string());
-
-    let content = fs::read_to_string(manifest_path).context("Failed to read hpm.toml")?;
-
-    match hpm_package::parse_manifest_str(&content) {
-        Ok(manifest) => {
-            result.add_info("[OK] hpm.toml has valid TOML syntax".to_string());
-            Ok(Some(manifest))
-        }
-        Err(e) => {
-            result.add_error(format!("Invalid TOML syntax in hpm.toml: {}", e));
-            Ok(None)
-        }
-    }
-}
-
-fn validate_manifest_content(manifest: &PackageManifest, result: &mut ValidationResult) {
-    let report = manifest.validate_with(hpm_package::ValidationLevel::Publish);
-    if report.is_ok() {
-        result.add_info("[OK] Package manifest validation passed".to_string());
-    }
-    for err in report.errors {
-        result.add_error(format!("Manifest validation failed: {}", err));
-    }
-    for warning in report.warnings {
-        result.add_warning(warning);
-    }
-}
-
-async fn validate_project_structure(
-    project_dir: &Path,
-    manifest: &PackageManifest,
-    result: &mut ValidationResult,
-) {
-    let expected_dirs = ["otls", "python", "scripts", "presets", "config"];
-    let mut found_dirs = Vec::new();
-
-    for dir_name in &expected_dirs {
-        let dir_path = project_dir.join(dir_name);
-        if dir_path.exists() && dir_path.is_dir() {
-            found_dirs.push(*dir_name);
-            result.add_info(format!("[OK] Found {} directory", dir_name));
-        }
-    }
-
-    if found_dirs.is_empty() {
-        result.add_warning(
-            "No standard Houdini directories found (otls, python, scripts, presets, config)"
-                .to_string(),
-        );
-    }
-
-    // Check for README
-    let readme_files = ["README.md", "README.txt", "README"];
-    let mut found_readme = false;
-    for readme in &readme_files {
-        if project_dir.join(readme).exists() {
-            found_readme = true;
-            result.add_info(format!("[OK] Found {}", readme));
-            break;
-        }
-    }
-
-    if !found_readme {
-        if let Some(ref readme_path) = manifest.package.readme {
-            if !project_dir.join(readme_path).exists() {
-                result.add_error(format!(
-                    "README file specified in manifest not found: {}",
-                    readme_path
-                ));
-            } else {
-                result.add_info(format!("[OK] Found specified README: {}", readme_path));
-            }
-        } else {
-            result.add_warning("No README file found - consider adding documentation".to_string());
-        }
-    }
-
-    // Validate otls directory if it exists
-    if found_dirs.contains(&"otls") {
-        validate_otls_directory(project_dir, result).await;
-    }
-}
-
-/// Digital-asset library extensions Houdini loads from an `otls` directory.
-/// `otl` is the historical spelling of `hda`; the `lc`/`nc` variants are the
-/// limited-commercial and non-commercial saves of the same format.
-const HDA_EXTENSIONS: [&str; 6] = ["hda", "otl", "hdalc", "otllc", "hdanc", "otlnc"];
-
-async fn validate_otls_directory(project_dir: &Path, result: &mut ValidationResult) {
-    let otls_path = project_dir.join("otls");
-
-    match fs::read_dir(&otls_path) {
-        Ok(entries) => {
-            let mut has_assets = false;
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if let Some(extension) = path.extension() {
-                    // Houdini loads all six: the `lc` and `nc` suffixes are
-                    // limited-commercial and non-commercial assets, which are
-                    // real HDAs, just saved under a restricted license. See
-                    // <https://www.sidefx.com/docs/houdini/assets/install.html>.
-                    if HDA_EXTENSIONS.iter().any(|known| extension == *known) {
-                        has_assets = true;
-                        result.add_info(format!(
-                            "[OK] Found Houdini asset: {}",
-                            path.file_name().unwrap().to_string_lossy()
-                        ));
-                    }
-                }
-            }
-
-            if !has_assets {
-                result.add_warning(format!(
-                    "otls directory exists but contains no digital assets ({})",
-                    HDA_EXTENSIONS
-                        .iter()
-                        .map(|e| format!(".{e}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-        }
-        Err(e) => {
-            result.add_warning(format!("Could not read otls directory: {}", e));
-        }
-    }
-}
-
-fn validate_houdini_compatibility(manifest: &PackageManifest, result: &mut ValidationResult) {
-    // `[compat].houdini` is a `HoudiniRange` newtype that validates at
-    // deserialize time, so the manifest can't load with a malformed
-    // range. Here we just surface the compiled expression on the happy
-    // path and warn on the binary-package + unbounded-above footgun.
-    if let Some(range) = &manifest.compat.houdini {
-        result.add_info(format!(
-            "[OK] Houdini compatibility: {} (compiles to `{}`)",
-            range,
-            range.to_enable_expression()
-        ));
-
-        // Native-binary packages that leave their Houdini range
-        // unbounded above are a footgun: DSOs compiled against one
-        // Houdini major typically won't load in the next, so the
-        // package will install cleanly on a newer Houdini and then
-        // crash at load. Surface it as a warning so the author can
-        // either narrow the range or confirm they really mean to ship
-        // platform-agnostic content.
-        if !manifest.compat.platforms.is_empty() && !range.has_upper_bound() {
-            result.add_warning(format!(
-                "[compat].platforms is declared but [compat].houdini = \"{}\" \
-                 has no upper bound. Native binaries compiled against one \
-                 Houdini major typically won't load in the next. Consider \
-                 \"^21\" (Houdini 21.x only) or an explicit range like \
-                 \">=20.5, <22\".",
-                range
-            ));
-        }
-    }
-}
-
-async fn validate_best_practices(
-    project_dir: &Path,
-    manifest: &PackageManifest,
-    result: &mut ValidationResult,
-) {
-    // Check for license file
-    let license_files = ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"];
-    let mut found_license = false;
-    for license_file in &license_files {
-        if project_dir.join(license_file).exists() {
-            found_license = true;
-            result.add_info(format!("[OK] Found license file: {}", license_file));
-            break;
-        }
-    }
-
-    if !found_license && manifest.package.license.is_some() {
-        result.add_warning("License specified in manifest but no LICENSE file found".to_string());
-    }
-
-    // Check for version control
-    if project_dir.join(".git").exists() {
-        result.add_info("[OK] Git repository initialized".to_string());
-
-        // Check for .gitignore
-        if !project_dir.join(".gitignore").exists() {
-            result.add_warning("No .gitignore file found - consider adding one".to_string());
-        }
-    } else {
-        result.add_info("No version control detected - consider initializing git".to_string());
-    }
-
-    // Check for scripts
-    if !manifest.scripts.commands.is_empty() {
-        result.add_info(format!(
-            "[OK] Package defines {} script(s)",
-            manifest.scripts.commands.len()
-        ));
-
-        let host_os = hpm_package::Platform::current()
-            .and_then(|p| p.os_key().map(|os| os.as_str().to_string()));
-        for (name, entry) in &manifest.scripts.commands {
-            let resolved = entry.resolve_cmd(host_os.as_deref());
-            match resolved {
-                Some(cmd) if cmd.trim().is_empty() => {
-                    result.add_warning(format!("Script '{}' has empty command", name));
-                }
-                Some(_) => {
-                    if let Some(desc) = entry.description() {
-                        let display = entry.label().unwrap_or(name);
-                        result.add_info(format!("Script '{}': {}", display, desc));
-                    } else if let Some(label) = entry.label() {
-                        result.add_info(format!("Script '{}' labelled '{}'", name, label));
-                    }
-                }
-                None => {
-                    // No variant matches the host — still legitimate (the
-                    // script just isn't available on this OS) but worth a
-                    // hint so authors notice typos in their `when` axes.
-                    result.add_info(format!(
-                        "Script '{}' has no command for host OS — only matches other platforms",
-                        name
-                    ));
-                }
-            }
-        }
-    }
-
-    // Check package size considerations
-    check_package_size(project_dir, result).await;
-}
-
-async fn check_package_size(project_dir: &Path, result: &mut ValidationResult) {
-    let mut total_size = 0u64;
-    let mut large_files = Vec::new();
-
-    if let Ok(entries) = walkdir::WalkDir::new(project_dir)
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-    {
-        for entry in entries {
-            if entry.file_type().is_file()
-                && let Ok(metadata) = entry.metadata()
-            {
-                let size = metadata.len();
-                total_size += size;
-
-                // Flag files larger than 10MB
-                if size > 10 * 1024 * 1024 {
-                    large_files.push((entry.path().to_path_buf(), size));
-                }
-            }
-        }
-    }
-
-    if total_size > 100 * 1024 * 1024 {
-        result.add_warning(format!(
-            "Package size is large ({:.1} MB) - consider if all files are necessary",
-            total_size as f64 / (1024.0 * 1024.0)
-        ));
-    }
-
-    for (path, size) in large_files {
-        let relative_path = path.strip_prefix(project_dir).unwrap_or(&path);
-        result.add_warning(format!(
-            "Large file detected: {} ({:.1} MB)",
-            relative_path.display(),
-            size as f64 / (1024.0 * 1024.0)
-        ));
-    }
+/// The informational lines, in the order the checks ran: passed checks
+/// carry an `[OK]` prefix, neutral information none.
+fn info_lines(report: &Report) -> Vec<String> {
+    report
+        .findings
+        .iter()
+        .filter_map(|f| match f.severity {
+            Severity::Passed => Some(format!("[OK] {}", f.message)),
+            Severity::Info => Some(f.message.clone()),
+            Severity::Error | Severity::Warning => None,
+        })
+        .collect()
 }
 
 /// Emit the validation findings. Human output goes through the console —
 /// info lines are suppressed by `--quiet` while warnings, errors, and the
 /// final verdict always show; JSON output is a single document on stdout.
-fn display_results(result: &ValidationResult, console: &mut Console, output: OutputFormat) {
+fn display_results(report: &Report, console: &mut Console, output: OutputFormat) {
+    let errors: Vec<&str> = report.messages(Severity::Error).collect();
+    let warnings: Vec<&str> = report.messages(Severity::Warning).collect();
     if output.is_json() {
         let doc = serde_json::json!({
-            "valid": result.is_valid,
-            "errors": result.errors,
-            "warnings": result.warnings,
-            "info": result.info_messages,
+            "valid": report.is_valid(),
+            "errors": errors,
+            "warnings": warnings,
+            "info": info_lines(report),
         });
         console.stdout(output.render_json(&doc));
         return;
     }
 
-    for info in &result.info_messages {
+    for info in info_lines(report) {
         console.info(info);
     }
-    for warning in &result.warnings {
+    for warning in &warnings {
         console.warn(warning);
     }
-    for error in &result.errors {
+    for error in &errors {
         console.error(error);
     }
 
-    if result.is_valid {
+    if report.is_valid() {
         console.success("Package validation completed successfully");
-        if !result.warnings.is_empty() {
+        if !warnings.is_empty() {
             console.status(format!(
                 "  {} warning(s) found - consider addressing them",
-                result.warnings.len()
+                warnings.len()
             ));
         }
     }
@@ -418,178 +82,30 @@ fn display_results(result: &ValidationResult, console: &mut Console, output: Out
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-    use tokio;
+    use hpm_core::check::Finding;
 
-    #[tokio::test]
-    async fn test_validation_result_creation() {
-        let mut result = ValidationResult::new();
-        assert!(result.is_valid);
-        assert!(result.errors.is_empty());
-        assert!(result.warnings.is_empty());
-        assert!(result.info_messages.is_empty());
-
-        result.add_error("Test error".to_string());
-        assert!(!result.is_valid);
-        assert_eq!(result.errors.len(), 1);
-
-        result.add_warning("Test warning".to_string());
-        assert_eq!(result.warnings.len(), 1);
-
-        result.add_info("Test info".to_string());
-        assert_eq!(result.info_messages.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_validate_manifest_file_missing() {
-        let temp_dir = TempDir::new().unwrap();
-        let manifest_path = temp_dir.path().join("hpm.toml");
-        let mut result = ValidationResult::new();
-
-        let manifest = validate_manifest_file(&manifest_path, &mut result)
-            .await
-            .unwrap();
-
-        assert!(manifest.is_none());
-        assert!(!result.is_valid);
-        assert!(!result.errors.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_validate_manifest_file_valid() {
-        let temp_dir = TempDir::new().unwrap();
-        let manifest_path = temp_dir.path().join("hpm.toml");
-
-        let manifest_content = r#"
-[package]
-path = "studio/test-package"
-name = "test-package"
-version = "1.0.0"
-description = "A test package"
-
-[compat]
-houdini = ">=20.5"
-"#;
-
-        std::fs::write(&manifest_path, manifest_content).unwrap();
-
-        let mut result = ValidationResult::new();
-        let manifest = validate_manifest_file(&manifest_path, &mut result)
-            .await
-            .unwrap();
-
-        assert!(manifest.is_some());
-        assert!(result.is_valid);
-        assert_eq!(result.info_messages.len(), 2); // Found + valid syntax
-    }
-
-    #[tokio::test]
-    async fn warns_when_platforms_declared_with_unbounded_houdini() {
-        // A package declaring [compat].platforms but leaving the houdini
-        // range unbounded above ships DSOs that will likely fail to load
-        // on the next Houdini major. `hpm check` must flag this.
-        let temp_dir = TempDir::new().unwrap();
-        let project_dir = temp_dir.path();
-        let manifest_path = project_dir.join("hpm.toml");
-        std::fs::write(
-            &manifest_path,
-            r#"
-[package]
-path = "studio/needs-bound"
-name = "Needs Bound"
-version = "1.0.0"
-
-[compat]
-houdini = ">=21"
-platforms = ["linux-x86_64"]
-"#,
-        )
-        .unwrap();
-
-        let mut result = ValidationResult::new();
-        let manifest = validate_manifest_file(&manifest_path, &mut result)
-            .await
-            .unwrap()
-            .expect("manifest parses");
-        super::validate_houdini_compatibility(&manifest, &mut result);
-
-        assert!(
-            result
-                .warnings
-                .iter()
-                .any(|w| w.contains("no upper bound") && w.contains("Native binaries")),
-            "expected upper-bound warning, got: {:?}",
-            result.warnings
-        );
-    }
-
-    #[tokio::test]
-    async fn no_warning_when_platforms_declared_with_bounded_houdini() {
-        // Same shape but with a bounded houdini range — no warning.
-        let temp_dir = TempDir::new().unwrap();
-        let project_dir = temp_dir.path();
-        let manifest_path = project_dir.join("hpm.toml");
-        std::fs::write(
-            &manifest_path,
-            r#"
-[package]
-path = "studio/bounded"
-name = "Bounded"
-version = "1.0.0"
-
-[compat]
-houdini = "^21"
-platforms = ["linux-x86_64"]
-"#,
-        )
-        .unwrap();
-
-        let mut result = ValidationResult::new();
-        let manifest = validate_manifest_file(&manifest_path, &mut result)
-            .await
-            .unwrap()
-            .expect("manifest parses");
-        super::validate_houdini_compatibility(&manifest, &mut result);
-
-        assert!(
-            !result.warnings.iter().any(|w| w.contains("no upper bound")),
-            "expected no upper-bound warning, got: {:?}",
-            result.warnings
-        );
-    }
-
-    #[tokio::test]
-    async fn no_warning_when_no_platforms_declared() {
-        // Pure-data / pure-Python package — unbounded houdini range is
-        // fine, no warning.
-        let temp_dir = TempDir::new().unwrap();
-        let project_dir = temp_dir.path();
-        let manifest_path = project_dir.join("hpm.toml");
-        std::fs::write(
-            &manifest_path,
-            r#"
-[package]
-path = "studio/pure"
-name = "Pure"
-version = "1.0.0"
-
-[compat]
-houdini = ">=21"
-"#,
-        )
-        .unwrap();
-
-        let mut result = ValidationResult::new();
-        let manifest = validate_manifest_file(&manifest_path, &mut result)
-            .await
-            .unwrap()
-            .expect("manifest parses");
-        super::validate_houdini_compatibility(&manifest, &mut result);
-
-        assert!(
-            !result.warnings.iter().any(|w| w.contains("no upper bound")),
-            "expected no warning for pure-data package, got: {:?}",
-            result.warnings
+    #[test]
+    fn info_lines_prefix_passed_checks_and_keep_the_run_order() {
+        let finding = |severity, message: &str| Finding {
+            severity,
+            message: message.to_string(),
+        };
+        let report = Report {
+            findings: vec![
+                finding(Severity::Passed, "hpm.toml found"),
+                finding(Severity::Warning, "w"),
+                finding(Severity::Info, "No version control detected"),
+                finding(Severity::Error, "e"),
+                finding(Severity::Passed, "Found otls directory"),
+            ],
+        };
+        assert_eq!(
+            info_lines(&report),
+            [
+                "[OK] hpm.toml found",
+                "No version control detected",
+                "[OK] Found otls directory"
+            ]
         );
     }
 }

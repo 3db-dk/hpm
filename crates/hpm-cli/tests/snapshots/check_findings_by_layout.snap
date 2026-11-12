@@ -59,7 +59,7 @@ error: Package error: Package validation failed with 1 error(s)
 args: --output json-compact check
 exit: 0
 --- stdout
-{"errors":[],"info":["[OK] hpm.toml found","[OK] hpm.toml has valid TOML syntax","[OK] Package manifest validation passed","[OK] Found otls directory","[OK] Found scripts directory","[OK] Found specified README: docs/README.md","[OK] Houdini compatibility: >=21 (compiles to `houdini_version >= '21'`)","[OK] Found license file: LICENSE","[OK] Git repository initialized","[OK] Package defines 2 script(s)","Script 'Set up': Prepare the workspace"],"valid":true,"warnings":["Package authors are missing - consider adding author information","otls directory exists but contains no digital assets (.hda, .otl, .hdalc, .otllc, .hdanc, .otlnc)","[compat].platforms is declared but [compat].houdini = /">=21/" has no upper bound. Native binaries compiled against one Houdini major typically won't load in the next. Consider /"^21/" (Houdini 21.x only) or an explicit range like /">=20.5, <22/".","Package size is large (131.0 MB) - consider if all files are necessary","Large file detected: scripts/big.bin (11.0 MB)","Large file detected: build/huge.bin (120.0 MB)"]}
+{"errors":[],"info":["[OK] hpm.toml found","[OK] hpm.toml has valid TOML syntax","[OK] Package manifest validation passed","[OK] Found otls directory","[OK] Found scripts directory","[OK] Found specified README: docs/README.md","[OK] Houdini compatibility: >=21 (compiles to `houdini_version >= '21'`)","[OK] Found license file: LICENSE","[OK] Git repository initialized","[OK] Package defines 2 script(s)","Script 'Set up': Prepare the workspace"],"valid":true,"warnings":["Package authors are missing - consider adding author information","otls directory exists but contains no digital assets (.hda, .otl, .hdalc, .otllc, .hdanc, .otlnc)","[compat].platforms is declared but [compat].houdini = /">=21/" has no upper bound. Native binaries compiled against one Houdini major typically won't load in the next. Consider /"^21/" (Houdini 21.x only) or an explicit range like /">=20.5, <22/".","Large file detected: scripts/big.bin (11.0 MB)"]}
 --- stderr
 args: --quiet check
 exit: 0
@@ -69,6 +69,4 @@ SUCCESS: Package validation completed successfully
 WARNING: Package authors are missing - consider adding author information
 WARNING: otls directory exists but contains no digital assets (.hda, .otl, .hdalc, .otllc, .hdanc, .otlnc)
 WARNING: [compat].platforms is declared but [compat].houdini = ">=21" has no upper bound. Native binaries compiled against one Houdini major typically won't load in the next. Consider "^21" (Houdini 21.x only) or an explicit range like ">=20.5, <22".
-WARNING: Package size is large (131.0 MB) - consider if all files are necessary
 WARNING: Large file detected: scripts/big.bin (11.0 MB)
-WARNING: Large file detected: build/huge.bin (120.0 MB)

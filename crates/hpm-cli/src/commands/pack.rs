@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use hpm_config::Config;
+use hpm_core::check::Severity;
 use hpm_core::packer;
 use hpm_package::{NativePackageTarget, PackageManifest, Platform, validate_hpackage_descriptor};
 use std::path::{Path, PathBuf};
@@ -89,15 +90,16 @@ pub async fn execute(config: &Config, options: PackOptions, console: &mut Consol
 
     // Validate package first, keeping stdout clean for --json: warnings go
     // to stderr via the console, errors fail the pack.
-    let validation = super::check::validate_package(Some(package_dir.clone())).await?;
-    for warning in &validation.warnings {
+    let validation = hpm_core::check::check_package(&package_dir);
+    for warning in validation.messages(Severity::Warning) {
         console.warn(warning);
     }
-    if !validation.is_valid {
+    if !validation.is_valid() {
+        let errors: Vec<&str> = validation.messages(Severity::Error).collect();
         bail!(
             "Package validation failed with {} error(s):\n  - {}",
-            validation.errors.len(),
-            validation.errors.join("\n  - ")
+            errors.len(),
+            errors.join("\n  - ")
         );
     }
 

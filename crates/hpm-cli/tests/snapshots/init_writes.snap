@@ -2,6 +2,25 @@
 source: crates/hpm-cli/tests/cli_snapshots.rs
 expression: env.mask(&report)
 ---
+stdout:
+SUCCESS: Successfully created Houdini package 'demo-pkg'
+
+Package structure:
+├── .gitignore
+├── README.md
+├── config
+├── hpm.toml
+├── otls
+├── presets
+├── python
+│   └── __init__.py
+├── scripts
+└── tests
+
+Next steps:
+  cd demo-pkg
+  hpm add # Add dependencies
+
 paths:
 .gitignore
 README.md

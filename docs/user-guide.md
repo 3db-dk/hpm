@@ -355,7 +355,7 @@ hpm check
 Check runs:
 
 - `hpm.toml` exists, parses, and passes manifest validation (scoped `creator/slug` path, semver version, `[compat].houdini` parseable, `[stage]` and `[[operators]]` per-platform consistency with `[compat].platforms`).
-- Soft warnings for: missing description, missing authors, missing keywords, missing `[compat].houdini`, missing README or license file, missing `.gitignore` when a `.git` directory is present, packages larger than 100 MB, and individual files larger than 10 MB.
+- Soft warnings for: missing description, missing authors, missing keywords, missing `[compat].houdini`, missing README or license file, missing `.gitignore` when a `.git` directory is present, packages larger than 100 MB, and individual files larger than 10 MB. Size is measured over what `hpm pack` would ship: files excluded by `.gitignore`, `.hpmignore` or `[stage]` (a `build/` tree, say) do not count.
 
 Check is advisory — warnings do not fail the command.
 

@@ -111,6 +111,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<packages_dir>/../fetch` when `packages_dir` is outside `home_dir`, are
   still reclaimed by the fetch-staging sweep and by `evict_download`.
 
+- `hpm check` (and the check `hpm pack` runs first) measures package size
+  over what pack would ship, so a gitignored `build/` or `target/` tree no
+  longer triggers "Package size is large" or "Large file detected". A
+  file in the package that cannot be read is now an error instead of
+  silently skipping the size check.
+- `hpm init` prints its package tree sorted, with correct `└──` /
+  `│` connectors.
+- `hpm install` no longer draws a spinner (which ignored `--quiet`).
+
 - `hpm init` no longer writes a root `package.json`. Nothing read it: hpm
   writes each dependency's Houdini package file at install time, and
   `hpm pack` generates the shipped `{slug}.json`. Existing files are left
@@ -156,6 +165,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   methods of `HoudiniRange`. **Breaking (hpm-core API):**
   `python::collect_python_dependencies` is no longer `async`; a Houdini
   version with a non-numeric minor (`21.x`) is now an error.
+- Package validation moved into `hpm_core::check` (`check_package` returns
+  a `Report` of typed findings), for pack and TumbleTrove Desktop to share.
 - **Breaking (hpm-core API):** `python::get_venvs_dir`. The Python
   subsystem takes a `python::PythonHome` (`PythonHome::for_storage(&config.storage)`,
   or `PythonHome::of_user()` for `~/.hpm`): `initialize`,
