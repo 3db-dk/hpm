@@ -1931,3 +1931,88 @@ mod cleanup_plan {
         }
     }
 }
+
+/// Every path under `root` with its file bytes: equal before and after an
+/// operation that must write nothing.
+fn tree_snapshot(root: &std::path::Path) -> Vec<(std::path::PathBuf, Option<Vec<u8>>)> {
+    let mut entries: Vec<_> = walkdir::WalkDir::new(root)
+        .into_iter()
+        .map(|e| {
+            let e = e.unwrap();
+            let bytes = e
+                .file_type()
+                .is_file()
+                .then(|| std::fs::read(e.path()).unwrap());
+            (e.path().strip_prefix(root).unwrap().to_path_buf(), bytes)
+        })
+        .collect();
+    entries.sort();
+    entries
+}
+
+/// An orphaned dev install whose copy something still uses is not offered
+/// by the dry run and is kept by the real run, and the dry run writes
+/// nothing. Users: a project whose emitted manifest still points at the
+/// copy though its hpm.toml no longer claims it (synced before records
+/// existed, so only the real run's backfill records it), and this process's
+/// hold. With no user, both runs agree on removing it.
+#[tokio::test]
+async fn dev_dry_run_agrees_with_the_real_run_and_writes_nothing() {
+    for user in ["project manifest", "process hold", "none"] {
+        let temp = TempDir::new().unwrap();
+        let storage = test_storage(&temp);
+        let source = temp.path().join("orphan-src");
+        write_source_package(&source, "studio/orphan", "1.0.0", "m");
+        let copy = storage
+            .install_as_dev_copy(&source)
+            .await
+            .unwrap()
+            .install_path;
+        dev_users::settle(&copy);
+
+        let project = temp.path().join("project");
+        write_project_with_path_dep(
+            &project,
+            "consumer",
+            "1.0.0",
+            "studio/other",
+            "../other",
+            false,
+        );
+        let packages = project.join(".hpm/packages");
+        std::fs::create_dir_all(&packages).unwrap();
+        let _hold = match user {
+            "project manifest" => {
+                let hpath = serde_json::json!({ "hpath": [copy.to_string_lossy()] });
+                std::fs::write(packages.join("studio.orphan.json"), hpath.to_string()).unwrap();
+                None
+            }
+            "process hold" => dev_users::DevCopyHold::acquire(&copy),
+            _ => None,
+        };
+        let config = projects_config_with(vec![project]);
+
+        let before = tree_snapshot(temp.path());
+        let dry = storage
+            .cleanup_unused_dev_installs_dry_run(&config)
+            .await
+            .unwrap();
+        assert_eq!(
+            tree_snapshot(temp.path()),
+            before,
+            "{user}: the dry run wrote something"
+        );
+        let real = storage.cleanup_unused_dev_installs(&config).await.unwrap();
+        assert_eq!(
+            dry, real,
+            "{user}: the dry run must name exactly what the real run removes"
+        );
+        let expected: Vec<String> = if user == "none" {
+            vec!["_dev/orphan@1.0.0".to_string()]
+        } else {
+            vec![]
+        };
+        assert_eq!(real, expected, "{user}");
+        assert_eq!(copy.is_dir(), user != "none", "{user}");
+    }
+}

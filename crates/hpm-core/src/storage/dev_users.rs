@@ -162,6 +162,27 @@ pub(crate) fn hash_in_use(
     hash: &str,
     state_of: &impl Fn(u32) -> ProcessState,
 ) -> bool {
+    judge_records(container, hash, state_of, true)
+}
+
+/// [`hash_in_use`] without removing dead records: for a dry run, which
+/// must write nothing.
+fn hash_in_use_read_only(
+    container: &Path,
+    hash: &str,
+    state_of: &impl Fn(u32) -> ProcessState,
+) -> bool {
+    judge_records(container, hash, state_of, false)
+}
+
+/// Whether any record of `<container>/<hash>` is live, removing the dead
+/// ones when `prune`.
+fn judge_records(
+    container: &Path,
+    hash: &str,
+    state_of: &impl Fn(u32) -> ProcessState,
+    prune: bool,
+) -> bool {
     let dir = records_dir(container, hash);
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
@@ -200,7 +221,7 @@ pub(crate) fn hash_in_use(
         };
         if live {
             in_use = true;
-        } else {
+        } else if prune {
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -338,7 +359,7 @@ pub(crate) enum Unrecorded {
 /// The dev copies the Houdini manifests in `packages_dir` (a project's
 /// `.hpm/packages`) point at, each with the manifest that names it. Only
 /// copies that exist, directly inside a `_dev/<slug>@<version>/` container.
-fn project_dev_copies(packages_dir: &Path) -> Vec<(PathBuf, PathBuf)> {
+pub(crate) fn project_dev_copies(packages_dir: &Path) -> Vec<(PathBuf, PathBuf)> {
     let Ok(entries) = std::fs::read_dir(packages_dir) else {
         return Vec::new();
     };
@@ -574,6 +595,54 @@ fn drop_orphan_records(container: &Path, state_of: &impl Fn(u32) -> ProcessState
 /// `Path::is_dir` would answer for the workspace instead.
 pub(crate) fn is_copy_container(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir() && !is_link(&meta))
+}
+
+/// Whether reclaiming `container` with nothing kept (as an orphan cleanup
+/// does, with [`Unrecorded::Remove`]) would empty it so that
+/// [`remove_empty_container`] removes it, judged without changing anything.
+///
+/// `project_copies` are the copies the discovered projects' manifests point
+/// at: the real run records those first ([`record_project_manifests`]), so
+/// they count as in use here even before a record exists. A copy this
+/// process holds, a live user record, or a staging directory of a process
+/// that is not gone keeps the container; so does any entry that is not a
+/// copy, a tombstone or the records directory.
+pub(crate) fn container_would_empty(
+    container: &Path,
+    state_of: impl Fn(u32) -> ProcessState,
+    project_copies: &std::collections::HashSet<PathBuf>,
+) -> bool {
+    if !is_copy_container(container) {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(container) else {
+        return false;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == USERS_DIR || name.starts_with(TOMBSTONE_PREFIX) {
+            continue;
+        }
+        if let Some(pid) = stage_owner(&name) {
+            if state_of(pid) == ProcessState::Gone {
+                continue;
+            }
+            return false;
+        }
+        let is_copy = is_hash_dir_name(&name) && entry.file_type().is_ok_and(|t| t.is_dir());
+        if !is_copy
+            || project_copies.contains(&path)
+            || DevCopyHold::is_held(&path)
+            || hash_in_use_read_only(container, &name, &state_of)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// The other version containers of the same package beside `container`

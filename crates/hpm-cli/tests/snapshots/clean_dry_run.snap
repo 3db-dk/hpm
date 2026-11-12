@@ -11,4 +11,4 @@ No orphaned packages found - cleanup not needed
 [TIME]  INFO Ensured storage directories exist
 [TIME]  INFO No packages installed - cleanup not needed
 [TIME]  INFO Dry run: would remove 0 orphaned packages
-[TIME]  INFO Dry run: would remove 0 orphaned dev installs
+[TIME]  INFO No packages installed - cleanup not needed
