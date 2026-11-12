@@ -69,40 +69,17 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
             .by_index(i)
             .map_err(|e| FetchError::ExtractionError(e.to_string()))?;
 
-        if let Some(ref skip) = layout.skip_entry
-            && file
-                .name()
-                .map_err(|e| FetchError::ExtractionError(e.to_string()))?
-                == *skip
-        {
+        let name = file
+            .name()
+            .map_err(|e| FetchError::ExtractionError(e.to_string()))?
+            .to_string();
+        let Some(raw_path) = file.enclosed_name() else {
+            warn!("Skipping file with invalid path in archive: {name}");
             continue;
-        }
-
-        let raw_path = match file.enclosed_name() {
-            Some(p) => p.to_path_buf(),
-            None => {
-                warn!("Skipping file with invalid path in archive");
-                continue;
-            }
         };
-
-        // Strip the common prefix
-        let relative_path = if let Some(ref prefix) = layout.strip_prefix {
-            match raw_path.strip_prefix(prefix) {
-                Ok(p) => p.to_path_buf(),
-                Err(_) => raw_path,
-            }
-        } else {
-            raw_path
-        };
-
-        // Skip empty paths (the root directory itself after stripping prefix)
-        if relative_path.as_os_str().is_empty() {
+        let Some(relative_path) = layout.target_for(&name, &raw_path)? else {
             continue;
-        }
-
-        // Security check: ensure no path traversal
-        validate_path_safety_sync(&relative_path)?;
+        };
 
         let target_path = target_dir.join(&relative_path);
 
@@ -187,6 +164,27 @@ struct ExtractPlan {
     skip_entry: Option<String>,
 }
 
+impl ExtractPlan {
+    /// Where the entry named `name` (its raw archive name) with path `raw`
+    /// lands, relative to the target directory: `None` for the skipped root
+    /// json and for the stripped root directory itself, and an error for a
+    /// path that would escape the target.
+    fn target_for(&self, name: &str, raw: &Path) -> Result<Option<PathBuf>, FetchError> {
+        if self.skip_entry.as_deref() == Some(name) {
+            return Ok(None);
+        }
+        let relative = match &self.strip_prefix {
+            Some(prefix) => raw.strip_prefix(prefix).unwrap_or(raw),
+            None => raw,
+        };
+        if relative.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        validate_path_safety_sync(relative)?;
+        Ok(Some(relative.to_path_buf()))
+    }
+}
+
 /// Decide how to extract based on the entry names.
 ///
 /// Tries the hpackage layout first (`hpm pack` output: `{slug}.json` at the
@@ -245,24 +243,23 @@ fn find_hpackage_layout(names: &[String]) -> Option<(PathBuf, String)> {
 
 /// Find a common single-component root directory across a set of archive entry names.
 ///
-/// Returns `Some(prefix)` only if every entry starts with the same first path
-/// component — matches Git/SideFX archive convention where everything sits
-/// under a single `pkg-name-version/` directory.
+/// Returns `Some(prefix)` only if every entry lies *under* the same first path
+/// component (compared as a whole component, not as a string prefix) — the
+/// Git/SideFX convention where everything sits under one
+/// `pkg-name-version/` directory. A root-level file means there is no
+/// common root (stripping would drop it), and `..` is never a root.
 fn find_common_root_prefix(names: &[String]) -> Option<PathBuf> {
-    let first = names.first()?;
-    let first_component = PathBuf::from(first)
-        .components()
-        .next()?
-        .as_os_str()
-        .to_owned();
-    let prefix = PathBuf::from(&first_component);
-    let prefix_str = prefix.to_str()?;
+    let mut root: Option<&str> = None;
     for name in names {
-        if !name.starts_with(prefix_str) {
-            return None;
+        let (first, _rest) = name.split_once('/')?;
+        match root {
+            None => root = Some(first),
+            Some(r) if r == first => {}
+            Some(_) => return None,
         }
     }
-    Some(prefix)
+    root.filter(|r| !r.is_empty() && *r != "..")
+        .map(PathBuf::from)
 }
 
 /// Extract a gzipped tar archive to the target directory (blocking operation).
@@ -305,26 +302,9 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
             .map_err(|e| FetchError::ExtractionError(e.to_string()))?
             .into_owned();
 
-        if let Some(ref skip) = layout.skip_entry
-            && raw_path.to_string_lossy() == skip.as_str()
-        {
+        let Some(relative_path) = layout.target_for(&raw_path.to_string_lossy(), &raw_path)? else {
             continue;
-        }
-
-        let relative_path = if let Some(ref prefix) = layout.strip_prefix {
-            match raw_path.strip_prefix(prefix) {
-                Ok(p) => p.to_path_buf(),
-                Err(_) => raw_path,
-            }
-        } else {
-            raw_path
         };
-
-        if relative_path.as_os_str().is_empty() {
-            continue;
-        }
-
-        validate_path_safety_sync(&relative_path)?;
 
         let target_path = target_dir.join(&relative_path);
         let entry_type = entry.header().entry_type();
@@ -909,5 +889,66 @@ mod tests {
         // common-root-prefix path instead.
         let git = vec!["pkg-1.0/hpm.toml".to_string()];
         assert_eq!(find_hpackage_layout(&git), None);
+    }
+
+    mod layout_model {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// An entry: a root component, and below it either nothing (a
+        /// root-level file), the directory itself (`root/`), or a file path.
+        fn entry() -> impl Strategy<Value = String> {
+            let root = prop::sample::select(vec!["a", "ab", "pkg", "pkg-1.0", "b"]);
+            let below = prop_oneof![
+                Just(None),
+                Just(Some(String::new())),
+                "[a-z]{1,4}(/[a-z]{1,4}){0,2}".prop_map(Some),
+            ];
+            (root, below).prop_map(|(root, below)| match below {
+                None => root.to_string(),
+                Some(rest) => format!("{root}/{rest}"),
+            })
+        }
+
+        proptest! {
+            /// The common root is stripped exactly when every entry lies
+            /// under one root directory, compared component by component.
+            /// Model: split each name at its first `/`.
+            #[test]
+            fn common_root_matches_the_component_model(names in prop::collection::vec(entry(), 1..6)) {
+                let model = {
+                    let firsts: Option<Vec<&str>> =
+                        names.iter().map(|n| n.split_once('/').map(|(f, _)| f)).collect();
+                    firsts.and_then(|f| {
+                        let r = f[0];
+                        f.iter().all(|x| *x == r).then(|| PathBuf::from(r))
+                    })
+                };
+                prop_assert_eq!(resolve_archive_layout(&names).strip_prefix, model);
+            }
+        }
+    }
+
+    /// A root file whose name starts the same as a directory beside it is
+    /// not a common root: both are extracted. String-prefix matching took
+    /// `a` as the root of `ab/` and dropped the file `a`.
+    #[test]
+    fn a_root_file_sharing_a_prefix_with_a_directory_is_kept() {
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("p.zip");
+        {
+            use std::io::Write;
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive_path).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("a", opts).unwrap();
+            zip.write_all(b"root file").unwrap();
+            zip.start_file("ab/hpm.toml", opts).unwrap();
+            zip.write_all(b"[package]").unwrap();
+            zip.finish().unwrap();
+        }
+        let out = temp.path().join("out");
+        extract_archive_sync(&archive_path, &out).unwrap();
+        assert_eq!(std::fs::read(out.join("a")).unwrap(), b"root file");
+        assert!(out.join("ab/hpm.toml").is_file());
     }
 }

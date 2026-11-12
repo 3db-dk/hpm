@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Installing one version from two places at once (hpm and TumbleTrove
+  Desktop, or two syncs) no longer corrupts the store copy. Each fetch now
+  extracts into a directory of its own, and a store copy is copied into a
+  private staging directory and renamed into place, so the store never
+  shows a half-copied tree.
+- A download whose extraction failed (a crash, or an entry refused as a
+  path traversal) is no longer installed on the next attempt as it stood,
+  unverified. Nothing in fetch staging is reused.
+- An archive with a root-level file whose name begins like a directory
+  beside it (`a` next to `ab/`) no longer loses that file on extraction.
+
 - `fetch_manifest` (used by TumbleTrove Desktop) finds a package already in
   the store when asked by its scoped `creator/slug` name. It looked in the
   wrong directory, missed, and downloaded and re-copied the package over a
@@ -21,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty string literal followed by bare text, which Python rejects.
 
 ### Changed
+
+- An install never replaces a store copy that is already there (a running
+  Houdini may have it loaded); `hpm global add` used to. To repair a damaged
+  copy, move it and its `.files.json` aside first, as TumbleTrove Desktop
+  does. A tree without `hpm.toml` or a stale link is still replaced.
 
 - `[storage] cache_dir` is honoured: downloaded archives are cached there.
   They used to go to `<home_dir>/cache` whatever it said. Archives an older

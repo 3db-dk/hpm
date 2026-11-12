@@ -1632,7 +1632,24 @@ async fn store_installs_carry_an_install_record_through_their_lifecycle() {
         }
     );
 
-    // A reinstall rewrites the tree and its record together.
+    // An install never replaces a committed copy (a running Houdini may
+    // have it loaded): it keeps the existing one, damage and all.
+    let kept = storage.install_into_cas(&source).await.unwrap();
+    assert_eq!(kept.install_path, installed.install_path);
+    let Verification::Checked(report) = storage.verify_installed(&kept).unwrap() else {
+        panic!("still recorded");
+    };
+    assert_eq!(
+        report.problems.len(),
+        1,
+        "the existing copy is kept as it is"
+    );
+
+    // A repair moves the copy and its record aside first, as TumbleTrove
+    // Desktop does; the reinstall then writes the tree and record together.
+    let aside = temp.path().join("aside");
+    std::fs::rename(&installed.install_path, &aside).unwrap();
+    std::fs::rename(&record, temp.path().join("aside.files.json")).unwrap();
     let reinstalled = storage.install_into_cas(&source).await.unwrap();
     let Verification::Checked(report) = storage.verify_installed(&reinstalled).unwrap() else {
         panic!("a reinstall is recorded");
@@ -1749,4 +1766,31 @@ fn moved_store_keeps_one_staging_root_and_reclaims_the_old_ones() {
     std::fs::write(old_cache.join("studio-tool-1.0.0"), b"zip").unwrap();
     std::fs::write(temp.path().join("fast/cache/studio-tool-1.0.0"), b"zip").unwrap();
     assert_eq!(storage.evict_download("studio/tool", "1.0.0"), 2);
+}
+
+/// A store copy staged by an install whose process is gone is swept; one
+/// staged by a live process (this one) is an install in flight and stays.
+/// Neither is ever listed as a package.
+#[test]
+fn store_stages_of_gone_installs_are_swept_and_never_listed() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    let packages = temp.path().join("packages");
+    // PIDs this high are not handed out on any supported OS.
+    let gone = packages.join(format!(".stage-{}-0", 0x7fff_fff0u32));
+    let live = packages.join(format!(".stage-{}-0", std::process::id()));
+    for stage in [&gone, &live] {
+        std::fs::create_dir_all(stage.join("tool@1.0.0")).unwrap();
+        std::fs::write(
+            stage.join("tool@1.0.0").join("hpm.toml"),
+            "[package]\npath = \"studio/tool\"\nname = \"t\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+    }
+    assert!(storage.list_installed().unwrap().is_empty());
+
+    let (removed, _) = storage.sweep_fetch_staging(std::time::Duration::from_secs(3600));
+    assert_eq!(removed, 1);
+    assert!(!gone.exists());
+    assert!(live.exists());
 }

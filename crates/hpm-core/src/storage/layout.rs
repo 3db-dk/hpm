@@ -43,6 +43,29 @@ pub fn download_key(name: &str, version: &str) -> String {
     format!("{}-{}", name.replace('/', "-"), version)
 }
 
+/// Whether the cache or staging entry `entry` belongs to the download with
+/// key `key`: the archive (`<key>`), an extracted or partial copy a fetch
+/// made under its own name (`<key>.<pid>-<seq>`, `<key>.<pid>-<seq>.part`),
+/// or the shared `<key>.part` older hpm versions used. A neighbour whose key
+/// merely starts with `key` (`tool-1.0.01`) does not match.
+pub fn is_download_of(entry: &str, key: &str) -> bool {
+    let Some(rest) = entry.strip_prefix(key) else {
+        return false;
+    };
+    if rest.is_empty() || rest == ".part" {
+        return true;
+    }
+    let Some(private) = rest.strip_prefix('.') else {
+        return false;
+    };
+    let private = private.strip_suffix(".part").unwrap_or(private);
+    let Some((pid, seq)) = private.split_once('-') else {
+        return false;
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    digits(pid) && digits(seq)
+}
+
 /// The roots of one store, derived from a [`StorageConfig`].
 #[derive(Debug, Clone)]
 pub struct StoreLayout {
@@ -152,6 +175,29 @@ mod tests {
             l.staging_dir("acme/tools", "1.0.0"),
             PathBuf::from("/h/fetch/acme-tools-1.0.0")
         );
+    }
+
+    #[test]
+    fn downloads_are_matched_by_key_not_by_prefix() {
+        let key = "studio-tool-1.0.0";
+        for yes in [
+            key,
+            "studio-tool-1.0.0.part",
+            "studio-tool-1.0.0.42-7",
+            "studio-tool-1.0.0.42-7.part",
+        ] {
+            assert!(is_download_of(yes, key), "{yes}");
+        }
+        for no in [
+            "studio-tool-1.0.01",
+            "studio-tool-1.0.0-beta",
+            "studio-tool-1.0.0.x-1",
+            "studio-tool-1.0.0.1-",
+            "studio-tool-2.0.0",
+            "studio-tool-1.0.0.42-7.tmp",
+        ] {
+            assert!(!is_download_of(no, key), "{no}");
+        }
     }
 
     #[test]

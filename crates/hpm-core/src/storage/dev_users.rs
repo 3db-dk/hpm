@@ -557,7 +557,7 @@ fn reclaim_with(
 
 /// The PID that made the staging directory `name`, when `name` is one
 /// (`.stage-<pid>-<seq>`, see `dev_install::stage_dir`).
-fn stage_owner(name: &str) -> Option<u32> {
+pub(super) fn stage_owner(name: &str) -> Option<u32> {
     let rest = name.strip_prefix(".stage-")?;
     let (pid, seq) = rest.split_once('-')?;
     seq.parse::<u64>().ok()?;
