@@ -88,6 +88,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependency; a path dependency's `version` vanished; `{}` parsed). The same
   holds for `[python_dependencies]` tables, which must give `version` and/or
   `extras`. Every installable published TumbleTrove package still parses.
+  **Upgrade note:** the rule applies to every `hpm.toml` hpm reads, including
+  packages from `url = ...` dependencies and copies already in the store. A
+  store copy whose manifest is now refused is skipped (with a warning) when
+  listing installed packages, and reinstalling it names the manifest error;
+  move the copy and its `.files.json` aside (as for a repair) once a fixed
+  version is available.
 - `hpm list --output json`: a path or URL dependency's `spec` no longer
   carries `"optional": false`.
 

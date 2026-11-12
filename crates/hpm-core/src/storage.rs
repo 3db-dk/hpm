@@ -359,6 +359,10 @@ impl StorageManager {
     ) -> Result<InstalledPackage, StorageError> {
         remove_stage(staged);
         info!("{name}@{version} was installed concurrently; keeping that copy");
+        // The kept copy is what this install returns, so a manifest it
+        // cannot read (one written under looser rules, say) is the error;
+        // `parse_installed_package` would only skip it.
+        PackageManifest::from_path(&target_dir.join("hpm.toml"))?;
         self.parse_installed_package(target_dir.to_path_buf())?
             .ok_or_else(|| StorageError::PackageNotFound(format!("{name}@{version}")))
     }

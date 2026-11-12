@@ -2049,3 +2049,34 @@ fn only_slug_at_version_directories_are_packages() {
     listed.sort();
     assert_eq!(listed, ["rig@0.1.0", "tool@1.0.0", "tool@2.0.0"]);
 }
+
+/// A copy already in the store whose `hpm.toml` this hpm refuses (written
+/// under looser rules) is kept, as every committed copy is, and the install
+/// reports the manifest error, naming the file, rather than "not found".
+#[tokio::test]
+async fn reinstalling_over_a_copy_whose_manifest_no_longer_parses_names_the_manifest() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    let source = temp.path().join("reg-source");
+    write_source_package(&source, "creator/bar", "2.0.0", "registry");
+    let installed = storage.install_into_cas(&source).await.unwrap();
+
+    let manifest = installed.install_path.join("hpm.toml");
+    let mut perms = std::fs::metadata(&manifest).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(&manifest, perms).unwrap();
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        format!("{text}\n[dependencies]\n\"creator/x\" = {{ version = \"1\", registy = \"r\" }}\n"),
+    )
+    .unwrap();
+
+    let err = storage.install_into_cas(&source).await.unwrap_err();
+    assert!(
+        matches!(err, StorageError::Manifest(_)),
+        "expected the manifest error, got {err}"
+    );
+    assert!(err.to_string().contains("hpm.toml"), "{err}");
+}
