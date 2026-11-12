@@ -14,7 +14,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// The value of a `[env.<KEY>]` entry in `hpm.toml`.
+/// The value of a `[runtime.<KEY>]` entry (and of a script's `cmd`) in
+/// `hpm.toml`.
 ///
 /// `Flat` is a single string, used directly (with `$HPM_PACKAGE_ROOT`
 /// substituted). `Conditional` is an ordered list of variants — the first
@@ -743,9 +744,6 @@ pub enum ExpressionError {
     HpackageMultipleClauses { req: String, count: usize },
 }
 
-/// Lower a `Conditional` env value into Houdini's `[{ "<expr>": "<val>" }, …]`
-/// shape, applying the supplied substitutions to each branch's `set` string.
-///
 /// Result of lowering a `Conditional` env value for one install context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoweredConditional {
@@ -759,6 +757,9 @@ pub enum LoweredConditional {
     Branches(Vec<HashMap<String, String>>),
 }
 
+/// Lower a `Conditional` env value into Houdini's `[{ "<expr>": "<val>" }, …]`
+/// shape, applying the supplied substitutions to each branch's `set` string.
+///
 /// Variants whose `install_source` axis does not match `is_dev` are
 /// filtered out before lowering, so install-time gates never reach the
 /// Houdini-side expression. The `install_source` axis is also stripped
@@ -773,8 +774,7 @@ pub enum LoweredConditional {
 /// branch AND-ed on — negation by comparison-flipping joined with `or`,
 /// since the expression grammar has no `not`. Houdini also has no boolean
 /// literals (`{"true": v}` silently defines a *variable named `true`*
-/// instead of applying `v` — the old encoding of unconditional branches
-/// was broken), so unconditional branches are handled structurally: a
+/// instead of applying `v`), so unconditional branches are handled structurally: a
 /// leading one collapses the whole value to
 /// [`LoweredConditional::Unconditional`], and a trailing fallback's
 /// expression is just the accumulated negations. Either way, anything

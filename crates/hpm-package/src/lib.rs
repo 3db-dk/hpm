@@ -11,7 +11,7 @@
 //! - **Package Templates**: Standardized package structure generation
 //! - **Dependency Management**: Support for registry, URL, and path dependencies, plus Python dependencies
 //! - **Platform-Aware Packaging**: Native platform declarations for multi-architecture archives
-//! - **Version Constraint Handling**: Full semantic versioning support
+//! - **Versions**: package versions are semver; a bare dependency version is an exact pin
 //!
 //! ## Key Types
 //!
@@ -64,7 +64,7 @@
 //! // Add HPM dependencies
 //! let mut deps = IndexMap::new();
 //! deps.insert(
-//!     "utility-nodes".to_string(),
+//!     "studio/utility-nodes".to_string(),
 //!     DependencySpec::url(
 //!         "https://example.com/packages/utility-nodes/1.0.0/utility-nodes-1.0.0.zip",
 //!         "1.0.0"

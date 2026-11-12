@@ -74,9 +74,8 @@ pub struct PackageManifest {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub python_dependencies: IndexMap<String, PythonDependencySpec>,
     /// `[runtime]` — env-var contributions to the generated Houdini
-    /// `package.json`. Replaces the prior `[env]` + `[dev.env]` pair; the
-    /// dev/registry distinction now lives in the `when.install_source` axis
-    /// on individual conditional variants.
+    /// package file. Dev-only and registry-only values are expressed with
+    /// the `when.install_source` axis on individual conditional variants.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub runtime: IndexMap<String, ManifestEnvEntry>,
     #[serde(default, skip_serializing_if = "PackageScripts::is_empty")]
@@ -124,8 +123,7 @@ impl PackageManifest {
     /// `PackagePath::new("creator/slug").unwrap()` for static identifiers
     /// in tests, or propagate the parse error in production code.
     ///
-    /// Pass an empty `Vec` for `authors` when unknown — empty vec encodes
-    /// "no authors declared" exactly like the prior `None`.
+    /// Pass an empty `Vec` for `authors` when no authors are declared.
     pub fn new(
         path: PackagePath,
         name: String,
@@ -548,9 +546,8 @@ impl PackageManifest {
     }
 
     fn is_valid_semver(&self, version: &str) -> bool {
-        // Delegate to the semver crate so we accept pre-release and build
-        // metadata (`1.0.0-alpha.1`, `1.0.0+build.5`) — the prior hand-
-        // rolled `major.minor.patch` u32 split rejected both.
+        // Full semver: pre-release and build metadata (`1.0.0-alpha.1`,
+        // `1.0.0+build.5`) are valid.
         semver::Version::parse(version).is_ok()
     }
 }

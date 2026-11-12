@@ -3,12 +3,8 @@
 //!
 //! Every crate above `hpm-package` raises IO failures that share the same
 //! three coordinates ("we tried to *read* this *path* and got *this io
-//! error*"). Each crate used to spell that out via its own custom variant —
-//! `StorageError::DirectoryRead`, `ProjectError::ManifestIo`,
-//! `DiscoveryError::DirectoryRead`, etc. — sometimes with the path, sometimes
-//! with a stringified message, never consistently. `IoOp` consolidates the
-//! shape so every variant carries the path + source error + verb, and Display
-//! reads the same everywhere.
+//! error*"). `IoOp` carries all three, so every IO error names its path and
+//! verb and its Display reads the same everywhere.
 
 use std::fmt;
 use std::path::PathBuf;

@@ -18,8 +18,9 @@
 //!   `update`, `search`, and `pack`; every other command rejects it with an
 //!   error instead of silently ignoring it.
 //!
-//! Exit codes: 0 success, 1 user error (config/package/network/io),
-//! 2 internal error, N for a forwarded external command exit code.
+//! Exit codes: 0 success, 1 user error (config/package/network), 2 a
+//! command-line usage error (from clap), N for a forwarded external
+//! command exit code.
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 use std::process::ExitCode;

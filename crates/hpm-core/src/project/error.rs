@@ -12,8 +12,6 @@ use std::path::PathBuf;
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
     /// IO failure with the operation verb, path, and source `io::Error`.
-    /// Subsumes the prior DirectoryCreation / DirectoryRead / ManifestIo
-    /// variants — all three carried the same shape (op + path + io::Error).
     #[error(transparent)]
     Io(#[from] IoOp),
 
@@ -108,9 +106,6 @@ pub enum ProjectError {
     /// points the user at `hpm install`.
     #[error("{0}")]
     PackageEnvNotReady(String),
-    // (`[compat].houdini` is now a `HoudiniRange` newtype that validates
-    // at deserialize time, so the prior `InvalidHoudiniCompat` variant is
-    // unreachable and has been removed.)
 }
 
 // Hand-written so call sites can `?` from the unboxed source error types.
@@ -134,10 +129,8 @@ mod tests {
     use std::io;
     use std::path::Path;
 
-    /// IoOp → ProjectError via the derived `#[from]` impl. This is the
-    /// hot path that replaced the prior `DirectoryCreation` / `DirectoryRead`
-    /// / `ManifestIo` variants — every `?` on a filesystem call in the
-    /// project layer now flows through here.
+    /// IoOp → ProjectError via the derived `#[from]` impl: every `?` on a
+    /// filesystem call in the project layer flows through here.
     #[test]
     fn from_io_op_lifts_to_io_variant() {
         let inner = IoOp::wrap(

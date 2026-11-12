@@ -8,8 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Staging configuration: how the install image is derived from the workspace.
 ///
 /// `[stage]` is the single source of truth for what ends up in a published
-/// archive and in a path-dependency install image. It replaces the prior
-/// `[native]`-only filter model with a more general "where does each file
+/// archive and in a path-dependency install image: a "where does each file
 /// go" model — useful for HDK plugins whose `.dylib` lives at
 /// `build/Release/foo.dylib` in the workspace but should be installed at
 /// `dso/macos-aarch64/foo.dylib`.
