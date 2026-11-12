@@ -153,3 +153,22 @@ proptest! {
         prop_assert_eq!(written_keys(&value), set_fields(&overlay));
     }
 }
+
+/// A config file as `Config::save` writes it (TumbleTrove Desktop has saved
+/// users' `~/.hpm/config.toml` this way: every field, resolved), captured
+/// from hpm 0.37. It must keep loading, and loading it must reproduce the
+/// values it holds.
+#[test]
+fn a_config_written_by_config_save_still_loads() {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/config_saved_by_0_37.toml");
+    let config = hpm_config::Config::load_from_path(&path).unwrap();
+    assert_eq!(config.storage.home_dir, PathBuf::from("/Users/artist/.hpm"));
+    assert_eq!(
+        config.storage.cache_dir,
+        PathBuf::from("/Users/artist/.hpm/cache")
+    );
+    assert_eq!(config.registries.len(), 1);
+    assert_eq!(config.registries[0].name, "tumbletrove");
+    assert_eq!(config.projects.max_search_depth, 3);
+}
