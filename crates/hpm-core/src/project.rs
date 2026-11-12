@@ -295,7 +295,6 @@ impl ProjectManager {
             .load_project_manifest()?
             .and_then(|m| m.compat.houdini_min());
         let collected = collect_python_dependencies(project_houdini_version.as_deref(), &manifests)
-            .await
             .map_err(|e| ProjectError::PythonResolution(e.into()))?;
 
         if collected.dependencies.is_empty() {
@@ -416,7 +415,6 @@ impl ProjectManager {
             .await
             .map_err(|e| ProjectError::PythonResolution(e.into()))?;
         let collected = collect_python_dependencies(project_houdini_version.as_deref(), &manifests)
-            .await
             .map_err(|e| ProjectError::PythonResolution(e.into()))?;
         let resolved = resolve_combined(&collected, extra_requirements)
             .await

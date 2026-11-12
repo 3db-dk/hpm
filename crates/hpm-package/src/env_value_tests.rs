@@ -1,5 +1,18 @@
 use super::*;
 
+// The derivations as functions of the range text, for terse tables.
+fn compile_houdini_req(req: &str) -> Result<String, ExpressionError> {
+    HoudiniRange::parse(req).map(|r| r.to_enable_expression())
+}
+
+fn houdini_req_has_upper_bound(req: &str) -> bool {
+    HoudiniRange::parse(req).is_ok_and(|r| r.has_upper_bound())
+}
+
+fn houdini_req_lower_bound(req: &str) -> Option<String> {
+    HoudiniRange::parse(req).ok()?.lower_bound()
+}
+
 #[test]
 fn caret_major_only_expands_to_major_range() {
     let s = compile_houdini_req("^21").unwrap();
@@ -465,17 +478,19 @@ fn matches_version_handles_plain_major_ranges() {
 /// warning rather than repaired.
 #[test]
 fn hpackage_operands_follow_the_upstream_version_rule() {
+    let hpackage = |req: &str| {
+        HoudiniRange::parse(req)
+            .unwrap()
+            .to_enable_expression_hpackage()
+    };
     // One segment: padded, since hpackage rejects a one-part version.
-    assert_eq!(normalize_hpackage_houdini_req(">=21").unwrap(), ">=21.0");
+    assert_eq!(hpackage(">=21").unwrap(), "houdini_version >= '21.0'");
     // Two segments: already the accepted shape.
-    assert_eq!(normalize_hpackage_houdini_req(">=21.0").unwrap(), ">=21.0");
+    assert_eq!(hpackage(">=21.0").unwrap(), "houdini_version >= '21.0'");
     // Three segments with a zero build: trims back to the same range.
-    assert_eq!(
-        normalize_hpackage_houdini_req(">=21.0.0").unwrap(),
-        ">=21.0"
-    );
+    assert_eq!(hpackage(">=21.0.0").unwrap(), "houdini_version >= '21.0'");
     // Three segments with a real build: no representation, so no rewrite.
-    let err = normalize_hpackage_houdini_req(">=20.5.445").unwrap_err();
+    let err = hpackage(">=20.5.445").unwrap_err();
     assert!(
         matches!(&err, ExpressionError::HpackageOperand { operand, .. } if operand == "20.5.445"),
         "expected the operand to be named, got {err}"

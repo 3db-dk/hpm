@@ -103,7 +103,6 @@ async fn test_end_to_end_python_workflow() {
     // Step 1: Collect Python dependencies. `None` exercises the legacy
     // per-package houdini→python mapping path.
     let collected_deps = collection::collect_python_dependencies(None, &manifests)
-        .await
         .expect("Failed to collect Python dependencies");
 
     // Verify dependency collection
@@ -315,7 +314,6 @@ async fn test_houdini_python_version_mapping_edge_cases() {
     // Known-but-unmapped future major → error (so we don't silently pick an
     // outdated Python ABI when a new Houdini ships).
     let err = collection::collect_python_dependencies(None, &[make_manifest("23.0")])
-        .await
         .expect_err("expected error for unmapped Houdini major");
     assert!(
         err.to_string().contains("No Python version mapping"),
@@ -326,14 +324,12 @@ async fn test_houdini_python_version_mapping_edge_cases() {
     // unparseable or unmapped project Houdini must error before we touch
     // any package, not after.
     let err = collection::collect_python_dependencies(Some("invalid"), &[])
-        .await
         .expect_err("expected error for unparseable project Houdini version");
     assert!(
         err.to_string().contains("Could not parse Houdini version"),
         "unexpected error message: {err}"
     );
     let err = collection::collect_python_dependencies(Some("23.0"), &[])
-        .await
         .expect_err("expected error for unmapped project Houdini major");
     assert!(
         err.to_string().contains("No Python version mapping"),

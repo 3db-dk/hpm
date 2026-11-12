@@ -394,7 +394,6 @@ async fn resolve_global_python(
         Some(&version.as_dir_component()),
         std::slice::from_ref(&installed.manifest),
     )
-    .await
     .map_err(to_project)?;
 
     if collected.dependencies.is_empty() {

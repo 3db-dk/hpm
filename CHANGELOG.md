@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `[compat].houdini` range semver cannot read (`==21`, or an operand with
+  a leading zero such as `22.00`) no longer counts as matching every
+  Houdini. `hpm global add` and dependency solving now judge a range the way
+  Houdini evaluates the package's `enable` (checked against Houdini 22.0's
+  own evaluation: a version is compared over the operand's components, so
+  `21.0.445` equals `21` and is below `21.1`). The emitted `enable` strings
+  are unchanged.
+- A range written with a single `=` (`=21`) has a lower bound again, so the
+  project's Python version is chosen from it instead of skipped.
+
 - Installing one version from two places at once (hpm and TumbleTrove
   Desktop, or two syncs) no longer corrupts the store copy. Each fetch now
   extracts into a directory of its own, and a store copy is copied into a
@@ -74,6 +84,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking (hpm-core API):** `ProjectManager::generate_houdini_manifests`.
   It emitted without the package's venv; `sync_dependencies` writes the
   manifests.
+- **Breaking (hpm-package API):** the free functions in `env_value`
+  (`compile_houdini_req`, `houdini_req_lower_bound`,
+  `houdini_req_has_upper_bound`, `normalize_hpackage_houdini_req`). Use the
+  methods of `HoudiniRange`. **Breaking (hpm-core API):**
+  `python::collect_python_dependencies` is no longer `async`; a Houdini
+  version with a non-numeric minor (`21.x`) is now an error.
 - **Breaking (hpm-core / hpm-config API):** `archive_fetcher::cas_install_dir`,
   `archive_fetcher::fetcher_install_dir`, `StorageConfig::package_dir` and
   `FetchManifestError::NoVersionsAvailable`. Use `storage::StoreLayout`

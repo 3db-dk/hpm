@@ -205,42 +205,42 @@ expression: out
 "=21"
   enable: houdini_version == '21'
   hpackage: error: houdini version requirement `=21` leaves SideFX's hpackage r
-  lower_bound: None
+  lower_bound: Some("21")
   has_upper_bound: true
 "=21.0"
   enable: houdini_version == '21.0'
   hpackage: error: houdini version requirement `=21.0` leaves SideFX's hpackage
-  lower_bound: None
+  lower_bound: Some("21.0")
   has_upper_bound: true
 "=20.5"
   enable: houdini_version == '20.5'
   hpackage: error: houdini version requirement `=20.5` leaves SideFX's hpackage
-  lower_bound: None
+  lower_bound: Some("20.5")
   has_upper_bound: true
 "=20.5.445"
   enable: houdini_version == '20.5.445'
   hpackage: error: houdini version requirement `=20.5.445` cannot be published 
-  lower_bound: None
+  lower_bound: Some("20.5.445")
   has_upper_bound: true
 "=21.0.0"
   enable: houdini_version == '21.0.0'
   hpackage: error: houdini version requirement `=21.0.0` leaves SideFX's hpacka
-  lower_bound: None
+  lower_bound: Some("21.0.0")
   has_upper_bound: true
 "=0.5"
   enable: houdini_version == '0.5'
   hpackage: error: houdini version requirement `=0.5` leaves SideFX's hpackage 
-  lower_bound: None
+  lower_bound: Some("0.5")
   has_upper_bound: true
 "=0.0.3"
   enable: houdini_version == '0.0.3'
   hpackage: error: houdini version requirement `=0.0.3` cannot be published to 
-  lower_bound: None
+  lower_bound: Some("0.0.3")
   has_upper_bound: true
 "=22.00"
   enable: houdini_version == '22.00'
   hpackage: error: houdini version requirement `=22.00` leaves SideFX's hpackag
-  lower_bound: None
+  lower_bound: Some("22.00")
   has_upper_bound: true
 "^21"
   enable: houdini_version >= '21' and houdini_version < '22'
@@ -280,7 +280,7 @@ expression: out
 "^22.00"
   enable: houdini_version >= '22.0' and houdini_version < '23'
   hpackage: error: houdini version requirement `^22.00` compiles to 2 clauses, 
-  lower_bound: Some("22.00")
+  lower_bound: Some("22.0")
   has_upper_bound: true
 "~21"
   enable: houdini_version >= '21' and houdini_version < '22'
@@ -320,7 +320,7 @@ expression: out
 "~22.00"
   enable: houdini_version >= '22.0' and houdini_version < '22.1'
   hpackage: error: houdini version requirement `~22.00` compiles to 2 clauses, 
-  lower_bound: Some("22.00")
+  lower_bound: Some("22.0")
   has_upper_bound: true
 "21"
   enable: houdini_version >= '21' and houdini_version < '22'
@@ -360,7 +360,7 @@ expression: out
 "22.00"
   enable: houdini_version >= '22.0' and houdini_version < '23'
   hpackage: error: houdini version requirement `22.00` compiles to 2 clauses, a
-  lower_bound: Some("22.00")
+  lower_bound: Some("22.0")
   has_upper_bound: true
 ">=20.5, <22"
   enable: (houdini_version >= '20.5' and houdini_version < '22')
@@ -390,7 +390,7 @@ expression: out
 "=21, <21.5"
   enable: (houdini_version == '21' and houdini_version < '21.5')
   hpackage: error: houdini version requirement `=21, <21.5` compiles to 2 claus
-  lower_bound: None
+  lower_bound: Some("21")
   has_upper_bound: true
 " >= 21 ,  < 22 "
   enable: (houdini_version >= '21' and houdini_version < '22')
