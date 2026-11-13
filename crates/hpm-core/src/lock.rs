@@ -733,4 +733,92 @@ version = ">=1.20"
             prop_assert!(dep.source.is_url() != dep.source.is_path());
         }
     }
+
+    /// One change to an installed tree after its digest was locked.
+    #[derive(Debug, Clone)]
+    enum Tamper {
+        /// Flip one bit of a file's contents.
+        FlipBit { file: usize, byte: usize, bit: u8 },
+        /// Append bytes to a file.
+        Append { file: usize, extra: Vec<u8> },
+        /// Add a file next to the others.
+        AddFile { name: String, contents: Vec<u8> },
+        /// Remove a file.
+        Remove { file: usize },
+    }
+
+    fn tamper_strategy() -> impl Strategy<Value = Tamper> {
+        prop_oneof![
+            (any::<usize>(), any::<usize>(), 0u8..8)
+                .prop_map(|(file, byte, bit)| Tamper::FlipBit { file, byte, bit }),
+            (any::<usize>(), prop::collection::vec(any::<u8>(), 1..4))
+                .prop_map(|(file, extra)| Tamper::Append { file, extra }),
+            ("z[a-z]{0,3}", prop::collection::vec(any::<u8>(), 0..4))
+                .prop_map(|(name, contents)| Tamper::AddFile { name, contents }),
+            any::<usize>().prop_map(|file| Tamper::Remove { file }),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Once a lock records an installed tree's digest, in either format,
+        /// the untouched tree verifies and any change to it (a flipped bit,
+        /// appended bytes, an added or a removed file) is a ChecksumMismatch.
+        #[test]
+        fn any_change_to_a_locked_tree_fails_verification(
+            files in prop::collection::btree_map("[a-y]{1,4}", prop::collection::vec(any::<u8>(), 1..6), 1..4),
+            tamper in tamper_strategy(),
+            legacy in any::<bool>(),
+        ) {
+            let temp = TempDir::new().unwrap();
+            let dir = cas_dir(temp.path(), "creator/foo", "1.0.0").unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+            for (name, contents) in &files {
+                std::fs::write(dir.join(name), contents).unwrap();
+            }
+            let checksum = if legacy {
+                crate::tree_hash::hash_tree_as(&dir, "legacy").unwrap()
+            } else {
+                crate::tree_hash::hash_tree(&dir).unwrap()
+            };
+            let mut lock = LockFile::new("root/pkg".to_string(), "1.0.0".to_string());
+            lock.add_dependency(
+                "creator/foo".to_string(),
+                LockedDependency {
+                    version: "1.0.0".to_string(),
+                    checksum: Some(checksum),
+                    source: LockedSource::url("https://example.com/foo.zip", "1.0.0"),
+                },
+            );
+            prop_assert!(lock.verify_checksums(temp.path()).is_ok());
+
+            let names: Vec<&String> = files.keys().collect();
+            let pick = |i: usize| dir.join(names[i % names.len()]);
+            match &tamper {
+                Tamper::FlipBit { file, byte, bit } => {
+                    let path = pick(*file);
+                    let mut bytes = std::fs::read(&path).unwrap();
+                    let at = byte % bytes.len();
+                    bytes[at] ^= 1 << bit;
+                    std::fs::write(&path, bytes).unwrap();
+                }
+                Tamper::Append { file, extra } => {
+                    let path = pick(*file);
+                    let mut bytes = std::fs::read(&path).unwrap();
+                    bytes.extend(extra);
+                    std::fs::write(&path, bytes).unwrap();
+                }
+                Tamper::AddFile { name, contents } => {
+                    std::fs::write(dir.join(name), contents).unwrap();
+                }
+                Tamper::Remove { file } => std::fs::remove_file(pick(*file)).unwrap(),
+            }
+            let result = lock.verify_checksums(temp.path());
+            prop_assert!(
+                matches!(result, Err(LockError::ChecksumMismatch { .. })),
+                "{:?} (legacy {}) verified as {:?}", tamper, legacy, result
+            );
+        }
+    }
 }
