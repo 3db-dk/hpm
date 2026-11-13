@@ -333,6 +333,10 @@ certifi==2022.12.7";
             ("numpy", "@ https://evil.invalid/n.tar.gz", vec![]),
             ("x @ https://evil.invalid/x.tar.gz", "*", vec![]),
             ("requests", ">=2", vec!["socks]\n-e x".to_string()]),
+            // A space-separated token starting with `-` is a per-requirement
+            // option to pip and uv.
+            ("numpy", ">=1 --config-settings=editable=x", vec![]),
+            ("numpy", ">=1,-e", vec![]),
         ] {
             let mut deps = PythonDependencies::new();
             deps.add_dependency(

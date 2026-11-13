@@ -71,7 +71,15 @@ pub fn validate_python_version(spec: &str) -> Result<(), String> {
                 b' ' | b'.' | b',' | b'*' | b'+' | b'!' | b'<' | b'>' | b'=' | b'~' | b'^' | b'-'
             )
     });
-    if !ok || spec.trim_start().starts_with('-') {
+    // A `-` belongs inside a version (`1.0-1`); after a space, comma or
+    // operator it would start a token pip and uv read as an option
+    // (`>=1 --config-settings=...`).
+    let option_dash = spec.starts_with('-')
+        || spec
+            .as_bytes()
+            .windows(2)
+            .any(|pair| matches!(pair, [before, b'-'] if !before.is_ascii_alphanumeric()));
+    if !ok || option_dash {
         return Err(format!(
             "'{}' is not a version constraint (letters, digits, spaces and . , * + ! < > = ~ ^ -)",
             spec.escape_debug()
@@ -289,5 +297,128 @@ mod tests {
                 extras: vec!["socks".into()]
             }
         );
+    }
+
+    mod properties {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// The line uv reads for an accepted dependency, rendered the way the
+        /// resolver renders it.
+        fn requirement_line(name: &str, spec: &PythonDependencySpec) -> String {
+            let version = match spec.version_req() {
+                "*" | "" => "",
+                v => v,
+            };
+            if spec.extras().is_empty() {
+                format!("{name}{version}")
+            } else {
+                format!("{name}[{}]{version}", spec.extras().join(","))
+            }
+        }
+
+        fn hostile_text() -> impl Strategy<Value = String> {
+            let alphabet = prop::sample::select(vec![
+                'a', 'e', 'Z', '1', '.', '_', '-', ' ', '\t', '=', '>', '<', '~', '^', '*', ',',
+                '!', '+', ';', '@', '#', '/', ':', '[', ']', '\n', '\r', '"', '\\',
+            ]);
+            // Mostly characters a constraint may hold, so accepted values
+            // are common and the rest probe the edges.
+            let allowed = prop::sample::select(vec![
+                'a', 'e', '1', '0', '.', '-', ' ', '=', '>', '<', '~', '^', '*', ',', '!', '+',
+            ]);
+            prop_oneof![
+                prop::collection::vec(alphabet, 0..14),
+                prop::collection::vec(allowed, 0..14),
+            ]
+            .prop_map(|c| c.into_iter().collect())
+        }
+
+        fn hostile_name() -> impl Strategy<Value = String> {
+            prop_oneof!["[a-z0-9]([a-z0-9._-]{0,6}[a-z0-9])?", hostile_text(),]
+        }
+
+        fn hostile_spec() -> impl Strategy<Value = PythonDependencySpec> {
+            prop_oneof![
+                hostile_text().prop_map(PythonDependencySpec::Simple),
+                (
+                    prop::option::of(hostile_text()),
+                    any::<bool>(),
+                    prop::collection::vec(hostile_name(), 0..3)
+                )
+                    .prop_map(|(version, optional, extras)| {
+                        PythonDependencySpec::Detailed {
+                            version,
+                            optional,
+                            extras,
+                        }
+                    }),
+            ]
+        }
+
+        /// PEP 440 specifiers as projects write them.
+        fn pep440_spec() -> impl Strategy<Value = String> {
+            let version = prop_oneof![
+                "[0-9]{1,3}(\\.[0-9]{1,3}){0,3}",
+                "[0-9]{1,2}\\.[0-9]{1,2}(a|b|rc|\\.post|\\.dev)[0-9]{1,2}",
+                "[0-9]{1,2}\\.[0-9]{1,2}-[0-9]",
+                "[0-9]\\![0-9]\\.[0-9]",
+                "[0-9]\\.[0-9]\\+[a-z0-9]{1,4}(\\.[0-9])?",
+                "[0-9]\\.[0-9]\\.\\*",
+            ];
+            let clause = (
+                prop::sample::select(vec![
+                    "==", "!=", ">=", "<=", ">", "<", "~=", "===", "^", "~", "",
+                ]),
+                version,
+            )
+                .prop_map(|(op, v)| format!("{op}{v}"));
+            prop_oneof![
+                Just("*".to_string()),
+                (
+                    prop::collection::vec(clause, 1..4),
+                    prop::sample::select(vec![",", ", ", " , "])
+                )
+                    .prop_map(|(clauses, sep)| clauses.join(sep)),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1024))]
+
+            /// An accepted dependency renders to exactly one requirement line
+            /// that is a name, optional extras and a version constraint: no
+            /// line break, marker, URL, comment, quote, or pip option.
+            #[test]
+            fn accepted_dependencies_render_one_plain_requirement(
+                name in hostile_name(),
+                spec in hostile_spec(),
+            ) {
+                if validate_python_dependency(&name, &spec).is_ok() {
+                    let line = requirement_line(&name, &spec);
+                    prop_assert!(
+                        !line.chars().any(|c| c.is_control() || ";@#/:\"\\'".contains(c)),
+                        "{:?}", line
+                    );
+                    prop_assert!(
+                        line.split_whitespace().all(|token| !token.starts_with('-')),
+                        "{:?} carries an option", line
+                    );
+                    prop_assert_eq!(line.matches('[').count(), usize::from(!spec.extras().is_empty()));
+                }
+            }
+
+            /// Real PEP 440 constraints, names and extras are accepted.
+            #[test]
+            fn pep440_constraints_are_accepted(
+                name in "[A-Za-z0-9]([A-Za-z0-9._-]{0,10}[A-Za-z0-9])?",
+                version in pep440_spec(),
+                extras in prop::collection::vec("[a-z][a-z0-9_-]{0,6}[a-z0-9]", 0..3),
+            ) {
+                let spec = PythonDependencySpec::Detailed { version: Some(version), optional: false, extras };
+                let result = validate_python_dependency(&name, &spec);
+                prop_assert!(result.is_ok(), "{:?} {:?}: {:?}", name, spec, result);
+            }
+        }
     }
 }

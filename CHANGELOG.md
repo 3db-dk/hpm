@@ -80,7 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and extras must be PEP 508 names and versions only version-specifier
   characters. A version holding a line break could add pip options such as
   `--index-url` to the requirements file shared by every installed package,
-  or a direct URL to build from.
+  or a direct URL to build from. A `-` that does not follow a letter or
+  digit is refused too, since `>=1 --config-settings=...` would pass a
+  per-requirement option.
 
 - The bundled uv moves from 0.5.9 to 0.13.6, past the advisories against
   0.5.9 (wheel entry points and RECORD files writing or deleting outside the
