@@ -1913,3 +1913,25 @@ fn url_dependency_versions_load() {
         toml::from_str::<PackageManifest>(&toml_str).unwrap_or_else(|e| panic!("{version}: {e}"));
     }
 }
+
+/// A URL dependency's `version` is a version, not a path: one that is not
+/// semver fails the manifest load.
+#[test]
+fn non_semver_url_dependency_versions_fail_the_load() {
+    for version in [
+        "1/../../x",
+        "1\\\\..\\\\x",
+        "C:x",
+        "1.0.0/x",
+        "latest",
+        "../1.0.0",
+    ] {
+        let toml_str = format!(
+            "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"acme/tools\" = {{ url = \"https://example.invalid/t.zip\", version = \"{version}\" }}\n"
+        );
+        assert!(
+            toml::from_str::<PackageManifest>(&toml_str).is_err(),
+            "loaded version {version:?}"
+        );
+    }
+}

@@ -74,7 +74,7 @@ pub async fn fetch_manifest(
     if storage.package_exists(name, &resolved_version) {
         debug!("fetch_manifest: CAS hit for {}@{}", name, resolved_version);
         let manifest_path = storage
-            .get_package_path(name, &resolved_version)
+            .get_package_path(name, &resolved_version)?
             .join("hpm.toml");
         return Ok(PackageManifest::from_path(&manifest_path)?);
     }
@@ -122,7 +122,7 @@ mod tests {
     }
 
     fn write_fake_package(storage: &StorageManager, name: &str, version: &str, manifest: &str) {
-        let dir = storage.get_package_path(name, version);
+        let dir = storage.get_package_path(name, version).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("hpm.toml"), manifest).unwrap();
     }

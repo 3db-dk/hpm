@@ -82,15 +82,16 @@ impl StorageManager {
 
     /// Whether the store holds `name@version`. `name` is a dependency key
     /// (`creator/slug`) or a bare slug; the store keys by slug.
+    /// A name or version that cannot name a store directory is never in it.
     pub fn package_exists(&self, name: &str, version: &str) -> bool {
         self.get_package_path(name, version)
-            .join("hpm.toml")
-            .exists()
+            .is_ok_and(|dir| dir.join("hpm.toml").exists())
     }
 
     /// The store directory for `name@version` (see [`StoreLayout::cas_dir`]).
-    pub fn get_package_path(&self, name: &str, version: &str) -> PathBuf {
-        self.layout().cas_dir(name, version)
+    /// A name or version that cannot name one is an error, never a path.
+    pub fn get_package_path(&self, name: &str, version: &str) -> Result<PathBuf, StorageError> {
+        Ok(self.layout().cas_dir(name, version)?)
     }
 
     /// Sweep every installed package for programs that lost their executable
@@ -238,7 +239,10 @@ impl StorageManager {
     /// it aside is the caller's decision, and an install never replaces a
     /// committed copy.
     pub fn evict_download(&self, name: &str, version: &str) -> usize {
-        let key = layout::download_key(name, version);
+        // A name or version that cannot name a download has none to evict.
+        let Ok(key) = layout::download_key(name, version) else {
+            return 0;
+        };
         let layout = self.layout();
         let mut dirs = self.fetch_staging_dirs();
         dirs.push(layout.cache_dir().to_path_buf());
@@ -527,11 +531,11 @@ impl StorageManager {
         // Dev styles share the `_dev/<slug>@<version>` container. A copy lands
         // at a content-addressed `<container>/<hash>` subdirectory; a link's
         // entry *is* the container path.
-        let dev_container = self.layout().dev_container(name, version);
+        let dev_container = self.layout().dev_container(name, version)?;
 
         match style {
             InstallStyle::CasCopy => {
-                let target_dir = self.get_package_path(name, version);
+                let target_dir = self.get_package_path(name, version)?;
                 // Record what is being installed from the extracted archive
                 // itself, before the copy, so a copy cut short shows up as
                 // damage rather than as a smaller healthy package.
@@ -807,7 +811,7 @@ impl StorageManager {
     }
 
     pub async fn remove_package(&self, name: &str, version: &str) -> Result<(), StorageError> {
-        let package_dir = self.get_package_path(name, version);
+        let package_dir = self.get_package_path(name, version)?;
 
         // `symlink_metadata` rather than `exists()` because `exists()` follows
         // links — a junction pointing at a missing target would falsely report

@@ -45,8 +45,7 @@ pub struct PackageSource {
 
 impl PackageSource {
     /// Create a new package source. Validates that `url` carries a `http://`
-    /// or `https://` scheme and that `version` is non-empty and not bracketed
-    /// by stray `.` characters.
+    /// or `https://` scheme and that `version` is a semantic version.
     pub fn url(
         url: impl Into<String>,
         version: impl Into<String>,
@@ -67,9 +66,9 @@ impl PackageSource {
             ));
         }
 
-        if version.starts_with('.') || version.ends_with('.') {
+        if semver::Version::parse(&version).is_err() {
             return Err(PackageSourceError::InvalidVersion(format!(
-                "Version has invalid format: {}",
+                "Version must be a semantic version: {}",
                 version
             )));
         }

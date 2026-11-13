@@ -248,7 +248,7 @@ async fn remove_package_unlinks_symlink_entries() {
     // Manually plant a symlink/junction at the registry CAS path that
     // `remove_package` resolves to. `get_package_path(name, version)` uses the
     // bare-slug layout, so the link lives at `<packages_dir>/<slug>@<v>/`.
-    let cas_path = storage_manager.get_package_path("foo", "1.0.0");
+    let cas_path = storage_manager.get_package_path("foo", "1.0.0").unwrap();
     std::fs::create_dir_all(cas_path.parent().unwrap()).unwrap();
     create_dev_link(&external, &cas_path).unwrap();
     assert!(cas_path.join("MARKER").exists());
@@ -1645,17 +1645,18 @@ mod store_layout {
             .unwrap();
             let installed = rt.block_on(storage.install_into_cas(&source)).unwrap();
 
-            prop_assert_eq!(&storage.get_package_path(&slug, &version), &installed.install_path);
+            prop_assert_eq!(&storage.get_package_path(&slug, &version).unwrap(), &installed.install_path);
             prop_assert!(storage.package_exists(&slug, &version));
             let scoped = format!("{creator}/{slug}");
-            prop_assert_eq!(&storage.get_package_path(&scoped, &version), &installed.install_path);
+            prop_assert_eq!(&storage.get_package_path(&scoped, &version).unwrap(), &installed.install_path);
             prop_assert!(storage.package_exists(&scoped, &version));
             prop_assert_eq!(
                 crate::storage::layout::cas_dir(
                     &storage.config.packages_dir,
                     &format!("{creator}/{slug}"),
                     &version
-                ),
+                )
+                .unwrap(),
                 installed.install_path.clone()
             );
             let listed: Vec<_> = storage

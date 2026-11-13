@@ -181,6 +181,11 @@ impl DependencyTable {
                 return refuse("link", "url");
             }
             let version = self.version.ok_or("a url dependency needs a `version`")?;
+            // The version names the download's cache and store directories,
+            // so it must be one: a semantic version, nothing path-shaped.
+            semver::Version::parse(&version).map_err(|_| {
+                format!("a url dependency's `version` must be a semantic version, got '{version}'")
+            })?;
             return Ok(DependencySpec::Url {
                 url,
                 version,

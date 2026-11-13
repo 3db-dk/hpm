@@ -280,6 +280,9 @@ impl RegistrySet {
                 // `highest_matching`) must not see 1.9.2 twice because it
                 // shipped for two platforms.
                 Ok(versions) if !versions.is_empty() => {
+                    for entry in &versions {
+                        vet_entry(name, None, entry)?;
+                    }
                     return Ok(dedupe_builds_by_version(
                         versions,
                         hpm_package::Platform::current(),
@@ -314,7 +317,10 @@ impl RegistrySet {
     ) -> Result<RegistryEntry, RegistryError> {
         for registry in self.selected(registry)? {
             match registry.get_version(name, version).await {
-                Ok(entry) => return Ok(entry),
+                Ok(entry) => {
+                    vet_entry(name, Some(version), &entry)?;
+                    return Ok(entry);
+                }
                 Err(RegistryError::PackageNotFound { .. })
                 | Err(RegistryError::VersionNotFound { .. }) => continue,
                 Err(e) => return Err(e),
@@ -375,6 +381,38 @@ impl RegistrySet {
                 version: req.to_string(),
             })
     }
+}
+
+/// Check a registry's answer against the question. A registry is run by
+/// someone else, and an entry's `name` and `vers` go on to name store,
+/// cache and staging paths and the lockfile: an entry must name the package
+/// that was asked for (ASCII case aside), carry a semantic version, and,
+/// for an exact lookup, be that version. Anything else is refused rather
+/// than skipped, since a registry answering inconsistently cannot be
+/// trusted for the rest of its answer either.
+fn vet_entry(
+    name: &str,
+    version: Option<&str>,
+    entry: &RegistryEntry,
+) -> Result<(), RegistryError> {
+    let refuse = |what: &str| {
+        Err(RegistryError::ParseError(format!(
+            "Registry answered a lookup of '{name}' with an entry for '{}@{}' ({what})",
+            entry.name, entry.version
+        )))
+    };
+    if !entry.name.eq_ignore_ascii_case(name) {
+        return refuse("a different package");
+    }
+    let Ok(got) = semver::Version::parse(&entry.version) else {
+        return refuse("not a semantic version");
+    };
+    if let Some(wanted) = version
+        && semver::Version::parse(wanted.trim()).ok() != Some(got)
+    {
+        return refuse("a different version");
+    }
+    Ok(())
 }
 
 /// Collapse per-platform build rows into one entry per `(name, version)`.
@@ -890,5 +928,87 @@ mod requirement_tests {
                 prop_assert_eq!(admits, model(req, &[(v, false)]).is_some(), "{} admits {}", req, v);
             }
         }
+    }
+}
+
+/// A registry's answers are data from whoever runs it: an entry must name
+/// the package and version that were asked for before hpm builds any path
+/// or download from it.
+#[cfg(test)]
+mod entry_vetting_tests {
+    use super::test_support::entry;
+    use super::*;
+
+    /// Answers every lookup with the same entry, whatever was asked.
+    struct LyingRegistry(RegistryEntry);
+
+    #[async_trait]
+    impl Registry for LyingRegistry {
+        async fn search(&self, _q: &str) -> Result<SearchResults, RegistryError> {
+            Ok(SearchResults {
+                packages: vec![self.0.clone()],
+                total: 1,
+            })
+        }
+        async fn get_versions(&self, _n: &str) -> Result<Vec<RegistryEntry>, RegistryError> {
+            Ok(vec![self.0.clone()])
+        }
+        async fn get_version(&self, _n: &str, _v: &str) -> Result<RegistryEntry, RegistryError> {
+            Ok(self.0.clone())
+        }
+        async fn refresh(&self) -> Result<(), RegistryError> {
+            Ok(())
+        }
+        fn name(&self) -> &str {
+            "lying"
+        }
+    }
+
+    fn set_answering(name: &str, version: &str) -> RegistrySet {
+        let mut set = RegistrySet::new();
+        set.add(Box::new(LyingRegistry(entry(name, version, false))));
+        set
+    }
+
+    #[tokio::test]
+    async fn an_entry_for_another_version_or_package_is_refused() {
+        for (name, version) in [
+            ("acme/tools", "1.0.0/../../../../x"),
+            ("acme/tools", "1\\..\\..\\x"),
+            ("acme/tools", "C:x"),
+            ("acme/tools", "2.0.0"),
+            ("evil/other", "1.0.0"),
+            ("acme/../../x", "1.0.0"),
+        ] {
+            let set = set_answering(name, version);
+            assert!(
+                set.get_version_in("acme/tools", "1.0.0", None)
+                    .await
+                    .is_err(),
+                "exact lookup accepted {name}@{version}"
+            );
+            // 2.0.0 is a fine answer to `*`; only the exact lookup must
+            // refuse it.
+            if version != "2.0.0" {
+                assert!(
+                    set.resolve_in("acme/tools", "*", None).await.is_err(),
+                    "range lookup accepted {name}@{version}"
+                );
+            }
+        }
+    }
+
+    /// A registry that answers with the name in another case is the same
+    /// package; its entry is kept.
+    #[tokio::test]
+    async fn an_entry_differing_only_in_case_is_kept() {
+        let set = set_answering("Acme/Tools", "1.0.0");
+        assert_eq!(
+            set.get_version_in("acme/tools", "1.0.0", None)
+                .await
+                .unwrap()
+                .version,
+            "1.0.0"
+        );
     }
 }

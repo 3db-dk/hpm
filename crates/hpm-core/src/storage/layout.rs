@@ -38,17 +38,60 @@ pub fn parse_coordinate(name: &str) -> Option<(&str, &str)> {
         .filter(|(slug, version)| !slug.is_empty() && !version.is_empty())
 }
 
+/// A package name and version that cannot name a store, cache or staging
+/// path.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("'{name}@{version}' cannot name a package directory: {reason}")]
+pub struct InvalidCoordinate {
+    pub name: String,
+    pub version: String,
+    pub reason: &'static str,
+}
+
+/// Check that `name@version` can name a directory under a store root: the
+/// name is a bare slug or `creator/slug` whose segments hold only ASCII
+/// letters, digits, `.`, `_` and `-` and do not start with `.`, and the
+/// version is a semantic version. Every path function below goes through
+/// here, so a name or version from a manifest, lockfile or registry can only
+/// ever select one plain directory entry under its root.
+fn check_coordinate(name: &str, version: &str) -> Result<(), InvalidCoordinate> {
+    let invalid = |reason| InvalidCoordinate {
+        name: name.to_string(),
+        version: version.to_string(),
+        reason,
+    };
+    let segment_ok = |segment: &str| {
+        !segment.is_empty()
+            && !segment.starts_with('.')
+            && segment
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    let segments: Vec<&str> = name.split('/').collect();
+    if segments.len() > 2 || !segments.iter().all(|s| segment_ok(s)) {
+        return Err(invalid("not a package name"));
+    }
+    semver::Version::parse(version).map_err(|_| invalid("not a semantic version"))?;
+    Ok(())
+}
+
 /// The store directory for `name@version` under `packages_dir`. `name` is a
 /// dependency key (`creator/slug`) or a bare slug.
-pub fn cas_dir(packages_dir: &Path, name: &str, version: &str) -> PathBuf {
-    packages_dir.join(coordinate(name, version))
+pub fn cas_dir(
+    packages_dir: &Path,
+    name: &str,
+    version: &str,
+) -> Result<PathBuf, InvalidCoordinate> {
+    check_coordinate(name, version)?;
+    Ok(packages_dir.join(coordinate(name, version)))
 }
 
 /// The file name a download of `name@version` is kept under, in both the
 /// archive cache and fetch staging: the name with `/` replaced by `-`, then
 /// `-<version>`.
-pub fn download_key(name: &str, version: &str) -> String {
-    format!("{}-{}", name.replace('/', "-"), version)
+pub fn download_key(name: &str, version: &str) -> Result<String, InvalidCoordinate> {
+    check_coordinate(name, version)?;
+    Ok(format!("{}-{}", name.replace('/', "-"), version))
 }
 
 /// Whether the cache or staging entry `entry` belongs to the download with
@@ -108,7 +151,7 @@ impl StoreLayout {
     }
 
     /// The store directory for `name@version`; see [`cas_dir`].
-    pub fn cas_dir(&self, name: &str, version: &str) -> PathBuf {
+    pub fn cas_dir(&self, name: &str, version: &str) -> Result<PathBuf, InvalidCoordinate> {
         cas_dir(&self.packages_dir, name, version)
     }
 
@@ -118,14 +161,15 @@ impl StoreLayout {
     }
 
     /// The dev container for `name@version`.
-    pub fn dev_container(&self, name: &str, version: &str) -> PathBuf {
-        self.dev_root().join(coordinate(name, version))
+    pub fn dev_container(&self, name: &str, version: &str) -> Result<PathBuf, InvalidCoordinate> {
+        check_coordinate(name, version)?;
+        Ok(self.dev_root().join(coordinate(name, version)))
     }
 
     /// The fetch-staging directory a download of `name@version` is
     /// extracted into.
-    pub fn staging_dir(&self, name: &str, version: &str) -> PathBuf {
-        self.fetch_dir.join(download_key(name, version))
+    pub fn staging_dir(&self, name: &str, version: &str) -> Result<PathBuf, InvalidCoordinate> {
+        Ok(self.fetch_dir.join(download_key(name, version)?))
     }
 
     /// Download locations earlier hpm versions used and this one no longer
@@ -162,15 +206,15 @@ mod tests {
     fn scoped_and_bare_names_reach_the_same_store_directory() {
         let l = layout("/h", "/h/packages", "/h/cache");
         assert_eq!(
-            l.cas_dir("acme/tools", "1.0.0"),
+            l.cas_dir("acme/tools", "1.0.0").unwrap(),
             PathBuf::from("/h/packages/tools@1.0.0")
         );
         assert_eq!(
-            l.cas_dir("tools", "1.0.0"),
-            l.cas_dir("acme/tools", "1.0.0")
+            l.cas_dir("tools", "1.0.0").unwrap(),
+            l.cas_dir("acme/tools", "1.0.0").unwrap()
         );
         assert_eq!(
-            l.dev_container("acme/tools", "1.0.0"),
+            l.dev_container("acme/tools", "1.0.0").unwrap(),
             PathBuf::from("/h/packages/_dev/tools@1.0.0")
         );
     }
@@ -208,9 +252,12 @@ mod tests {
     #[test]
     fn downloads_are_keyed_by_the_full_name() {
         let l = layout("/h", "/h/packages", "/h/cache");
-        assert_eq!(download_key("acme/tools", "1.0.0"), "acme-tools-1.0.0");
         assert_eq!(
-            l.staging_dir("acme/tools", "1.0.0"),
+            download_key("acme/tools", "1.0.0").unwrap(),
+            "acme-tools-1.0.0"
+        );
+        assert_eq!(
+            l.staging_dir("acme/tools", "1.0.0").unwrap(),
             PathBuf::from("/h/fetch/acme-tools-1.0.0")
         );
     }
@@ -248,14 +295,47 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                l.cas_dir(name, version),
+                l.cas_dir(name, version).unwrap(),
                 PathBuf::from("/h/packages").join(store)
             );
-            assert_eq!(download_key(name, version), key);
+            assert_eq!(download_key(name, version).unwrap(), key);
             assert_eq!(
-                l.staging_dir(name, version),
+                l.staging_dir(name, version).unwrap(),
                 PathBuf::from("/h/fetch").join(key)
             );
+        }
+    }
+
+    /// A name or version that is not one never names a path outside the
+    /// store, cache or staging root.
+    #[test]
+    fn hostile_names_and_versions_never_leave_their_root() {
+        let l = layout("/h", "/h/packages", "/h/cache");
+        for (name, version) in [
+            ("acme/tools", "1/../../../x"),
+            ("acme/tools", "1\\..\\..\\x"),
+            ("acme/tools", "C:x"),
+            ("acme/..", "1.0.0"),
+            ("../..", "1.0.0"),
+            ("acme/tools", ""),
+            ("acme/tools", "latest"),
+            ("a/b/c", "1.0.0"),
+            ("acme/.hidden", "1.0.0"),
+            ("acme/to:ols", "1.0.0"),
+        ] {
+            assert!(
+                l.cas_dir(name, version).is_err(),
+                "cas_dir {name}@{version}"
+            );
+            assert!(
+                l.staging_dir(name, version).is_err(),
+                "staging {name}@{version}"
+            );
+            assert!(
+                l.dev_container(name, version).is_err(),
+                "dev {name}@{version}"
+            );
+            assert!(download_key(name, version).is_err(), "key {name}@{version}");
         }
     }
 

@@ -124,6 +124,21 @@ impl GitRegistry {
                 name
             )));
         };
+        // Both segments become path components under the clone: only plain
+        // names, never `..`, separators or drive syntax.
+        let plain = |segment: &str| {
+            !segment.is_empty()
+                && !segment.starts_with('.')
+                && segment
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        };
+        if !plain(creator) || !plain(slug) {
+            return Err(RegistryError::ParseError(format!(
+                "Package name '{}' is not a valid scoped path",
+                name
+            )));
+        }
         let relative = PathBuf::from(creator).join(format!("{}.json", slug));
         Ok(self.cache_dir.join(relative))
     }

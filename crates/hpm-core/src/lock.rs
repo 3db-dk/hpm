@@ -145,6 +145,10 @@ impl LockMetadata {
 /// Errors that can occur during lock file operations
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
+    /// A package name or version that cannot name a directory.
+    #[error(transparent)]
+    InvalidCoordinate(#[from] crate::storage::layout::InvalidCoordinate),
+
     /// Read/parse/serialize/write failures on the on-disk lock file —
     /// forwarded transparently from the shared TOML-file error shape.
     #[error(transparent)]
@@ -269,7 +273,7 @@ impl LockFile {
             let Some(expected_checksum) = &dep.checksum else {
                 continue;
             };
-            let package_dir = cas_dir(packages_dir, name, &dep.version);
+            let package_dir = cas_dir(packages_dir, name, &dep.version)?;
             if !package_dir.exists() {
                 return Err(LockError::PackageMissing {
                     package: name.clone(),
@@ -369,7 +373,7 @@ mod tests {
         version: &str,
         content: &[u8],
     ) -> PathBuf {
-        let dir = cas_dir(packages_dir, name, version);
+        let dir = cas_dir(packages_dir, name, version).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("file.txt"), content).unwrap();
         dir

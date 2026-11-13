@@ -37,6 +37,10 @@ fn compute_directory_checksum_sync(dir: &Path) -> Result<String, FetchError> {
 /// Errors that can occur during archive fetching.
 #[derive(Debug, Error)]
 pub enum FetchError {
+    /// A package name or version that cannot name a directory.
+    #[error(transparent)]
+    InvalidCoordinate(#[from] crate::storage::layout::InvalidCoordinate),
+
     #[error("HTTP request failed: {0}")]
     HttpError(#[from] reqwest::Error),
 
@@ -178,7 +182,7 @@ impl ArchiveFetcher {
         package_name: &str,
         expected_sha256: Option<&str>,
     ) -> Result<FetchResult, FetchError> {
-        let cache_key = crate::storage::layout::download_key(package_name, version);
+        let cache_key = crate::storage::layout::download_key(package_name, version)?;
         // Every fetch extracts into a directory of its own: an extraction is
         // never reused (a crash or a refused entry would leave a partial tree
         // that would be installed unverified), and two fetches of one version
@@ -694,7 +698,7 @@ mod tests {
                 .expect("every concurrent install succeeds");
         }
 
-        let store = storage.get_package_path("tool", "1.0.0");
+        let store = storage.get_package_path("tool", "1.0.0").unwrap();
         assert_eq!(std::fs::read_dir(store.join("data")).unwrap().count(), 200);
         match crate::install_manifest::verify(&store).unwrap() {
             crate::install_manifest::Verification::Checked(report) => {

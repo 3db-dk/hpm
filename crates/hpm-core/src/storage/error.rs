@@ -6,6 +6,10 @@ use hpm_package::{IoOp, ManifestLoadError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
+    /// A package name or version that cannot name a directory.
+    #[error(transparent)]
+    InvalidCoordinate(#[from] crate::storage::layout::InvalidCoordinate),
+
     /// IO failure with the operation verb, path, and source `io::Error`.
     /// Subsumes the prior DirectoryCreation/DirectoryRead/DirectoryRemoval/
     /// MetadataRead variants.

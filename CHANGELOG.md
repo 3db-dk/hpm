@@ -36,8 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its file anywhere the user could write; `hpm build` and `hpm pack` had
   the same flaw.
 
+- Package names and versions from manifests, lockfiles and registries can
+  no longer name paths outside the store, archive cache or fetch staging:
+  every such path is built from a checked name (letters, digits, `.`, `_`,
+  `-`; at most `creator/slug`) and a semantic version. A registry entry that
+  names a different package or version than was asked for, or carries a
+  version that is not semver, is refused.
+
 ### Changed
 
+- Upgrade note: a URL dependency's `version` must be a semantic version.
+- API: `StorageManager::get_package_path`, `storage::layout::cas_dir`,
+  `download_key`, and `StoreLayout::{cas_dir, dev_container, staging_dir}`
+  now return a `Result`; embedders (TumbleTrove Desktop) add `?`.
 - Upgrade note: a `[stage]` place rule whose `to` has a `..` component, a
   leading `/`, a drive, a backslash or a colon now fails the manifest load.
 - Upgrade note: `[storage]`, `[projects]` and `[signing]` in a project's
