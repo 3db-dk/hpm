@@ -72,7 +72,11 @@ pub struct PackageManifest {
     pub registries: Vec<RegistryConfig>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub dependencies: IndexMap<String, DependencySpec>,
-    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "IndexMap::is_empty",
+        deserialize_with = "crate::python::deserialize_python_dependencies"
+    )]
     pub python_dependencies: IndexMap<String, PythonDependencySpec>,
     /// `[runtime]` — env-var contributions to the generated Houdini
     /// package file. Dev-only and registry-only values are expressed with

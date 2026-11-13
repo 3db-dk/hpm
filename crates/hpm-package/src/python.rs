@@ -46,6 +46,74 @@ pub enum PythonDependencySpec {
     },
 }
 
+/// Whether `name` is a PEP 508 distribution name (also the form of an extra):
+/// ASCII letters and digits, with `.`, `_` and `-` inside.
+pub fn is_python_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    let edge = |b: &u8| b.is_ascii_alphanumeric();
+    bytes.first().is_some_and(edge)
+        && bytes.last().is_some_and(edge)
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// Check a Python version constraint before it becomes part of a requirement
+/// line: only the characters of version specifiers (PEP 440 operators and
+/// versions, `*`, hpm's `^`, commas and spaces). That leaves no way to start
+/// a pip option (`-`), a direct URL or VCS reference (`@`, `:`, `/`), an
+/// environment marker (`;`), extras (`[`), a comment (`#`) or a new line.
+pub fn validate_python_version(spec: &str) -> Result<(), String> {
+    let ok = spec.bytes().all(|b| {
+        b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b' ' | b'.' | b',' | b'*' | b'+' | b'!' | b'<' | b'>' | b'=' | b'~' | b'^' | b'-'
+            )
+    });
+    if !ok || spec.trim_start().starts_with('-') {
+        return Err(format!(
+            "'{}' is not a version constraint (letters, digits, spaces and . , * + ! < > = ~ ^ -)",
+            spec.escape_debug()
+        ));
+    }
+    Ok(())
+}
+
+/// Check one `[python_dependencies]` entry: a PEP 508 name, a version
+/// constraint, and extras that are names.
+pub fn validate_python_dependency(name: &str, spec: &PythonDependencySpec) -> Result<(), String> {
+    if !is_python_name(name) {
+        return Err(format!(
+            "'{}' is not a Python package name",
+            name.escape_debug()
+        ));
+    }
+    validate_python_version(spec.version_req()).map_err(|e| format!("{name}: {e}"))?;
+    if let Some(bad) = spec.extras().iter().find(|extra| !is_python_name(extra)) {
+        return Err(format!(
+            "{name}: extra '{}' is not a name",
+            bad.escape_debug()
+        ));
+    }
+    Ok(())
+}
+
+/// Deserialize `[python_dependencies]`, checking every entry with
+/// [`validate_python_dependency`].
+pub fn deserialize_python_dependencies<'de, D>(
+    deserializer: D,
+) -> Result<indexmap::IndexMap<String, PythonDependencySpec>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let deps = indexmap::IndexMap::<String, PythonDependencySpec>::deserialize(deserializer)?;
+    for (name, spec) in &deps {
+        validate_python_dependency(name, spec).map_err(serde::de::Error::custom)?;
+    }
+    Ok(deps)
+}
+
 /// The keys a Python dependency table may carry.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

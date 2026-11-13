@@ -7,6 +7,11 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PythonError {
+    /// A Python requirement that is not one plain requirement (it would add
+    /// a pip option, a URL or a marker to the requirements file).
+    #[error("Refusing Python requirement {0:?}: not a single plain requirement")]
+    InvalidRequirement(String),
+
     /// IO failure with the operation verb, path, and source `io::Error`.
     #[error(transparent)]
     Io(#[from] IoOp),
