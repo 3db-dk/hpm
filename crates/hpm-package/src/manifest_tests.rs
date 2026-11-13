@@ -1813,3 +1813,26 @@ fn generate_houdini_native_package_sidefx_rejects_a_build_level_bound() {
         "error should name the bound it cannot express, got: {err}"
     );
 }
+
+/// The registry URL forms studios use keep loading from `hpm.toml`.
+#[test]
+fn registry_url_forms_load() {
+    for (url, kind) in [
+        ("https://api.tumbletrove.com/v1/registry", "api"),
+        ("https://github.com/studio/registry.git", "git"),
+        ("ssh://git@git.example.invalid/studio/registry.git", "git"),
+        ("git@github.com:studio/registry.git", "git"),
+        ("file:///mnt/nas/hpm-registry.git", "git"),
+        ("/mnt/nas/hpm-registry.git", "git"),
+        ("//nas/share/hpm-registry.git", "git"),
+        ("Z:/hpm-registry.git", "git"),
+        ("../shared/registry.git", "git"),
+    ] {
+        let toml_str = format!(
+            "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[[registries]]\nname = \"Studio.Reg\"\nurl = '{url}'\ntype = \"{kind}\"\n"
+        );
+        let manifest: PackageManifest =
+            toml::from_str(&toml_str).unwrap_or_else(|e| panic!("{url}: {e}"));
+        assert_eq!(manifest.registries[0].url, url);
+    }
+}

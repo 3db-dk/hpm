@@ -396,3 +396,112 @@ mod tests {
         assert_eq!(entries[1].version, "2.0.0");
     }
 }
+
+/// Git registries driven end to end through real `git` against local bare
+/// repositories: the inputs that must keep resolving.
+#[cfg(test)]
+mod remote_tests {
+    use super::super::RegistrySet;
+    use std::path::Path;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    /// A bare index repository holding `acme/tools` at the given versions.
+    pub(crate) fn bare_index(root: &Path, name: &str, versions: &[&str]) -> std::path::PathBuf {
+        let work = root.join(format!("{name}-work"));
+        std::fs::create_dir_all(work.join("acme")).unwrap();
+        std::fs::write(work.join("config.json"), "{}").unwrap();
+        let lines: Vec<String> = versions
+            .iter()
+            .map(|v| {
+                format!(
+                    r#"{{"name":"acme/tools","vers":"{v}","deps":[],"dl":"https://example.invalid/tools-{v}.zip","yanked":false}}"#
+                )
+            })
+            .collect();
+        std::fs::write(work.join("acme/tools.json"), lines.join("\n") + "\n").unwrap();
+        git(&work, &["init", "-q", "-b", "main"]);
+        git(&work, &["add", "."]);
+        git(&work, &["commit", "-q", "-m", "index"]);
+        let bare = root.join(format!("{name}.git"));
+        git(
+            root,
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                work.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+        bare
+    }
+
+    fn git_source(name: &str, url: &str) -> hpm_config::RegistrySourceConfig {
+        hpm_config::RegistrySourceConfig {
+            name: name.into(),
+            url: url.into(),
+            registry_type: hpm_config::RegistryType::Git,
+        }
+    }
+
+    /// A studio index on a local or network path resolves, under a display
+    /// name with capitals and dots, and a refresh pulls it again.
+    #[tokio::test]
+    async fn a_local_path_git_registry_resolves_and_refreshes() {
+        let tmp = TempDir::new().unwrap();
+        let bare = bare_index(tmp.path(), "studio", &["1.0.0", "1.2.0"]);
+        let cache = tmp.path().join("registry-cache");
+        let set =
+            RegistrySet::from_configs(&[git_source("Studio.Reg", bare.to_str().unwrap())], &cache)
+                .unwrap();
+
+        let entry = set.resolve_in("acme/tools", "^1", None).await.unwrap();
+        assert_eq!(entry.version, "1.2.0");
+        for (name, result) in set.refresh_all().await {
+            result.unwrap_or_else(|e| panic!("refresh {name}: {e}"));
+        }
+        let again = set.resolve_in("acme/tools", "=1.0.0", None).await.unwrap();
+        assert_eq!(again.version, "1.0.0");
+    }
+
+    /// A `file://` URL to the same kind of index resolves too.
+    #[tokio::test]
+    async fn a_file_url_git_registry_resolves() {
+        let tmp = TempDir::new().unwrap();
+        let bare = bare_index(tmp.path(), "nas", &["2.0.0"]);
+        let url = format!("file://{}", bare.to_str().unwrap().replace('\\', "/"));
+        let set = RegistrySet::from_configs(&[git_source("nas", &url)], &tmp.path().join("cache"))
+            .unwrap();
+        let entry = set.resolve_in("acme/tools", "^2", None).await.unwrap();
+        assert_eq!(entry.version, "2.0.0");
+    }
+
+    /// The usual remote URL forms build a registry without touching the
+    /// network (construction never clones).
+    #[test]
+    fn remote_url_forms_build_a_registry() {
+        let tmp = TempDir::new().unwrap();
+        for url in [
+            "https://github.com/studio/registry.git",
+            "ssh://git@git.example.invalid/studio/registry.git",
+            "git@github.com:studio/registry.git",
+        ] {
+            RegistrySet::from_configs(&[git_source("studio", url)], tmp.path())
+                .unwrap_or_else(|e| panic!("{url}: {e}"));
+        }
+    }
+}
