@@ -353,4 +353,44 @@ mod tests {
                 .contains_key(&crate::Platform::WindowsX86_64)
         );
     }
+
+    mod properties {
+        use super::super::PlaceRule;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(512))]
+
+            /// A place rule loads only when its `to` stays inside the install
+            /// image: a manifest can never name a target outside it.
+            #[test]
+            fn loaded_place_rules_stay_in_the_image(
+                to in prop_oneof![
+                    "[a-z./\\\\: ]{0,12}",
+                    "(\\.\\./|/|[A-Za-z]:|\\\\\\\\)[a-z/]{0,8}",
+                    "(\\./)?[a-z]{1,6}(/[a-z]{1,6}){0,3}/?",
+                ],
+            ) {
+                let mut table = toml::Table::new();
+                table.insert("from".into(), "bin/*".into());
+                table.insert("to".into(), to.clone().into());
+                match table.try_into::<PlaceRule>() {
+                    Ok(rule) => {
+                        let root = std::path::Path::new("/image");
+                        let target = root.join(rule.confined_to().unwrap());
+                        prop_assert!(target.starts_with(root), "{:?} -> {:?}", to, target);
+                        prop_assert!(!to.contains(['\\', ':']));
+                        prop_assert!(!std::path::Path::new(to.trim()).components().any(|c| matches!(
+                            c,
+                            std::path::Component::ParentDir | std::path::Component::RootDir
+                        )));
+                    }
+                    Err(_) => prop_assert!(
+                        crate::path_util::confined_relative_path(std::path::Path::new(to.trim())).is_err(),
+                        "{:?} refused", to
+                    ),
+                }
+            }
+        }
+    }
 }
