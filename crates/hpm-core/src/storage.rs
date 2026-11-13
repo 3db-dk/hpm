@@ -354,17 +354,27 @@ impl StorageManager {
         &self,
         staged: &std::path::Path,
         target_dir: &std::path::Path,
-        name: &str,
+        wanted: &hpm_package::PackagePath,
         version: &str,
     ) -> Result<InstalledPackage, StorageError> {
         remove_stage(staged);
-        info!("{name}@{version} was installed concurrently; keeping that copy");
         // The kept copy is what this install returns, so a manifest it
         // cannot read (one written under looser rules, say) is the error;
         // `parse_installed_package` would only skip it.
-        PackageManifest::from_path(&target_dir.join("hpm.toml"))?;
+        let kept = PackageManifest::from_path(&target_dir.join("hpm.toml"))?;
+        // The folder is named by slug, so it may hold another creator's
+        // package; returning that would install the wrong package.
+        if kept.package.path != *wanted {
+            return Err(StorageError::SlugCollision {
+                wanted: wanted.to_string(),
+                installed: kept.package.path.to_string(),
+                version: version.to_string(),
+                path: target_dir.to_path_buf(),
+            });
+        }
+        info!("{wanted}@{version} is already in the store; keeping that copy");
         self.parse_installed_package(target_dir.to_path_buf())?
-            .ok_or_else(|| StorageError::PackageNotFound(format!("{name}@{version}")))
+            .ok_or_else(|| StorageError::PackageNotFound(format!("{wanted}@{version}")))
     }
 
     fn parse_installed_package(
@@ -548,7 +558,12 @@ impl StorageManager {
                     // Another install finished this version first (copies
                     // only ever land whole, by rename). It may already be
                     // loaded by a running Houdini: keep it.
-                    return self.keep_concurrent_install(&staged, &target_dir, name, version);
+                    return self.keep_concurrent_install(
+                        &staged,
+                        &target_dir,
+                        &manifest.package.path,
+                        version,
+                    );
                 }
                 // A tree without `hpm.toml` (an older hpm's in-place copy cut
                 // short) or a stale link is replaced; never `remove_dir_all`
@@ -563,7 +578,12 @@ impl StorageManager {
                     // appeared since the clear is another install's finished
                     // copy of this version.
                     if is_committed_copy(&target_dir) {
-                        return self.keep_concurrent_install(&staged, &target_dir, name, version);
+                        return self.keep_concurrent_install(
+                            &staged,
+                            &target_dir,
+                            &manifest.package.path,
+                            version,
+                        );
                     }
                     remove_stage(&staged);
                     return Err(IoOp::wrap("commit store copy to", &target_dir, e).into());

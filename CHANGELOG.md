@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole folder name. **Upgrade note:** a pattern written to skip a family
   of folders by prefix (`backup` for `backup-2025/`) now skips only the
   folder with exactly that name; list the others too.
+- Installing a package whose slug and version match another creator's
+  package already in the store (`acme/tools@1.0.0` and `studio/tools@1.0.0`)
+  failed silently: the store keys packages by slug, and the install handed
+  back the other creator's copy. It now stops with an error naming both.
+  Keeping both at once needs a store layout change, which is not part of
+  this release.
 
 ### Changed
 

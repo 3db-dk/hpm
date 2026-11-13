@@ -23,6 +23,22 @@ pub enum StorageError {
     #[error("Package not found: {0}")]
     PackageNotFound(String),
 
+    /// The store keys a registry install on `<slug>@<version>`, and that
+    /// folder already holds another creator's package of the same slug and
+    /// version. Installing would hand back the wrong package.
+    #[error(
+        "Cannot install {wanted}@{version}: the store already holds {installed}@{version} \
+         under the same name ({}), and packages are stored by slug. Remove it \
+         (hpm clean, once nothing uses it) or use one of the two packages.",
+        path.display()
+    )]
+    SlugCollision {
+        wanted: String,
+        installed: String,
+        version: String,
+        path: std::path::PathBuf,
+    },
+
     #[error(transparent)]
     ProjectDiscovery(#[from] DiscoveryError),
 

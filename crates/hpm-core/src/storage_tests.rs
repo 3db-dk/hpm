@@ -2080,3 +2080,33 @@ async fn reinstalling_over_a_copy_whose_manifest_no_longer_parses_names_the_mani
     );
     assert!(err.to_string().contains("hpm.toml"), "{err}");
 }
+
+/// The store keys a registry install on its slug, so two creators' packages
+/// with the same slug and version share a folder. The second install is
+/// refused, naming both, instead of being handed the first creator's copy.
+#[tokio::test]
+async fn a_second_creators_package_with_the_same_slug_is_refused() {
+    let temp = TempDir::new().unwrap();
+    let storage = test_storage(&temp);
+    let first = temp.path().join("first");
+    write_source_package(&first, "acme/bar", "2.0.0", "acme");
+    let installed = storage.install_into_cas(&first).await.unwrap();
+
+    let second = temp.path().join("second");
+    write_source_package(&second, "other/bar", "2.0.0", "other");
+    let err = storage.install_into_cas(&second).await.unwrap_err();
+    let text = err.to_string();
+    assert!(
+        matches!(err, StorageError::SlugCollision { .. }),
+        "expected a slug collision, got {text}"
+    );
+    assert!(
+        text.contains("acme/bar") && text.contains("other/bar"),
+        "{text}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(installed.install_path.join("MARKER")).unwrap(),
+        "acme",
+        "the first creator's copy is untouched"
+    );
+}
