@@ -161,7 +161,11 @@ mod tests {
                         relative.components().all(|c| matches!(c, Component::Normal(_))),
                         "{:?} -> {:?}", raw, relative
                     );
-                    prop_assert!(!relative.to_string_lossy().contains(['\\', ':', '\0']));
+                    // Checked per name: the joined path uses the host's
+                    // separator, `\\` on Windows.
+                    prop_assert!(relative
+                        .iter()
+                        .all(|name| !name.to_string_lossy().contains(['\\', ':', '\0'])));
                     let root = Path::new("/target/dir");
                     prop_assert!(root.join(&relative).starts_with(root));
                     // Applying the rule again, to the `/` form a writer

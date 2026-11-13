@@ -879,7 +879,11 @@ mod tests {
                         .all(|c| matches!(c, std::path::Component::Normal(_))));
                     let target = Path::new("/target");
                     prop_assert!(target.join(&relative).starts_with(target));
-                    prop_assert!(!relative.to_string_lossy().contains(['\\', ':']));
+                    // Checked per name: the joined path uses the host's
+                    // separator, `\\` on Windows.
+                    prop_assert!(relative
+                        .iter()
+                        .all(|name| !name.to_string_lossy().contains(['\\', ':'])));
                 }
             }
         }
