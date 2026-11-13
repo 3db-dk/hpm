@@ -453,7 +453,11 @@ fn extract_tar_gz_sync(
 fn finalize_mode(target_path: &Path, declared: Option<u32>) -> Result<(), FetchError> {
     use std::os::unix::fs::PermissionsExt;
 
-    let mode = declared.unwrap_or(0o644) & 0o7777;
+    // Only owner bits and read/execute for group and other: setuid, setgid
+    // and sticky bits, and group or world write, are never taken from an
+    // archive (on a shared node they would let other users run as the
+    // installer or rewrite the package after the install).
+    let mode = declared.unwrap_or(0o644) & 0o755;
     let repaired = crate::exec_mode::repaired_mode(mode, target_path);
     if repaired != mode {
         debug!(
@@ -926,6 +930,67 @@ mod tests {
                 assert!(written <= limits.bytes, "{label} {format}: wrote {written}");
             }
         }
+    }
+
+    /// Special and group/world-write bits in an archive never reach disk:
+    /// on a shared node, setuid binaries or files other users can rewrite
+    /// would outlive the install. Read and execute bits are kept.
+    #[cfg(unix)]
+    #[test]
+    fn special_and_shared_write_bits_are_dropped() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("pkg.zip");
+        let out = temp.path().join("out");
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            for (name, mode) in [
+                ("suid", 0o4755),
+                ("sgid", 0o2755),
+                ("sticky", 0o1755),
+                ("shared", 0o666),
+                ("world", 0o777),
+            ] {
+                let options = zip::write::SimpleFileOptions::default().unix_permissions(mode);
+                zip.start_file(format!("pkg/{name}"), options).unwrap();
+                zip.write_all(b"data").unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        std::fs::write(&archive_path, buf.into_inner()).unwrap();
+        extract_archive_sync(&archive_path, &out).unwrap();
+        let mode = |p: &str| std::fs::metadata(out.join(p)).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode("suid"), 0o755);
+        assert_eq!(mode("sgid"), 0o755);
+        assert_eq!(mode("sticky"), 0o755);
+        assert_eq!(mode("shared"), 0o644);
+        assert_eq!(mode("world"), 0o755);
+
+        // Tar headers carry the special bits verbatim.
+        let gz = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar = tar::Builder::new(gz);
+        for (name, mode) in [("pkg/suid", 0o4755), ("pkg/sgid", 0o2775)] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(4);
+            header.set_mode(mode);
+            header.set_cksum();
+            tar.append_data(&mut header, name, &b"data"[..]).unwrap();
+        }
+        let tar_path = temp.path().join("pkg.tar.gz");
+        std::fs::write(&tar_path, tar.into_inner().unwrap().finish().unwrap()).unwrap();
+        let tar_out = temp.path().join("tar-out");
+        extract_archive_sync(&tar_path, &tar_out).unwrap();
+        let mode = |p: &str| {
+            std::fs::metadata(tar_out.join(p))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777
+        };
+        assert_eq!(mode("suid"), 0o755);
+        assert_eq!(mode("sgid"), 0o755);
     }
 
     #[test]

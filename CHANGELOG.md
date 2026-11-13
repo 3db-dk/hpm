@@ -96,6 +96,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer have a 5-minute cap on the whole transfer (large packages on slow
   links were cut off); a download that sends nothing for 2 minutes fails.
 
+- Extracted package files no longer take setuid, setgid or sticky bits, or
+  group or world write permission, from the archive.
+
 ### Changed
 
 - Upgrade note: the first Python install after upgrading downloads uv
