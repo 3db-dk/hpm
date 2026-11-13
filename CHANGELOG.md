@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.1] - 2026-11-13
+
+### Fixed
+
+- Windows: installing an archive with files in subfolders failed with
+  "Archive contains path traversal attempt" (for example `otls/a.hda`).
+  The path check read zip entries as native Windows paths, whose `\`
+  separators it refuses; it now reads each entry's own `/`-separated name.
+  0.40.0 shipped no Windows binary because of this.
+
 ## [0.40.0] - 2026-11-13
 
 ### Security
