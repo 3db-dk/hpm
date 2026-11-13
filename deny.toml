@@ -23,11 +23,7 @@ allow = [
     "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
-# zip's default codecs; dropped with them when zip's features are narrowed.
-exceptions = [
-    { crate = "libbz2-rs-sys", allow = ["bzip2-1.0.6"] },
-    { crate = "ppmd-rust", allow = ["MIT-0"] },
-]
+exceptions = []
 
 [bans]
 multiple-versions = "warn"

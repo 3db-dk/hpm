@@ -993,6 +993,34 @@ mod tests {
         assert_eq!(mode("sgid"), 0o755);
     }
 
+    /// Only Stored and Deflated entries are decoded: an entry declaring
+    /// another codec (zstd, bzip2, LZMA, ...) is refused as unsupported
+    /// rather than handed to that codec's decoder.
+    #[test]
+    fn entries_in_other_codecs_are_refused() {
+        // A stored zip with its method fields rewritten to another codec.
+        let stored = build_test_zip(&[("pkg/data.txt", b"hello")]);
+        for method in [12u16, 14, 93, 95, 98] {
+            let mut bytes = stored.clone();
+            for (signature, offset) in [(b"PK\x03\x04", 8usize), (b"PK\x01\x02", 10usize)] {
+                let at = bytes
+                    .windows(4)
+                    .position(|w| w == signature)
+                    .expect("zip header present");
+                bytes[at + offset..at + offset + 2].copy_from_slice(&method.to_le_bytes());
+            }
+            let temp = TempDir::new().unwrap();
+            let archive = temp.path().join("a.zip");
+            std::fs::write(&archive, &bytes).unwrap();
+            let err = extract_archive_sync(&archive, &temp.path().join("out")).unwrap_err();
+            assert!(
+                err.to_string().to_lowercase().contains("not supported")
+                    || err.to_string().to_lowercase().contains("unsupported"),
+                "method {method}: {err}"
+            );
+        }
+    }
+
     #[test]
     fn test_find_common_root_prefix_no_shared_root() {
         let names = vec!["a/x".to_string(), "b/y".to_string()];

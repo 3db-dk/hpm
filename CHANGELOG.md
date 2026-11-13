@@ -118,8 +118,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   different bytes need a new version tag). A tag that does not match the
   workspace version fails CI.
 
+- Package archives are decoded only as Stored or Deflated zip entries (and
+  tar.gz); the bzip2, deflate64, LZMA, PPMd, XZ, zstd and AES decoders are no
+  longer built into hpm, removing their code (zstd's in C) from what an
+  untrusted archive can reach. Archives `hpm pack` writes are unchanged.
+
 ### Changed
 
+- Upgrade note: a zip package archive whose entries use a compression method
+  other than Stored or Deflated now fails to extract; repack it with
+  `hpm pack` or a standard zip tool.
 - Upgrade note: on Windows, `hpm run` arguments may not contain `"` or line
   breaks; `%`, `&`, `|`, `<`, `>` and `^` still pass through inside quotes.
 - Upgrade note: a package containing a symlink to a file outside the package

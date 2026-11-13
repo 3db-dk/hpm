@@ -66,7 +66,10 @@ petgraph = { version = "0.8", default-features = false }
 # Additional dependencies for Python support
 semver = "1.0"
 indexmap = { version = "2.14", features = ["serde"] }
-zip = "9.0"
+# Only the codecs hpm writes and reads (Stored and Deflated, with the same
+# zlib-rs backend as before); the default set also decodes bzip2, deflate64,
+# LZMA, PPMd, XZ and zstd (C) and AES, all reachable from untrusted archives.
+zip = { version = "9.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 tar = "0.4"
 flate2 = "1.1"
 
