@@ -2143,3 +2143,76 @@ async fn a_second_creators_package_with_the_same_slug_is_refused() {
         "the first creator's copy is untouched"
     );
 }
+
+// ------------------------------------------------------------------
+// Store identity: an archive fills only the slot it declares
+// ------------------------------------------------------------------
+
+mod store_identity {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Small domains, so requested and declared identities often agree,
+    /// often differ in one part, and sometimes differ only in case.
+    fn creator() -> impl Strategy<Value = &'static str> {
+        prop::sample::select(vec!["ana", "Ana", "bo"])
+    }
+    fn slug() -> impl Strategy<Value = &'static str> {
+        prop::sample::select(vec!["tool", "Tool", "tools"])
+    }
+    fn version() -> impl Strategy<Value = &'static str> {
+        prop::sample::select(vec!["1.0.0", "1.0.1", "2.0.0-rc.1"])
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        /// `install_into_cas` stores an archive exactly when its manifest
+        /// declares the identity it was requested as (ASCII case aside, a
+        /// bare-slug request matching the slug); otherwise the requested
+        /// slot stays empty.
+        #[test]
+        fn an_archive_fills_only_the_slot_it_declares(
+            // A manifest's own path is lowercase; requests vary in case.
+            declared in (
+                prop::sample::select(vec!["ana", "bo"]),
+                prop::sample::select(vec!["tool", "tools"]),
+                version(),
+            ),
+            requested in (creator(), slug(), version()),
+            scoped_request in any::<bool>(),
+        ) {
+            let (d_creator, d_slug, d_version) = declared;
+            let (r_creator, r_slug, r_version) = requested;
+            let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+            let temp = TempDir::new().unwrap();
+            let storage = test_storage(&temp);
+            let source = temp.path().join("src");
+            std::fs::create_dir_all(&source).unwrap();
+            std::fs::write(
+                source.join("hpm.toml"),
+                format!("[package]\npath = \"{d_creator}/{d_slug}\"\nname = \"x\"\nversion = \"{d_version}\"\n"),
+            )
+            .unwrap();
+            let requested_name = if scoped_request {
+                format!("{r_creator}/{r_slug}")
+            } else {
+                r_slug.to_string()
+            };
+
+            let same = (!scoped_request || d_creator.eq_ignore_ascii_case(r_creator))
+                && d_slug.eq_ignore_ascii_case(r_slug)
+                && d_version == r_version;
+            let result = rt.block_on(storage.install_into_cas(&source, &requested_name, r_version));
+            prop_assert_eq!(result.is_ok(), same, "{:?} as {}@{}: {:?}", declared, requested_name, r_version, result.as_ref().err().map(|e| e.to_string()));
+            if !same {
+                prop_assert!(
+                    matches!(result, Err(StorageError::IdentityMismatch { .. })),
+                    "{:?}", result
+                );
+                prop_assert!(!storage.package_exists(&requested_name, r_version));
+                prop_assert!(storage.list_installed().unwrap().is_empty());
+            }
+        }
+    }
+}
