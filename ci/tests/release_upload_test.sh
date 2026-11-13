@@ -125,5 +125,27 @@ else
   pass "a tag that does not match the crate version is refused"
 fi
 
+# 7. The token never appears on a process command line: every curl the
+# script runs is recorded through a wrapper earlier on PATH.
+mkdir -p "$SCRATCH/shim"
+REAL_CURL=$(command -v curl)
+cat > "$SCRATCH/shim/curl" <<SHIM
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$SCRATCH/curl-argv.log"
+exec "$REAL_CURL" "\$@"
+SHIM
+chmod +x "$SCRATCH/shim/curl"
+start_fake
+: > "$SCRATCH/curl-argv.log"
+if PATH="$SCRATCH/shim:$PATH" upload "$SCRATCH/bin1"; then
+  if [ -s "$SCRATCH/curl-argv.log" ] && ! grep -q 'fake-test-token' "$SCRATCH/curl-argv.log"; then
+    pass "the token never appears on a curl command line"
+  else
+    fail "the token appeared on a curl command line"
+  fi
+else
+  fail "upload under the curl recorder: $(cat "$SCRATCH/out.log")"
+fi
+
 [ "$FAILS" -eq 0 ] || { echo "$FAILS failure(s)" >&2; exit 1; }
 echo "all release script tests passed"

@@ -47,6 +47,11 @@ fi
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 BODY="$WORK/body.json"
+# The token goes to curl through a header file in this private directory
+# (mktemp -d is mode 700), never on a command line where other users on the
+# worker could read it from the process list. printf is a shell builtin.
+AUTH="$WORK/auth-header"
+printf 'Authorization: token %s\n' "$GITHUB_TOKEN" > "$AUTH"
 
 # Issues a GitHub API request, prints the HTTP status, leaves the body in $BODY.
 # Deliberately omits `-f` so a 4xx reaches the status checks below instead of
@@ -55,7 +60,7 @@ api() {
   local method=$1 url=$2
   shift 2
   curl -sS -X "$method" "$url" \
-    -H "Authorization: token $GITHUB_TOKEN" \
+    -H "@$AUTH" \
     -H "Accept: application/vnd.github+json" \
     -o "$BODY" -w '%{http_code}' "$@"
 }

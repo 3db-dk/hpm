@@ -43,6 +43,10 @@ foreach ($base in @($api, $uploads)) {
 }
 $bodyFile = Join-Path ([System.IO.Path]::GetTempPath()) "hpm-release-body-$PID.json"
 $jsonFile = Join-Path ([System.IO.Path]::GetTempPath()) "hpm-release-$PID.json"
+# The token reaches curl.exe through a header file in the user's temp
+# directory (private to the user), never on a command line where other users
+# could read it from the process list. Removed in the finally block.
+$authFile = Join-Path ([System.IO.Path]::GetTempPath()) "hpm-release-auth-$PID.txt"
 
 # Issues a GitHub API request, returns the HTTP status, leaves the body in
 # $bodyFile. Deliberately omits -f so a 4xx reaches the status checks below.
@@ -54,7 +58,7 @@ function Invoke-Api {
     )
     $curlArgs = @(
         '-sS', '-X', $Method, $Url,
-        '-H', "Authorization: token $env:GITHUB_TOKEN",
+        '-H', "@$authFile",
         '-H', 'Accept: application/vnd.github+json',
         '-o', $bodyFile,
         '-w', '%{http_code}'
@@ -107,6 +111,7 @@ function Write-Utf8NoBom {
 try {
     if (-not $env:GITHUB_TOKEN) { throw 'GITHUB_TOKEN is not set' }
     if (-not $env:CI_COMMIT_TAG) { throw 'CI_COMMIT_TAG is not set' }
+    Write-Utf8NoBom -Path $authFile -Content "Authorization: token $env:GITHUB_TOKEN`n"
 
     $tag = $env:CI_COMMIT_TAG
     $version = $tag -replace '^v', ''
@@ -212,7 +217,7 @@ catch {
     exit 1
 }
 finally {
-    Remove-Item $bodyFile, $jsonFile -Force -ErrorAction SilentlyContinue
+    Remove-Item $bodyFile, $jsonFile, $authFile -Force -ErrorAction SilentlyContinue
 }
 
 exit 0
