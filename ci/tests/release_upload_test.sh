@@ -114,6 +114,21 @@ else
   pass "an API base other than GitHub or 127.0.0.1 is refused"
 fi
 
+# 5b. Look-alike bases that only start like 127.0.0.1 are refused too.
+for base in "http://127.0.0.1:1@evil.invalid" "http://127.0.0.1:8080.evil.invalid/" "http://127.0.0.1:80/x"; do
+  if (
+    cd "$SCRATCH/work"
+    GITHUB_TOKEN="$FAKE_TOKEN" CI_COMMIT_TAG=v9.9.9 GITHUB_API_URL="$base" \
+      bash "$ROOT/ci/release-upload.sh" "$SCRATCH/bin1" linux-x86_64
+  ) > "$SCRATCH/out.log" 2>&1; then
+    fail "accepted look-alike API base $base"
+  elif grep -q "refusing API base" "$SCRATCH/out.log"; then
+    pass "look-alike API base $base is refused"
+  else
+    fail "look-alike API base $base failed for another reason: $(cat "$SCRATCH/out.log")"
+  fi
+done
+
 # 6. The tag must name the version being built.
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)
 if (cd "$ROOT" && CI_COMMIT_TAG="v$VERSION" bash ci/check-version.sh) >/dev/null 2>&1; then

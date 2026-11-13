@@ -30,11 +30,12 @@ REPO=${RELEASE_REPO:-3db-dk/hpm}
 API=${GITHUB_API_URL:-https://api.github.com}
 UPLOADS=${GITHUB_UPLOADS_URL:-https://uploads.github.com}
 for base in "$API" "$UPLOADS"; do
-  case "$base" in
-    https://api.github.com | https://uploads.github.com) ;;
-    http://127.0.0.1:[0-9]*) ;;
-    *) echo "refusing API base $base: only GitHub or 127.0.0.1" >&2; exit 1 ;;
-  esac
+  # Whole-string match: a base that merely starts like an allowed one
+  # (`http://127.0.0.1:1@elsewhere`) is refused.
+  if ! [[ "$base" =~ ^(https://api\.github\.com|https://uploads\.github\.com|http://127\.0\.0\.1:[0-9]+)$ ]]; then
+    echo "refusing API base $base: only GitHub or 127.0.0.1" >&2
+    exit 1
+  fi
 done
 VERSION=${CI_COMMIT_TAG#v}
 ARTIFACT="hpm-v$VERSION-$SUFFIX"
