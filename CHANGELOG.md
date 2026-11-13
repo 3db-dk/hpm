@@ -176,6 +176,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directories can be deleted.
 - `hpm_config::Config::registry_cache_path` is removed: the cache directory
   is derived from the remote URL, not the registry name.
+- API: `GitRegistry::new(name, remote_url: &str, registry_cache_root: &Path)`
+  returns a `Result` (the URL is validated) and takes the root holding every
+  git registry's clone, appending a digest of the remote itself, instead of
+  the registry's own cache directory.
 
 ## [0.39.1] - 2026-11-13
 

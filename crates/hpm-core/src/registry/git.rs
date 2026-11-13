@@ -33,6 +33,19 @@ impl GitRemote {
     /// plaintext forms.
     pub fn parse(url: &str) -> Result<Self, RegistryError> {
         hpm_package::validate_git_remote(url).map_err(RegistryError::ParseError)?;
+        // A relative local path names a directory relative to where hpm runs;
+        // pin it to that absolute path, since git runs elsewhere (in the
+        // cache) and records local origins as absolute paths.
+        let is_url = url.contains("://");
+        let is_scp = url
+            .split_once(':')
+            .is_some_and(|(host, _)| !host.contains(['/', '\\']) && host.len() > 1);
+        if !is_url && !is_scp && !Path::new(url).is_absolute() {
+            let cwd = std::env::current_dir().map_err(|e| {
+                RegistryError::GitError(format!("cannot resolve relative registry path: {e}"))
+            })?;
+            return Ok(Self(cwd.join(url).to_string_lossy().into_owned()));
+        }
         Ok(Self(url.to_string()))
     }
 
@@ -173,6 +186,23 @@ impl GitRegistry {
         Ok(entries)
     }
 
+    /// Make sure the clone exists and is this remote's before it is read: a
+    /// missing clone, or one whose origin is another remote (left by an
+    /// older hpm's name-keyed layout, or planted), is cloned again.
+    async fn ensure_cache(&self) -> Result<(), RegistryError> {
+        if self.is_cached() {
+            let cache_dir = self.cache_dir.clone();
+            let remote = self.remote.clone();
+            let ours = tokio::task::spawn_blocking(move || origin_matches(&cache_dir, &remote))
+                .await
+                .map_err(|e| RegistryError::GitError(format!("Task join error: {}", e)))??;
+            if ours {
+                return Ok(());
+            }
+        }
+        self.update_cache().await
+    }
+
     /// Check if the local cache exists and has been cloned.
     fn is_cached(&self) -> bool {
         self.cache_dir.join("config.json").exists()
@@ -193,6 +223,11 @@ impl GitRegistry {
                     "Registry index '{}' cache points at another remote; re-cloning",
                     display_name
                 );
+                std::fs::remove_dir_all(&cache_dir)
+                    .map_err(|e| IoOp::wrap("remove stale registry cache", &cache_dir, e))?;
+            }
+            if !cache_dir.join(".git").exists() && cache_dir.exists() {
+                // Not a clone (a partial or foreign directory): start over.
                 std::fs::remove_dir_all(&cache_dir)
                     .map_err(|e| IoOp::wrap("remove stale registry cache", &cache_dir, e))?;
             }
@@ -330,24 +365,37 @@ fn origin_matches(cache_dir: &Path, remote: &GitRemote) -> Result<bool, Registry
         .output()
         .map_err(|e| RegistryError::GitError(format!("Failed to run git config: {}", e)))?;
     // A clone without an origin (exit 1) is not this remote's clone either.
-    Ok(output.status.success()
-        && String::from_utf8_lossy(&output.stdout).trim_end_matches(['\r', '\n'])
-            == remote.as_str())
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let origin = String::from_utf8_lossy(&output.stdout)
+        .trim_end_matches(['\r', '\n'])
+        .to_string();
+    if origin == remote.as_str() {
+        return Ok(true);
+    }
+    // git may record a local path in another spelling (symlinks resolved,
+    // separators normalised); the same directory is the same remote.
+    Ok(
+        match (
+            std::fs::canonicalize(&origin),
+            std::fs::canonicalize(remote.as_str()),
+        ) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        },
+    )
 }
 
 #[async_trait]
 impl Registry for GitRegistry {
     async fn search(&self, query: &str) -> Result<SearchResults, RegistryError> {
-        if !self.is_cached() {
-            self.update_cache().await?;
-        }
+        self.ensure_cache().await?;
         self.search_local(query)
     }
 
     async fn get_versions(&self, name: &str) -> Result<Vec<RegistryEntry>, RegistryError> {
-        if !self.is_cached() {
-            self.update_cache().await?;
-        }
+        self.ensure_cache().await?;
         self.read_entries(name)
     }
 
@@ -382,6 +430,25 @@ impl Registry for GitRegistry {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Make `reg`'s cache a clone of its remote as far as hpm can tell (a
+    /// git checkout whose origin is the remote, holding `config.json`), so a
+    /// lookup reads it without cloning.
+    fn seed_cache(reg: &GitRegistry) {
+        std::fs::create_dir_all(&reg.cache_dir).unwrap();
+        std::fs::write(reg.cache_dir.join("config.json"), "{}").unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["remote", "add", "origin", reg.remote.as_str()],
+        ] {
+            let status = std::process::Command::new("git")
+                .args(&args)
+                .current_dir(&reg.cache_dir)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+    }
 
     #[test]
     fn test_index_path_rejects_non_scoped_name() {
@@ -426,8 +493,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let reg = GitRegistry::new("test", "https://example.com", tmp.path()).unwrap();
         // Mark the cache as populated so get_versions doesn't try to clone.
-        std::fs::create_dir_all(&reg.cache_dir).unwrap();
-        std::fs::write(reg.cache_dir.join("config.json"), "{}").unwrap();
+        seed_cache(&reg);
 
         let host = hpm_package::Platform::current().expect("host platform detectable");
         // A tagged non-host build first in the file: first-match would pick it.
@@ -464,8 +530,7 @@ mod tests {
     async fn get_version_errors_when_no_compatible_build() {
         let tmp = TempDir::new().unwrap();
         let reg = GitRegistry::new("test", "https://example.com", tmp.path()).unwrap();
-        std::fs::create_dir_all(&reg.cache_dir).unwrap();
-        std::fs::write(reg.cache_dir.join("config.json"), "{}").unwrap();
+        seed_cache(&reg);
 
         let path = reg.index_path("acme/native").unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -580,6 +645,77 @@ mod remote_tests {
         }
         let again = set.resolve_in("acme/tools", "=1.0.0", None).await.unwrap();
         assert_eq!(again.version, "1.0.0");
+    }
+
+    /// Refreshing a local-path registry pulls into the existing clone; it is
+    /// not discarded and cloned again (the clone's recorded origin must be
+    /// recognised as the configured path, through symlinked temp dirs too).
+    #[tokio::test]
+    async fn refreshing_a_local_path_registry_keeps_its_clone() {
+        let tmp = TempDir::new().unwrap();
+        let bare = bare_index(tmp.path(), "studio", &["1.0.0"]);
+        let cache = tmp.path().join("registry-cache");
+        let set =
+            RegistrySet::from_configs(&[git_source("studio", bare.to_str().unwrap())], &cache)
+                .unwrap();
+        set.resolve_in("acme/tools", "^1", None).await.unwrap();
+        let clone = std::fs::read_dir(&cache)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        std::fs::write(clone.join(".kept"), "").unwrap();
+        for (name, result) in set.refresh_all().await {
+            result.unwrap_or_else(|e| panic!("refresh {name}: {e}"));
+        }
+        set.resolve_in("acme/tools", "^1", None).await.unwrap();
+        assert!(
+            clone.join(".kept").exists(),
+            "the clone was discarded and re-cloned"
+        );
+    }
+
+    /// A relative local path names a directory relative to where hpm runs,
+    /// as before; it is recorded as that absolute path.
+    #[test]
+    fn a_relative_local_path_is_taken_from_the_working_directory() {
+        let remote = super::GitRemote::parse("shared/registry.git").unwrap();
+        assert_eq!(
+            Path::new(remote.as_str()),
+            std::env::current_dir().unwrap().join("shared/registry.git")
+        );
+    }
+
+    /// A clone whose origin is not the configured remote is never read, even
+    /// before any refresh: it is cloned again from the right remote.
+    #[tokio::test]
+    async fn a_clone_with_another_origin_is_not_read() {
+        let tmp = TempDir::new().unwrap();
+        let real = bare_index(tmp.path(), "real", &["1.0.0"]);
+        let planted = bare_index(tmp.path(), "planted", &["9.0.0"]);
+        let cache = tmp.path().join("cache");
+        let set =
+            RegistrySet::from_configs(&[git_source("studio", real.to_str().unwrap())], &cache)
+                .unwrap();
+        // Put a clone of another index exactly where this registry's clone goes.
+        let slot = cache.join(
+            super::GitRemote::parse(real.to_str().unwrap())
+                .unwrap()
+                .cache_key(),
+        );
+        std::fs::create_dir_all(&cache).unwrap();
+        git(
+            &cache,
+            &[
+                "clone",
+                "-q",
+                planted.to_str().unwrap(),
+                slot.to_str().unwrap(),
+            ],
+        );
+        let entry = set.resolve_in("acme/tools", "*", None).await.unwrap();
+        assert_eq!(entry.version, "1.0.0");
     }
 
     /// A `file://` URL to the same kind of index resolves too.
