@@ -48,8 +48,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identity was stored in that package's slot and served to every project on
   the machine that later asked for it.
 
+- `hpm install` reproduces `hpm.lock`: every package the lock pins at the
+  manifest's version must match its locked checksum, whether freshly
+  downloaded (checked before it reaches the store) or reused from the store.
+  A registry or mirror that served different bytes for a locked version was
+  installed, and the lock rewritten to match. `ProjectManager::sync_dependencies`
+  applies the same check for embedders.
+- A project with a committed `hpm.lock` now installs on a machine whose store
+  has never held its packages; it used to fail with "recorded in the lock
+  file but is not installed".
+
 ### Changed
 
+- Upgrade note: `--frozen-lockfile` fails when a registry or URL dependency
+  has no lock entry with a checksum at the manifest's version.
+- `ProjectManager::sync_dependencies` reads the project's `hpm.lock` and fails
+  when it exists but cannot be read; `sync_dependencies_with_lock` takes the
+  lock explicitly.
 - Upgrade note: a URL dependency whose key or `version` differs from the
   package path and version in the archive's `hpm.toml` now fails to install
   (a bare-slug key still matches the slug).

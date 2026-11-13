@@ -53,6 +53,36 @@ pub enum ProjectError {
     #[error(transparent)]
     Fetch(Box<FetchError>),
 
+    /// `hpm.lock` exists but cannot be read; a sync never ignores the lock
+    /// it is meant to reproduce.
+    #[error("Could not read {} ({source})", lock.display())]
+    LockUnreadable {
+        lock: PathBuf,
+        source: Box<crate::lock::LockError>,
+    },
+
+    /// A package's files differ from the checksum `hpm.lock` records for
+    /// that version: the bytes are not the ones the lock pinned.
+    #[error(
+        "{name}@{version} does not match hpm.lock (expected checksum {expected}, got {actual}). \
+         The source served different bytes than were locked; run 'hpm update {name}' only if \
+         you mean to accept them."
+    )]
+    LockChecksumMismatch {
+        name: String,
+        version: String,
+        expected: String,
+        actual: String,
+    },
+
+    /// `--frozen-lockfile` was given but the lock does not pin this
+    /// dependency's version and checksum.
+    #[error(
+        "--frozen-lockfile requires hpm.lock to pin {name} at its manifest version with a \
+         checksum. Re-run without --frozen-lockfile to update the lock."
+    )]
+    FrozenLockIncomplete { name: String },
+
     /// A package source URL could not be parsed.
     #[error(transparent)]
     InvalidPackageSource(#[from] PackageSourceError),

@@ -37,6 +37,17 @@ fn compute_directory_checksum_sync(dir: &Path) -> Result<String, FetchError> {
 /// Errors that can occur during archive fetching.
 #[derive(Debug, Error)]
 pub enum FetchError {
+    /// The fetched tree differs from the checksum the lock recorded.
+    #[error(
+        "{name}@{version} does not match its locked checksum (expected {expected}, got {actual})"
+    )]
+    LockedChecksumMismatch {
+        name: String,
+        version: String,
+        expected: String,
+        actual: String,
+    },
+
     /// A package name or version that cannot name a directory.
     #[error(transparent)]
     InvalidCoordinate(#[from] crate::storage::layout::InvalidCoordinate),
@@ -138,14 +149,48 @@ impl ArchiveFetcher {
         storage: &crate::storage::StorageManager,
         source: &PackageSource,
         package_name: &str,
+        locked_checksum: Option<&str>,
     ) -> Result<(crate::storage::InstalledPackage, String), E>
     where
         E: From<FetchError> + From<crate::storage::StorageError>,
     {
         let fetched = self.fetch(source, package_name).await?;
-        let installed = storage
-            .install_into_cas(&fetched.package_path, package_name, &source.version)
-            .await;
+        // With a locked checksum, the extracted tree must be exactly the
+        // locked one before anything reaches the store.
+        let verified = match locked_checksum {
+            Some(expected) => {
+                let dir = fetched.package_path.clone();
+                let recorded = expected.to_string();
+                let actual = tokio::task::spawn_blocking(move || {
+                    crate::tree_hash::hash_tree_as(&dir, &recorded)
+                })
+                .await
+                .map_err(|e| FetchError::ExtractionError(format!("hash task failed: {e}")))?
+                .map_err(|e| FetchError::ExtractionError(e.to_string()));
+                match actual {
+                    Ok(actual) if actual == expected => Ok(()),
+                    Ok(actual) => Err(FetchError::LockedChecksumMismatch {
+                        name: package_name.to_string(),
+                        version: source.version.clone(),
+                        expected: expected.to_string(),
+                        actual,
+                    }),
+                    Err(e) => Err(e),
+                }
+            }
+            None => Ok(()),
+        };
+        let installed = match verified {
+            Ok(()) => {
+                storage
+                    .install_into_cas(&fetched.package_path, package_name, &source.version)
+                    .await
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_dir_all(&fetched.package_path).await;
+                return Err(e.into());
+            }
+        };
         // The staging copy goes whether or not the install was accepted.
         if let Err(e) = tokio::fs::remove_dir_all(&fetched.package_path).await {
             warn!(
@@ -421,7 +466,7 @@ mod tests {
 
         let source = PackageSource::url("https://example.invalid/tool.zip", "1.0.0").unwrap();
         let (installed, _) = fetcher
-            .fetch_into_store::<FetchIntoStoreTestError>(&storage, &source, "studio/tool")
+            .fetch_into_store::<FetchIntoStoreTestError>(&storage, &source, "studio/tool", None)
             .await
             .unwrap();
 
@@ -479,7 +524,7 @@ mod tests {
         .unwrap();
         let source = PackageSource::url("https://example.invalid/p.zip", version).unwrap();
         let result = fetcher
-            .fetch_into_store::<FetchIntoStoreTestError>(&storage, &source, dep_name)
+            .fetch_into_store::<FetchIntoStoreTestError>(&storage, &source, dep_name, None)
             .await
             .map(|(installed, _)| installed);
         (result, temp)
@@ -795,6 +840,7 @@ mod tests {
                             &storage,
                             &source,
                             "studio/tool",
+                            None,
                         )
                         .await
                         .map(|(installed, _)| installed.install_path)

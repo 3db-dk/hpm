@@ -94,7 +94,7 @@ pub async fn fetch_manifest(
 
     let fetcher = ArchiveFetcher::for_storage(&storage.config)?;
     let (installed, _checksum) = fetcher
-        .fetch_into_store::<FetchManifestError>(storage, &source, name)
+        .fetch_into_store::<FetchManifestError>(storage, &source, name, None)
         .await?;
 
     info!(

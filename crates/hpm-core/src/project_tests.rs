@@ -647,6 +647,7 @@ async fn install_one_dep_short_circuits_on_scoped_name() {
         std::slice::from_ref(&installed),
         "tumblehead/tumblepipe",
         &spec,
+        None,
     )
     .await
     .expect("scoped lookup must short-circuit on the bare-slug InstalledPackage");
@@ -707,6 +708,7 @@ async fn install_one_dep_repairs_a_lost_executable_bit_on_reuse() {
         std::slice::from_ref(&installed),
         "tumblehead/tumblepipe",
         &spec,
+        None,
     )
     .await
     .expect("already-installed dep short-circuits");
@@ -738,6 +740,7 @@ async fn install_one_dep_no_registries_reports_not_configured() {
         &[],
         "tumblepipe",
         &spec,
+        None,
     )
     .await
     .expect_err("no registries configured must be an error");
@@ -2298,5 +2301,45 @@ mod lock_enforcement {
         assert_eq!(data(&manager), "release bytes");
         manager.sync_dependencies().await.unwrap();
         assert_eq!(data(&manager), "release bytes");
+    }
+
+    /// Bytes other than the locked ones (a registry or mirror that swapped
+    /// the archive) never install: the sync fails and the store keeps no
+    /// copy of them.
+    #[tokio::test]
+    async fn bytes_other_than_the_locked_ones_are_refused() {
+        let temp = TempDir::new().unwrap();
+        let manager = manager_at(&temp, Some(MANIFEST));
+        cache_archive(&temp, "swapped bytes");
+        write_lock(&temp, Some(tools_checksum("release bytes")));
+
+        let result = manager.sync_dependencies().await;
+        assert!(result.is_err(), "installed bytes the lock did not record");
+        assert!(
+            manager
+                .storage_manager
+                .list_installed()
+                .unwrap()
+                .iter()
+                .all(|p| p.manifest.package.path.as_str() != "acme/tools"),
+            "the swapped bytes stayed in the store"
+        );
+    }
+
+    /// A store copy that differs from the lock (installed earlier, by a
+    /// project without this lock) is not reused.
+    #[tokio::test]
+    async fn a_store_copy_differing_from_the_lock_is_not_reused() {
+        let temp = TempDir::new().unwrap();
+        let manager = manager_at(&temp, Some(MANIFEST));
+        cache_archive(&temp, "swapped bytes");
+        manager.sync_dependencies().await.unwrap();
+        assert_eq!(data(&manager), "swapped bytes");
+
+        write_lock(&temp, Some(tools_checksum("release bytes")));
+        assert!(
+            manager.sync_dependencies().await.is_err(),
+            "reused a store copy the lock did not record"
+        );
     }
 }

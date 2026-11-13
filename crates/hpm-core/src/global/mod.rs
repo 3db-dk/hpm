@@ -339,7 +339,7 @@ pub async fn add(
         .map_err(|e| GlobalError::Project(Box::new(e.into())))?;
 
     let (installed, _checksum) =
-        crate::project::fetch_and_install_pkg(storage, fetcher, name, &entry.version, source)
+        crate::project::fetch_and_install_pkg(storage, fetcher, name, &entry.version, source, None)
             .await
             .map_err(|e| GlobalError::Project(Box::new(e)))?;
 

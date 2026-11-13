@@ -63,8 +63,10 @@ pub async fn install_dependencies(
         .to_path_buf();
     let lock_path = project_dir.join("hpm.lock");
 
-    // Pre-sync: load and verify the existing lockfile if present. This is
-    // the only place that fails fast under --frozen-lockfile.
+    // Pre-sync: load the existing lockfile if present. The sync reproduces
+    // it: every package it pins is checked against its locked checksum,
+    // whether fetched or reused from the store, so a machine whose store has
+    // never held the packages installs from the lock too.
     if frozen_lockfile && !lock_path.exists() {
         bail!(
             "--frozen-lockfile requires hpm.lock to exist. \
@@ -74,12 +76,6 @@ pub async fn install_dependencies(
     let existing_lock = if lock_path.exists() {
         match LockFile::load(&lock_path) {
             Ok(lock) => {
-                lock.verify_checksums(&config.storage.packages_dir)
-                    .context(
-                        "Package integrity check failed. \
-                     Delete the corrupted package and run 'hpm install' again.",
-                    )?;
-                info!("Cached packages verified successfully");
                 if let Some(days) = lock.metadata.as_ref().and_then(|m| m.stale_days()) {
                     console.warn(format!(
                         "Lock file is {days} days old. \
@@ -113,7 +109,7 @@ pub async fn install_dependencies(
     let project_manager =
         ProjectManager::new(project_dir, storage_manager, Arc::new(config.clone()))?;
     let outcomes = project_manager
-        .sync_dependencies()
+        .sync_dependencies_with_lock(existing_lock.as_ref(), frozen_lockfile)
         .await
         .context("Failed to sync project dependencies")?;
 

@@ -54,8 +54,11 @@ Verification happens at two points:
   registry entry's `cksum` before anything is extracted. A mismatch removes
   the corrupt cached archive and aborts the install. Registry entries
   without a checksum install with a warning.
-- **On every `hpm install`**: each cached package in `~/.hpm/packages/` is
-  verified against the checksum in `hpm.lock` before use.
+- **On every `hpm install`**: each package `hpm.lock` pins at the version the
+  manifest asks for is verified against its locked checksum, whether it is
+  freshly downloaded (before it is stored) or reused from
+  `~/.hpm/packages/`. A machine that has never installed the package
+  fetches it and verifies it the same way.
 
 A mismatch at either point aborts with a clear error — corrupted or
 tampered packages never silently reach Houdini.
@@ -70,10 +73,13 @@ build if the lock would need to change:
 hpm install --frozen-lockfile
 ```
 
-This catches two failure modes:
+This catches three failure modes:
 
 - The lock file is missing entirely.
 - A dependency's constraint or a registry's contents have drifted since the lock was written.
+- A registry or URL dependency is not pinned with a checksum: under
+  `--frozen-lockfile` every one must be, so a frozen install reproduces exact
+  bytes.
 
 ### Staleness detection
 
@@ -322,7 +328,8 @@ Rotate at studio-appropriate cadence and publish the new `keyId`.
 |--------|---------------|------------|
 | Cache tampering | Attacker modifies a package under `~/.hpm/packages/`. | SHA-256 verification against `hpm.lock` before use. |
 | Man-in-the-middle | Attacker intercepts a download. | TLS + checksum verification. |
-| Lockfile poisoning | Attacker rewrites `hpm.lock` checksums. | Detected at install when cached bytes mismatch. Review lockfile diffs in code review. |
+| Lockfile poisoning | Attacker rewrites `hpm.lock` checksums. | Install verifies packages against the lock, so a rewritten checksum fails against the real bytes; a lock rewritten to match substituted bytes is only caught in review. Review lockfile diffs in code review. |
+| Swapped bytes for a locked version | Registry or mirror serves different bytes for a version the lock pins. | Install fails: fetched and stored copies must match the locked checksum. |
 | Dependency drift | Same project produces different installs over time. | Exact version + checksum pinning; `--frozen-lockfile`. |
 | Stale dependencies | Old versions with known CVEs. | 90-day staleness warnings; `hpm update` surfaces newer versions. |
 | Replay of a vulnerable version | Registry serves an older artifact than expected. | Version is pinned in the lockfile; the registry cannot "silently" downgrade. |
