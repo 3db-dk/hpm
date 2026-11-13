@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.2] - 2026-11-13
+
+### Fixed
+
+- A sync could fail with "create dev copy target ... Invalid argument"
+  (seen on macOS) when it installed a new version of a path dependency
+  while an earlier sync's background cleanup was removing that version's
+  then-empty folder. The install now recreates the folder and carries on.
+- 0.38.1 shipped no Windows binary: a test of this cleanup failed once on
+  the Windows build (an older version's copy was gone while a project
+  still used it). It has not recurred and its cause is not yet known; the
+  test now reports what it found. 0.38.2 is the first Windows build of
+  0.38; see 0.38.0 for everything that changed.
+
 ## [0.38.1] - 2026-11-12
 
 ### Fixed
