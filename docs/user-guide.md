@@ -1079,7 +1079,11 @@ requests = { version = ">=2.25.0", extras = ["security", "socks"] }
 matplotlib = { version = "^3.5.0", optional = true }
 ```
 
-Version constraints use PEP 440 syntax (same as pip/uv). See
+Version constraints use PEP 440 syntax (same as pip/uv). Each entry must be
+one plain requirement: the name and extras are PEP 508 names, and the version
+holds only letters, digits, spaces and `. , * + ! < > = ~ ^ -`, with a `-`
+only after a letter or digit (`1.0-1`). Direct URLs (`name @ url`),
+environment markers and pip options are refused when the manifest loads. See
 [Python guide](python-guide.md) for the Houdini→Python version mapping and
 venv sharing behavior.
 

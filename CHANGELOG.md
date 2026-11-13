@@ -111,7 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Text from registries and package manifests (search results, package
   descriptions, warnings and errors carrying them) is printed without
-  control characters or bidirectional overrides, so it cannot inject
+  control characters or Unicode bidirectional controls, so it cannot inject
   terminal escape sequences (hidden or recoloured output, hyperlinks, a
   changed window title).
 

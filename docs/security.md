@@ -220,7 +220,7 @@ No security issues found.
 ## Transport security
 
 - HPM uses [rustls](https://github.com/rustls/rustls) for all HTTPS (no OpenSSL). Certificates are verified against the operating system's trust store (through `rustls-platform-verifier`), so which roots are trusted is whatever each machine trusts: a root added to a studio's machines is trusted by HPM too.
-- Registry answers and package archives are fetched only over HTTPS, or plain HTTP to this machine (`localhost`, `127.0.0.0/8`, `::1`) for local mirrors. Redirects follow the same rule and never step down from HTTPS to HTTP. Git registries accept `https://`, `ssh://`, `file://`, `git@host:path` or a local path, never `git://` or `http://`.
+- Registry answers and package archives are fetched only over HTTPS, or plain HTTP to this machine (`localhost`, `127.0.0.0/8`, `::1`) for local mirrors. Redirects follow the same rule and never step down from HTTPS to HTTP. Git registries accept `https://`, `ssh://`, `file://`, `git@host:path` or a local path, never `git://` or `http://`, and never a URL or host starting with `-`.
 - TLS and checksums protect different things. A download is checked against the registry's checksum and, when the project has a lockfile entry for that version, against the locked tree checksum. On a first resolve with no lockfile, the checksum arrives from the same registry over the same connection, so it detects corruption, not a compromised registry or a TLS-level attacker; a registry entry without a checksum installs with only a warning. Commit `hpm.lock` so later installs are pinned to bytes you have already seen.
 
 ## Storage layout

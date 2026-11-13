@@ -65,7 +65,8 @@ type = "git"
 A git registry's `url` may be an `https://`, `ssh://` or `file://` URL, an
 scp-style `git@host:path`, or a local or network path to the index repository.
 HPM refuses `git://` and `http://` (unauthenticated plaintext), the
-`<transport>::<address>` remote-helper syntax, and anything starting with `-`,
+`<transport>::<address>` remote-helper syntax, anything starting with `-`, and
+a host starting with `-` (which ssh would read as an option),
 both in `config.toml` and in a project's `hpm.toml`. Git runs with only the
 https, ssh and file transports enabled.
 

@@ -308,13 +308,18 @@ client runs the same flow.
  │ hpm install (CLI)            ── ProjectManager::sync_dependencies ── │
  ├──────────────────────────────────────────────────────────────────────┤
  │  1. Load hpm.toml                                                    │
- │  2. If hpm.lock exists:                                              │
- │       verify cached packages against stored checksums                │
+ │  2. If hpm.lock exists (unreadable → stop):                          │
+ │       each locked checksum is the expected tree digest: checked      │
+ │       on the extracted archive before it reaches the store, and on   │
+ │       a store copy before it is reused (--frozen-lockfile requires   │
+ │       one per registry/URL dep)                                      │
  │       warn if metadata.generated_at > 90 days                        │
  │  3. Fetch + install in parallel (one task per dep, JoinSet):         │
  │       Registry        → query registry, exact-version lookup         │
  │                       → ArchiveFetcher → ~/.hpm/fetch/               │
  │                       → install_into_cas → ~/.hpm/packages/<slug>@<v>/ │
+ │                         (refused unless its manifest declares the    │
+ │                         requested name and version)                  │
  │       Url             → ArchiveFetcher (no registry query)           │
  │                       → install_into_cas                             │
  │       Path            → install_as_dev_copy (or install_as_dev_link  │
