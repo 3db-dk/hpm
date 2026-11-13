@@ -118,12 +118,11 @@ impl LockMetadata {
     /// without hand-rolled leap-year handling.
     pub fn days_since_generated(&self) -> Option<i64> {
         let generated = self.generated_at.as_ref()?;
-        if generated.len() < 10 {
-            return None;
-        }
-        let year: i32 = generated[0..4].parse().ok()?;
-        let month: u8 = generated[5..7].parse().ok()?;
-        let day: u8 = generated[8..10].parse().ok()?;
+        // `get` rather than indexing: the lock comes from whoever wrote the
+        // project, and a range that splits a character must not panic.
+        let year: i32 = generated.get(0..4)?.parse().ok()?;
+        let month: u8 = generated.get(5..7)?.parse().ok()?;
+        let day: u8 = generated.get(8..10)?.parse().ok()?;
         let gen_date =
             time::Date::from_calendar_date(year, time::Month::try_from(month).ok()?, day).ok()?;
         let today = time::OffsetDateTime::now_utc().date();
@@ -533,6 +532,24 @@ mod tests {
             platform: None,
         };
         assert!(meta.days_since_generated().is_some_and(|d| d > 365));
+    }
+
+    /// A malformed timestamp in a cloned project's lock has no age; it never
+    /// aborts hpm.
+    #[test]
+    fn a_malformed_timestamp_has_no_age() {
+        for generated in [
+            "2026-1\u{e9}-01T00:00:00Z",
+            "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}",
+            "2026/13/45T",
+        ] {
+            let meta = LockMetadata {
+                generated_at: Some(generated.to_string()),
+                hpm_version: None,
+                platform: None,
+            };
+            assert_eq!(meta.days_since_generated(), None, "{generated}");
+        }
     }
 
     /// Old lockfiles carried a `version = 1` format field (and per-entry

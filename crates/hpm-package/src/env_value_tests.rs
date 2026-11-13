@@ -574,3 +574,18 @@ fn ordinary_houdini_ranges_parse() {
         HoudiniRange::parse(req).unwrap_or_else(|e| panic!("{req}: {e}"));
     }
 }
+
+/// A range whose bound has no successor is an invalid range, not an
+/// arithmetic overflow (a panic in debug builds, a wrapped bound in release).
+#[test]
+fn ranges_at_the_numeric_limit_are_invalid() {
+    for req in [
+        "^18446744073709551615",
+        "~18446744073709551615",
+        "~1.18446744073709551615",
+        "^0.18446744073709551615",
+        "^0.0.18446744073709551615",
+    ] {
+        assert!(HoudiniRange::parse(req).is_err(), "{req}");
+    }
+}
