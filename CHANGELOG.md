@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   redirect where packages are stored, or to choose the key `hpm pack` signs
   with.
 
+- Archive extraction confines every entry to the install directory. A
+  tar.gz package whose member named an absolute path (in the header, a GNU
+  long-name record or a PAX `path`) was written to that path at install
+  time. Entries with a root, drive or `..` component, or a backslash, colon
+  or NUL in a name, are now refused on every platform.
+
 ### Changed
 
 - Upgrade note: `[storage]`, `[projects]` and `[signing]` in a project's

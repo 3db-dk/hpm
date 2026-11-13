@@ -177,11 +177,7 @@ impl ExtractPlan {
             Some(prefix) => raw.strip_prefix(prefix).unwrap_or(raw),
             None => raw,
         };
-        if relative.as_os_str().is_empty() {
-            return Ok(None);
-        }
-        validate_path_safety_sync(relative)?;
-        Ok(Some(relative.to_path_buf()))
+        confined_relative_path(relative)
     }
 }
 
@@ -389,23 +385,36 @@ fn finalize_mode(target_path: &Path, declared: Option<u32>) -> Result<(), FetchE
     Ok(())
 }
 
-/// Validate that a path doesn't contain traversal attempts.
-fn validate_path_safety_sync(path: &Path) -> Result<(), FetchError> {
-    // Check for backslash-based traversal (e.g. from Windows-style archive entries)
-    let path_str = path.to_string_lossy();
-    if path_str.contains("..\\") || path_str.contains("../") || path_str == ".." {
-        return Err(FetchError::PathTraversalDetected(
-            path.display().to_string(),
-        ));
-    }
+/// The path an archive entry is written to, relative to the target
+/// directory, or `None` for an entry that names the root itself.
+///
+/// Every extracted entry goes through here. Only plain name components are
+/// kept (`.` components are dropped, so `./`-prefixed GNU tar members work);
+/// a root, a drive or UNC prefix, or a `..` component is refused, and so is a
+/// component holding a backslash, a colon or a NUL. Those last three are
+/// refused on every platform: on Windows they spell a separator, a drive or
+/// an alternate data stream, and refusing them everywhere means one archive
+/// yields one tree on every host.
+fn confined_relative_path(path: &Path) -> Result<Option<PathBuf>, FetchError> {
+    use std::path::Component;
+    let refuse = || FetchError::PathTraversalDetected(path.display().to_string());
+    let mut relative = PathBuf::new();
     for component in path.components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            return Err(FetchError::PathTraversalDetected(
-                path.display().to_string(),
-            ));
+        match component {
+            Component::Normal(name) => {
+                let name_str = name.to_string_lossy();
+                if name_str.contains(['\\', ':', '\0']) {
+                    return Err(refuse());
+                }
+                relative.push(name);
+            }
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(refuse());
+            }
         }
     }
-    Ok(())
+    Ok((!relative.as_os_str().is_empty()).then_some(relative))
 }
 
 #[cfg(test)]
@@ -419,30 +428,30 @@ mod tests {
     #[test]
     fn test_validate_path_safety() {
         // Safe paths
-        assert!(validate_path_safety_sync(Path::new("foo/bar/baz.txt")).is_ok());
-        assert!(validate_path_safety_sync(Path::new("src/lib.rs")).is_ok());
+        assert!(confined_relative_path(Path::new("foo/bar/baz.txt")).is_ok());
+        assert!(confined_relative_path(Path::new("src/lib.rs")).is_ok());
 
         // Unsafe paths
-        assert!(validate_path_safety_sync(Path::new("../etc/passwd")).is_err());
-        assert!(validate_path_safety_sync(Path::new("foo/../../etc/passwd")).is_err());
+        assert!(confined_relative_path(Path::new("../etc/passwd")).is_err());
+        assert!(confined_relative_path(Path::new("foo/../../etc/passwd")).is_err());
     }
 
     #[test]
     fn test_path_traversal_parent_directory() {
         // Path traversal with parent directory reference
-        assert!(validate_path_safety_sync(Path::new("../secret")).is_err());
+        assert!(confined_relative_path(Path::new("../secret")).is_err());
     }
 
     #[test]
     fn test_path_traversal_embedded() {
         // Path traversal embedded in path
-        assert!(validate_path_safety_sync(Path::new("foo/../../../etc/passwd")).is_err());
+        assert!(confined_relative_path(Path::new("foo/../../../etc/passwd")).is_err());
     }
 
     #[test]
     fn test_path_traversal_windows_style() {
         // Windows-style path separators shouldn't bypass checks
-        assert!(validate_path_safety_sync(Path::new("..\\secret")).is_err());
+        assert!(confined_relative_path(Path::new("..\\secret")).is_err());
     }
 
     // --- Archive format detection + tar.gz extraction ---
@@ -653,6 +662,152 @@ mod tests {
             "a..b/c.txt",
         ] {
             assert!(out.join(rel).is_file(), "{rel} missing");
+        }
+    }
+
+    /// Append a header-only extension record (GNU long name or PAX) whose
+    /// payload carries the next entry's real path.
+    fn append_path_record(
+        tar: &mut tar::Builder<GzEncoder<Vec<u8>>>,
+        kind: tar::EntryType,
+        payload: &[u8],
+    ) {
+        let mut header = tar::Header::new_gnu();
+        let name: &[u8] = if kind == tar::EntryType::XHeader {
+            b"PaxHeaders/x"
+        } else {
+            b"././@LongLink"
+        };
+        header.as_gnu_mut().unwrap().name[..name.len()].copy_from_slice(name);
+        header.set_entry_type(kind);
+        header.set_size(payload.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append(&header, payload).unwrap();
+    }
+
+    /// A tar member naming an absolute path is refused and nothing is
+    /// written outside the target, whichever way the archive spells the
+    /// path: the ustar name field, a GNU long-name record, or a PAX `path`.
+    #[test]
+    fn test_extract_tar_gz_refuses_absolute_members() {
+        for spelling in ["ustar", "gnu-longname", "pax"] {
+            let temp = TempDir::new().unwrap();
+            let archive_path = temp.path().join("evil.tar.gz");
+            let out = temp.path().join("out");
+            let escaped = temp.path().join(format!("escaped-{spelling}.txt"));
+            let abs = escaped.to_str().unwrap().as_bytes().to_vec();
+
+            let gz = GzEncoder::new(Vec::new(), Compression::default());
+            let mut tar = tar::Builder::new(gz);
+            let mut legit = tar::Header::new_old();
+            legit.as_old_mut().name[..10].copy_from_slice(b"pkg/a.txt\0");
+            legit.set_size(1);
+            legit.set_mode(0o644);
+            legit.set_cksum();
+            tar.append(&legit, &b"a"[..]).unwrap();
+
+            let mut header = tar::Header::new_gnu();
+            match spelling {
+                "ustar" => {
+                    header.as_gnu_mut().unwrap().name[..abs.len()].copy_from_slice(&abs);
+                }
+                "gnu-longname" => {
+                    let mut payload = abs.clone();
+                    payload.push(0);
+                    append_path_record(&mut tar, tar::EntryType::GNULongName, &payload);
+                    header.as_gnu_mut().unwrap().name[..5].copy_from_slice(b"short");
+                }
+                _ => {
+                    let record = format!(" path={}\n", escaped.display());
+                    // PAX records are "<len> <key>=<value>\n", len counting itself.
+                    let mut len = record.len() + 1;
+                    if (len.to_string() + &record).len() != len {
+                        len += 1;
+                    }
+                    let payload = format!("{len}{record}");
+                    append_path_record(&mut tar, tar::EntryType::XHeader, payload.as_bytes());
+                    header.as_gnu_mut().unwrap().name[..5].copy_from_slice(b"short");
+                }
+            }
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_size(3);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append(&header, &b"pwn"[..]).unwrap();
+            let bytes = tar.into_inner().unwrap().finish().unwrap();
+            std::fs::write(&archive_path, &bytes).unwrap();
+
+            let result = extract_archive_sync(&archive_path, &out);
+            assert!(!escaped.exists(), "{spelling}: wrote outside the target");
+            assert!(
+                matches!(result, Err(FetchError::PathTraversalDetected(_))),
+                "{spelling}: expected PathTraversalDetected, got {result:?}"
+            );
+        }
+    }
+
+    /// Windows-form names are refused on every host, so one archive yields
+    /// one tree everywhere; near-misses with dots inside names are kept.
+    #[test]
+    fn windows_form_names_are_refused_everywhere() {
+        for bad in [
+            "\\\\server\\share\\x",
+            "C:\\x",
+            "C:x",
+            "\\x",
+            "pkg\\..\\x",
+            "a:b",
+            "pkg/a\u{0}b",
+            "/abs/x",
+            "pkg//abs/../../x",
+        ] {
+            assert!(
+                matches!(
+                    confined_relative_path(Path::new(bad)),
+                    Err(FetchError::PathTraversalDetected(_))
+                ),
+                "accepted {bad:?}"
+            );
+        }
+        for good in ["report..pdf", "a..b/c", "./x/./y", ".hidden/f", "...", "x."] {
+            assert!(
+                matches!(confined_relative_path(Path::new(good)), Ok(Some(_))),
+                "refused {good:?}"
+            );
+        }
+        assert!(matches!(confined_relative_path(Path::new("./")), Ok(None)));
+    }
+
+    mod confinement_properties {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn component() -> impl Strategy<Value = &'static str> {
+            prop::sample::select(vec![
+                "a", "b.txt", "..", ".", "", "C:", "c:x", "\\x", "x\\..", "...", "a b",
+            ])
+        }
+
+        proptest! {
+            /// Whatever an archive names, an accepted path is made only of
+            /// plain components and stays inside the target directory.
+            #[test]
+            fn accepted_paths_stay_inside_the_target(
+                parts in prop::collection::vec(component(), 1..6),
+                absolute in any::<bool>(),
+            ) {
+                let joined = parts.join("/");
+                let name = if absolute { format!("/{joined}") } else { joined };
+                if let Ok(Some(relative)) = confined_relative_path(Path::new(&name)) {
+                    prop_assert!(relative
+                        .components()
+                        .all(|c| matches!(c, std::path::Component::Normal(_))));
+                    let target = Path::new("/target");
+                    prop_assert!(target.join(&relative).starts_with(target));
+                    prop_assert!(!relative.to_string_lossy().contains(['\\', ':']));
+                }
+            }
         }
     }
 
