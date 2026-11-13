@@ -17,6 +17,8 @@ cleanup() {
 trap cleanup EXIT
 
 FAILS=0
+# An obviously fake credential, kept in one variable.
+FAKE_TOKEN="fake-test-token"
 pass() { echo "ok   - $1"; }
 fail() { echo "FAIL - $1" >&2; FAILS=$((FAILS + 1)); }
 
@@ -38,7 +40,7 @@ upload() {
   local binary=$1
   (
     cd "$SCRATCH/work"
-    GITHUB_TOKEN=fake-test-token CI_COMMIT_TAG=v9.9.9 \
+    GITHUB_TOKEN="$FAKE_TOKEN" CI_COMMIT_TAG=v9.9.9 \
       GITHUB_API_URL="http://127.0.0.1:$PORT" \
       GITHUB_UPLOADS_URL="http://127.0.0.1:$PORT" \
       bash "$ROOT/ci/release-upload.sh" "$binary" linux-x86_64
@@ -46,7 +48,7 @@ upload() {
 }
 
 assets() {
-  curl -sS -H "Authorization: token fake-test-token" \
+  curl -sS -H "Authorization: token $FAKE_TOKEN" \
     "http://127.0.0.1:$PORT/repos/3db-dk/hpm/releases/2/assets"
 }
 
@@ -104,7 +106,7 @@ fi
 # 5. The API base can only be GitHub or this machine: the token goes nowhere else.
 if (
   cd "$SCRATCH/work"
-  GITHUB_TOKEN=fake-test-token CI_COMMIT_TAG=v9.9.9 GITHUB_API_URL="http://example.invalid" \
+  GITHUB_TOKEN="$FAKE_TOKEN" CI_COMMIT_TAG=v9.9.9 GITHUB_API_URL="http://example.invalid" \
     bash "$ROOT/ci/release-upload.sh" "$SCRATCH/bin1" linux-x86_64
 ) > "$SCRATCH/out.log" 2>&1; then
   fail "accepted an API base other than GitHub or 127.0.0.1"
@@ -138,7 +140,7 @@ chmod +x "$SCRATCH/shim/curl"
 start_fake
 : > "$SCRATCH/curl-argv.log"
 if PATH="$SCRATCH/shim:$PATH" upload "$SCRATCH/bin1"; then
-  if [ -s "$SCRATCH/curl-argv.log" ] && ! grep -q 'fake-test-token' "$SCRATCH/curl-argv.log"; then
+  if [ -s "$SCRATCH/curl-argv.log" ] && ! grep -q "$FAKE_TOKEN" "$SCRATCH/curl-argv.log"; then
     pass "the token never appears on a curl command line"
   else
     fail "the token appeared on a curl command line"

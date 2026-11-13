@@ -13,3 +13,7 @@ be8882a03c7e9119d1c038400a988e2be682bf67:docs/registry-architecture.md:generic-a
 4da0db27137453c1369c67e618c769c264ff2b7d:crates/hpm-core/src/packer/tests.rs:private-key:1070
 e5c6db68a9e6eed18532a7e2b38bdd1386b8bba2:crates/hpm-core/src/packer/tests.rs:private-key:1135
 e5c6db68a9e6eed18532a7e2b38bdd1386b8bba2:crates/hpm-core/src/packer/tests.rs:private-key:1137
+
+# A fake credential ("fake-test-token") in a curl header in the release
+# script tests, before it moved into a variable.
+b044d64967f25029c51e02448517af5c131093ad:ci/tests/release_upload_test.sh:curl-auth-header:49
