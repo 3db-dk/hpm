@@ -31,9 +31,38 @@ use std::path::PathBuf;
 /// ```
 pub fn atomic_write(path: &Path, content: impl AsRef<[u8]>) -> Result<(), IoOp> {
     let tmp_path = tmp_sibling(path);
-    std::fs::write(&tmp_path, content).map_err(|e| IoOp::wrap("stage", path, e))?;
-    std::fs::rename(&tmp_path, path).map_err(|e| IoOp::wrap("commit", path, e))?;
+    let content = content.as_ref();
+    retry_transient(|| std::fs::write(&tmp_path, content))
+        .map_err(|e| IoOp::wrap("stage", path, e))?;
+    retry_transient(|| std::fs::rename(&tmp_path, path))
+        .map_err(|e| IoOp::wrap("commit", path, e))?;
     Ok(())
+}
+
+/// Run `op`, retrying briefly while it fails the way Windows fails a file
+/// operation that another process interferes with for a moment: an
+/// antivirus scanner or search indexer opening a just-written file without
+/// delete sharing makes a rename onto it, or of it, fail with "access
+/// denied" or a sharing violation until it lets go. Elsewhere, and for any
+/// other error, the first result stands.
+fn retry_transient<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    #[cfg(windows)]
+    {
+        // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+        const TRANSIENT: [i32; 3] = [5, 32, 33];
+        for delay_ms in [1, 2, 5, 10, 20, 50, 100, 200, 400] {
+            match op() {
+                Err(e)
+                    if e.raw_os_error()
+                        .is_some_and(|code| TRANSIENT.contains(&code)) =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                }
+                result => return result,
+            }
+        }
+    }
+    op()
 }
 
 fn tmp_sibling(path: &Path) -> PathBuf {
@@ -74,6 +103,32 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&target).unwrap(), "fresh");
         assert!(!stale_tmp.exists());
+    }
+
+    /// A scanner holding the target open without delete sharing for a
+    /// moment (as Windows Defender does with a file it has just seen
+    /// written) must not fail the write: the rename is retried until it
+    /// lets go.
+    #[cfg(windows)]
+    #[test]
+    fn a_target_held_open_for_a_moment_is_still_replaced() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("record.json");
+        fs::write(&target, b"old").unwrap();
+        // FILE_SHARE_READ only: no delete sharing, so a rename onto it fails.
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&target)
+            .unwrap();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            drop(held);
+        });
+        atomic_write(&target, b"new").unwrap();
+        releaser.join().unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
     }
 
     #[test]
