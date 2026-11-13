@@ -62,7 +62,7 @@ pub struct StorageManager {
 /// Whether `manifest` declares the package it was requested as: the same
 /// `creator/slug` (or slug, for a bare-slug request), ASCII case aside, at
 /// the same semantic version.
-fn check_declared_identity(
+pub(crate) fn check_declared_identity(
     manifest: &PackageManifest,
     requested_name: &str,
     requested_version: &str,
