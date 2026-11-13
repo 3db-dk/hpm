@@ -757,7 +757,6 @@ dependencies = [
  "hpm-package",
  "insta",
  "proptest",
- "semver",
  "serde_json",
  "tempfile",
  "thiserror",
