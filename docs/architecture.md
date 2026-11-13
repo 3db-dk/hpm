@@ -759,8 +759,8 @@ manifests.
 
 ### Security
 
-- **Transport**: TLS through rustls (pure Rust, no OpenSSL). Certificate verification against the platform trust store.
-- **Integrity**: the archive is checked against the registry's SHA-256 when it is downloaded (a missing checksum only warns); the SHA-256 of the installed tree is recorded in `hpm.lock` and verified before every install.
+- **Transport**: TLS through rustls (pure Rust, no OpenSSL). Certificate verification against the platform trust store. HTTPS only, or plain HTTP to this machine; redirects never step down to HTTP (`http::check_transport`).
+- **Integrity**: the archive is checked against the registry's SHA-256 when it is downloaded (a missing checksum only warns); the SHA-256 of the installed tree is recorded in `hpm.lock`, and a sync verifies every package the lock pins, fetched (before it reaches the store) or reused, against it (`ProjectManager::sync_dependencies_with_lock`).
 - **Signing**: `hpm pack --key` signs archives with Ed25519 over PKCS#8 PEM private keys. `keyId` = first 8 bytes of public key, hex-encoded. See [Security](security.md#package-signing) for the wire format.
 - **Isolation**: bundled `uv` runs out-of-process with its own cache and config, never touching system state.
 

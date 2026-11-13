@@ -219,9 +219,9 @@ No security issues found.
 
 ## Transport security
 
-- HPM uses [rustls](https://github.com/rustls/rustls) for all HTTPS, so TLS comes from a pure-Rust stack — no OpenSSL, no system-trust-store drift between platforms.
-- Registry URLs can be `http://` or `https://`; `hpm audit` warns about HTTP URLs in the `url = …` form of dependencies. If your registry itself is reachable only over HTTP, treat that as a misconfiguration — plain-HTTP registries leak package names and contents, and are trivially tamperable in transit.
-- Downloads from registries stream through reqwest with the checksum path ending at the SHA-256 verification in `hpm install`. MITM tampering doesn't survive checksum verification.
+- HPM uses [rustls](https://github.com/rustls/rustls) for all HTTPS (no OpenSSL). Certificates are verified against the operating system's trust store (through `rustls-platform-verifier`), so which roots are trusted is whatever each machine trusts: a root added to a studio's machines is trusted by HPM too.
+- Registry answers and package archives are fetched only over HTTPS, or plain HTTP to this machine (`localhost`, `127.0.0.0/8`, `::1`) for local mirrors. Redirects follow the same rule and never step down from HTTPS to HTTP. Git registries accept `https://`, `ssh://`, `file://`, `git@host:path` or a local path, never `git://` or `http://`.
+- TLS and checksums protect different things. A download is checked against the registry's checksum and, when the project has a lockfile entry for that version, against the locked tree checksum. On a first resolve with no lockfile, the checksum arrives from the same registry over the same connection, so it detects corruption, not a compromised registry or a TLS-level attacker; a registry entry without a checksum installs with only a warning. Commit `hpm.lock` so later installs are pinned to bytes you have already seen.
 
 ## Storage layout
 
@@ -279,12 +279,15 @@ name = "studio"
 url = "https://packages.studio.com/v1/registry"
 type = "api"
 
-# Bad — plaintext leaks names and lets attackers swap archives in flight
+# Refused — plaintext leaks names and lets attackers swap archives in flight
 [[registries]]
 name = "studio"
 url = "http://packages.studio.com/v1/registry"
 type = "api"
 ```
+
+HPM refuses the second form; only a registry on this machine may use plain
+HTTP.
 
 ### Commit `hpm.lock`
 
@@ -329,12 +332,12 @@ Rotate at studio-appropriate cadence and publish the new `keyId`.
 | Threat | Attack vector | Mitigation |
 |--------|---------------|------------|
 | Cache tampering | Attacker modifies a package under `~/.hpm/packages/`. | SHA-256 verification against `hpm.lock` before use. |
-| Man-in-the-middle | Attacker intercepts a download. | TLS + checksum verification. |
+| Man-in-the-middle | Attacker intercepts a download. | TLS (HTTPS only, no downgrade on redirect). The lockfile's checksum catches substituted bytes for a locked version; a first resolve relies on TLS alone. |
 | Lockfile poisoning | Attacker rewrites `hpm.lock` checksums. | Install verifies packages against the lock, so a rewritten checksum fails against the real bytes; a lock rewritten to match substituted bytes is only caught in review. Review lockfile diffs in code review. |
 | Swapped bytes for a locked version | Registry or mirror serves different bytes for a version the lock pins. | Install fails: fetched and stored copies must match the locked checksum. |
 | Dependency drift | Same project produces different installs over time. | Exact version + checksum pinning; `--frozen-lockfile`. |
 | Stale dependencies | Old versions with known CVEs. | 90-day staleness warnings; `hpm update` surfaces newer versions. |
-| Replay of a vulnerable version | Registry serves an older artifact than expected. | Version is pinned in the lockfile; the registry cannot "silently" downgrade. |
+| Replay of a vulnerable version | Registry serves an older artifact than expected. | Version and tree checksum are pinned in the lockfile; a registry answering for a different version than asked, or with different bytes for a locked version, is refused. Without a lockfile, the registry's answer is taken as given. |
 
 ### Not addressed
 
