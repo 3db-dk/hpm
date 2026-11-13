@@ -215,6 +215,50 @@ mod tests {
         );
     }
 
+    /// Real names and versions keep naming the same store and download
+    /// paths: prerelease and build metadata, digits, underscores, dots and
+    /// capitals inside a name.
+    #[test]
+    fn legitimate_names_and_versions_keep_their_paths() {
+        let l = layout("/h", "/h/packages", "/h/cache");
+        for (name, version, store, key) in [
+            (
+                "acme/tools",
+                "1.0.0-beta.1+b5",
+                "tools@1.0.0-beta.1+b5",
+                "acme-tools-1.0.0-beta.1+b5",
+            ),
+            (
+                "studio/fx2",
+                "10.20.30",
+                "fx2@10.20.30",
+                "studio-fx2-10.20.30",
+            ),
+            (
+                "Studio/My_Tool.v2",
+                "0.1.0",
+                "My_Tool.v2@0.1.0",
+                "Studio-My_Tool.v2-0.1.0",
+            ),
+            (
+                "tools",
+                "2.0.0-rc.1",
+                "tools@2.0.0-rc.1",
+                "tools-2.0.0-rc.1",
+            ),
+        ] {
+            assert_eq!(
+                l.cas_dir(name, version),
+                PathBuf::from("/h/packages").join(store)
+            );
+            assert_eq!(download_key(name, version), key);
+            assert_eq!(
+                l.staging_dir(name, version),
+                PathBuf::from("/h/fetch").join(key)
+            );
+        }
+    }
+
     #[test]
     fn downloads_are_matched_by_key_not_by_prefix() {
         let key = "studio-tool-1.0.0";

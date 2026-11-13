@@ -1902,3 +1902,14 @@ fn escaping_place_rule_targets_fail_the_load() {
         );
     }
 }
+
+/// URL dependencies pinned to prerelease and build-metadata versions load.
+#[test]
+fn url_dependency_versions_load() {
+    for version in ["1.0.0", "1.0.0-beta.1", "1.0.0-beta.1+b5", "2.3.4+20261113"] {
+        let toml_str = format!(
+            "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"acme/tools\" = {{ url = \"https://example.invalid/t.zip\", version = \"{version}\" }}\n"
+        );
+        toml::from_str::<PackageManifest>(&toml_str).unwrap_or_else(|e| panic!("{version}: {e}"));
+    }
+}
