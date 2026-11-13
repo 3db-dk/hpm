@@ -377,4 +377,79 @@ mod tests {
         assert_eq!(moved.cache_dir(), Path::new("/fast/cache"));
         assert_eq!(moved.legacy_cache_dir(), Some(PathBuf::from("/h/cache")));
     }
+
+    mod coordinate_properties {
+        use super::*;
+        use proptest::prelude::*;
+        use std::path::{Component, Path};
+
+        /// Names and versions from the pieces that could escape a root:
+        /// dots, separators of both kinds, drive and stream syntax, `@`,
+        /// NUL, and ordinary name characters.
+        fn hostile() -> impl Strategy<Value = String> {
+            let piece = prop::sample::select(vec![
+                ".", "..", "/", "\\", ":", "@", "\0", "C:", "a", "Z", "1", "0", "-", "_", "+", " ",
+            ]);
+            prop::collection::vec(piece, 0..7).prop_map(|p| p.concat())
+        }
+
+        /// `path` is `root` plus exactly one plain name.
+        fn one_name_under(path: &Path, root: &Path) -> bool {
+            path.strip_prefix(root).is_ok_and(|rest| {
+                let parts: Vec<_> = rest.components().collect();
+                matches!(parts.as_slice(), [Component::Normal(_)])
+            })
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1024))]
+
+            /// Whatever a manifest, lockfile or registry names, an accepted
+            /// coordinate is one plain name under the store, dev, cache or
+            /// staging root, never a path out of it.
+            #[test]
+            fn accepted_coordinates_are_one_name_under_their_root(
+                creator in hostile(),
+                slug in hostile(),
+                scoped in any::<bool>(),
+                version in prop_oneof![hostile(), Just("1.0.0".to_string())],
+            ) {
+                let name = if scoped { format!("{creator}/{slug}") } else { slug };
+                let l = layout("/h", "/h/packages", "/h/cache");
+                if let Ok(path) = l.cas_dir(&name, &version) {
+                    prop_assert!(one_name_under(&path, Path::new("/h/packages")), "{:?}", path);
+                }
+                if let Ok(path) = l.dev_container(&name, &version) {
+                    prop_assert!(one_name_under(&path, &l.dev_root()), "{:?}", path);
+                }
+                if let Ok(path) = l.staging_dir(&name, &version) {
+                    prop_assert!(one_name_under(&path, Path::new("/h/fetch")), "{:?}", path);
+                }
+                if let Ok(key) = download_key(&name, &version) {
+                    prop_assert!(one_name_under(&Path::new("/h/cache").join(&key), Path::new("/h/cache")), "{:?}", key);
+                }
+            }
+
+            /// Real coordinates always resolve, so a check that refuses
+            /// everything cannot pass the property above alone.
+            #[test]
+            fn real_coordinates_resolve(
+                creator in "[a-z0-9][a-z0-9-]{0,8}",
+                slug in "[A-Za-z0-9][A-Za-z0-9._-]{0,8}",
+                scoped in any::<bool>(),
+                version in (0u32..100, 0u32..100, 0u32..100, prop::option::of("[a-z]{1,5}\\.(0|[1-9][0-9]?)"))
+                    .prop_map(|(a, b, c, pre)| match pre {
+                        Some(pre) => format!("{a}.{b}.{c}-{pre}"),
+                        None => format!("{a}.{b}.{c}"),
+                    }),
+            ) {
+                let name = if scoped { format!("{creator}/{slug}") } else { slug };
+                let l = layout("/h", "/h/packages", "/h/cache");
+                prop_assert!(l.cas_dir(&name, &version).is_ok(), "{} {}", name, version);
+                prop_assert!(l.dev_container(&name, &version).is_ok());
+                prop_assert!(l.staging_dir(&name, &version).is_ok());
+                prop_assert!(download_key(&name, &version).is_ok());
+            }
+        }
+    }
 }
