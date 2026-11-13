@@ -524,6 +524,17 @@ mod tests {
         assert_eq!(loaded.package.name, "acme/widget");
     }
 
+    /// Well-formed timestamps give an age.
+    #[test]
+    fn a_well_formed_timestamp_has_an_age() {
+        let meta = LockMetadata {
+            generated_at: Some("2020-02-29T12:00:00Z".to_string()),
+            hpm_version: None,
+            platform: None,
+        };
+        assert!(meta.days_since_generated().is_some_and(|d| d > 365));
+    }
+
     /// Old lockfiles carried a `version = 1` format field (and per-entry
     /// keys like `dependencies` on locked deps). Those fields are gone, but
     /// existing lockfiles on disk still contain them — parsing must tolerate

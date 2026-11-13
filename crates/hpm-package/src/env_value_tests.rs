@@ -566,3 +566,11 @@ fn hpackage_normalization_requires_a_readable_bound() {
         Err(ExpressionError::HpackageNoBound(_))
     ));
 }
+
+/// Houdini ranges authors write keep parsing.
+#[test]
+fn ordinary_houdini_ranges_parse() {
+    for req in ["^21", "~20.5", ">=20.5, <23", "^0.0.3", "~21", "20.5.123"] {
+        HoudiniRange::parse(req).unwrap_or_else(|e| panic!("{req}: {e}"));
+    }
+}
