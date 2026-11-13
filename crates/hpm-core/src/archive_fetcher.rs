@@ -431,6 +431,74 @@ mod tests {
         );
     }
 
+    /// Install `dep_name@version` from an archive pre-placed in the download
+    /// cache (no network), whose own `hpm.toml` declares `declared_path` at
+    /// `declared_version`. Returns the result and the temp root.
+    async fn fetch_declared(
+        dep_name: &str,
+        version: &str,
+        declared_path: &str,
+        declared_version: &str,
+    ) -> (
+        Result<crate::storage::InstalledPackage, FetchIntoStoreTestError>,
+        TempDir,
+    ) {
+        let temp = TempDir::new().unwrap();
+        let storage = crate::storage::StorageManager::new(hpm_config::StorageConfig {
+            home_dir: temp.path().to_path_buf(),
+            cache_dir: temp.path().join("cache"),
+            packages_dir: temp.path().join("packages"),
+            registry_cache_dir: temp.path().join("registry"),
+        })
+        .unwrap();
+        let fetcher =
+            ArchiveFetcher::new(temp.path().join("cache"), temp.path().join("fetch")).unwrap();
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            use std::io::Write;
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("pkg/hpm.toml", options).unwrap();
+            write!(
+                zip,
+                "[package]\npath = \"{declared_path}\"\nname = \"x\"\nversion = \"{declared_version}\"\n"
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+        std::fs::create_dir_all(temp.path().join("cache")).unwrap();
+        std::fs::write(
+            temp.path()
+                .join("cache")
+                .join(crate::storage::layout::download_key(dep_name, version).unwrap()),
+            buf.into_inner(),
+        )
+        .unwrap();
+        let source = PackageSource::url("https://example.invalid/p.zip", version).unwrap();
+        let result = fetcher
+            .fetch_into_store::<FetchIntoStoreTestError>(&storage, &source, dep_name)
+            .await
+            .map(|(installed, _)| installed);
+        (result, temp)
+    }
+
+    /// A package whose archive declares the identity it was requested under
+    /// installs, including when the request differs only in ASCII case or
+    /// names the bare slug.
+    #[tokio::test]
+    async fn an_archive_declaring_the_requested_identity_installs() {
+        for (dep, version, declared, declared_version) in [
+            ("studio/tool", "1.0.0", "studio/tool", "1.0.0"),
+            ("Studio/Tool", "1.0.0", "studio/tool", "1.0.0"),
+            ("tool", "2.1.0-beta.1", "studio/tool", "2.1.0-beta.1"),
+        ] {
+            let (result, _temp) = fetch_declared(dep, version, declared, declared_version).await;
+            let installed = result.unwrap_or_else(|e| panic!("{dep}@{version}: {e:?}"));
+            assert_eq!(installed.version, declared_version);
+            assert_eq!(installed.manifest.package.path.as_str(), declared);
+        }
+    }
+
     #[derive(Debug)]
     #[allow(dead_code)]
     enum FetchIntoStoreTestError {
