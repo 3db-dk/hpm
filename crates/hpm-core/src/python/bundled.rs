@@ -13,29 +13,49 @@ use std::sync::Mutex;
 use tokio::fs;
 use tracing::{debug, info, warn};
 
-const UV_VERSION: &str = "0.5.9";
+/// The uv release hpm runs. Bumping it means updating [`uv_archive`]'s
+/// digests from that release's `<archive>.sha256` files.
+const UV_VERSION: &str = "0.13.6";
 
-/// Platform-specific UV release archive name (filename only).
-fn uv_archive_name() -> Option<&'static str> {
+/// This platform's uv release archive name and the SHA-256 it must hash to.
+/// The download is checked against this pinned digest before anything is
+/// extracted, so neither a replaced release asset nor anything between hpm
+/// and GitHub can change the binary every `hpm install` runs.
+fn uv_archive() -> Option<(&'static str, &'static str)> {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        Some("uv-x86_64-pc-windows-msvc.zip")
+        Some((
+            "uv-x86_64-pc-windows-msvc.zip",
+            "a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f",
+        ))
     }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     {
-        Some("uv-x86_64-apple-darwin.tar.gz")
+        Some((
+            "uv-x86_64-apple-darwin.tar.gz",
+            "63ba17fdda55ad1a230d4b37fc6017ffa10c23688c83818bd3bfdf914c652a02",
+        ))
     }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        Some("uv-aarch64-apple-darwin.tar.gz")
+        Some((
+            "uv-aarch64-apple-darwin.tar.gz",
+            "60fbd5c8a1ed681845eea28d9d622fcde03c51e91a43465b64a1e17db1ed3472",
+        ))
     }
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        Some("uv-x86_64-unknown-linux-gnu.tar.gz")
+        Some((
+            "uv-x86_64-unknown-linux-gnu.tar.gz",
+            "f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645",
+        ))
     }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
     {
-        Some("uv-aarch64-unknown-linux-gnu.tar.gz")
+        Some((
+            "uv-aarch64-unknown-linux-gnu.tar.gz",
+            "229e194255c7958d86d56e8790d969a6f74736592133f0dfd0076f754c642c1d",
+        ))
     }
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
@@ -50,7 +70,7 @@ fn uv_archive_name() -> Option<&'static str> {
 }
 
 fn uv_download_url() -> Option<String> {
-    uv_archive_name().map(|name| {
+    uv_archive().map(|(name, _)| {
         format!("https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/{name}")
     })
 }
@@ -91,7 +111,23 @@ fn uv_env(home: &PythonHome) -> [(&'static str, PathBuf); 6] {
 pub async fn ensure_uv_binary(home: &PythonHome) -> Result<PathBuf, PythonError> {
     let hpm_dir = home.root();
     let tools_dir = hpm_dir.join("tools");
-    let uv_path = tools_dir.join(uv_binary_name());
+    // Each release lives in a directory of its own, so a version bump
+    // installs the new binary instead of reusing whatever is already there.
+    let uv_path = tools_dir
+        .join(format!("uv-{UV_VERSION}"))
+        .join(uv_binary_name());
+
+    // Older hpm versions kept an unpinned, unversioned `tools/uv`; it is
+    // never run again.
+    let legacy = tools_dir.join(uv_binary_name());
+    if std::fs::symlink_metadata(&legacy).is_ok()
+        && let Err(e) = std::fs::remove_file(&legacy)
+    {
+        warn!(
+            "Could not remove the old unpinned uv at {:?}: {}",
+            legacy, e
+        );
+    }
 
     if !uv_path.exists() {
         info!("Downloading UV {} for the first time...", UV_VERSION);
@@ -137,6 +173,8 @@ async fn download_uv(target_path: &Path) -> Result<(), PythonError> {
 
     let archive_data = response.bytes().await.map_err(uv_download)?;
     info!("Downloaded {} bytes", archive_data.len());
+    let (_, expected) = uv_archive().ok_or(PythonError::UnsupportedPlatform)?;
+    verify_uv_digest(&archive_data, expected, &download_url)?;
 
     if download_url.ends_with(".zip") {
         extract_zip(&archive_data, target_path).await?;
@@ -154,6 +192,24 @@ async fn download_uv(target_path: &Path) -> Result<(), PythonError> {
 
     info!("UV binary installed at {:?}", target_path);
     Ok(())
+}
+
+/// Refuse a downloaded uv archive whose SHA-256 is not the pinned one.
+fn verify_uv_digest(archive: &[u8], expected: &str, url: &str) -> Result<(), PythonError> {
+    use sha2::{Digest, Sha256};
+    let actual: String = Sha256::digest(archive)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(PythonError::UvDigestMismatch {
+            url: url.to_string(),
+            expected: expected.to_string(),
+            actual,
+        })
+    }
 }
 
 async fn extract_zip(archive_data: &[u8], target_path: &Path) -> Result<(), PythonError> {
@@ -228,6 +284,11 @@ async fn extract_tar_gz(archive_data: &[u8], target_path: &Path) -> Result<(), P
                 .to_string();
 
             if path_str.ends_with(uv_binary_name) {
+                // Only a regular file becomes the binary: a link entry
+                // would make `tools/.../uv` point wherever it says.
+                if !entry.header().entry_type().is_file() {
+                    return Err(PythonError::UvBinaryNotInArchive);
+                }
                 entry
                     .unpack(&target_path)
                     .map_err(|e| IoOp::wrap("unpack UV binary to", &target_path, e))?;
@@ -398,6 +459,76 @@ pub async fn run_uv_command(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// A uv already sitting at `tools/uv` (any older hpm's download, or a
+    /// file put there) is not the pinned release: hpm never runs it, and
+    /// removes it.
+    #[tokio::test]
+    async fn an_unpinned_uv_in_tools_is_never_used() {
+        let temp = TempDir::new().unwrap();
+        let home = PythonHome::new(temp.path());
+        let tools = temp.path().join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        let legacy = tools.join(uv_binary_name());
+        std::fs::write(&legacy, "old uv").unwrap();
+        // The pinned release, already installed, so nothing is downloaded.
+        let pinned = tools
+            .join(format!("uv-{UV_VERSION}"))
+            .join(uv_binary_name());
+        std::fs::create_dir_all(pinned.parent().unwrap()).unwrap();
+        std::fs::write(&pinned, "pinned uv").unwrap();
+
+        let used = ensure_uv_binary(&home).await.unwrap();
+        assert_ne!(used, legacy, "ran the unpinned uv");
+        assert_eq!(used, pinned);
+        assert!(!legacy.exists(), "the unpinned uv was left in place");
+    }
+
+    /// A download is accepted only when it hashes to the pinned digest.
+    #[test]
+    fn only_the_pinned_archive_is_accepted() {
+        use sha2::{Digest, Sha256};
+        let archive = b"pretend uv archive".to_vec();
+        let digest: String = Sha256::digest(&archive)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        verify_uv_digest(&archive, &digest, "https://example.invalid/uv").unwrap();
+        let mut tampered = archive.clone();
+        tampered.push(0);
+        assert!(matches!(
+            verify_uv_digest(&tampered, &digest, "https://example.invalid/uv"),
+            Err(PythonError::UvDigestMismatch { .. })
+        ));
+        if let Some((name, pinned)) = uv_archive() {
+            assert!(name.starts_with("uv-"));
+            assert_eq!(pinned.len(), 64);
+            assert!(
+                pinned
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            );
+        }
+    }
+
+    /// A link entry named like the binary is refused, not unpacked.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_link_entry_is_not_unpacked_as_the_binary() {
+        use flate2::{Compression, write::GzEncoder};
+        let gz = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar = tar::Builder::new(gz);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        tar.append_link(&mut header, format!("uv-x/{}", uv_binary_name()), "/bin/sh")
+            .unwrap();
+        let bytes = tar.into_inner().unwrap().finish().unwrap();
+        let temp = TempDir::new().unwrap();
+        let target = temp.path().join("tools/uv-x").join(uv_binary_name());
+        assert!(extract_tar_gz(&bytes, &target).await.is_err());
+        assert!(std::fs::symlink_metadata(&target).is_err());
+    }
 
     #[tokio::test]
     async fn test_uv_isolation_setup() {

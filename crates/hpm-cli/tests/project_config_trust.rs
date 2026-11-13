@@ -20,6 +20,10 @@ fn hpm(home: &Path, cwd: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
+/// Where hpm keeps the pinned uv under a home directory. Bump with
+/// `UV_VERSION` in hpm-core's `python/bundled.rs`.
+const UV_DIR: &str = "tools/uv-0.13.6/uv";
+
 fn stub(path: &Path, marker: &Path) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(
@@ -41,10 +45,10 @@ fn a_project_config_cannot_supply_the_uv_hpm_runs() {
     // The user's own hpm home already holds a uv; a stub that records that
     // it ran keeps the test offline.
     let user_marker = work.path().join("user-uv-ran");
-    stub(&home.path().join(".hpm/tools/uv"), &user_marker);
+    stub(&home.path().join(".hpm").join(UV_DIR), &user_marker);
 
     let planted_marker = work.path().join("planted-uv-ran");
-    stub(&project.join("state/tools/uv"), &planted_marker);
+    stub(&project.join("state").join(UV_DIR), &planted_marker);
     std::fs::create_dir_all(project.join(".hpm")).unwrap();
     std::fs::write(
         project.join(".hpm/config.toml"),

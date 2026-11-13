@@ -7,6 +7,16 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PythonError {
+    /// The downloaded uv archive is not the pinned release.
+    #[error(
+        "Refusing uv download from {url}: SHA-256 {actual} does not match the pinned {expected}"
+    )]
+    UvDigestMismatch {
+        url: String,
+        expected: String,
+        actual: String,
+    },
+
     /// A Python requirement that is not one plain requirement (it would add
     /// a pip option, a URL or a marker to the requirements file).
     #[error("Refusing Python requirement {0:?}: not a single plain requirement")]

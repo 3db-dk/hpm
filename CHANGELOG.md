@@ -82,8 +82,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--index-url` to the requirements file shared by every installed package,
   or a direct URL to build from.
 
+- The bundled uv moves from 0.5.9 to 0.13.6, past the advisories against
+  0.5.9 (wheel entry points and RECORD files writing or deleting outside the
+  venv, archive-parsing differentials, a distrusted CA in uv's bundled
+  roots). The download is checked against a SHA-256 pinned in hpm for each
+  platform before it is extracted, only a regular file is accepted as the
+  binary, and it is installed under `tools/uv-<version>/`, so a version bump
+  replaces it; the unversioned `tools/uv` of older hpm is removed.
+
 ### Changed
 
+- Upgrade note: the first Python install after upgrading downloads uv
+  0.13.6 into `~/.hpm/tools/uv-0.13.6/`.
 - Upgrade note: `[python_dependencies]` entries with direct URLs (`name @
   url`), environment markers, or characters outside version specifiers now
   fail the manifest load.
