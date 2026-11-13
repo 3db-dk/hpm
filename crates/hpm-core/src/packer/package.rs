@@ -393,6 +393,51 @@ mod tests {
         );
     }
 
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(24))]
+
+        /// Whatever the display name holds (punctuation, characters Windows
+        /// refuses in file names, non-ASCII), the archive is
+        /// `{slug}-{version}.zip` and uses only portable file-name
+        /// characters.
+        #[test]
+        fn archive_names_are_portable(
+            slug in "[a-z][a-z0-9]{0,6}(-[a-z0-9]{1,4}){0,2}",
+            name in "[ -~\u{e5}\u{f8}\u{65e5}]{1,20}",
+            version in (0u8..20, 0u8..20, 0u8..20),
+        ) {
+            let version = format!("{}.{}.{}", version.0, version.1, version.2);
+            let dir = tempfile::tempdir().unwrap();
+            let pkg = dir.path().join("pkg");
+            std::fs::create_dir_all(pkg.join("otls")).unwrap();
+            std::fs::write(pkg.join("otls/a.hda"), "x").unwrap();
+            let toml_name = name.replace('\\', "\\\\").replace('"', "\\\"");
+            std::fs::write(
+                pkg.join("hpm.toml"),
+                format!(
+                    "[package]\npath = \"acme/{slug}\"\nname = \"{toml_name}\"\nversion = \"{version}\"\ndescription = \"d\"\nauthors = [\"A\"]\nkeywords = [\"k\"]\n"
+                ),
+            )
+            .unwrap();
+            let outcome = pack_package(PackRequest {
+                dir: pkg,
+                output_dir: dir.path().join("out"),
+                key: None,
+                platform: None,
+                target: NativePackageTarget::Generic,
+                verify_assets: false,
+            })
+            .unwrap();
+            let file = outcome.result.archive_path.file_name().unwrap().to_str().unwrap().to_string();
+            proptest::prop_assert_eq!(&file, &format!("{slug}-{version}.zip"));
+            proptest::prop_assert!(
+                file.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.'),
+                "{}",
+                file
+            );
+        }
+    }
+
     #[derive(Debug, Clone, Copy)]
     enum Descriptor {
         Absent,
