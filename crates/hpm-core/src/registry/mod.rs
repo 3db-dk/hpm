@@ -1172,4 +1172,52 @@ mod auth_scope_tests {
         )
         .unwrap();
     }
+
+    mod token_scope_properties {
+        use super::super::https_origin;
+        use proptest::prelude::*;
+
+        const TRUSTED: &str = "registry.example.invalid";
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1024))]
+
+            /// The token goes to a URL exactly when it is https on the
+            /// trusted host (ASCII case aside) at the default port, whatever
+            /// user info, path, query or fragment it carries. Look-alike
+            /// hosts, the trusted name in user info or after the host, other
+            /// ports and plain http never get it.
+            #[test]
+            fn the_token_goes_only_to_the_trusted_origin(
+                scheme in prop::sample::select(vec!["https", "HTTPS", "http"]),
+                userinfo in prop::sample::select(vec!["", "u@", "u:p@", "registry.example.invalid@"]),
+                host in prop::sample::select(vec![
+                    TRUSTED,
+                    "Registry.Example.INVALID",
+                    "registry.example.invalid.evil.invalid",
+                    "evil-registry.example.invalid",
+                    "registry.example.invalid.",
+                    "evil.invalid",
+                ]),
+                port in prop::sample::select(vec!["", ":443", ":8443"]),
+                suffix in prop::sample::select(vec![
+                    "",
+                    "/v1/registry",
+                    "#@registry.example.invalid",
+                    "?h=registry.example.invalid",
+                    "\\@registry.example.invalid",
+                    "/@registry.example.invalid",
+                ]),
+            ) {
+                let trusted: std::collections::HashSet<String> =
+                    [https_origin(&format!("https://{TRUSTED}/v1/registry")).unwrap()].into();
+                let url = format!("{scheme}://{userinfo}{host}{port}{suffix}");
+                let allowed = https_origin(&url).is_some_and(|o| trusted.contains(&o));
+                let expected = scheme.eq_ignore_ascii_case("https")
+                    && host.eq_ignore_ascii_case(TRUSTED)
+                    && matches!(port, "" | ":443");
+                prop_assert_eq!(allowed, expected, "{}", url);
+            }
+        }
+    }
 }
