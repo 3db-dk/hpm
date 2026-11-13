@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- A git registry's url is checked before it reaches `git`, and git runs
+  with only the https, ssh and file transports, no credential prompt and
+  none of the inherited variables that redirect it to another repository.
+  A registry declared in a project's `hpm.toml` could otherwise make
+  `hpm install` run commands or clone into directories outside hpm's cache.
+- Git registry indexes are cached by a digest of their remote URL instead of
+  their display name, so a project registry that reuses the name of one of
+  yours can no longer seed or replace its index; a clone whose origin no
+  longer matches is cloned again.
+
+### Changed
+
+- Upgrade note: git registry urls starting with `-`, using the
+  `<transport>::` helper syntax, or the `git://` or `http://` schemes are now
+  rejected when `config.toml` or `hpm.toml` is loaded, naming the registry.
+  Use `https://`, `ssh://`, `file://`, `git@host:path` or a local path.
+- Git registry indexes are now cloned under `~/.hpm/registry/<digest>/`; each
+  is cloned once more after upgrading, and the old `~/.hpm/registry/<name>/`
+  directories can be deleted.
+- `hpm_config::Config::registry_cache_path` is removed: the cache directory
+  is derived from the remote URL, not the registry name.
+
 ## [0.39.1] - 2026-11-13
 
 ### Fixed

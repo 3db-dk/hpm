@@ -1836,3 +1836,25 @@ fn registry_url_forms_load() {
         assert_eq!(manifest.registries[0].url, url);
     }
 }
+
+/// A git registry url that `git` would read as an option or a helper
+/// transport fails the manifest load, naming the registry.
+#[test]
+fn hostile_git_registry_urls_fail_the_load() {
+    for url in [
+        "--upload-pack=touch x",
+        "-u x",
+        "ext::sh -c touch% x",
+        "fd::7",
+        "git://host.example.invalid/r.git",
+        "http://host.example.invalid/r.git",
+    ] {
+        let toml_str = format!(
+            "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[[registries]]\nname = \"evil\"\nurl = '{url}'\ntype = \"git\"\n"
+        );
+        let err = toml::from_str::<PackageManifest>(&toml_str)
+            .expect_err(url)
+            .to_string();
+        assert!(err.contains("registry 'evil'"), "{url}: {err}");
+    }
+}

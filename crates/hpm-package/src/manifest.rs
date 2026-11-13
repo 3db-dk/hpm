@@ -31,7 +31,7 @@ pub use env::{EnvMethod, ManifestEnvEntry};
 pub use error::ManifestLoadError;
 pub use info::PackageInfo;
 pub use operators::{OperatorDecl, OperatorKind, OperatorSource, SourceResolution};
-pub use registry::{RegistryConfig, RegistryType};
+pub use registry::{RegistryConfig, RegistryType, validate_git_remote, validate_registry_url};
 pub use scripts::{
     PackageScripts, ScriptCommand, ScriptCondition, ScriptEntry, ScriptEnv, ScriptVariant,
 };

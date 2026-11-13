@@ -18,15 +18,72 @@ use super::types::{RegistryEntry, SearchResults};
 use super::{Registry, RegistryError, select_build_for_host};
 use async_trait::async_trait;
 use hpm_package::IoOp;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::info;
+
+/// A git registry remote that has passed [`hpm_package::validate_git_remote`].
+///
+/// The only way to build a [`GitRegistry`], so no unchecked string reaches a
+/// `git` command line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRemote(String);
+
+impl GitRemote {
+    /// Parse a remote URL, refusing option-shaped, helper-transport and
+    /// plaintext forms.
+    pub fn parse(url: &str) -> Result<Self, RegistryError> {
+        hpm_package::validate_git_remote(url).map_err(RegistryError::ParseError)?;
+        Ok(Self(url.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The cache directory name for this remote: a digest of the URL, so two
+    /// registries share a clone only when they share a remote, and no part
+    /// of a registry's name or URL becomes a path component.
+    fn cache_key(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(self.0.as_bytes());
+        digest[..16].iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+/// A `git` command with hpm's fixed policy: only the https, ssh and file
+/// transports, no credential prompts, and none of the inherited variables
+/// that would point it at a different repository or configuration.
+fn git_command(current_dir: &Path) -> std::process::Command {
+    const INHERITED: [&str; 11] = [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+        "GIT_CONFIG",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_EXEC_PATH",
+    ];
+    let mut cmd = std::process::Command::new("git");
+    for var in INHERITED {
+        cmd.env_remove(var);
+    }
+    cmd.env("GIT_ALLOW_PROTOCOL", "https:ssh:file")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .current_dir(current_dir);
+    crate::process_util::hide_console_std(&mut cmd);
+    cmd
+}
 
 /// A Git-hosted package registry index.
 pub struct GitRegistry {
     /// Display name
     display_name: String,
-    /// Remote URL of the git repository
-    remote_url: String,
+    /// Remote of the git repository
+    remote: GitRemote,
     /// Local cache directory for the cloned index
     cache_dir: PathBuf,
 }
@@ -35,19 +92,23 @@ impl GitRegistry {
     /// Create a new Git registry.
     ///
     /// # Arguments
-    /// * `name` - Display name for this registry
-    /// * `remote_url` - Git remote URL (HTTPS)
-    /// * `cache_dir` - Local directory to cache the cloned index
+    /// * `name` - Display name for this registry (never used in a path)
+    /// * `remote_url` - Git remote URL, checked by [`GitRemote::parse`]
+    /// * `registry_cache_root` - Directory holding every git registry's
+    ///   clone; this registry's clone lives in a subdirectory named by a
+    ///   digest of its remote
     pub fn new(
         name: impl Into<String>,
-        remote_url: impl Into<String>,
-        cache_dir: impl Into<PathBuf>,
-    ) -> Self {
-        Self {
+        remote_url: &str,
+        registry_cache_root: &Path,
+    ) -> Result<Self, RegistryError> {
+        let remote = GitRemote::parse(remote_url)?;
+        let cache_dir = registry_cache_root.join(remote.cache_key());
+        Ok(Self {
             display_name: name.into(),
-            remote_url: remote_url.into(),
-            cache_dir: cache_dir.into(),
-        }
+            remote,
+            cache_dir,
+        })
     }
 
     /// Compute the index file path for a scoped package path
@@ -103,22 +164,32 @@ impl GitRegistry {
     }
 
     /// Clone or pull the registry index.
+    ///
+    /// A clone whose `origin` is not this registry's remote is discarded and
+    /// re-cloned rather than pulled, so a cache never follows another remote.
     async fn update_cache(&self) -> Result<(), RegistryError> {
         let cache_dir = self.cache_dir.clone();
-        let remote_url = self.remote_url.clone();
+        let remote = self.remote.clone();
         let display_name = self.display_name.clone();
 
         tokio::task::spawn_blocking(move || {
+            if cache_dir.join(".git").exists() && !origin_matches(&cache_dir, &remote)? {
+                info!(
+                    "Registry index '{}' cache points at another remote; re-cloning",
+                    display_name
+                );
+                std::fs::remove_dir_all(&cache_dir)
+                    .map_err(|e| IoOp::wrap("remove stale registry cache", &cache_dir, e))?;
+            }
             if cache_dir.join(".git").exists() {
                 // Pull latest
                 info!("Updating registry index '{}'...", display_name);
-                let mut cmd = std::process::Command::new("git");
-                cmd.args(["pull", "--ff-only", "-q"])
-                    .current_dir(&cache_dir);
-                crate::process_util::hide_console_std(&mut cmd);
-                let output = cmd.output().map_err(|e| {
-                    RegistryError::GitError(format!("Failed to run git pull: {}", e))
-                })?;
+                let output = git_command(&cache_dir)
+                    .args(["pull", "--ff-only", "-q"])
+                    .output()
+                    .map_err(|e| {
+                        RegistryError::GitError(format!("Failed to run git pull: {}", e))
+                    })?;
 
                 if !output.status.success() {
                     // A registry that has silently stopped updating resolves
@@ -134,19 +205,23 @@ impl GitRegistry {
                 // Clone fresh
                 info!(
                     "Cloning registry index '{}' from {}...",
-                    display_name, remote_url
+                    display_name,
+                    remote.as_str()
                 );
-                if let Some(parent) = cache_dir.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| IoOp::wrap("create registry cache parent", parent, e))?;
-                }
-                let mut cmd = std::process::Command::new("git");
-                cmd.args(["clone", "--depth=1", "-q", &remote_url])
-                    .arg(&cache_dir);
-                crate::process_util::hide_console_std(&mut cmd);
-                let output = cmd.output().map_err(|e| {
-                    RegistryError::GitError(format!("Failed to run git clone: {}", e))
+                let parent = cache_dir.parent().ok_or_else(|| {
+                    RegistryError::GitError("Registry cache directory has no parent".to_string())
                 })?;
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| IoOp::wrap("create registry cache parent", parent, e))?;
+                // `--` ends option parsing: the remote and destination are
+                // only ever positional arguments.
+                let output = git_command(parent)
+                    .args(["clone", "--depth=1", "-q", "--", remote.as_str()])
+                    .arg(&cache_dir)
+                    .output()
+                    .map_err(|e| {
+                        RegistryError::GitError(format!("Failed to run git clone: {}", e))
+                    })?;
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -233,6 +308,18 @@ impl GitRegistry {
     }
 }
 
+/// Whether the clone at `cache_dir` was made from `remote`.
+fn origin_matches(cache_dir: &Path, remote: &GitRemote) -> Result<bool, RegistryError> {
+    let output = git_command(cache_dir)
+        .args(["config", "--get", "remote.origin.url"])
+        .output()
+        .map_err(|e| RegistryError::GitError(format!("Failed to run git config: {}", e)))?;
+    // A clone without an origin (exit 1) is not this remote's clone either.
+    Ok(output.status.success()
+        && String::from_utf8_lossy(&output.stdout).trim_end_matches(['\r', '\n'])
+            == remote.as_str())
+}
+
 #[async_trait]
 impl Registry for GitRegistry {
     async fn search(&self, query: &str) -> Result<SearchResults, RegistryError> {
@@ -284,7 +371,7 @@ mod tests {
     #[test]
     fn test_index_path_rejects_non_scoped_name() {
         let tmp = TempDir::new().unwrap();
-        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
+        let reg = GitRegistry::new("test", "https://example.com", tmp.path()).unwrap();
         assert!(matches!(
             reg.index_path("package-name"),
             Err(RegistryError::ParseError(_))
@@ -294,7 +381,7 @@ mod tests {
     #[test]
     fn test_index_path_scoped() {
         let tmp = TempDir::new().unwrap();
-        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
+        let reg = GitRegistry::new("test", "https://example.com", tmp.path()).unwrap();
         let path = reg.index_path("tumblehead/tumble-rig").unwrap();
         assert!(path.ends_with("tumblehead/tumble-rig.json"));
     }
@@ -302,7 +389,7 @@ mod tests {
     #[test]
     fn test_index_path_scoped_case_insensitive() {
         let tmp = TempDir::new().unwrap();
-        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
+        let reg = GitRegistry::new("test", "https://example.com", tmp.path()).unwrap();
         let path1 = reg.index_path("TumbleHead/Tumble-Rig").unwrap();
         let path2 = reg.index_path("tumblehead/tumble-rig").unwrap();
         assert_eq!(path1, path2);
@@ -311,7 +398,7 @@ mod tests {
     #[test]
     fn test_read_entries_not_found() {
         let tmp = TempDir::new().unwrap();
-        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
+        let reg = GitRegistry::new("test", "https://example.com", tmp.path()).unwrap();
         let result = reg.read_entries("creator/nonexistent");
         assert!(matches!(result, Err(RegistryError::PackageNotFound { .. })));
     }
@@ -322,9 +409,10 @@ mod tests {
     #[tokio::test]
     async fn get_version_selects_host_platform_build() {
         let tmp = TempDir::new().unwrap();
-        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
+        let reg = GitRegistry::new("test", "https://example.com", tmp.path()).unwrap();
         // Mark the cache as populated so get_versions doesn't try to clone.
-        std::fs::write(tmp.path().join("config.json"), "{}").unwrap();
+        std::fs::create_dir_all(&reg.cache_dir).unwrap();
+        std::fs::write(reg.cache_dir.join("config.json"), "{}").unwrap();
 
         let host = hpm_package::Platform::current().expect("host platform detectable");
         // A tagged non-host build first in the file: first-match would pick it.
@@ -360,8 +448,9 @@ mod tests {
     #[tokio::test]
     async fn get_version_errors_when_no_compatible_build() {
         let tmp = TempDir::new().unwrap();
-        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
-        std::fs::write(tmp.path().join("config.json"), "{}").unwrap();
+        let reg = GitRegistry::new("test", "https://example.com", tmp.path()).unwrap();
+        std::fs::create_dir_all(&reg.cache_dir).unwrap();
+        std::fs::write(reg.cache_dir.join("config.json"), "{}").unwrap();
 
         let path = reg.index_path("acme/native").unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -381,7 +470,7 @@ mod tests {
     #[test]
     fn test_read_entries_parses_json_lines() {
         let tmp = TempDir::new().unwrap();
-        let reg = GitRegistry::new("test", "https://example.com", tmp.path());
+        let reg = GitRegistry::new("test", "https://example.com", tmp.path()).unwrap();
 
         // Create index file for a scoped package
         let path = reg.index_path("acme/mops").unwrap();
@@ -483,11 +572,162 @@ mod remote_tests {
     async fn a_file_url_git_registry_resolves() {
         let tmp = TempDir::new().unwrap();
         let bare = bare_index(tmp.path(), "nas", &["2.0.0"]);
-        let url = format!("file://{}", bare.to_str().unwrap().replace('\\', "/"));
+        let url = format!(
+            "file:///{}",
+            bare.to_str()
+                .unwrap()
+                .replace('\\', "/")
+                .trim_start_matches('/')
+        );
         let set = RegistrySet::from_configs(&[git_source("nas", &url)], &tmp.path().join("cache"))
             .unwrap();
         let entry = set.resolve_in("acme/tools", "^2", None).await.unwrap();
         assert_eq!(entry.version, "2.0.0");
+    }
+
+    /// A project's registry list must not be able to hand `git` an option in
+    /// place of a URL: the option-looking URL is refused before any spawn,
+    /// even when the name points the clone at an existing repository.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_option_shaped_url_never_reaches_git() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let bare = bare_index(tmp.path(), "a", &["1.0.0"]);
+        let marker = tmp.path().join("marker");
+        let hook = tmp.path().join("hook.sh");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\ntouch '{}'\nexec git-upload-pack \"$@\"\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cache = tmp.path().join("cache");
+        let sources = [
+            git_source("a", bare.to_str().unwrap()),
+            git_source("a/.git", &format!("--upload-pack={}", hook.display())),
+        ];
+        // Either the set refuses to build, or no lookup through it spawns
+        // the option.
+        if let Ok(set) = RegistrySet::from_configs(&sources, &cache) {
+            let _ = set.resolve_in("acme/tools", "^1", Some("a")).await;
+            let _ = set.resolve_in("acme/tools", "^1", Some("a/.git")).await;
+        }
+        assert!(
+            !marker.exists(),
+            "git ran an option taken from a registry url"
+        );
+    }
+
+    /// Option-shaped and transport-helper URLs are refused for git registries.
+    #[test]
+    fn option_and_helper_urls_are_refused() {
+        let tmp = TempDir::new().unwrap();
+        for url in [
+            "--upload-pack=touch x",
+            "-u touch x",
+            "--template=/tmp/t",
+            "-cprotocol.allow=always",
+            "ext::sh -c touch% x",
+            "fd::17",
+            "  --upload-pack=x",
+            "git://git.example.invalid/registry.git",
+            "http://git.example.invalid/registry.git",
+            "",
+            "https://example.invalid/a\nb",
+        ] {
+            assert!(
+                RegistrySet::from_configs(&[git_source("studio", url)], tmp.path()).is_err(),
+                "accepted {url:?}"
+            );
+        }
+    }
+
+    /// A registry's display name never chooses where its index is cloned.
+    #[tokio::test]
+    async fn a_registry_name_never_places_the_clone() {
+        let tmp = TempDir::new().unwrap();
+        let bare = bare_index(tmp.path(), "src", &["1.0.0"]);
+        let cache = tmp.path().join("cache");
+        let absolute = tmp.path().join("absolute-target");
+        for name in [
+            "../escaped".to_string(),
+            "..".to_string(),
+            "x/../../escaped2".to_string(),
+            absolute.to_str().unwrap().to_string(),
+        ] {
+            let set =
+                RegistrySet::from_configs(&[git_source(&name, bare.to_str().unwrap())], &cache)
+                    .unwrap();
+            let _ = set.resolve_in("acme/tools", "^1", None).await;
+        }
+        assert!(!tmp.path().join("escaped").exists());
+        assert!(!tmp.path().join("escaped2").exists());
+        assert!(!absolute.exists());
+        assert!(!tmp.path().join("config.json").exists());
+        for entry in std::fs::read_dir(tmp.path()).unwrap() {
+            let name = entry.unwrap().file_name();
+            let name = name.to_string_lossy();
+            assert!(
+                ["cache", "src-work", "src.git"].contains(&name.as_ref()),
+                "unexpected entry {name}"
+            );
+        }
+    }
+
+    /// Two registries that share a display name but not a URL never read
+    /// each other's index: a project cannot pre-seed the user's registry.
+    #[tokio::test]
+    async fn same_named_registries_keep_separate_indexes() {
+        let tmp = TempDir::new().unwrap();
+        let attacker = bare_index(tmp.path(), "attacker", &["9.0.0"]);
+        let real = bare_index(tmp.path(), "real", &["1.0.0"]);
+        let cache = tmp.path().join("cache");
+
+        let project =
+            RegistrySet::from_configs(&[git_source("studio", attacker.to_str().unwrap())], &cache)
+                .unwrap();
+        project.resolve_in("acme/tools", "*", None).await.unwrap();
+
+        let user =
+            RegistrySet::from_configs(&[git_source("studio", real.to_str().unwrap())], &cache)
+                .unwrap();
+        let entry = user.resolve_in("acme/tools", "*", None).await.unwrap();
+        assert_eq!(entry.version, "1.0.0");
+    }
+
+    /// Every git spawn carries the transport allowlist and drops inherited
+    /// repository-location variables.
+    #[test]
+    fn git_commands_carry_the_fixed_policy() {
+        let tmp = TempDir::new().unwrap();
+        let cmd = super::git_command(tmp.path());
+        let envs: Vec<_> = cmd.get_envs().collect();
+        let value = |k: &str| {
+            envs.iter()
+                .find(|(key, _)| *key == std::ffi::OsStr::new(k))
+                .map(|(_, v)| *v)
+        };
+        assert_eq!(
+            value("GIT_ALLOW_PROTOCOL"),
+            Some(Some(std::ffi::OsStr::new("https:ssh:file")))
+        );
+        assert_eq!(
+            value("GIT_TERMINAL_PROMPT"),
+            Some(Some(std::ffi::OsStr::new("0")))
+        );
+        for removed in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_COUNT",
+        ] {
+            assert_eq!(value(removed), Some(None), "{removed} not removed");
+        }
+        assert_eq!(cmd.get_current_dir(), Some(tmp.path()));
     }
 
     /// The usual remote URL forms build a registry without touching the

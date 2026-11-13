@@ -143,11 +143,6 @@ impl Config {
         self.registries.len() < before
     }
 
-    /// Get the cache directory for a specific git registry.
-    pub fn registry_cache_path(&self, registry_name: &str) -> PathBuf {
-        self.storage.registry_cache_dir.join(registry_name)
-    }
-
     /// Save the configuration to a file.
     pub fn save(&self, path: &Path) -> Result<(), TomlFileError> {
         if let Some(parent) = path.parent() {

@@ -135,6 +135,7 @@ pub use manifest::{
     PackageManifest, PackageScripts, PlaceRule, PlatformStaging, RegistryConfig, RegistryType,
     ScriptCommand, ScriptCondition, ScriptEntry, ScriptEnv, ScriptVariant, StageConfig,
     StagePlatformRules, TargetPlatformError, ValidationLevel, ValidationReport, parse_manifest_str,
+    validate_git_remote, validate_registry_url,
 };
 pub use package_path::{PackagePath, PackagePathError, split_name_version};
 pub use path_util::user_home;

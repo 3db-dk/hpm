@@ -53,6 +53,8 @@ pub async fn add_registry(
             }
         }
     };
+    hpm_package::validate_registry_url(&reg_type, &url)
+        .map_err(|e| anyhow::anyhow!("Refusing registry url: {e}"))?;
 
     // Derive name from URL if not specified
     let display_name = name.unwrap_or_else(|| {

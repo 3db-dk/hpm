@@ -62,6 +62,13 @@ url = "https://github.com/studio/hpm-packages.git"
 type = "git"
 ```
 
+A git registry's `url` may be an `https://`, `ssh://` or `file://` URL, an
+scp-style `git@host:path`, or a local or network path to the index repository.
+HPM refuses `git://` and `http://` (unauthenticated plaintext), the
+`<transport>::<address>` remote-helper syntax, and anything starting with `-`,
+both in `config.toml` and in a project's `hpm.toml`. Git runs with only the
+https, ssh and file transports enabled.
+
 ### Listing
 
 ```sh
@@ -210,8 +217,12 @@ see [the user guide](user-guide.md).
 
 ## Caching
 
-HPM caches **Git** registry indexes under `~/.hpm/registry/<name>/`. The cache
-is per-registry, not per-project, so multiple projects share the same clone.
+HPM caches **Git** registry indexes under `~/.hpm/registry/<digest>/`, where
+the directory name is a digest of the registry's remote URL. The cache is
+per-remote, not per-project, so every project using the same remote shares one
+clone, while two registries that share a display name but not a URL never read
+each other's index. A clone whose `origin` no longer matches its remote is
+discarded and cloned again.
 
 - **Git cache**: a local clone of the index repository. Updated by `hpm registry update`.
 - **API registries are not cached.** Every resolution and search hits the

@@ -188,8 +188,13 @@ impl RegistrySet {
                     set.add(Box::new(api_reg));
                 }
                 hpm_config::RegistryType::Git => {
-                    let cache_dir = registry_cache_dir.join(&reg.name);
-                    let git_reg = GitRegistry::new(&reg.name, &reg.url, &cache_dir);
+                    let git_reg = GitRegistry::new(&reg.name, &reg.url, registry_cache_dir)
+                        .map_err(|e| {
+                            RegistryError::ParseError(format!(
+                                "Registry '{}' could not be constructed: {}",
+                                reg.name, e
+                            ))
+                        })?;
                     set.add(Box::new(git_reg));
                 }
             }
