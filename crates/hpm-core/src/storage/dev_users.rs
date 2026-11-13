@@ -201,6 +201,18 @@ fn judge_records(
         };
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
+        // A claim being written: `atomic_write` stages it as `<record>.tmp`
+        // before renaming it into place. Its contents may be incomplete,
+        // but a claim is on its way, so it keeps the copy; one abandoned
+        // long ago by a crash claims nothing.
+        if name.ends_with(".tmp") {
+            if staged_claim_is_fresh(&path) {
+                in_use = true;
+            } else if prune {
+                let _ = std::fs::remove_file(&path);
+            }
+            continue;
+        }
         let live = match std::fs::read(&path) {
             Ok(bytes) => {
                 if name.starts_with(PROCESS_PREFIX) {
@@ -226,6 +238,24 @@ fn judge_records(
         }
     }
     in_use
+}
+
+/// How long a staged claim (`<record>.tmp`) counts as being written.
+/// Writing one takes milliseconds; anything older was left by a crash.
+const STAGED_CLAIM_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Whether a staged claim was written recently enough to still be on its
+/// way. One whose age cannot be read is treated as fresh: keeping a copy
+/// too long costs disk, removing it too early costs a project.
+fn staged_claim_is_fresh(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map(|modified| {
+            modified
+                .elapsed()
+                .map_or(true, |age| age < STAGED_CLAIM_TTL)
+        })
+        .unwrap_or(true)
 }
 
 /// In-process count of holds per dev copy, so two installs of the same copy
@@ -1481,6 +1511,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A claim is written as `<record>.tmp` and renamed into place. While it
+    /// is being written it is a claim in progress: the copy is kept and the
+    /// file left alone, however incomplete its contents. One left behind
+    /// long ago by a crash claims nothing and is removed.
+    #[test]
+    fn a_claim_being_written_keeps_the_copy() {
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('a'));
+        let records = records_dir(&c, &hash('a'));
+        std::fs::create_dir_all(&records).unwrap();
+        let in_flight = records.join("project-0123456789abcdef.json.tmp");
+        std::fs::write(&in_flight, b"{\"manif").unwrap();
+        assert!(hash_in_use(&c, &hash('a'), &|_| ProcessState::Gone));
+        assert!(in_flight.exists(), "an in-flight claim is never pruned");
+        assert_eq!(
+            reclaim_dev_copies(&c, None, Unrecorded::Keep, |_| ProcessState::Gone),
+            0
+        );
+        assert!(copy.is_dir());
+
+        let day_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(24 * 3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&in_flight)
+            .unwrap()
+            .set_modified(day_ago)
+            .unwrap();
+        assert!(!hash_in_use(&c, &hash('a'), &|_| ProcessState::Gone));
+        assert!(!in_flight.exists(), "an abandoned one is removed");
     }
 
     /// The project-record file name is keyed by the first 8 bytes of the
