@@ -129,9 +129,7 @@ impl ArchiveFetcher {
         std::fs::create_dir_all(&cache_dir).map_err(FetchError::CacheDirectoryError)?;
         std::fs::create_dir_all(&staging_dir).map_err(FetchError::CacheDirectoryError)?;
 
-        // 5 min timeout for large packages
-        let http_client =
-            crate::http::client_builder(std::time::Duration::from_secs(300)).build()?;
+        let http_client = crate::http::download_client_builder().build()?;
 
         Ok(Self {
             http_client,

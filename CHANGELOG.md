@@ -90,6 +90,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binary, and it is installed under `tools/uv-<version>/`, so a version bump
   replaces it; the unversioned `tools/uv` of older hpm is removed.
 
+- Bounds on what a registry or package can make hpm consume: an archive
+  may expand to at most 1,000,000 entries and 256 GiB, a registry answer may
+  be at most 64 MiB, and connections must open within 30 s. Downloads no
+  longer have a 5-minute cap on the whole transfer (large packages on slow
+  links were cut off); a download that sends nothing for 2 minutes fails.
+
 ### Changed
 
 - Upgrade note: the first Python install after upgrading downloads uv

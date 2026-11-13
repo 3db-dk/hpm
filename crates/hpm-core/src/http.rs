@@ -11,9 +11,20 @@ pub(crate) const USER_AGENT: &str = concat!("hpm/", env!("CARGO_PKG_VERSION"));
 /// given request timeout. Callers add their own headers (e.g. auth) and
 /// `build()`.
 pub(crate) fn client_builder(timeout: std::time::Duration) -> reqwest::ClientBuilder {
+    base_builder().timeout(timeout)
+}
+
+/// A builder for downloads of any size: no cap on the whole transfer (a
+/// large package on a slow link must finish), but a connection that cannot
+/// be made, or that sends nothing for two minutes, fails.
+pub(crate) fn download_client_builder() -> reqwest::ClientBuilder {
+    base_builder().read_timeout(std::time::Duration::from_secs(120))
+}
+
+fn base_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
-        .timeout(timeout)
+        .connect_timeout(std::time::Duration::from_secs(30))
         .redirect(redirect_policy())
 }
 

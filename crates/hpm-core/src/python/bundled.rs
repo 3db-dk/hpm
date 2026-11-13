@@ -155,7 +155,7 @@ async fn download_uv(target_path: &Path) -> Result<(), PythonError> {
         url: download_url.clone(),
         source,
     };
-    let client = crate::http::client_builder(std::time::Duration::from_secs(300))
+    let client = crate::http::download_client_builder()
         .build()
         .map_err(uv_download)?;
     let response = client

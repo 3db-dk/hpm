@@ -45,17 +45,93 @@ pub(super) fn extract_archive_sync(
     archive_path: &Path,
     target_dir: &Path,
 ) -> Result<(), FetchError> {
+    extract_with_limits(archive_path, target_dir, ExtractLimits::DEFAULT)
+}
+
+/// How much one archive may expand to. Far above any real package (Houdini
+/// packages run to tens of gigabytes), these only stop an archive built to
+/// fill the disk or exhaust inodes.
+#[derive(Clone, Copy, Debug)]
+struct ExtractLimits {
+    entries: u64,
+    bytes: u64,
+}
+
+impl ExtractLimits {
+    const DEFAULT: Self = Self {
+        entries: 1_000_000,
+        bytes: 256 * 1024 * 1024 * 1024,
+    };
+}
+
+/// What is left of an [`ExtractLimits`] as entries are extracted.
+struct ExtractBudget {
+    entries: u64,
+    bytes: u64,
+}
+
+impl ExtractBudget {
+    fn new(limits: ExtractLimits) -> Self {
+        Self {
+            entries: limits.entries,
+            bytes: limits.bytes,
+        }
+    }
+
+    fn take_entry(&mut self) -> Result<(), FetchError> {
+        self.entries = self.entries.checked_sub(1).ok_or_else(|| {
+            FetchError::ExtractionError("archive has too many entries".to_string())
+        })?;
+        Ok(())
+    }
+
+    /// Copy `reader` into `writer`, refusing to write more than the bytes
+    /// left in the budget.
+    fn copy(
+        &mut self,
+        reader: &mut impl Read,
+        writer: &mut impl std::io::Write,
+    ) -> Result<(), FetchError> {
+        let copied = std::io::copy(&mut reader.take(self.bytes), writer)?;
+        let mut probe = [0u8; 1];
+        if reader.read(&mut probe)? > 0 {
+            return Err(FetchError::ExtractionError(
+                "archive expands past the extraction size limit".to_string(),
+            ));
+        }
+        self.bytes -= copied;
+        Ok(())
+    }
+}
+
+fn extract_with_limits(
+    archive_path: &Path,
+    target_dir: &Path,
+    limits: ExtractLimits,
+) -> Result<(), FetchError> {
+    let mut budget = ExtractBudget::new(limits);
     match detect_archive_format(archive_path)? {
-        ArchiveFormat::Zip => extract_zip_sync(archive_path, target_dir),
-        ArchiveFormat::TarGz => extract_tar_gz_sync(archive_path, target_dir),
+        ArchiveFormat::Zip => extract_zip_sync(archive_path, target_dir, &mut budget),
+        ArchiveFormat::TarGz => extract_tar_gz_sync(archive_path, target_dir, &mut budget),
     }
 }
 
 /// Extract a ZIP archive to the target directory (blocking operation).
-fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchError> {
+fn extract_zip_sync(
+    archive_path: &Path,
+    target_dir: &Path,
+    budget: &mut ExtractBudget,
+) -> Result<(), FetchError> {
     let file = std::fs::File::open(archive_path)?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| FetchError::ExtractionError(e.to_string()))?;
+
+    // The central directory states the entry count up front.
+    if archive.len() as u64 > budget.entries {
+        return Err(FetchError::ExtractionError(
+            "archive has too many entries".to_string(),
+        ));
+    }
 
     // Resolve the layout: hpackage (strip `{slug}/`, skip root `{slug}.json`),
     // Git-style single root dir (strip it), or flat (extract as-is).
@@ -65,6 +141,7 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
     std::fs::create_dir_all(target_dir)?;
 
     for i in 0..archive.len() {
+        budget.take_entry()?;
         let mut file = archive
             .by_index(i)
             .map_err(|e| FetchError::ExtractionError(e.to_string()))?;
@@ -111,7 +188,7 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
             }
 
             let mut outfile = std::fs::File::create(&target_path)?;
-            std::io::copy(&mut file, &mut outfile)?;
+            budget.copy(&mut file, &mut outfile)?;
             drop(outfile);
 
             #[cfg(unix)]
@@ -259,7 +336,11 @@ fn find_common_root_prefix(names: &[String]) -> Option<PathBuf> {
 }
 
 /// Extract a gzipped tar archive to the target directory (blocking operation).
-fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchError> {
+fn extract_tar_gz_sync(
+    archive_path: &Path,
+    target_dir: &Path,
+    budget: &mut ExtractBudget,
+) -> Result<(), FetchError> {
     // Pass 1: enumerate entry names so we can detect a common root prefix.
     // The tar crate's `Archive` is single-pass, so we open it twice.
     let names = {
@@ -272,6 +353,11 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
             .map_err(|e| FetchError::ExtractionError(e.to_string()))?
         {
             let entry = entry.map_err(|e| FetchError::ExtractionError(e.to_string()))?;
+            if names.len() as u64 >= budget.entries {
+                return Err(FetchError::ExtractionError(
+                    "archive has too many entries".to_string(),
+                ));
+            }
             let path = entry
                 .path()
                 .map_err(|e| FetchError::ExtractionError(e.to_string()))?;
@@ -292,6 +378,7 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
         .entries()
         .map_err(|e| FetchError::ExtractionError(e.to_string()))?
     {
+        budget.take_entry()?;
         let mut entry = entry.map_err(|e| FetchError::ExtractionError(e.to_string()))?;
         let raw_path = entry
             .path()
@@ -312,7 +399,7 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
                 std::fs::create_dir_all(parent)?;
             }
             let mut outfile = std::fs::File::create(&target_path)?;
-            std::io::copy(&mut entry, &mut outfile)?;
+            budget.copy(&mut entry, &mut outfile)?;
             drop(outfile);
 
             #[cfg(unix)]
@@ -785,6 +872,58 @@ mod tests {
                     prop_assert!(target.join(&relative).starts_with(target));
                     prop_assert!(!relative.to_string_lossy().contains(['\\', ':']));
                 }
+            }
+        }
+    }
+
+    /// An archive that expands past the size or entry limit is refused and
+    /// stops writing at the limit; one within both extracts in full.
+    #[test]
+    fn extraction_stops_at_the_size_and_entry_limits() {
+        let limits = ExtractLimits {
+            entries: 4,
+            bytes: 1000,
+        };
+        type Entries = Vec<(&'static str, Vec<u8>)>;
+        let cases: [(&str, Entries, bool); 3] = [
+            (
+                "within",
+                vec![("a.txt", vec![b'a'; 600]), ("b.txt", vec![b'b'; 400])],
+                true,
+            ),
+            (
+                "too big",
+                vec![("a.txt", vec![b'a'; 600]), ("b.txt", vec![b'b'; 401])],
+                false,
+            ),
+            (
+                "too many",
+                (0..5)
+                    .map(|i| (["1", "2", "3", "4", "5"][i], vec![b'x']))
+                    .collect(),
+                false,
+            ),
+        ];
+        for (label, entries, ok) in cases {
+            let refs: Vec<(&str, &[u8])> =
+                entries.iter().map(|(n, c)| (*n, c.as_slice())).collect();
+            for (format, bytes) in [
+                ("zip", build_test_zip(&refs)),
+                ("tar.gz", build_test_tar_gz("pkg", &refs)),
+            ] {
+                let temp = TempDir::new().unwrap();
+                let archive = temp.path().join("a.bin");
+                std::fs::write(&archive, &bytes).unwrap();
+                let out = temp.path().join("out");
+                let result = extract_with_limits(&archive, &out, limits);
+                assert_eq!(result.is_ok(), ok, "{label} {format}: {result:?}");
+                let written: u64 = walkdir::WalkDir::new(&out)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file())
+                    .map(|e| e.metadata().unwrap().len())
+                    .sum();
+                assert!(written <= limits.bytes, "{label} {format}: wrote {written}");
             }
         }
     }

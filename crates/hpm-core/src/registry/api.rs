@@ -90,6 +90,27 @@ impl ApiRegistry {
     }
 }
 
+/// The most a registry answer may hold. Real answers are kilobytes; this
+/// stops a registry that streams without end from exhausting memory.
+const MAX_REGISTRY_RESPONSE: usize = 64 * 1024 * 1024;
+
+/// Read a registry answer of at most [`MAX_REGISTRY_RESPONSE`] bytes and
+/// parse it as JSON.
+async fn read_json_limited<T: serde::de::DeserializeOwned>(
+    mut response: reqwest::Response,
+) -> Result<T, RegistryError> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len() + chunk.len() > MAX_REGISTRY_RESPONSE {
+            return Err(RegistryError::ParseError(format!(
+                "registry answer exceeds {MAX_REGISTRY_RESPONSE} bytes"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|e| RegistryError::ParseError(e.to_string()))
+}
+
 #[derive(serde::Deserialize)]
 struct VersionsResponse {
     versions: Vec<RegistryEntry>,
@@ -116,10 +137,7 @@ impl Registry for ApiRegistry {
         }
 
         let response = response.error_for_status()?;
-        let results: SearchResults = response
-            .json()
-            .await
-            .map_err(|e| RegistryError::ParseError(e.to_string()))?;
+        let results: SearchResults = read_json_limited(response).await?;
 
         info!(
             "Registry '{}' search for '{}': {} results",
@@ -142,10 +160,7 @@ impl Registry for ApiRegistry {
         }
 
         let response = response.error_for_status()?;
-        let wrapper: VersionsResponse = response
-            .json()
-            .await
-            .map_err(|e| RegistryError::ParseError(e.to_string()))?;
+        let wrapper: VersionsResponse = read_json_limited(response).await?;
 
         Ok(wrapper.versions)
     }
@@ -169,10 +184,7 @@ impl Registry for ApiRegistry {
         }
 
         let response = response.error_for_status()?;
-        let wrapper: BuildsResponse = response
-            .json()
-            .await
-            .map_err(|e| RegistryError::ParseError(e.to_string()))?;
+        let wrapper: BuildsResponse = read_json_limited(response).await?;
 
         if wrapper.builds.is_empty() {
             return Err(RegistryError::VersionNotFound {
@@ -390,5 +402,30 @@ mod transport_tests {
         assert!(ApiRegistry::new("r", "http://registry.example.invalid/v1/registry").is_err());
         assert!(ApiRegistry::new("r", "https://registry.example.invalid/v1/registry").is_ok());
         assert!(ApiRegistry::new("r", "http://127.0.0.1:9").is_ok());
+    }
+
+    /// A registry that streams an answer without end is cut off at the
+    /// limit instead of filling memory.
+    #[tokio::test]
+    async fn an_endless_registry_answer_is_cut_off() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/registry", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n");
+                let chunk = vec![b' '; 1 << 20];
+                for _ in 0..(MAX_REGISTRY_RESPONSE / chunk.len() + 8) {
+                    if stream.write_all(&chunk).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        let registry = ApiRegistry::new("r", &url).unwrap();
+        let err = registry.get_versions("acme/tools").await.unwrap_err();
+        assert!(err.to_string().contains("exceeds"), "{err}");
     }
 }
