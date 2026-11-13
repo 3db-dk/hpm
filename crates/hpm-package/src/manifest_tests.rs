@@ -1858,3 +1858,24 @@ fn hostile_git_registry_urls_fail_the_load() {
         assert!(err.contains("registry 'evil'"), "{url}: {err}");
     }
 }
+
+/// Place-rule `to` values authors use keep loading.
+#[test]
+fn place_rule_targets_load() {
+    for to in [
+        "dso/macos-aarch64/",
+        "./",
+        ".",
+        "bin/tool",
+        "a/b/c.so",
+        "lib..d/",
+    ] {
+        let toml_str = format!(
+            "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[compat]\nplatforms = [\"macos-aarch64\"]\n\n[[stage.platform.macos-aarch64.place]]\nfrom = \"build/*\"\nto = '{to}'\n"
+        );
+        let manifest: PackageManifest =
+            toml::from_str(&toml_str).unwrap_or_else(|e| panic!("{to}: {e}"));
+        let rules = &manifest.stage.platform.entries[0].place;
+        assert_eq!(rules[0].to, to);
+    }
+}

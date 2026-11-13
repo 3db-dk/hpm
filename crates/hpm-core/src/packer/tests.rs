@@ -941,3 +941,70 @@ fn compute_archive_checksum_meets_the_digest_spec() {
         crate::digest_spec::reference_hex(b"abc")
     );
 }
+
+/// A stage config placing `from` -> `to` on Linux.
+fn linux_place(rules: &[(&str, &str)]) -> hpm_package::manifest::StageConfig {
+    let mut entries = indexmap::IndexMap::new();
+    entries.insert(
+        hpm_package::platform::Platform::LinuxX86_64,
+        hpm_package::manifest::StagePlatformRules {
+            place: rules
+                .iter()
+                .map(|(from, to)| hpm_package::manifest::PlaceRule {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                })
+                .collect(),
+        },
+    );
+    hpm_package::manifest::StageConfig {
+        platform: hpm_package::manifest::PlatformStaging { entries },
+        ..Default::default()
+    }
+}
+
+/// The `to` forms package authors use keep placing files where they say:
+/// a directory, the archive root as `./` or `.`, a literal file path, and
+/// nested directories.
+#[test]
+fn place_rule_targets_that_must_keep_working() {
+    let linux = hpm_package::platform::Platform::LinuxX86_64;
+    for (to, rel, expected) in [
+        (
+            "dso/linux-x86_64/",
+            "build/libfoo.so",
+            "dso/linux-x86_64/libfoo.so",
+        ),
+        ("./", "build/libfoo.so", "libfoo.so"),
+        (".", "build/libfoo.so", "libfoo.so"),
+        ("bin/tool", "build/tool-linux", "bin/tool"),
+        ("a/b/c.so", "build/x.so", "a/b/c.so"),
+        ("lib..d/", "build/x.so", "lib..d/x.so"),
+    ] {
+        let filter = StageFilter::new(&linux_place(&[("build/*", to)]), Some(&linux)).unwrap();
+        assert_eq!(
+            filter.archive_path_for(rel).as_deref(),
+            Some(expected),
+            "to = {to:?}"
+        );
+    }
+}
+
+/// `hpm build` materialises those placements inside the output directory.
+#[test]
+fn stage_to_dir_places_files_inside_the_output() {
+    let dir = TempDir::new().unwrap();
+    create_test_package(dir.path());
+    fs::create_dir_all(dir.path().join("build")).unwrap();
+    fs::write(dir.path().join("build/libfoo.so"), b"so").unwrap();
+    let out = TempDir::new().unwrap();
+    let linux = hpm_package::platform::Platform::LinuxX86_64;
+    let filter = StageFilter::new(
+        &linux_place(&[("build/*", "dso/linux-x86_64/")]),
+        Some(&linux),
+    )
+    .unwrap();
+    let ignore = build_ignore_rules(dir.path()).unwrap();
+    stage_to_dir(dir.path(), out.path(), &ignore, Some(&filter)).unwrap();
+    assert!(out.path().join("dso/linux-x86_64/libfoo.so").is_file());
+}
