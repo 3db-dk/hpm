@@ -2022,3 +2022,108 @@ mod package_env_not_ready {
         assert_eq!((env.venv_bin, env.virtual_env), (None, None));
     }
 }
+
+/// `[install] parallel_downloads` bounds how many installs a sync runs at
+/// once: four URL dependencies, served slowly by a local server that records
+/// how many requests overlap, never overlap with a limit of 1, and do with 4.
+#[tokio::test(flavor = "multi_thread")]
+async fn parallel_downloads_bounds_concurrent_installs() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let temp_dir = TempDir::new().unwrap();
+    let srv = temp_dir.path().join("srv");
+    for i in 0..4 {
+        let pkg = temp_dir.path().join(format!("src{i}"));
+        std::fs::create_dir_all(pkg.join("otls")).unwrap();
+        std::fs::write(pkg.join("otls/a.hda"), format!("pkg {i}")).unwrap();
+        std::fs::write(
+            pkg.join("hpm.toml"),
+            format!("[package]\npath = \"acme/p{i}\"\nname = \"p{i}\"\nversion = \"1.0.0\"\n"),
+        )
+        .unwrap();
+        crate::packer::pack(
+            &pkg,
+            &format!("p{i}"),
+            "1.0.0",
+            &srv,
+            None,
+            None,
+            &hpm_package::StageConfig::default(),
+            crate::packer::ArchiveLayout::default(),
+        )
+        .unwrap();
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    {
+        let (active, peak, srv) = (active.clone(), peak.clone(), srv.clone());
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let (active, peak, srv) = (active.clone(), peak.clone(), srv.clone());
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 2048];
+                    let n = socket.read(&mut buf).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+                    let file = request
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("/")
+                        .trim_start_matches('/')
+                        .to_string();
+                    let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                    let body = std::fs::read(srv.join(&file)).unwrap_or_default();
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(&body).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+    }
+
+    let deps: String = (0..4)
+        .map(|i| {
+            format!("\"acme/p{i}\" = {{ url = \"{base}/p{i}-1.0.0.zip\", version = \"1.0.0\" }}\n")
+        })
+        .collect();
+    for (limit, home) in [(1usize, "one"), (4, "four")] {
+        let root = temp_dir.path().join(format!("project-{home}"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("hpm.toml"),
+            format!("[package]\npath = \"acme/app\"\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\n{deps}"),
+        )
+        .unwrap();
+        let (base_config, storage) = test_setup(&temp_dir.path().join(home));
+        let config = Arc::new(Config {
+            install: hpm_config::InstallConfig {
+                parallel_downloads: std::num::NonZeroUsize::new(limit).unwrap(),
+            },
+            ..(*base_config).clone()
+        });
+        peak.store(0, Ordering::SeqCst);
+        let outcomes = ProjectManager::new(root, storage, config)
+            .unwrap()
+            .sync_dependencies()
+            .await
+            .unwrap();
+        assert_eq!(outcomes.len(), 4);
+        let seen = peak.load(Ordering::SeqCst);
+        if limit == 1 {
+            assert_eq!(seen, 1, "limit 1 let {seen} downloads overlap");
+        } else {
+            assert!(seen > 1, "limit 4 never overlapped downloads");
+        }
+    }
+}
