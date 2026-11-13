@@ -141,11 +141,46 @@ pub struct StagePlatformRules {
 /// glob into the install image at `to`. If `to` ends with `/`, files keep
 /// their original basename; otherwise `to` is the literal archive path
 /// (use when relocating a single file).
+///
+/// `to` must stay inside the install image
+/// ([`crate::path_util::confined_relative_path`]); a manifest whose `to`
+/// leaves it fails to load.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, try_from = "RawPlaceRule")]
 pub struct PlaceRule {
     pub from: String,
     pub to: String,
+}
+
+impl PlaceRule {
+    /// The install-image path `to` names, relative to the image root (empty
+    /// for the root itself, `"./"` or `"."`). Refuses a `to` that leaves the
+    /// image.
+    pub fn confined_to(&self) -> Result<std::path::PathBuf, crate::path_util::UnconfinedPath> {
+        crate::path_util::confined_relative_path(std::path::Path::new(self.to.trim()))
+    }
+}
+
+/// The unchecked on-disk shape of a [`PlaceRule`].
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPlaceRule {
+    from: String,
+    to: String,
+}
+
+impl TryFrom<RawPlaceRule> for PlaceRule {
+    type Error = String;
+
+    fn try_from(raw: RawPlaceRule) -> Result<Self, Self::Error> {
+        let rule = Self {
+            from: raw.from,
+            to: raw.to,
+        };
+        rule.confined_to()
+            .map_err(|e| format!("place rule `to`: {e}"))?;
+        Ok(rule)
+    }
 }
 
 /// `[stage.profile.*]` table. Each entry is the set of overrides for a single

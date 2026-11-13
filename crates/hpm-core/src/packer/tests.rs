@@ -1008,3 +1008,54 @@ fn stage_to_dir_places_files_inside_the_output() {
     stage_to_dir(dir.path(), out.path(), &ignore, Some(&filter)).unwrap();
     assert!(out.path().join("dso/linux-x86_64/libfoo.so").is_file());
 }
+
+/// Place-rule targets that leave the install image are refused, so neither
+/// `hpm build` nor `hpm pack` can put a file outside it.
+#[test]
+fn place_rule_targets_cannot_leave_the_image() {
+    let linux = hpm_package::platform::Platform::LinuxX86_64;
+    let dir = TempDir::new().unwrap();
+    create_test_package(dir.path());
+    fs::create_dir_all(dir.path().join("build")).unwrap();
+    fs::write(dir.path().join("build/libfoo.so"), b"so").unwrap();
+    let outside = TempDir::new().unwrap();
+    let escaped = outside.path().join("escaped.so");
+    let abs = escaped.to_str().unwrap().replace('\\', "/");
+    let climb = "../escaped-climb.so".to_string();
+
+    for to in [
+        abs.as_str(),
+        climb.as_str(),
+        "../../x",
+        "a/../../x",
+        "..\\x",
+        "C:\\x",
+        "C:x",
+        "a:b",
+    ] {
+        let stage = linux_place(&[("build/*", to)]);
+        // `hpm build`: staging into an output dir.
+        let out = outside.path().join("dist");
+        let staged = StageFilter::new(&stage, Some(&linux)).and_then(|filter| {
+            let ignore = build_ignore_rules(dir.path())?;
+            stage_to_dir(dir.path(), &out, &ignore, Some(&filter))
+        });
+        assert!(staged.is_err(), "hpm build accepted to = {to:?}");
+        assert!(!escaped.exists(), "{to:?}: staged outside the output");
+        assert!(!outside.path().join("escaped-climb.so").exists());
+
+        // `hpm pack`: the archive must not carry an escaping entry name.
+        let pack_out = TempDir::new().unwrap();
+        let packed = pack(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            pack_out.path(),
+            None,
+            Some(&linux),
+            &stage,
+            ArchiveLayout::default(),
+        );
+        assert!(packed.is_err(), "hpm pack accepted to = {to:?}");
+    }
+}

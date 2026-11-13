@@ -1879,3 +1879,26 @@ fn place_rule_targets_load() {
         assert_eq!(rules[0].to, to);
     }
 }
+
+/// A place-rule `to` that leaves the install image fails the manifest load.
+#[test]
+fn escaping_place_rule_targets_fail_the_load() {
+    for to in [
+        "../x",
+        "../../.zshrc",
+        "a/../../x",
+        "/abs/x",
+        "..\\x",
+        "C:\\x",
+        "C:x",
+        "a:b",
+    ] {
+        let toml_str = format!(
+            "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[compat]\nplatforms = [\"macos-aarch64\"]\n\n[[stage.platform.macos-aarch64.place]]\nfrom = \"build/*\"\nto = '{to}'\n"
+        );
+        assert!(
+            toml::from_str::<PackageManifest>(&toml_str).is_err(),
+            "loaded to = {to:?}"
+        );
+    }
+}

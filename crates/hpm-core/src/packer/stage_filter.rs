@@ -60,13 +60,12 @@ impl StageFilter {
                     if platform == target {
                         let trimmed = rule.to.trim();
                         let to_is_dir = trimmed.ends_with('/') || trimmed == ".";
-                        let to = if trimmed == "." || trimmed == "./" {
-                            String::new()
-                        } else if to_is_dir {
-                            trimmed.trim_end_matches('/').to_string()
-                        } else {
-                            trimmed.to_string()
-                        };
+                        // The confined form drops `.` components and refuses
+                        // a `to` that would leave the install image.
+                        let confined = rule
+                            .confined_to()
+                            .map_err(|e| PackError::PlaceTarget(e.to_string()))?;
+                        let to = relative_path_to_forward_slash(&confined);
                         target_rules.push(CompiledPlaceRule {
                             from,
                             to,
@@ -294,6 +293,10 @@ pub(crate) fn collect_stage_entries(
             },
             None => rel_str,
         };
+        // Every writer (`hpm build`, `hpm pack`, dev copies) joins this
+        // path under its own root; refuse here what would leave it.
+        hpm_package::path_util::confined_relative_path(Path::new(&archive_path))
+            .map_err(|e| PackError::PlaceTarget(e.to_string()))?;
         entries.push((path.to_path_buf(), archive_path));
     }
     Ok(entries)

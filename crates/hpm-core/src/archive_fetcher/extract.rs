@@ -386,34 +386,12 @@ fn finalize_mode(target_path: &Path, declared: Option<u32>) -> Result<(), FetchE
 }
 
 /// The path an archive entry is written to, relative to the target
-/// directory, or `None` for an entry that names the root itself.
-///
-/// Every extracted entry goes through here. Only plain name components are
-/// kept (`.` components are dropped, so `./`-prefixed GNU tar members work);
-/// a root, a drive or UNC prefix, or a `..` component is refused, and so is a
-/// component holding a backslash, a colon or a NUL. Those last three are
-/// refused on every platform: on Windows they spell a separator, a drive or
-/// an alternate data stream, and refusing them everywhere means one archive
-/// yields one tree on every host.
+/// directory, or `None` for an entry that names the root itself. Every
+/// extracted entry goes through here; the rule is
+/// [`hpm_package::path_util::confined_relative_path`].
 fn confined_relative_path(path: &Path) -> Result<Option<PathBuf>, FetchError> {
-    use std::path::Component;
-    let refuse = || FetchError::PathTraversalDetected(path.display().to_string());
-    let mut relative = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(name) => {
-                let name_str = name.to_string_lossy();
-                if name_str.contains(['\\', ':', '\0']) {
-                    return Err(refuse());
-                }
-                relative.push(name);
-            }
-            Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(refuse());
-            }
-        }
-    }
+    let relative = hpm_package::path_util::confined_relative_path(path)
+        .map_err(|e| FetchError::PathTraversalDetected(e.0))?;
     Ok((!relative.as_os_str().is_empty()).then_some(relative))
 }
 

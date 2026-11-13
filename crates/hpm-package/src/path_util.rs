@@ -24,6 +24,44 @@ pub fn user_home() -> Option<PathBuf> {
     }
 }
 
+/// A path that does not stay inside the directory it is meant for.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "'{0}' is not a relative path inside the target directory \
+     (no root, drive, '..', '\\', ':' or NUL)"
+)]
+pub struct UnconfinedPath(pub String);
+
+/// The relative path `path` names inside a target directory, built only from
+/// plain name components; an empty result names the directory itself.
+///
+/// This is the single rule for every path hpm writes on someone else's
+/// behalf: archive entries on extraction, and `[stage]` place targets in
+/// dev copies, `hpm build` output and packed archives. `.` components are
+/// dropped (so `./`-prefixed tar members and `to = "./"` work). A root, a
+/// drive or UNC prefix, a `..` component, and a backslash, colon or NUL
+/// anywhere are refused, on every platform: on Windows those spell a
+/// separator, a drive or an alternate data stream, and refusing them
+/// everywhere means one input yields one tree on every host.
+pub fn confined_relative_path(path: &Path) -> Result<PathBuf, UnconfinedPath> {
+    use std::path::Component;
+    let refuse = || UnconfinedPath(path.display().to_string());
+    if path.to_string_lossy().contains(['\\', ':', '\0']) {
+        return Err(refuse());
+    }
+    let mut relative = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => relative.push(name),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(refuse());
+            }
+        }
+    }
+    Ok(relative)
+}
+
 /// Render a relative path with `/` separators, regardless of host OS.
 ///
 /// Used wherever a path string is consumed by something that expects

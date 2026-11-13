@@ -48,6 +48,9 @@ pub enum PackError {
     #[error("Invalid glob pattern: {0}")]
     GlobPattern(String),
 
+    #[error("Invalid [stage] place target: {0}")]
+    PlaceTarget(String),
+
     #[error(
         "Package validation failed with {} error(s):\n  - {}",
         errors.len(),

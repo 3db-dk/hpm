@@ -31,8 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   time. Entries with a root, drive or `..` component, or a backslash, colon
   or NUL in a name, are now refused on every platform.
 
+- A `[stage]` place rule's `to` must stay inside the install image. A path
+  dependency's `to` with `..` or an absolute path made `hpm install` write
+  its file anywhere the user could write; `hpm build` and `hpm pack` had
+  the same flaw.
+
 ### Changed
 
+- Upgrade note: a `[stage]` place rule whose `to` has a `..` component, a
+  leading `/`, a drive, a backslash or a colon now fails the manifest load.
 - Upgrade note: `[storage]`, `[projects]` and `[signing]` in a project's
   `.hpm/config.toml` are now ignored with a warning; set them in
   `~/.hpm/config.toml` instead. `[install]` and `[[registries]]` still apply

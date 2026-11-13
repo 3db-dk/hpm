@@ -1301,7 +1301,10 @@ platforms you ship under `[compat].platforms`; each per-platform
 `to` path (archive-relative). If `to` ends with `/` it's a directory; the
 file's basename is appended. Otherwise `to` is the literal archive path
 (use when relocating a single file under a renamed name). Both `from`
-and `to` use forward slashes regardless of host OS.
+and `to` use forward slashes regardless of host OS. `to` must stay
+inside the install image: `"./"` or `"."` is its root, and a `to` with a
+`..` component, a leading `/`, a drive, a backslash or a colon fails the
+manifest load.
 
 **Where to put native binaries.** Place them in Houdini's convention
 folders at the package root — `dso/` for HDK plugins, `apexdso/` for APEX
