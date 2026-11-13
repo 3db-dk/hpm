@@ -23,7 +23,7 @@
 //!   copy and the project's manifest pointing at it ([`DevCopyHold`]), which
 //!   is the window in which nothing else names the new copy.
 //!
-//! [`reclaim_dev_copies`] removes every hash with no live user, renaming it
+//! `reclaim_dev_copies` removes every hash with no live user, renaming it
 //! aside first: on Windows a directory with a file open inside cannot be
 //! renamed, so a copy some unrecorded process still reads is left whole
 //! rather than half-deleted.
@@ -79,7 +79,7 @@ fn write_record(dir: &Path, name: &str, content: &[u8]) -> io::Result<()> {
 }
 
 /// Record `user` as a process reading the dev copy at `install_path`, so
-/// [`reclaim_dev_copies`] keeps the copy while that process runs. Returns
+/// The reclaim (`reclaim_dev_copies`) keeps the copy while that process runs. Returns
 /// `false` without writing anything when `install_path` is not a content
 /// copy. Call [`release_process_user`] when the process exits; a record left
 /// behind by a crash is harmless, since a dead process uses nothing.

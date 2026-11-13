@@ -20,7 +20,7 @@
 //!   reachability, backing `hpm clean`
 //! - [`python`] — bundled uv, venv management, Houdini→Python ABI mapping
 //! - [`script_run`] — shared `[scripts]` runner for embedders
-//! - [`asset_index`], [`fetch_manifest`], [`package_source`], [`tree_hash`]
+//! - [`asset_index`], [`fetch_manifest`](mod@fetch_manifest), [`package_source`], [`tree_hash`]
 //!   — supporting building blocks
 //!
 //! ## Storage layout

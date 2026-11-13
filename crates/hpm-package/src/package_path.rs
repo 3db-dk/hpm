@@ -95,7 +95,7 @@ impl PackagePath {
     /// `/` cannot appear in a filename, and joining the segments with `-`
     /// would be ambiguous — segments may themselves contain `-`, so
     /// `a-b/c` and `a/b-c` would both render as `a-b-c`. `.` is not a legal
-    /// segment character (see [`is_valid_segment`]), so it separates the two
+    /// segment character (see `is_valid_segment`), so it separates the two
     /// segments unambiguously and [`from_file_stem`] can invert this exactly.
     ///
     /// [`from_file_stem`]: Self::from_file_stem

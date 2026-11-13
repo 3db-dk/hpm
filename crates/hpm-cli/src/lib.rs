@@ -4,7 +4,7 @@
 //! - [`Cli`] / [`Commands`]: clap definitions for `hpm` and its subcommands.
 //! - [`run`]: entry point shared by the `hpm` binary and integration tests —
 //!   parses arguments, builds the single [`Console`], dispatches through
-//!   [`run_command`], and maps [`CliError`]s to exit codes.
+//!   `run_command`, and maps [`CliError`]s to exit codes.
 //! - [`commands`]: one module per subcommand. Each command owns its
 //!   user-facing output, including its success line; the dispatcher only
 //!   loads config, gates `--output`, and delegates.

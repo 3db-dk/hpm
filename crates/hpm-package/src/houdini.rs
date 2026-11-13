@@ -234,7 +234,7 @@ pub fn normalize_hpackage_version(version: &str) -> Result<String, String> {
 /// Check a bundled `{slug}.json` against the rules SideFX's hpackage
 /// repository enforces on upload.
 ///
-/// [`generate_houdini_native_package_for`] already emits a conforming file,
+/// [`generate_houdini_native_package_for`](crate::PackageManifest::generate_houdini_native_package_for) already emits a conforming file,
 /// but `hpm pack` ships a hand-written `{slug}.json` verbatim when the
 /// package directory holds one — so under `--sidefx` the descriptor that
 /// actually reaches the archive is the one that has to pass, whichever way it

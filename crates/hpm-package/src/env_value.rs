@@ -579,7 +579,7 @@ impl HoudiniRange {
     /// there.
     ///
     /// Every operand is rewritten to `major.minor` (see
-    /// [`SimpleVersion::hpackage`]), plus two checks. The range must compile
+    /// `SimpleVersion::hpackage`), plus two checks. The range must compile
     /// to exactly one comparison, because hpackage matches the whole
     /// `enable` value rather than searching it — so a bounded range is
     /// refused here rather than at upload. And that comparison must be `>=`
