@@ -19,15 +19,19 @@ steps:
       - git fetch --no-tags --depth=1 origin $env:CI_COMMIT_SHA
       - git reset --hard $env:CI_COMMIT_SHA
       - $env:PATH = "$env:USERPROFILE\.cargo\bin;C:\Users\Administrator\.cargo\bin;$env:PATH"
-      - rustup default stable
-      - cargo build --release -p hpm-cli --bin hpm
+      # rust-toolchain.toml pins the compiler; install it without changing
+      # the shared worker's default toolchain.
+      - rustup toolchain install
+      - cargo build --locked --release -p hpm-cli --bin hpm
 
   - name: test
     image: powershell
     commands:
       - $env:PATH = "$env:USERPROFILE\.cargo\bin;C:\Users\Administrator\.cargo\bin;$env:PATH"
-      - rustup default stable
-      - cargo test --release --workspace
+      # rust-toolchain.toml pins the compiler; install it without changing
+      # the shared worker's default toolchain.
+      - rustup toolchain install
+      - cargo test --locked --release --workspace
 
   - name: upload
     image: powershell

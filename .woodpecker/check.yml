@@ -19,7 +19,9 @@ steps:
       - git remote add origin ${CI_REPO_CLONE_URL}
       - git fetch --no-tags --depth=1 origin ${CI_COMMIT_SHA}
       - git reset --hard ${CI_COMMIT_SHA}
-      - rustup default stable
+      # rust-toolchain.toml pins the compiler; install it without changing
+      # the shared worker's default toolchain.
+      - rustup toolchain install
       # Secret gate: scan the checked-out commit's tracked files (the clone
       # is depth 1) before anything is built. gitleaks 8.30.1, checked
       # against its published SHA-256; reviewed history findings live in
@@ -30,8 +32,8 @@ steps:
       - tar -xzf .tools/gitleaks.tar.gz -C .tools gitleaks
       - .tools/gitleaks git --redact --no-banner --exit-code 1 .
       - cargo fmt --check
-      - cargo clippy --workspace --all-targets -- -D warnings
-      - cargo test --workspace
+      - cargo clippy --locked --workspace --all-targets -- -D warnings
+      - cargo test --locked --workspace
       # Dependency gate: advisories, licenses, banned and unknown sources
       # (deny.toml). Installed per run at a pinned version into the
       # workspace, so the shared host's ~/.cargo/bin is not modified.
