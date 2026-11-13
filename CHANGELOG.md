@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.1] - 2026-11-13
+
 ### Fixed
 
 - On Windows, a dev copy could be removed while a project still pointed at
@@ -18,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package files, claims) now retry briefly when Windows refuses them that
   way; a claim that still cannot be written fails the sync instead of being
   logged; and a claim in the middle of being written always keeps its copy.
+- 0.39.0 shipped no Windows binary: its Windows test run failed with this
+  symptom (a project's dev copy gone while the project used it).
+  0.39.1 is the first Windows build of 0.39; see 0.39.0 for what changed.
 
 ## [0.39.0] - 2026-11-13
 
