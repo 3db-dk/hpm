@@ -392,17 +392,36 @@ fn shell_quote(arg: &str) -> Result<String, ScriptRunError> {
 /// Quote a forwarded argument for `cmd /S /C`, refusing what would end its
 /// quoting. cmd toggles quoting at every `"` (it does not know the CRT's
 /// `\"` escape) and stops at a line break, so an argument holding either
-/// could put `&`, `|` or `>` outside quotes and run a second command. Every
-/// other character, `%` included (see [`windows_quote`]), stays inside the
-/// quotes and reaches the script as data.
+/// could put `&`, `|` or `>` outside quotes and run a second command; a
+/// `%NAME%` reference is refused for the same reason (see
+/// [`names_a_cmd_variable`]). Everything else stays inside the quotes and
+/// reaches the script as data.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn cmd_forwarded_arg(arg: &str) -> Result<String, ScriptRunError> {
-    if arg.contains(['"', '\r', '\n', '\0']) {
+    if arg.contains(['"', '\r', '\n', '\0']) || names_a_cmd_variable(arg) {
         return Err(ScriptRunError::UnsafeWindowsArg {
             arg: arg.to_string(),
         });
     }
     Ok(windows_quote(arg))
+}
+
+/// Whether `arg` holds a `%NAME%` (or `%NAME:...%`) reference cmd.exe would
+/// expand. cmd expands variables before it parses quotes, so a variable's
+/// value (or a substring of `%CMDCMDLINE%`) can supply a `"` that ends the
+/// argument's quoting. Variable names start with a letter or `_`; a `%`
+/// followed by a digit (`render.%04d.exr`) or a space (`50% off`) is not a
+/// reference and stays as written.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn names_a_cmd_variable(arg: &str) -> bool {
+    let percents: Vec<usize> = arg.match_indices('%').map(|(i, _)| i).collect();
+    percents.windows(2).any(|pair| {
+        let inner = &arg[pair[0] + 1..pair[1]];
+        inner
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+    })
 }
 
 /// Single-quote and escape embedded single quotes via `'\''`. Robust for
@@ -640,10 +659,17 @@ mod tests {
             r#"x"|whoami"#,
             r#"\" & calc"#,
             "line\r\ncalc",
+            // cmd.exe expands variables before it parses quotes, so an
+            // expansion can supply the `"` itself.
+            "%CMDCMDLINE:~0,1% & calc & %CMDCMDLINE:~0,1%",
+            "%PATH%",
+            "x%ComSpec%y",
+            "%_hidden%",
         ] {
             match cmd_forwarded_arg(arg) {
                 Err(ScriptRunError::UnsafeWindowsArg { .. }) => {}
                 Err(e) => panic!("{arg:?}: {e}"),
+                Ok(_) if arg.contains('%') => panic!("{arg:?} reaches cmd.exe expandable"),
                 Ok(quoted) => {
                     let line = format!("python script.py {quoted}");
                     assert!(
@@ -669,6 +695,8 @@ mod tests {
             "a b",
             "x&y|z<w>v^u",
             "100%",
+            "frame_%04d_%02d.exr",
+            "50% off, 20% more",
         ] {
             let quoted = cmd_forwarded_arg(arg).unwrap_or_else(|e| panic!("{arg:?}: {e}"));
             let line = format!("python script.py {quoted}");

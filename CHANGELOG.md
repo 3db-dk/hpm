@@ -128,8 +128,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgrade note: a zip package archive whose entries use a compression method
   other than Stored or Deflated now fails to extract; repack it with
   `hpm pack` or a standard zip tool.
-- Upgrade note: on Windows, `hpm run` arguments may not contain `"` or line
-  breaks; `%`, `&`, `|`, `<`, `>` and `^` still pass through inside quotes.
+- Upgrade note: on Windows, `hpm run` arguments may not contain `"`, line
+  breaks, or a `%NAME%` variable reference (cmd.exe would expand it before
+  quoting); `%04d`-style frame patterns, a lone `%`, `&`, `|`, `<`, `>` and
+  `^` still pass through inside quotes.
 - Upgrade note: a package containing a symlink to a file outside the package
   directory no longer packs or dev-installs; replace the link with the file.
 - Upgrade note: the first Python install after upgrading downloads uv
