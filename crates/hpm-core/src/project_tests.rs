@@ -2207,3 +2207,96 @@ async fn parallel_downloads_bounds_concurrent_installs() {
         }
     }
 }
+
+/// A project's `hpm.lock` records each package's tree checksum; a sync
+/// installs exactly the bytes the lock recorded.
+mod lock_enforcement {
+    use super::*;
+    use crate::lock::{LockFile, LockedDependency, LockedSource};
+
+    const MANIFEST: &str = "[package]\npath = \"studio/proj\"\nname = \"proj\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"acme/tools\" = { url = \"https://example.invalid/tools.zip\", version = \"1.0.0\" }\n";
+    const TOOLS_MANIFEST: &str =
+        "[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"1.0.0\"\n";
+
+    /// A zip of `acme/tools@1.0.0` whose payload file holds `payload`.
+    fn tools_zip(payload: &str) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("tools/hpm.toml", options).unwrap();
+            zip.write_all(TOOLS_MANIFEST.as_bytes()).unwrap();
+            zip.start_file("tools/data.txt", options).unwrap();
+            zip.write_all(payload.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    /// The tree checksum the lock records for the archive `tools_zip(payload)`.
+    fn tools_checksum(payload: &str) -> String {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("hpm.toml"), TOOLS_MANIFEST).unwrap();
+        std::fs::write(dir.path().join("data.txt"), payload).unwrap();
+        crate::tree_hash::hash_tree(dir.path()).unwrap()
+    }
+
+    /// Serve `tools_zip(payload)` from the download cache (no network).
+    fn cache_archive(temp: &TempDir, payload: &str) {
+        let cache = temp.path().join(".hpm").join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("acme-tools-1.0.0"), tools_zip(payload)).unwrap();
+    }
+
+    fn write_lock(temp: &TempDir, checksum: Option<String>) {
+        let mut lock = LockFile::new("proj".into(), "0.1.0".into());
+        lock.add_dependency(
+            "acme/tools".into(),
+            LockedDependency {
+                version: "1.0.0".into(),
+                checksum,
+                source: LockedSource::url(
+                    "https://example.invalid/tools.zip".to_string(),
+                    "1.0.0".to_string(),
+                ),
+            },
+        );
+        lock.save(&temp.path().join("project").join("hpm.lock"))
+            .unwrap();
+    }
+
+    fn manager_at(temp: &TempDir, manifest: Option<&str>) -> ProjectManager {
+        let (config, storage) = test_setup(temp.path());
+        let root = temp.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        if let Some(m) = manifest {
+            std::fs::write(root.join("hpm.toml"), m).unwrap();
+        }
+        ProjectManager::new(root, storage, config).unwrap()
+    }
+
+    fn data(manager: &ProjectManager) -> String {
+        let installed = manager.storage_manager.list_installed().unwrap();
+        let pkg = installed
+            .iter()
+            .find(|p| p.manifest.package.path.as_str() == "acme/tools")
+            .expect("acme/tools installed");
+        std::fs::read_to_string(pkg.install_path.join("data.txt")).unwrap()
+    }
+
+    /// The bytes the lock recorded install on a machine that has never seen
+    /// the package, and a second sync reuses them.
+    #[tokio::test]
+    async fn the_locked_bytes_install_on_a_fresh_machine_and_are_reused() {
+        let temp = TempDir::new().unwrap();
+        let manager = manager_at(&temp, Some(MANIFEST));
+        cache_archive(&temp, "release bytes");
+        write_lock(&temp, Some(tools_checksum("release bytes")));
+
+        manager.sync_dependencies().await.unwrap();
+        assert_eq!(data(&manager), "release bytes");
+        manager.sync_dependencies().await.unwrap();
+        assert_eq!(data(&manager), "release bytes");
+    }
+}
