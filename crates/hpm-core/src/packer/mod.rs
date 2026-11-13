@@ -52,6 +52,19 @@ pub enum PackError {
     PlaceTarget(String),
 
     #[error(
+        "{} is a link to a file outside the package; replace it with the file itself \
+         or move the target into the package",
+        .0.display()
+    )]
+    LinkOutsidePackage(std::path::PathBuf),
+
+    #[error(
+        "{0} is a private key; refusing to pack it. Keep signing keys outside the package \
+         or list them in .hpmignore"
+    )]
+    PrivateKey(String),
+
+    #[error(
         "Package validation failed with {} error(s):\n  - {}",
         errors.len(),
         errors.join("\n  - ")

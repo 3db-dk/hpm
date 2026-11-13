@@ -1092,3 +1092,69 @@ fn public_keys_and_docs_about_keys_pack() {
     assert!(zip.by_name("SIGNING.md").is_ok());
     assert!(zip.by_name("release.pub").is_ok());
 }
+
+/// A link in the package tree that points outside it is refused: packing
+/// it would ship whatever it points at (a home directory's keys, a CI
+/// environment).
+#[cfg(unix)]
+#[test]
+fn links_out_of_the_package_tree_are_refused() {
+    let dir = TempDir::new().unwrap();
+    create_test_package(dir.path());
+    let outside = TempDir::new().unwrap();
+    fs::write(outside.path().join("id_ed25519"), b"secret material").unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("id_ed25519"),
+        dir.path().join("notes.txt"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        "../../../../../../../../etc/hosts",
+        dir.path().join("hosts"),
+    )
+    .unwrap();
+    let out = TempDir::new().unwrap();
+    let result = pack(
+        dir.path(),
+        "test-pkg",
+        "1.0.0",
+        out.path(),
+        None,
+        None,
+        &hpm_package::manifest::StageConfig::default(),
+        ArchiveLayout::default(),
+    );
+    assert!(result.is_err(), "packed a link out of the package tree");
+}
+
+/// A private key in the package tree, however it got there, is never
+/// packed.
+#[test]
+fn private_keys_are_never_packed() {
+    for pem in [
+        "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIA==\n-----END PRIVATE KEY-----\n",
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA==\n-----END OPENSSH PRIVATE KEY-----\n",
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIB\n-----END RSA PRIVATE KEY-----\n",
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIB\n-----END ENCRYPTED PRIVATE KEY-----\n",
+    ] {
+        let dir = TempDir::new().unwrap();
+        create_test_package(dir.path());
+        fs::write(dir.path().join("signing.pem"), pem).unwrap();
+        let out = TempDir::new().unwrap();
+        let result = pack(
+            dir.path(),
+            "test-pkg",
+            "1.0.0",
+            out.path(),
+            None,
+            None,
+            &hpm_package::manifest::StageConfig::default(),
+            ArchiveLayout::default(),
+        );
+        assert!(
+            result.is_err(),
+            "packed a private key: {}",
+            pem.lines().next().unwrap()
+        );
+    }
+}

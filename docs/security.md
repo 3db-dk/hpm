@@ -120,7 +120,9 @@ openssl genpkey -algorithm ed25519 -out signing.pem
 openssl pkey -in signing.pem -pubout -out signing.pub.pem
 ```
 
-Keep `signing.pem` private. Publish `signing.pub.pem` through your registry
+Keep `signing.pem` private and outside the package directory (`hpm pack`
+refuses to package a PEM private key, or a link pointing outside the
+package). Publish `signing.pub.pem` through your registry
 or creator dashboard so consumers know what to verify against.
 
 ### Signing a package

@@ -760,7 +760,10 @@ openssl genpkey -algorithm ed25519 -out signing.pem
 openssl pkey -in signing.pem -pubout -out signing.pub.pem
 ```
 
-Keep `signing.pem` secret. Publish `signing.pub.pem` so consumers can verify.
+Keep `signing.pem` secret, and outside the package directory: `hpm pack` and
+`hpm build` refuse to package any file that is a PEM private key, and any link
+that points outside the package. Publish `signing.pub.pem` so consumers can
+verify.
 See [Security](security.md#package-signing) for the wire format.
 
 ### `hpm audit`

@@ -210,6 +210,10 @@ pub(crate) fn collect_stage_entries(
                 .unwrap_or(entry.path());
             relative == Path::new("") || !ignore.matched(relative, true).is_ignore()
         });
+    // Links are resolved against the package's real location, so one that
+    // points outside the tree can be told apart from one inside it.
+    let canonical_root = fs::canonicalize(package_dir)
+        .map_err(|e| IoOp::wrap("resolve package directory", package_dir, e))?;
     for entry in walker {
         let entry = entry.map_err(|e| {
             IoOp::wrap(
@@ -267,7 +271,17 @@ pub(crate) fn collect_stage_entries(
                     );
                     false
                 }
-                Ok(_) => true,
+                // A link to a file outside the package tree would ship that
+                // file (a key in the home directory, a CI environment);
+                // only links within the tree are packed.
+                Ok(_) => {
+                    let inside = fs::canonicalize(path)
+                        .is_ok_and(|target| target.starts_with(&canonical_root));
+                    if !inside {
+                        return Err(PackError::LinkOutsidePackage(relative.to_path_buf()));
+                    }
+                    true
+                }
                 // Broken link: nothing to read, and `File::open` would other-
                 // wise fail the whole pack later with a less obvious message.
                 Err(e) => {
@@ -302,6 +316,26 @@ pub(crate) fn collect_stage_entries(
     Ok(entries)
 }
 
+/// Refuse to put a private key in anything that leaves the workspace (an
+/// archive, `hpm build` output). A file whose first line is a PEM private
+/// key header is refused, whatever its name and however it got into the
+/// tree; a public key or a document that mentions keys further in is not.
+pub(super) fn refuse_private_keys(entries: &[(PathBuf, String)]) -> Result<(), PackError> {
+    use std::io::Read;
+    for (source, archive_path) in entries {
+        let mut head = [0u8; 128];
+        let n = fs::File::open(source)
+            .and_then(|mut f| f.read(&mut head))
+            .map_err(|e| IoOp::wrap("read staged file", source, e))?;
+        let text = String::from_utf8_lossy(&head[..n]);
+        let first_line = text.trim_start().lines().next().unwrap_or("");
+        if first_line.starts_with("-----BEGIN ") && first_line.ends_with("PRIVATE KEY-----") {
+            return Err(PackError::PrivateKey(archive_path.clone()));
+        }
+    }
+    Ok(())
+}
+
 /// Materialise the install image into `output_dir` — the same file set and
 /// placement [`create_archive`] would put in a zip, as a directory tree.
 /// Returns the number of files copied. Backs `hpm build`.
@@ -320,6 +354,7 @@ pub fn stage_to_dir(
         .ok()
         .map(Path::to_path_buf);
     let entries = collect_stage_entries(package_dir, ignore, stage_filter, skip.as_deref())?;
+    refuse_private_keys(&entries)?;
 
     for (source, archive_path) in &entries {
         let dest = output_dir.join(archive_path);

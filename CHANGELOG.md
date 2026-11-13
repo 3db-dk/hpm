@@ -99,8 +99,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extracted package files no longer take setuid, setgid or sticky bits, or
   group or world write permission, from the archive.
 
+- `hpm pack` and `hpm build` refuse to package a PEM private key (however it
+  got into the tree) and a link that points outside the package; such a link
+  used to be packed as the file it pointed at.
+
 ### Changed
 
+- Upgrade note: a package containing a symlink to a file outside the package
+  directory no longer packs or dev-installs; replace the link with the file.
 - Upgrade note: the first Python install after upgrading downloads uv
   0.13.6 into `~/.hpm/tools/uv-0.13.6/`.
 - Upgrade note: `[python_dependencies]` entries with direct URLs (`name @
