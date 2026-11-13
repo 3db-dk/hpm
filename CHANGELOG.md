@@ -19,8 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   yours can no longer seed or replace its index; a clone whose origin no
   longer matches is cloned again.
 
+- A project's `.hpm/config.toml` can no longer set `[storage]`, `[projects]`
+  or `[signing]`. A cloned repository could use them to move hpm's home into
+  its own tree, so that `hpm install` ran a tool the repository shipped, to
+  redirect where packages are stored, or to choose the key `hpm pack` signs
+  with.
+
 ### Changed
 
+- Upgrade note: `[storage]`, `[projects]` and `[signing]` in a project's
+  `.hpm/config.toml` are now ignored with a warning; set them in
+  `~/.hpm/config.toml` instead. `[install]` and `[[registries]]` still apply
+  from a project config.
 - Upgrade note: git registry urls starting with `-`, using the
   `<transport>::` helper syntax, or the `git://` or `http://` schemes are now
   rejected when `config.toml` or `hpm.toml` is loaded, naming the registry.

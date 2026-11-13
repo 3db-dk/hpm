@@ -1667,6 +1667,13 @@ anything no file sets falls back to the built-in default. Setting only
 under it unless they are set explicitly. A malformed config file is a
 hard error, not a silent fallback to defaults.
 
+A project config may set only `[install]` and `[[registries]]`. A project
+directory is often a repository someone else wrote, so `[storage]`,
+`[projects]` and `[signing]` (where hpm keeps its store and tools, what
+`hpm clean` treats as live, and which key `hpm pack` signs with) are read
+only from `~/.hpm/config.toml`; in a project config they are ignored with a
+warning naming the section.
+
 ```toml
 [install]
 parallel_downloads = 8       # packages a sync fetches and installs at once
@@ -1757,7 +1764,7 @@ Per-project layout:
 ├── hpm.toml
 ├── hpm.lock                         # pinned versions + checksums
 ├── .hpm/
-│   ├── config.toml                  # project-level overrides (optional)
+│   ├── config.toml                  # project-level [install] and [[registries]] (optional)
 │   └── packages/                    # Houdini manifests, one per dependency
 │       ├── studio.utility-nodes.json
 │       └── studio.material-library.json

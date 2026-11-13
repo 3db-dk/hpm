@@ -73,6 +73,78 @@ pub struct SigningOverlay {
     pub key_path: Option<PathBuf>,
 }
 
+/// The shape a project's `<project>/.hpm/config.toml` is parsed as.
+///
+/// A project config is content of whatever repository the user cloned, so
+/// it may only set what is about the project itself: `[install]` and
+/// `[[registries]]`. `[storage]`, `[projects]` and `[signing]` decide where
+/// hpm keeps its own state and tools, what `hpm clean` treats as live, and
+/// which key `hpm pack` signs with; they belong to the user's config.
+/// They are accepted so an existing file keeps loading, reported by
+/// [`ProjectConfigOverlay::load`], and never applied.
+#[derive(Debug, PartialEq, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectConfigOverlay {
+    #[serde(default)]
+    install: Option<InstallOverlay>,
+    #[serde(default)]
+    registries: Option<Vec<RegistrySourceConfig>>,
+    #[serde(default)]
+    storage: Option<toml::Value>,
+    #[serde(default)]
+    projects: Option<toml::Value>,
+    #[serde(default)]
+    signing: Option<toml::Value>,
+}
+
+impl ProjectConfigOverlay {
+    /// Load a project overlay, warning about each user-only section it sets.
+    pub fn load(path: &Path) -> Result<Self, TomlFileError> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| hpm_package::IoOp::wrap("read TOML file", path, e))?;
+        let overlay: Self = toml::from_str(&content).map_err(|e| TomlFileError::Parse {
+            path: path.to_path_buf(),
+            source: Box::new(e),
+        })?;
+        for section in overlay.ignored_sections() {
+            tracing::warn!(
+                "{}: `[{section}]` is only read from the user config (~/.hpm/config.toml); \
+                 ignored in a project config",
+                path.display()
+            );
+        }
+        if overlay.install.as_ref().is_some_and(|i| i.path.is_some()) {
+            tracing::warn!(
+                "{}: `[install] path` is not used by hpm and is ignored; it can be removed",
+                path.display()
+            );
+        }
+        Ok(overlay)
+    }
+
+    /// The user-only sections this file sets, which are not applied.
+    pub fn ignored_sections(&self) -> Vec<&'static str> {
+        [
+            ("storage", self.storage.is_some()),
+            ("projects", self.projects.is_some()),
+            ("signing", self.signing.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, set)| set.then_some(name))
+        .collect()
+    }
+
+    /// Apply the project-scoped values onto `config`.
+    pub fn apply_to(&self, config: &mut Config) {
+        ConfigOverlay {
+            install: self.install.clone(),
+            registries: self.registries.clone(),
+            ..ConfigOverlay::default()
+        }
+        .apply_to(config);
+    }
+}
+
 impl ConfigOverlay {
     /// Load an overlay from a TOML file.
     pub fn load(path: &Path) -> Result<Self, TomlFileError> {

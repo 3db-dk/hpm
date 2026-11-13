@@ -47,7 +47,7 @@ pub mod signing;
 pub mod storage;
 
 pub use install::InstallConfig;
-pub use overlay::ConfigOverlay;
+pub use overlay::{ConfigOverlay, ProjectConfigOverlay};
 pub use project_paths::ProjectPaths;
 pub use projects::ProjectsConfig;
 pub use registry::{RegistrySourceConfig, RegistryType};
@@ -115,7 +115,7 @@ impl Config {
             let project_config_path = project_dir.join(".hpm").join("config.toml");
             if project_config_path.exists() {
                 debug!("Loading project config from {:?}", project_config_path);
-                ConfigOverlay::load(&project_config_path)?.apply_to(&mut config);
+                ProjectConfigOverlay::load(&project_config_path)?.apply_to(&mut config);
             }
         }
 
@@ -504,5 +504,41 @@ home_dir = "missing closing bracket"
         let alone = Config::load_layers(&user, Some(tmp.path())).unwrap();
         assert_eq!(alone.install.parallel_downloads.get(), 4);
         assert_eq!(alone.registries[0].name, "user");
+    }
+
+    /// A project config cannot move hpm's storage, change which projects
+    /// `hpm clean` treats as live, or choose the signing key.
+    #[test]
+    fn project_config_cannot_set_storage_projects_or_signing() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.path().join("user.toml");
+        let home = tmp.path().join("hpm-home");
+        std::fs::write(
+            &user,
+            format!("[storage]\nhome_dir = '{}'\n", home.display()),
+        )
+        .unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(project.join(".hpm")).unwrap();
+        std::fs::write(
+            project.join(".hpm/config.toml"),
+            "[storage]\nhome_dir = \"state\"\ncache_dir = \"c\"\npackages_dir = \"p\"\nregistry_cache_dir = \"r\"\n\n[signing]\nkey_path = \"key.pem\"\n\n[projects]\nsearch_roots = [\"/\"]\nexplicit_paths = [\"/x\"]\nmax_search_depth = 99\nignore_patterns = []\n\n[install]\nparallel_downloads = 3\n",
+        )
+        .unwrap();
+
+        let config = Config::load_layers(&user, Some(&project)).unwrap();
+        assert_eq!(config.storage.home_dir, home);
+        assert_eq!(config.storage.cache_dir, home.join("cache"));
+        assert_eq!(config.storage.packages_dir, home.join("packages"));
+        assert_eq!(config.storage.registry_cache_dir, home.join("registry"));
+        assert_eq!(config.signing.key_path, None);
+        assert_eq!(config.projects, ProjectsConfig::default());
+        // The keys a project may set still apply from the same file.
+        assert_eq!(config.install.parallel_downloads.get(), 3);
+        let overlay = ProjectConfigOverlay::load(&project.join(".hpm/config.toml")).unwrap();
+        assert_eq!(
+            overlay.ignored_sections(),
+            ["storage", "projects", "signing"]
+        );
     }
 }
