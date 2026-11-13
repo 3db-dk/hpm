@@ -76,10 +76,13 @@ pub struct SigningOverlay {
 /// The shape a project's `<project>/.hpm/config.toml` is parsed as.
 ///
 /// A project config is content of whatever repository the user cloned, so
-/// it may only set what is about the project itself: `[install]` and
-/// `[[registries]]`. `[storage]`, `[projects]` and `[signing]` decide where
-/// hpm keeps its own state and tools, what `hpm clean` treats as live, and
-/// which key `hpm pack` signs with; they belong to the user's config.
+/// it may only set what is about the project itself: `[install]`.
+/// `[storage]`, `[projects]` and `[signing]` decide where hpm keeps its own
+/// state and tools, what `hpm clean` treats as live, and which key
+/// `hpm pack` signs with; `[[registries]]` is the list an embedder's
+/// credentials are scoped to (a project declares its registries in
+/// `hpm.toml` instead, which never widens that scope). They belong to the
+/// user's config.
 /// They are accepted so an existing file keeps loading, reported by
 /// [`ProjectConfigOverlay::load`], and never applied.
 #[derive(Debug, PartialEq, Clone, Default, Deserialize)]
@@ -88,7 +91,7 @@ pub struct ProjectConfigOverlay {
     #[serde(default)]
     install: Option<InstallOverlay>,
     #[serde(default)]
-    registries: Option<Vec<RegistrySourceConfig>>,
+    registries: Option<toml::Value>,
     #[serde(default)]
     storage: Option<toml::Value>,
     #[serde(default)]
@@ -125,6 +128,7 @@ impl ProjectConfigOverlay {
     /// The user-only sections this file sets, which are not applied.
     pub fn ignored_sections(&self) -> Vec<&'static str> {
         [
+            ("registries", self.registries.is_some()),
             ("storage", self.storage.is_some()),
             ("projects", self.projects.is_some()),
             ("signing", self.signing.is_some()),
@@ -138,7 +142,6 @@ impl ProjectConfigOverlay {
     pub fn apply_to(&self, config: &mut Config) {
         ConfigOverlay {
             install: self.install.clone(),
-            registries: self.registries.clone(),
             ..ConfigOverlay::default()
         }
         .apply_to(config);

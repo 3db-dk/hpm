@@ -160,10 +160,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now return a `Result`; embedders (TumbleTrove Desktop) add `?`.
 - Upgrade note: a `[stage]` place rule whose `to` has a `..` component, a
   leading `/`, a drive, a backslash or a colon now fails the manifest load.
-- Upgrade note: `[storage]`, `[projects]` and `[signing]` in a project's
-  `.hpm/config.toml` are now ignored with a warning; set them in
-  `~/.hpm/config.toml` instead. `[install]` and `[[registries]]` still apply
-  from a project config.
+- Upgrade note: `[storage]`, `[projects]`, `[signing]` and `[[registries]]`
+  in a project's `.hpm/config.toml` are now ignored with a warning; set them
+  in `~/.hpm/config.toml` instead, or declare a project's registries in its
+  `hpm.toml`. `[install]` still applies from a project config.
 - Upgrade note: git registry urls starting with `-`, using the
   `<transport>::` helper syntax, or the `git://` or `http://` schemes are now
   rejected when `config.toml` or `hpm.toml` is loaded, naming the registry.

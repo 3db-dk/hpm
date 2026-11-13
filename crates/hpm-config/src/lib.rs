@@ -493,8 +493,10 @@ home_dir = "missing closing bracket"
 
         let config = Config::load_layers(&user, Some(&project)).unwrap();
         assert_eq!(config.install.parallel_downloads.get(), 2);
+        // Registries come from the user config only (see
+        // `project_config_cannot_replace_the_user_registries`).
         assert_eq!(config.registries.len(), 1);
-        assert_eq!(config.registries[0].name, "studio");
+        assert_eq!(config.registries[0].name, "user");
         assert_eq!(config.storage.home_dir, home);
         assert_eq!(config.storage.packages_dir, home.join("packages"));
         assert_eq!(config.signing.key_path, Some(tmp.path().join("key.pem")));
@@ -540,5 +542,30 @@ home_dir = "missing closing bracket"
             overlay.ignored_sections(),
             ["storage", "projects", "signing"]
         );
+    }
+
+    /// A project config cannot replace the user's registries: the registry
+    /// list is what an embedder's credentials are scoped to, so a cloned
+    /// repository must not be able to add its own server to it. (A project
+    /// declares registries in `hpm.toml`, which never widens that scope.)
+    #[test]
+    fn project_config_cannot_replace_the_user_registries() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.path().join("user.toml");
+        std::fs::write(
+            &user,
+            "[[registries]]\nname = \"tumbletrove\"\nurl = \"https://registry.example.invalid/v1/registry\"\ntype = \"api\"\n",
+        )
+        .unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(project.join(".hpm")).unwrap();
+        std::fs::write(
+            project.join(".hpm/config.toml"),
+            "[[registries]]\nname = \"evil\"\nurl = \"https://evil.example.invalid/v1/registry\"\ntype = \"api\"\n",
+        )
+        .unwrap();
+        let config = Config::load_layers(&user, Some(&project)).unwrap();
+        assert_eq!(config.registries.len(), 1);
+        assert_eq!(config.registries[0].name, "tumbletrove");
     }
 }

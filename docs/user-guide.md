@@ -1679,12 +1679,14 @@ anything no file sets falls back to the built-in default. Setting only
 under it unless they are set explicitly. A malformed config file is a
 hard error, not a silent fallback to defaults.
 
-A project config may set only `[install]` and `[[registries]]`. A project
-directory is often a repository someone else wrote, so `[storage]`,
-`[projects]` and `[signing]` (where hpm keeps its store and tools, what
-`hpm clean` treats as live, and which key `hpm pack` signs with) are read
-only from `~/.hpm/config.toml`; in a project config they are ignored with a
-warning naming the section.
+A project config may set only `[install]`. A project directory is often a
+repository someone else wrote, so `[storage]`, `[projects]`, `[signing]` and
+`[[registries]]` (where hpm keeps its store and tools, what `hpm clean`
+treats as live, which key `hpm pack` signs with, and which servers an
+embedder's sign-in token may be sent to) are read only from
+`~/.hpm/config.toml`; in a project config they are ignored with a warning
+naming the section. A project declares the registries it resolves from in
+`hpm.toml`'s `[[registries]]`.
 
 ```toml
 [install]
