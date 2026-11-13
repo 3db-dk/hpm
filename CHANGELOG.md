@@ -175,7 +175,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in a project's `.hpm/config.toml` are now ignored with a warning; set them
   in `~/.hpm/config.toml` instead, or declare a project's registries in its
   `hpm.toml`. `[install]` still applies from a project config.
-- Upgrade note: git registry urls starting with `-`, using the
+- Upgrade note: git registry urls starting with `-` or naming a host that
+  starts with `-`, using the
   `<transport>::` helper syntax, or the `git://` or `http://` schemes are now
   rejected when `config.toml` or `hpm.toml` is loaded, naming the registry.
   Use `https://`, `ssh://`, `file://`, `git@host:path` or a local path.

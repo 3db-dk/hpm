@@ -789,6 +789,9 @@ mod remote_tests {
             "http://git.example.invalid/registry.git",
             "",
             "https://example.invalid/a\nb",
+            "ssh://-oProxyCommand=touch%20x/r.git",
+            "ssh://git@-oProxyCommand=x/r.git",
+            "git@-oProxyCommand=x:r.git",
         ] {
             assert!(
                 RegistrySet::from_configs(&[git_source("studio", url)], tmp.path()).is_err(),
@@ -893,6 +896,146 @@ mod remote_tests {
         ] {
             RegistrySet::from_configs(&[git_source("studio", url)], tmp.path())
                 .unwrap_or_else(|e| panic!("{url}: {e}"));
+        }
+    }
+
+    mod properties {
+        use super::super::GitRegistry;
+        use proptest::prelude::*;
+
+        /// URLs assembled from the parts that matter to git: schemes it
+        /// knows and helper syntax, user info, option-shaped hosts and
+        /// paths; plus arbitrary text.
+        fn hostile_url() -> impl Strategy<Value = String> {
+            let scheme = prop::sample::select(vec![
+                "https://",
+                "HTTPS://",
+                "ssh://",
+                "file://",
+                "git://",
+                "http://",
+                "ext::",
+                "fd::",
+                "",
+                "-",
+                "--upload-pack=",
+            ]);
+            let user = prop::sample::select(vec!["", "git@", "-oProxyCommand=x@", "u@-"]);
+            let host = prop::sample::select(vec![
+                "git.example.invalid",
+                "-oProxyCommand=x",
+                "h",
+                "",
+                "[::1]",
+            ]);
+            let sep = prop::sample::select(vec!["/", ":", "", ":22/"]);
+            let path = prop::sample::select(vec![
+                "org/repo.git",
+                "",
+                "-u x",
+                "a::b",
+                "r\nx",
+                "./r",
+                "..\\r",
+            ]);
+            prop_oneof![
+                4 => (scheme, user, host, sep, path)
+                    .prop_map(|(a, b, c, d, e)| format!("{a}{b}{c}{d}{e}")),
+                1 => "[ -~\t\n]{0,24}",
+            ]
+        }
+
+        /// The host git hands to ssh, or None when the URL names no host.
+        fn ssh_host(url: &str) -> Option<&str> {
+            let authority = match url.split_once("://") {
+                Some((_, rest)) => rest.split('/').next().unwrap_or(rest),
+                None => {
+                    let (head, _) = url.split_once(':')?;
+                    if head.contains(['/', '\\']) || head.len() <= 1 {
+                        return None;
+                    }
+                    head
+                }
+            };
+            Some(
+                authority
+                    .rsplit_once('@')
+                    .map_or(authority, |(_, host)| host),
+            )
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(512))]
+
+            /// An accepted remote can never reach git as an option, a remote
+            /// helper, a plaintext transport or an option-shaped ssh host,
+            /// and its clone is always one digest-named child of the root.
+            #[test]
+            fn accepted_remotes_are_plain_remotes(url in hostile_url()) {
+                let root = std::path::Path::new("/cache/registry");
+                let Ok(reg) = GitRegistry::new("r", &url, root) else {
+                    return Ok(());
+                };
+                let remote = reg.remote.as_str();
+                prop_assert!(!remote.starts_with('-'), "{:?}", remote);
+                prop_assert!(!remote.chars().any(char::is_control), "{:?}", remote);
+                match remote.split_once("://") {
+                    Some((scheme, _)) => prop_assert!(
+                        ["https", "ssh", "file"].contains(&scheme.to_ascii_lowercase().as_str()),
+                        "{:?}", remote
+                    ),
+                    None => prop_assert!(
+                        !remote.split(['/', '\\']).next().unwrap_or("").contains("::"),
+                        "{:?}", remote
+                    ),
+                }
+                if let Some(host) = ssh_host(remote) {
+                    prop_assert!(!host.starts_with('-'), "{:?} names host {:?}", remote, host);
+                }
+                prop_assert_eq!(reg.cache_dir.parent(), Some(root));
+                let leaf = reg.cache_dir.file_name().unwrap().to_str().unwrap();
+                prop_assert!(leaf.len() == 32 && leaf.bytes().all(|b| b.is_ascii_hexdigit()));
+            }
+
+            /// Remotes registries are really served from are accepted, and
+            /// two remotes share a clone only when they are the same remote.
+            #[test]
+            fn real_remotes_are_accepted_and_kept_apart(
+                host in "[a-z]{1,8}(\\.[a-z]{2,5}){1,2}",
+                org in "[A-Za-z0-9_.-]{1,8}",
+                repo in "[A-Za-z0-9_-]{1,8}",
+                form in 0usize..5,
+                other_repo in "[A-Za-z0-9_-]{1,8}",
+            ) {
+                let build = |repo: &str| match form {
+                    0 => format!("https://{host}/{org}/{repo}.git"),
+                    1 => format!("ssh://git@{host}:22/{org}/{repo}.git"),
+                    2 => format!("git@{host}:{org}/{repo}.git"),
+                    3 => format!("file:///srv/{org}/{repo}.git"),
+                    _ => format!("/srv/git/{org}/{repo}"),
+                };
+                let root = std::path::Path::new("/cache/registry");
+                let a = GitRegistry::new("a", &build(&repo), root);
+                prop_assert!(a.is_ok(), "{:?} refused", build(&repo));
+                let b = GitRegistry::new("b", &build(&other_repo), root).unwrap();
+                prop_assert_eq!(a.unwrap().cache_dir == b.cache_dir, repo == other_repo);
+            }
+
+            /// Whatever a package name holds, its index file is a
+            /// `<creator>/<slug>.json` inside the clone.
+            #[test]
+            fn index_paths_stay_inside_the_clone(name in "[a-zA-Z0-9./\\\\:_ -]{0,16}") {
+                let reg = GitRegistry::new("r", "https://git.example.invalid/i.git", std::path::Path::new("/c")).unwrap();
+                if let Ok(path) = reg.index_path(&name) {
+                    let rest = path.strip_prefix(&reg.cache_dir).unwrap();
+                    let parts: Vec<_> = rest.components().collect();
+                    prop_assert_eq!(parts.len(), 2, "{:?}", path);
+                    prop_assert!(
+                        parts.iter().all(|c| matches!(c, std::path::Component::Normal(_))),
+                        "{:?}", path
+                    );
+                }
+            }
         }
     }
 }

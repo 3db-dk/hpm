@@ -50,20 +50,42 @@ pub fn validate_git_remote(url: &str) -> Result<(), String> {
     if url.starts_with('-') {
         return Err("git registry url must not start with '-'".to_string());
     }
-    if let Some((scheme, _)) = url.split_once("://") {
+    if let Some((scheme, rest)) = url.split_once("://") {
         let scheme = scheme.to_ascii_lowercase();
         if !GIT_REMOTE_SCHEMES.contains(&scheme.as_str()) {
             return Err(format!(
                 "git registry url scheme '{scheme}' is not allowed (use https, ssh or file)"
             ));
         }
-        return Ok(());
+        return check_remote_host(rest.split('/').next().unwrap_or(rest));
     }
     // `<transport>::<address>` asks git to run a remote helper. A `::` before
     // the first path separator is that syntax; a path may contain `::` later.
     let head = url.split(['/', '\\']).next().unwrap_or(url);
     if head.contains("::") {
         return Err("git registry url uses the '<transport>::' helper syntax".to_string());
+    }
+    // scp-like `[user@]host:path`: a colon before any separator, after more
+    // than one character (`C:\...` is a Windows path).
+    if let Some((authority, _)) = head.split_once(':')
+        && authority.len() > 1
+    {
+        return check_remote_host(authority);
+    }
+    Ok(())
+}
+
+/// Refuse a host git would hand to ssh as an option (`-oProxyCommand=...`).
+/// No host name starts with `-`.
+fn check_remote_host(authority: &str) -> Result<(), String> {
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if host.starts_with('-') {
+        return Err(format!(
+            "git registry url host '{}' must not start with '-'",
+            host.escape_debug()
+        ));
     }
     Ok(())
 }
