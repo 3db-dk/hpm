@@ -66,8 +66,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes or deletes package files there; the stale-manifest sweep removes
   only regular files.
 
+- An embedder's bearer token (TumbleTrove Desktop's sign-in) is sent only to
+  https API registries, and for a project's registries only to the https
+  origins of the registries configured for the user. A project that declared
+  its own registry, or any plain-http registry, received the token.
+
 ### Changed
 
+- `ApiRegistry::with_auth_token` refuses a token for a registry that is not
+  https.
 - Upgrade note: a project whose `.hpm` or `.hpm/packages` directory is a
   symlink or junction no longer syncs; make it a real directory.
 - Upgrade note: `--frozen-lockfile` fails when a registry or URL dependency

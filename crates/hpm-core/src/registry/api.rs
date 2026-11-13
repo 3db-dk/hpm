@@ -53,9 +53,17 @@ impl ApiRegistry {
         base_url: impl Into<String>,
         token: Option<&str>,
     ) -> Result<Self, RegistryError> {
+        let base_url = base_url.into();
         let mut builder = crate::http::client_builder(std::time::Duration::from_secs(30));
 
         if let Some(token) = token {
+            // A bearer token over plain http is readable by anyone on the
+            // path; refuse rather than send it.
+            if super::https_origin(&base_url).is_none() {
+                return Err(RegistryError::ParseError(format!(
+                    "refusing to send credentials to a registry that is not https: {base_url}"
+                )));
+            }
             let mut value = HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|e| {
                 RegistryError::ParseError(format!("invalid auth token for registry: {}", e))
             })?;
@@ -67,7 +75,7 @@ impl ApiRegistry {
 
         let client = builder.build()?;
 
-        let mut url = base_url.into();
+        let mut url = base_url;
         // Normalize: remove trailing slash
         while url.ends_with('/') {
             url.pop();

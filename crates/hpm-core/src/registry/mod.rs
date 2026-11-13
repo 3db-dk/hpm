@@ -135,7 +135,22 @@ impl RegistrySet {
         } else {
             manifest_registries.iter().map(Into::into).collect()
         };
-        Self::from_configs_with_auth(&sources, &config.storage.registry_cache_dir, auth_token)
+        // The token belongs to the registries the user configured. A
+        // project's manifest is content of whatever repository was opened,
+        // so a registry it declares gets the token only when it is one of
+        // those same https origins.
+        let trusted: std::collections::HashSet<String> = config
+            .registries
+            .iter()
+            .filter(|r| r.registry_type == hpm_config::RegistryType::Api)
+            .filter_map(|r| https_origin(&r.url))
+            .collect();
+        Self::build(
+            &sources,
+            &config.storage.registry_cache_dir,
+            auth_token,
+            Some(&trusted),
+        )
     }
 
     /// Build a `RegistrySet` from registry configurations.
@@ -158,8 +173,9 @@ impl RegistrySet {
         Self::from_configs_with_auth(registries, registry_cache_dir, None)
     }
 
-    /// Like [`Self::from_configs`], but attaches a bearer token to every API
-    /// registry's HTTP client when `auth_token` is `Some`.
+    /// Like [`Self::from_configs`], but attaches a bearer token to every
+    /// https API registry's HTTP client when `auth_token` is `Some`; a
+    /// registry that is not https is built without it.
     ///
     /// Git registries ignore the token — there is no auth story for the git
     /// index today. When `auth_token` is `None`, behavior is identical to
@@ -173,12 +189,28 @@ impl RegistrySet {
         registry_cache_dir: &std::path::Path,
         auth_token: Option<&str>,
     ) -> Result<Self, RegistryError> {
+        Self::build(registries, registry_cache_dir, auth_token, None)
+    }
+
+    /// Build the set, attaching `auth_token` only to https API registries,
+    /// and, when `trusted` is given, only to those whose origin is in it.
+    /// Every other registry is built without credentials.
+    fn build(
+        registries: &[hpm_config::RegistrySourceConfig],
+        registry_cache_dir: &std::path::Path,
+        auth_token: Option<&str>,
+        trusted: Option<&std::collections::HashSet<String>>,
+    ) -> Result<Self, RegistryError> {
         let mut set = Self::new();
 
         for reg in registries {
             match reg.registry_type {
                 hpm_config::RegistryType::Api => {
-                    let api_reg = ApiRegistry::with_auth_token(&reg.name, &reg.url, auth_token)
+                    let token = auth_token.filter(|_| {
+                        https_origin(&reg.url)
+                            .is_some_and(|origin| trusted.is_none_or(|t| t.contains(&origin)))
+                    });
+                    let api_reg = ApiRegistry::with_auth_token(&reg.name, &reg.url, token)
                         .map_err(|e| {
                             RegistryError::ParseError(format!(
                                 "Registry '{}' could not be constructed: {}",
@@ -381,6 +413,14 @@ impl RegistrySet {
                 version: req.to_string(),
             })
     }
+}
+
+/// The `https://host[:port]` origin of `url`, lowercased, or `None` when it
+/// is not an https URL. Credentials are only ever scoped to such an origin.
+pub(crate) fn https_origin(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url.trim()).ok()?;
+    (parsed.scheme() == "https" && parsed.host().is_some())
+        .then(|| parsed.origin().ascii_serialization())
 }
 
 /// Check a registry's answer against the question. A registry is run by
@@ -1010,5 +1050,126 @@ mod entry_vetting_tests {
                 .version,
             "1.0.0"
         );
+    }
+}
+
+/// Where an embedder's bearer token may go.
+#[cfg(test)]
+mod auth_scope_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::sync::{Arc, Mutex};
+
+    /// A 127.0.0.1 listener that records the request heads it receives and
+    /// answers 404 to each.
+    fn recording_listener() -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/registry", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut buf = [0u8; 8192];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                sink.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&buf[..n]).to_lowercase());
+                let _ = stream.write_all(
+                    b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                );
+            }
+        });
+        (url, seen)
+    }
+
+    fn api(name: &str, url: &str) -> hpm_config::RegistrySourceConfig {
+        hpm_config::RegistrySourceConfig {
+            name: name.into(),
+            url: url.into(),
+            registry_type: hpm_config::RegistryType::Api,
+        }
+    }
+
+    /// A registry a project declares never receives the token, and neither
+    /// does any plain-http registry.
+    #[tokio::test]
+    async fn the_token_never_reaches_a_project_declared_or_plain_http_registry() {
+        let token = "fake-test-token-not-a-secret";
+
+        let (project_url, project_seen) = recording_listener();
+        let config = hpm_config::Config {
+            registries: vec![api(
+                "tumbletrove",
+                "https://registry.example.invalid/v1/registry",
+            )],
+            ..hpm_config::Config::default()
+        };
+        let manifest = vec![hpm_package::RegistryConfig {
+            name: "evil".into(),
+            url: project_url,
+            registry_type: hpm_package::RegistryType::Api,
+        }];
+        let set = RegistrySet::for_project(&manifest, &config, Some(token)).unwrap();
+        let _ = set.get_versions("acme/tools").await;
+
+        let (config_url, config_seen) = recording_listener();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let set = RegistrySet::from_configs_with_auth(
+            &[api("plain", &config_url)],
+            tmp.path(),
+            Some(token),
+        )
+        .unwrap();
+        let _ = set.get_versions("acme/tools").await;
+
+        for (label, seen) in [
+            ("project-declared", project_seen),
+            ("plain http", config_seen),
+        ] {
+            let seen = seen.lock().unwrap();
+            assert!(!seen.is_empty(), "{label}: no request reached the listener");
+            assert!(
+                seen.iter().all(|head| !head.contains("authorization")),
+                "{label}: the token was sent"
+            );
+        }
+    }
+
+    /// The registries the user configured keep the token, including when a
+    /// project declares the same https origin (TumbleTrove Desktop writes
+    /// its registry into project manifests); a different origin, or http,
+    /// gets none.
+    #[test]
+    fn the_token_is_scoped_to_configured_https_origins() {
+        let trusted: std::collections::HashSet<String> =
+            [https_origin("https://registry.example.invalid/v1/registry").unwrap()].into();
+        for (url, expected) in [
+            ("https://registry.example.invalid/v1/registry", true),
+            ("https://REGISTRY.example.invalid/v1/registry/", true),
+            ("https://registry.example.invalid:443/other", true),
+            ("http://registry.example.invalid/v1/registry", false),
+            ("https://registry.example.invalid.evil.invalid/v1", false),
+            ("https://registry.example.invalid:8443/v1", false),
+            ("https://evil.invalid/v1/registry", false),
+            ("not a url", false),
+        ] {
+            let allowed = https_origin(url).is_some_and(|o| trusted.contains(&o));
+            assert_eq!(allowed, expected, "{url}");
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(
+            ApiRegistry::with_auth_token("x", "http://registry.example.invalid", Some("t"))
+                .is_err()
+        );
+        RegistrySet::from_configs_with_auth(
+            &[api(
+                "tumbletrove",
+                "https://registry.example.invalid/v1/registry",
+            )],
+            tmp.path(),
+            Some("fake-test-token-not-a-secret"),
+        )
+        .unwrap();
     }
 }
