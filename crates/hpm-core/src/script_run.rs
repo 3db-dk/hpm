@@ -703,4 +703,87 @@ mod tests {
             assert!(cmd_operators_outside_quotes(&line).is_empty(), "{line}");
         }
     }
+
+    mod properties {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Strings built from the characters that matter to cmd.exe and the
+        /// CRT, so quotes, backslash runs, operators and `%` pairs collide
+        /// often; plus arbitrary Unicode.
+        fn hostile_arg() -> impl Strategy<Value = String> {
+            let alphabet = prop::sample::select(vec![
+                'a', 'Z', '_', '0', '9', ' ', '\\', '"', '%', '&', '|', '<', '>', '^', '\r', '\n',
+                '\0', ':', '~', ',', '!', '\t', '=',
+            ]);
+            prop_oneof![
+                3 => prop::collection::vec(alphabet, 0..16)
+                    .prop_map(|chars| chars.into_iter().collect::<String>()),
+                1 => any::<String>(),
+            ]
+        }
+
+        /// Arguments users actually pass: paths, frame patterns with a `%`
+        /// before a digit, a space or the end, and cmd operator characters,
+        /// which are safe inside quotes.
+        fn ordinary_arg() -> impl Strategy<Value = String> {
+            let piece = prop_oneof![
+                "[A-Za-z0-9_.:/\\\\ &|<>^!,=-]{1,8}",
+                Just("%04d".to_string()),
+                Just("% ".to_string()),
+                Just("%".to_string()),
+            ];
+            prop::collection::vec(piece, 0..5).prop_map(|pieces| {
+                let joined = pieces.concat();
+                // A trailing `%` followed later by a letter would pair up
+                // into a reference; keep `%` only where it cannot.
+                if names_a_cmd_variable(&joined) {
+                    joined.replace('%', "")
+                } else {
+                    joined
+                }
+            })
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(512))]
+
+            /// An accepted argument reaches the script whole and never ends
+            /// cmd's quoting; a refused one held exactly what the rule names.
+            #[test]
+            fn accepted_args_stay_one_quoted_argument(arg in hostile_arg()) {
+                let refusable = arg.contains(['"', '\r', '\n', '\0']) || names_a_cmd_variable(&arg);
+                match cmd_forwarded_arg(&arg) {
+                    Ok(quoted) => {
+                        prop_assert!(!refusable, "{:?} accepted as {:?}", arg, quoted);
+                        let line = format!("python script.py {quoted}");
+                        prop_assert!(cmd_operators_outside_quotes(&line).is_empty(), "{}", line);
+                        prop_assert!(!line.contains(['\r', '\n', '\0']));
+                        prop_assert!(!names_a_cmd_variable(&quoted), "{}", quoted);
+                        prop_assert_eq!(crt_parse_single(&quoted), arg);
+                    }
+                    Err(ScriptRunError::UnsafeWindowsArg { arg: refused }) => {
+                        prop_assert!(refusable, "{:?} refused", arg);
+                        prop_assert_eq!(refused, arg);
+                    }
+                    Err(e) => prop_assert!(false, "{:?}: {}", arg, e),
+                }
+            }
+
+            /// Ordinary arguments are always accepted and round-trip.
+            #[test]
+            fn ordinary_args_are_never_refused(arg in ordinary_arg()) {
+                let quoted = cmd_forwarded_arg(&arg);
+                prop_assert!(quoted.is_ok(), "{:?} refused", arg);
+                let quoted = quoted.unwrap();
+                prop_assert_eq!(crt_parse_single(&quoted), arg);
+            }
+
+            /// `windows_quote` alone round-trips any string the CRT can hold.
+            #[test]
+            fn windows_quote_round_trips_anything(arg in "[^\\x00]{0,24}") {
+                prop_assert_eq!(crt_parse_single(&windows_quote(&arg)), arg);
+            }
+        }
+    }
 }
