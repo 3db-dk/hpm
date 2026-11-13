@@ -2343,3 +2343,34 @@ mod lock_enforcement {
         );
     }
 }
+
+/// Links in a project's own tree: the project may live behind a linked
+/// parent directory, but the `.hpm` tree hpm writes into is its own.
+#[cfg(unix)]
+mod project_tree_links {
+    use super::*;
+
+    const MANIFEST: &str =
+        "[package]\npath = \"studio/proj\"\nname = \"proj\"\nversion = \"0.1.0\"\n";
+
+    /// A project opened through a symlinked parent (a studio's linked
+    /// projects folder, macOS's `/tmp`) syncs and writes its lock as usual.
+    #[tokio::test]
+    async fn a_project_behind_a_linked_parent_syncs() {
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().join("real-projects");
+        std::fs::create_dir_all(real.join("proj")).unwrap();
+        std::fs::write(real.join("proj/hpm.toml"), MANIFEST).unwrap();
+        let linked = temp.path().join("projects");
+        std::os::unix::fs::symlink(&real, &linked).unwrap();
+
+        let (config, storage) = test_setup(temp.path());
+        let manager = ProjectManager::new(linked.join("proj"), storage, config).unwrap();
+        manager.sync_dependencies().await.unwrap();
+        crate::lock::LockFile::new("proj".into(), "0.1.0".into())
+            .save(&linked.join("proj/hpm.lock"))
+            .unwrap();
+        assert!(real.join("proj/.hpm/packages").is_dir());
+        assert!(real.join("proj/hpm.lock").is_file());
+    }
+}
