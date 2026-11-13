@@ -188,6 +188,7 @@ cargo set-version --bump patch
 ```bash
 PROPTEST_CASES=2000 cargo test --workspace   # Comprehensive testing
 cargo audit                                  # Security audit
+cargo deny --locked check                    # Advisories, licenses, sources (deny.toml; CI gate)
 cargo machete                                # Unused dependencies
 cargo doc --workspace --no-deps              # Documentation
 ```
@@ -222,12 +223,15 @@ Each takes a source binary and an asset suffix, derives the version from
 `CI_COMMIT_TAG`, creates the release if it does not exist, and uploads the
 asset.
 
-Re-running a tag pipeline is safe: the upload **replaces** an existing asset
-of the same name rather than skipping it, so a rerun after amending the tag
-publishes the new binary. The scripts fail loudly on any unexpected HTTP
-status and verify after uploading that the asset is present, in state
-`uploaded`, and the expected size — a red upload step means the release is
-genuinely wrong, not merely re-run.
+Each binary is published with a `<asset>.sha256` file beside it. A published
+binary is **never replaced**: re-running a tag pipeline whose binary matches
+the published checksum is a no-op (so a pipeline cut short can be re-run),
+while a different binary under an existing version fails the upload. Shipping
+changed bytes takes a new tag. `check.yml` also refuses a tag that does not
+match the workspace version (`ci/check-version.sh`). The scripts fail loudly
+on any unexpected HTTP status and verify after uploading that the asset is
+present, in state `uploaded`, and the expected size. `ci/tests/release_upload_test.sh`
+exercises the shell script against a fake GitHub API on 127.0.0.1.
 
 All three platform workflows race to create the release; exactly one gets
 HTTP 201 and the others get 422, which is tolerated by design.

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7ac5eb4f79030d16768d81052831f87c4a55cb57ef8a5c1dfb9a357060ae045d # shrinks to url = "https://-oProxyCommand=x/org/repo.git"

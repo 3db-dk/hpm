@@ -53,9 +53,18 @@ impl ApiRegistry {
         base_url: impl Into<String>,
         token: Option<&str>,
     ) -> Result<Self, RegistryError> {
+        let base_url = base_url.into();
+        crate::http::check_transport(&base_url).map_err(RegistryError::ParseError)?;
         let mut builder = crate::http::client_builder(std::time::Duration::from_secs(30));
 
         if let Some(token) = token {
+            // A bearer token over plain http is readable by anyone on the
+            // path; refuse rather than send it.
+            if super::https_origin(&base_url).is_none() {
+                return Err(RegistryError::ParseError(format!(
+                    "refusing to send credentials to a registry that is not https: {base_url}"
+                )));
+            }
             let mut value = HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|e| {
                 RegistryError::ParseError(format!("invalid auth token for registry: {}", e))
             })?;
@@ -67,7 +76,7 @@ impl ApiRegistry {
 
         let client = builder.build()?;
 
-        let mut url = base_url.into();
+        let mut url = base_url;
         // Normalize: remove trailing slash
         while url.ends_with('/') {
             url.pop();
@@ -79,6 +88,27 @@ impl ApiRegistry {
             client,
         })
     }
+}
+
+/// The most a registry answer may hold. Real answers are kilobytes; this
+/// stops a registry that streams without end from exhausting memory.
+const MAX_REGISTRY_RESPONSE: usize = 64 * 1024 * 1024;
+
+/// Read a registry answer of at most [`MAX_REGISTRY_RESPONSE`] bytes and
+/// parse it as JSON.
+async fn read_json_limited<T: serde::de::DeserializeOwned>(
+    mut response: reqwest::Response,
+) -> Result<T, RegistryError> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len() + chunk.len() > MAX_REGISTRY_RESPONSE {
+            return Err(RegistryError::ParseError(format!(
+                "registry answer exceeds {MAX_REGISTRY_RESPONSE} bytes"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|e| RegistryError::ParseError(e.to_string()))
 }
 
 #[derive(serde::Deserialize)]
@@ -107,10 +137,7 @@ impl Registry for ApiRegistry {
         }
 
         let response = response.error_for_status()?;
-        let results: SearchResults = response
-            .json()
-            .await
-            .map_err(|e| RegistryError::ParseError(e.to_string()))?;
+        let results: SearchResults = read_json_limited(response).await?;
 
         info!(
             "Registry '{}' search for '{}': {} results",
@@ -133,10 +160,7 @@ impl Registry for ApiRegistry {
         }
 
         let response = response.error_for_status()?;
-        let wrapper: VersionsResponse = response
-            .json()
-            .await
-            .map_err(|e| RegistryError::ParseError(e.to_string()))?;
+        let wrapper: VersionsResponse = read_json_limited(response).await?;
 
         Ok(wrapper.versions)
     }
@@ -160,10 +184,7 @@ impl Registry for ApiRegistry {
         }
 
         let response = response.error_for_status()?;
-        let wrapper: BuildsResponse = response
-            .json()
-            .await
-            .map_err(|e| RegistryError::ParseError(e.to_string()))?;
+        let wrapper: BuildsResponse = read_json_limited(response).await?;
 
         if wrapper.builds.is_empty() {
             return Err(RegistryError::VersionNotFound {
@@ -367,5 +388,44 @@ mod tests {
         // Unknown platform string + no universal + no match => None.
         let builds = vec![build_with(Some("plan9-amd64"), "plan9.zip")];
         assert!(select_build(&builds, Some(Platform::LinuxX86_64)).is_none());
+    }
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+
+    /// An API registry off this machine must be https: its answers carry the
+    /// download URLs and checksums every install trusts.
+    #[test]
+    fn plain_http_api_registries_off_this_machine_are_refused() {
+        assert!(ApiRegistry::new("r", "http://registry.example.invalid/v1/registry").is_err());
+        assert!(ApiRegistry::new("r", "https://registry.example.invalid/v1/registry").is_ok());
+        assert!(ApiRegistry::new("r", "http://127.0.0.1:9").is_ok());
+    }
+
+    /// A registry that streams an answer without end is cut off at the
+    /// limit instead of filling memory.
+    #[tokio::test]
+    async fn an_endless_registry_answer_is_cut_off() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/registry", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n");
+                let chunk = vec![b' '; 1 << 20];
+                for _ in 0..(MAX_REGISTRY_RESPONSE / chunk.len() + 8) {
+                    if stream.write_all(&chunk).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        let registry = ApiRegistry::new("r", &url).unwrap();
+        let err = registry.get_versions("acme/tools").await.unwrap_err();
+        assert!(err.to_string().contains("exceeds"), "{err}");
     }
 }

@@ -118,12 +118,11 @@ impl LockMetadata {
     /// without hand-rolled leap-year handling.
     pub fn days_since_generated(&self) -> Option<i64> {
         let generated = self.generated_at.as_ref()?;
-        if generated.len() < 10 {
-            return None;
-        }
-        let year: i32 = generated[0..4].parse().ok()?;
-        let month: u8 = generated[5..7].parse().ok()?;
-        let day: u8 = generated[8..10].parse().ok()?;
+        // `get` rather than indexing: the lock comes from whoever wrote the
+        // project, and a range that splits a character must not panic.
+        let year: i32 = generated.get(0..4)?.parse().ok()?;
+        let month: u8 = generated.get(5..7)?.parse().ok()?;
+        let day: u8 = generated.get(8..10)?.parse().ok()?;
         let gen_date =
             time::Date::from_calendar_date(year, time::Month::try_from(month).ok()?, day).ok()?;
         let today = time::OffsetDateTime::now_utc().date();
@@ -145,6 +144,10 @@ impl LockMetadata {
 /// Errors that can occur during lock file operations
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
+    /// A package name or version that cannot name a directory.
+    #[error(transparent)]
+    InvalidCoordinate(#[from] crate::storage::layout::InvalidCoordinate),
+
     /// Read/parse/serialize/write failures on the on-disk lock file —
     /// forwarded transparently from the shared TOML-file error shape.
     #[error(transparent)]
@@ -269,7 +272,7 @@ impl LockFile {
             let Some(expected_checksum) = &dep.checksum else {
                 continue;
             };
-            let package_dir = cas_dir(packages_dir, name, &dep.version);
+            let package_dir = cas_dir(packages_dir, name, &dep.version)?;
             if !package_dir.exists() {
                 return Err(LockError::PackageMissing {
                     package: name.clone(),
@@ -369,7 +372,7 @@ mod tests {
         version: &str,
         content: &[u8],
     ) -> PathBuf {
-        let dir = cas_dir(packages_dir, name, version);
+        let dir = cas_dir(packages_dir, name, version).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("file.txt"), content).unwrap();
         dir
@@ -518,6 +521,35 @@ mod tests {
 
         let loaded = LockFile::load(&lock_path).expect("load should succeed");
         assert_eq!(loaded.package.name, "acme/widget");
+    }
+
+    /// Well-formed timestamps give an age.
+    #[test]
+    fn a_well_formed_timestamp_has_an_age() {
+        let meta = LockMetadata {
+            generated_at: Some("2020-02-29T12:00:00Z".to_string()),
+            hpm_version: None,
+            platform: None,
+        };
+        assert!(meta.days_since_generated().is_some_and(|d| d > 365));
+    }
+
+    /// A malformed timestamp in a cloned project's lock has no age; it never
+    /// aborts hpm.
+    #[test]
+    fn a_malformed_timestamp_has_no_age() {
+        for generated in [
+            "2026-1\u{e9}-01T00:00:00Z",
+            "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}",
+            "2026/13/45T",
+        ] {
+            let meta = LockMetadata {
+                generated_at: Some(generated.to_string()),
+                hpm_version: None,
+                platform: None,
+            };
+            assert_eq!(meta.days_since_generated(), None, "{generated}");
+        }
     }
 
     /// Old lockfiles carried a `version = 1` format field (and per-entry
@@ -699,6 +731,94 @@ version = ">=1.20"
         fn prop_locked_dependency_source_types(dep in locked_dependency_strategy()) {
             // Exactly one of is_url or is_path should be true
             prop_assert!(dep.source.is_url() != dep.source.is_path());
+        }
+    }
+
+    /// One change to an installed tree after its digest was locked.
+    #[derive(Debug, Clone)]
+    enum Tamper {
+        /// Flip one bit of a file's contents.
+        FlipBit { file: usize, byte: usize, bit: u8 },
+        /// Append bytes to a file.
+        Append { file: usize, extra: Vec<u8> },
+        /// Add a file next to the others.
+        AddFile { name: String, contents: Vec<u8> },
+        /// Remove a file.
+        Remove { file: usize },
+    }
+
+    fn tamper_strategy() -> impl Strategy<Value = Tamper> {
+        prop_oneof![
+            (any::<usize>(), any::<usize>(), 0u8..8)
+                .prop_map(|(file, byte, bit)| Tamper::FlipBit { file, byte, bit }),
+            (any::<usize>(), prop::collection::vec(any::<u8>(), 1..4))
+                .prop_map(|(file, extra)| Tamper::Append { file, extra }),
+            ("z[a-z]{0,3}", prop::collection::vec(any::<u8>(), 0..4))
+                .prop_map(|(name, contents)| Tamper::AddFile { name, contents }),
+            any::<usize>().prop_map(|file| Tamper::Remove { file }),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Once a lock records an installed tree's digest, in either format,
+        /// the untouched tree verifies and any change to it (a flipped bit,
+        /// appended bytes, an added or a removed file) is a ChecksumMismatch.
+        #[test]
+        fn any_change_to_a_locked_tree_fails_verification(
+            files in prop::collection::btree_map("[a-y]{1,4}", prop::collection::vec(any::<u8>(), 1..6), 1..4),
+            tamper in tamper_strategy(),
+            legacy in any::<bool>(),
+        ) {
+            let temp = TempDir::new().unwrap();
+            let dir = cas_dir(temp.path(), "creator/foo", "1.0.0").unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+            for (name, contents) in &files {
+                std::fs::write(dir.join(name), contents).unwrap();
+            }
+            let checksum = if legacy {
+                crate::tree_hash::hash_tree_as(&dir, "legacy").unwrap()
+            } else {
+                crate::tree_hash::hash_tree(&dir).unwrap()
+            };
+            let mut lock = LockFile::new("root/pkg".to_string(), "1.0.0".to_string());
+            lock.add_dependency(
+                "creator/foo".to_string(),
+                LockedDependency {
+                    version: "1.0.0".to_string(),
+                    checksum: Some(checksum),
+                    source: LockedSource::url("https://example.com/foo.zip", "1.0.0"),
+                },
+            );
+            prop_assert!(lock.verify_checksums(temp.path()).is_ok());
+
+            let names: Vec<&String> = files.keys().collect();
+            let pick = |i: usize| dir.join(names[i % names.len()]);
+            match &tamper {
+                Tamper::FlipBit { file, byte, bit } => {
+                    let path = pick(*file);
+                    let mut bytes = std::fs::read(&path).unwrap();
+                    let at = byte % bytes.len();
+                    bytes[at] ^= 1 << bit;
+                    std::fs::write(&path, bytes).unwrap();
+                }
+                Tamper::Append { file, extra } => {
+                    let path = pick(*file);
+                    let mut bytes = std::fs::read(&path).unwrap();
+                    bytes.extend(extra);
+                    std::fs::write(&path, bytes).unwrap();
+                }
+                Tamper::AddFile { name, contents } => {
+                    std::fs::write(dir.join(name), contents).unwrap();
+                }
+                Tamper::Remove { file } => std::fs::remove_file(pick(*file)).unwrap(),
+            }
+            let result = lock.verify_checksums(temp.path());
+            prop_assert!(
+                matches!(result, Err(LockError::ChecksumMismatch { .. })),
+                "{:?} (legacy {}) verified as {:?}", tamper, legacy, result
+            );
         }
     }
 }

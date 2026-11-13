@@ -74,9 +74,13 @@ pub async fn fetch_manifest(
     if storage.package_exists(name, &resolved_version) {
         debug!("fetch_manifest: CAS hit for {}@{}", name, resolved_version);
         let manifest_path = storage
-            .get_package_path(name, &resolved_version)
+            .get_package_path(name, &resolved_version)?
             .join("hpm.toml");
-        return Ok(PackageManifest::from_path(&manifest_path)?);
+        let manifest = PackageManifest::from_path(&manifest_path)?;
+        // The store keys by slug: the slot may hold another creator's
+        // package of the same slug and version.
+        crate::storage::check_declared_identity(&manifest, name, &resolved_version)?;
+        return Ok(manifest);
     }
 
     debug!(
@@ -94,7 +98,7 @@ pub async fn fetch_manifest(
 
     let fetcher = ArchiveFetcher::for_storage(&storage.config)?;
     let (installed, _checksum) = fetcher
-        .fetch_into_store::<FetchManifestError>(storage, &source, name)
+        .fetch_into_store::<FetchManifestError>(storage, &source, name, None)
         .await?;
 
     info!(
@@ -122,7 +126,7 @@ mod tests {
     }
 
     fn write_fake_package(storage: &StorageManager, name: &str, version: &str, manifest: &str) {
-        let dir = storage.get_package_path(name, version);
+        let dir = storage.get_package_path(name, version).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("hpm.toml"), manifest).unwrap();
     }
@@ -186,7 +190,10 @@ description = "test"
             "[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"1.0.0\"\n",
         )
         .unwrap();
-        storage.install_into_cas(&source).await.unwrap();
+        storage
+            .install_into_cas(&source, "acme/tools", "1.0.0")
+            .await
+            .unwrap();
 
         let manifest = fetch_manifest("acme/tools", "1.0.0", &RegistrySet::new(), &storage)
             .await
@@ -222,5 +229,31 @@ description = "test"
                 .expect("latest resolves to the installed 1.0.0");
             assert_eq!(manifest.package.version, "1.0.0");
         }
+    }
+
+    /// The store keys by slug, so another creator's package of the same slug
+    /// and version may hold the slot; its manifest is never returned as the
+    /// requested package's.
+    #[tokio::test]
+    async fn a_store_hit_for_another_creator_is_refused() {
+        let temp = TempDir::new().unwrap();
+        let storage = make_storage(&temp);
+        let source = temp.path().join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("hpm.toml"),
+            "[package]\npath = \"other/tools\"\nname = \"Other\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        storage
+            .install_into_cas(&source, "other/tools", "1.0.0")
+            .await
+            .unwrap();
+
+        let result = fetch_manifest("acme/tools", "1.0.0", &RegistrySet::new(), &storage).await;
+        assert!(
+            !matches!(&result, Ok(m) if m.package.path.as_str() == "other/tools"),
+            "returned another creator's manifest for acme/tools"
+        );
     }
 }

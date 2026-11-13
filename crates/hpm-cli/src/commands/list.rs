@@ -12,7 +12,7 @@
 //! ```
 
 use super::manifest_utils::{determine_manifest_path, load_manifest};
-use crate::console::Console;
+use crate::console::{Console, untrusted};
 use crate::output::OutputFormat;
 use anyhow::{Context, Result};
 use console::style;
@@ -185,11 +185,12 @@ fn format_tree_source_info(spec: &DependencySpec) -> String {
 fn display_package_info(manifest: &PackageManifest, console: &mut Console) {
     console.stdout(format!(
         "Package: {} v{}",
-        manifest.package.name, manifest.package.version
+        untrusted(&manifest.package.name),
+        manifest.package.version
     ));
 
     if let Some(description) = &manifest.package.description {
-        console.stdout(format!("Description: {}", description));
+        console.stdout(format!("Description: {}", untrusted(description)));
     }
 
     if let Some(req) = &manifest.compat.houdini {

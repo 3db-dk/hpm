@@ -308,13 +308,18 @@ client runs the same flow.
  │ hpm install (CLI)            ── ProjectManager::sync_dependencies ── │
  ├──────────────────────────────────────────────────────────────────────┤
  │  1. Load hpm.toml                                                    │
- │  2. If hpm.lock exists:                                              │
- │       verify cached packages against stored checksums                │
+ │  2. If hpm.lock exists (unreadable → stop):                          │
+ │       each locked checksum is the expected tree digest: checked      │
+ │       on the extracted archive before it reaches the store, and on   │
+ │       a store copy before it is reused (--frozen-lockfile requires   │
+ │       one per registry/URL dep)                                      │
  │       warn if metadata.generated_at > 90 days                        │
  │  3. Fetch + install in parallel (one task per dep, JoinSet):         │
  │       Registry        → query registry, exact-version lookup         │
  │                       → ArchiveFetcher → ~/.hpm/fetch/               │
  │                       → install_into_cas → ~/.hpm/packages/<slug>@<v>/ │
+ │                         (refused unless its manifest declares the    │
+ │                         requested name and version)                  │
  │       Url             → ArchiveFetcher (no registry query)           │
  │                       → install_into_cas                             │
  │       Path            → install_as_dev_copy (or install_as_dev_link  │
@@ -681,7 +686,7 @@ package contribution.
 The Python layer runs on four ideas, in descending order of importance:
 
 1. **Content-addressable venvs.** Hash the resolved dependency set, use it as the venv directory name. Same hash → same venv → shared across packages.
-2. **Bundled uv.** A copy of `uv` ships with HPM and lives at `~/.hpm/tools/uv`. Its cache (`~/.hpm/uv-cache/`), config (`~/.hpm/uv-config/`), and managed CPython installs (`~/.hpm/uv-python/`, pinned via `UV_PYTHON_INSTALL_DIR`) are isolated from any system `uv` so HPM never perturbs your other Python work. These paths, and the venvs, are under the configured `[storage] home_dir` (`~/.hpm` by default); in code the Python subsystem takes it as a `python::PythonHome`.
+2. **Bundled uv.** HPM runs one pinned `uv` release, downloaded on first use to `~/.hpm/tools/uv-<version>/` and accepted only when it matches the SHA-256 compiled into HPM for that platform; a version bump installs the new release beside the old directory, and the unversioned `~/.hpm/tools/uv` older HPM versions used is removed. Its cache (`~/.hpm/uv-cache/`), config (`~/.hpm/uv-config/`), and managed CPython installs (`~/.hpm/uv-python/`, pinned via `UV_PYTHON_INSTALL_DIR`) are isolated from any system `uv` so HPM never perturbs your other Python work. These paths, and the venvs, are under the configured `[storage] home_dir` (`~/.hpm` by default); in code the Python subsystem takes it as a `python::PythonHome`.
 3. **Self-bootstrapping Python.** `uv pip compile` and `uv venv` need an interpreter. Before invoking either, HPM runs `uv python install <ver>` to ensure a managed CPython matching the project's Houdini ABI exists. This is what makes a clean Windows install (no system Python anywhere) Just Work — without it `pip compile` errors with `No interpreter found in virtual environments, managed installations, search path, or registry`. The ensure step is process-cached, so it costs one fast filesystem probe per resolution.
 4. **Houdini manifest generation.** For each HPM package that declares Python dependencies, HPM writes `<project>/.hpm/packages/{creator}.{slug}.json` with `PYTHONPATH` prepended at the shared venv's `site-packages`.
 
@@ -759,8 +764,8 @@ manifests.
 
 ### Security
 
-- **Transport**: TLS through rustls (pure Rust, no OpenSSL). Certificate verification against the platform trust store.
-- **Integrity**: the archive is checked against the registry's SHA-256 when it is downloaded (a missing checksum only warns); the SHA-256 of the installed tree is recorded in `hpm.lock` and verified before every install.
+- **Transport**: TLS through rustls (pure Rust, no OpenSSL). Certificate verification against the platform trust store. HTTPS only, or plain HTTP to this machine; redirects never step down to HTTP (`http::check_transport`).
+- **Integrity**: the archive is checked against the registry's SHA-256 when it is downloaded (a missing checksum only warns); the SHA-256 of the installed tree is recorded in `hpm.lock`, and a sync verifies every package the lock pins, fetched (before it reaches the store) or reused, against it (`ProjectManager::sync_dependencies_with_lock`).
 - **Signing**: `hpm pack --key` signs archives with Ed25519 over PKCS#8 PEM private keys. `keyId` = first 8 bytes of public key, hex-encoded. See [Security](security.md#package-signing) for the wire format.
 - **Isolation**: bundled `uv` runs out-of-process with its own cache and config, never touching system state.
 

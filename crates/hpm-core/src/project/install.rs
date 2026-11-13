@@ -13,8 +13,39 @@ use tracing::info;
 use super::{InstallOutcome, ProjectError, ProjectManager};
 
 impl ProjectManager {
+    /// Install the project's dependencies, reproducing `hpm.lock` when the
+    /// project has one: every package whose locked version is the one the
+    /// manifest asks for must match its locked checksum, whether it is
+    /// fetched or reused from the store. A lock that exists but cannot be
+    /// read is an error.
     pub async fn sync_dependencies(&self) -> Result<Vec<(String, InstallOutcome)>, ProjectError> {
+        let lock_path = &self.project_paths.lock_file;
+        let lock = if lock_path.exists() {
+            Some(crate::lock::LockFile::load(lock_path).map_err(|source| {
+                ProjectError::LockUnreadable {
+                    lock: lock_path.clone(),
+                    source: Box::new(source),
+                }
+            })?)
+        } else {
+            None
+        };
+        self.sync_dependencies_with_lock(lock.as_ref(), false).await
+    }
+
+    /// [`Self::sync_dependencies`] against the given lock. With `frozen`,
+    /// every registry and URL dependency must be pinned by the lock at its
+    /// manifest version with a checksum, or the sync fails before anything
+    /// is installed.
+    pub async fn sync_dependencies_with_lock(
+        &self,
+        lock: Option<&crate::lock::LockFile>,
+        frozen: bool,
+    ) -> Result<Vec<(String, InstallOutcome)>, ProjectError> {
         info!("Syncing project dependencies");
+        // Re-checked on every sync: a long-lived manager (an embedder) must
+        // not write into a `.hpm` replaced by a link since it was built.
+        self.ensure_directories()?;
 
         let project_manifest = match self.load_project_manifest()? {
             Some(manifest) => manifest,
@@ -28,6 +59,32 @@ impl ProjectManager {
         let project_env_overrides = project_manifest.runtime;
         let manifest_registries = project_manifest.registries;
         let dependencies = project_manifest.dependencies;
+
+        // The checksum the lock pins for each dependency, when the lock
+        // records the very version the manifest asks for. A lock entry for
+        // another version is stale (the manifest moved on) and pins nothing.
+        let mut locked: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for (name, spec) in &dependencies {
+            let pinned_version = match spec {
+                hpm_package::DependencySpec::Registry { version, .. }
+                | hpm_package::DependencySpec::Url { version, .. } => version,
+                hpm_package::DependencySpec::Path { .. } => continue,
+            };
+            let entry = lock
+                .and_then(|l| l.get_dependency(name))
+                .filter(|e| &e.version == pinned_version);
+            match entry.and_then(|e| e.checksum.clone()) {
+                Some(checksum) => {
+                    locked.insert(name.clone(), checksum);
+                }
+                None if frozen => {
+                    return Err(ProjectError::FrozenLockIncomplete { name: name.clone() });
+                }
+                None => {}
+            }
+        }
+        let locked = Arc::new(locked);
 
         // Build the project's registry set once for any registry-resolved
         // deps. Wrapped in Arc so each spawned task can hold a cheap clone.
@@ -61,6 +118,7 @@ impl ProjectManager {
             let registry_set = registry_set.clone();
             let all_installed = all_installed.clone();
             let slots = slots.clone();
+            let locked = locked.clone();
 
             tasks.spawn(async move {
                 let _slot = slots
@@ -74,6 +132,7 @@ impl ProjectManager {
                     &all_installed,
                     &name,
                     &spec,
+                    locked.get(&name).map(String::as_str),
                 )
                 .await;
                 (name, result)
@@ -160,6 +219,35 @@ async fn reuse_installed(pkg: &InstalledPackage) {
     }
 }
 
+/// Check a store copy about to be reused against the checksum `hpm.lock`
+/// records for it. The store is shared by every project on the machine, so
+/// a copy installed earlier may not be the bytes this project locked.
+async fn verify_locked(
+    pkg: &InstalledPackage,
+    name: &str,
+    locked_checksum: Option<&str>,
+) -> Result<(), ProjectError> {
+    let Some(expected) = locked_checksum else {
+        return Ok(());
+    };
+    let dir = pkg.install_path.clone();
+    let recorded = expected.to_string();
+    let actual =
+        tokio::task::spawn_blocking(move || crate::tree_hash::hash_tree_as(&dir, &recorded))
+            .await
+            .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(ProjectError::LockChecksumMismatch {
+            name: name.to_string(),
+            version: pkg.version.clone(),
+            expected: expected.to_string(),
+            actual,
+        })
+    }
+}
+
 /// Install a single dependency, short-circuiting if it's already in the
 /// global CAS. Spawnable from the JoinSet in `sync_dependencies` — takes
 /// shared state by `&` (cloned into the task by the caller).
@@ -183,6 +271,7 @@ pub(super) async fn install_one_dep(
     all_installed: &[InstalledPackage],
     name: &str,
     spec: &hpm_package::DependencySpec,
+    locked_checksum: Option<&str>,
 ) -> Result<InstallOutcome, ProjectError> {
     use hpm_package::DependencySpec;
     match spec {
@@ -194,6 +283,7 @@ pub(super) async fn install_one_dep(
                 .find(|p| ProjectManager::matches_spec_name(p, name) && p.version == *version)
             {
                 info!("Package {}@{} already installed", name, version);
+                verify_locked(pkg, name, locked_checksum).await?;
                 reuse_installed(pkg).await;
                 return Ok(InstallOutcome {
                     package: pkg.clone(),
@@ -224,7 +314,8 @@ pub(super) async fn install_one_dep(
             let source = PackageSource::url(url.clone(), version)?
                 .with_registry_checksum(entry.cksum.as_deref())?;
             let (package, checksum) =
-                fetch_and_install_pkg(storage, fetcher, name, version, source).await?;
+                fetch_and_install_pkg(storage, fetcher, name, version, source, locked_checksum)
+                    .await?;
             Ok(InstallOutcome {
                 package,
                 checksum: Some(checksum),
@@ -237,6 +328,7 @@ pub(super) async fn install_one_dep(
                 .find(|p| ProjectManager::matches_spec_name(p, name) && p.version == *version)
             {
                 info!("Package {}@{} already installed", name, version);
+                verify_locked(pkg, name, locked_checksum).await?;
                 reuse_installed(pkg).await;
                 return Ok(InstallOutcome {
                     package: pkg.clone(),
@@ -246,7 +338,8 @@ pub(super) async fn install_one_dep(
             }
             let source = PackageSource::url(url, version)?;
             let (package, checksum) =
-                fetch_and_install_pkg(storage, fetcher, name, version, source).await?;
+                fetch_and_install_pkg(storage, fetcher, name, version, source, locked_checksum)
+                    .await?;
             Ok(InstallOutcome {
                 package,
                 checksum: Some(checksum),
@@ -287,9 +380,10 @@ pub(crate) async fn fetch_and_install_pkg(
     name: &str,
     version: &str,
     source: PackageSource,
+    locked_checksum: Option<&str>,
 ) -> Result<(InstalledPackage, String), ProjectError> {
     let (installed, checksum) = fetcher
-        .fetch_into_store::<ProjectError>(storage, &source, name)
+        .fetch_into_store::<ProjectError>(storage, &source, name, locked_checksum)
         .await?;
     info!("Successfully fetched and installed {}@{}", name, version);
     Ok((installed, checksum))

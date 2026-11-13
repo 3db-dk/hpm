@@ -37,6 +37,21 @@ fn compute_directory_checksum_sync(dir: &Path) -> Result<String, FetchError> {
 /// Errors that can occur during archive fetching.
 #[derive(Debug, Error)]
 pub enum FetchError {
+    /// The fetched tree differs from the checksum the lock recorded.
+    #[error(
+        "{name}@{version} does not match its locked checksum (expected {expected}, got {actual})"
+    )]
+    LockedChecksumMismatch {
+        name: String,
+        version: String,
+        expected: String,
+        actual: String,
+    },
+
+    /// A package name or version that cannot name a directory.
+    #[error(transparent)]
+    InvalidCoordinate(#[from] crate::storage::layout::InvalidCoordinate),
+
     #[error("HTTP request failed: {0}")]
     HttpError(#[from] reqwest::Error),
 
@@ -114,9 +129,7 @@ impl ArchiveFetcher {
         std::fs::create_dir_all(&cache_dir).map_err(FetchError::CacheDirectoryError)?;
         std::fs::create_dir_all(&staging_dir).map_err(FetchError::CacheDirectoryError)?;
 
-        // 5 min timeout for large packages
-        let http_client =
-            crate::http::client_builder(std::time::Duration::from_secs(300)).build()?;
+        let http_client = crate::http::download_client_builder().build()?;
 
         Ok(Self {
             http_client,
@@ -134,19 +147,56 @@ impl ArchiveFetcher {
         storage: &crate::storage::StorageManager,
         source: &PackageSource,
         package_name: &str,
+        locked_checksum: Option<&str>,
     ) -> Result<(crate::storage::InstalledPackage, String), E>
     where
         E: From<FetchError> + From<crate::storage::StorageError>,
     {
         let fetched = self.fetch(source, package_name).await?;
-        let installed = storage.install_into_cas(&fetched.package_path).await?;
+        // With a locked checksum, the extracted tree must be exactly the
+        // locked one before anything reaches the store.
+        let verified = match locked_checksum {
+            Some(expected) => {
+                let dir = fetched.package_path.clone();
+                let recorded = expected.to_string();
+                let actual = tokio::task::spawn_blocking(move || {
+                    crate::tree_hash::hash_tree_as(&dir, &recorded)
+                })
+                .await
+                .map_err(|e| FetchError::ExtractionError(format!("hash task failed: {e}")))?
+                .map_err(|e| FetchError::ExtractionError(e.to_string()));
+                match actual {
+                    Ok(actual) if actual == expected => Ok(()),
+                    Ok(actual) => Err(FetchError::LockedChecksumMismatch {
+                        name: package_name.to_string(),
+                        version: source.version.clone(),
+                        expected: expected.to_string(),
+                        actual,
+                    }),
+                    Err(e) => Err(e),
+                }
+            }
+            None => Ok(()),
+        };
+        let installed = match verified {
+            Ok(()) => {
+                storage
+                    .install_into_cas(&fetched.package_path, package_name, &source.version)
+                    .await
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_dir_all(&fetched.package_path).await;
+                return Err(e.into());
+            }
+        };
+        // The staging copy goes whether or not the install was accepted.
         if let Err(e) = tokio::fs::remove_dir_all(&fetched.package_path).await {
             warn!(
-                "Installed {} but could not remove its staging copy at {:?}: {}",
+                "Could not remove the staging copy of {} at {:?}: {}",
                 package_name, fetched.package_path, e
             );
         }
-        Ok((installed, fetched.checksum))
+        Ok((installed?, fetched.checksum))
     }
 
     /// Fetch a package archive — download into the archive cache (keyed by
@@ -178,7 +228,7 @@ impl ArchiveFetcher {
         package_name: &str,
         expected_sha256: Option<&str>,
     ) -> Result<FetchResult, FetchError> {
-        let cache_key = crate::storage::layout::download_key(package_name, version);
+        let cache_key = crate::storage::layout::download_key(package_name, version)?;
         // Every fetch extracts into a directory of its own: an extraction is
         // never reused (a crash or a refused entry would leave a partial tree
         // that would be installed unverified), and two fetches of one version
@@ -414,7 +464,7 @@ mod tests {
 
         let source = PackageSource::url("https://example.invalid/tool.zip", "1.0.0").unwrap();
         let (installed, _) = fetcher
-            .fetch_into_store::<FetchIntoStoreTestError>(&storage, &source, "studio/tool")
+            .fetch_into_store::<FetchIntoStoreTestError>(&storage, &source, "studio/tool", None)
             .await
             .unwrap();
 
@@ -425,6 +475,112 @@ mod tests {
             0,
             "the staging copy must be gone once the store holds the package"
         );
+    }
+
+    /// Install `dep_name@version` from an archive pre-placed in the download
+    /// cache (no network), whose own `hpm.toml` declares `declared_path` at
+    /// `declared_version`. Returns the result and the temp root.
+    async fn fetch_declared(
+        dep_name: &str,
+        version: &str,
+        declared_path: &str,
+        declared_version: &str,
+    ) -> (
+        Result<crate::storage::InstalledPackage, FetchIntoStoreTestError>,
+        TempDir,
+    ) {
+        let temp = TempDir::new().unwrap();
+        let storage = crate::storage::StorageManager::new(hpm_config::StorageConfig {
+            home_dir: temp.path().to_path_buf(),
+            cache_dir: temp.path().join("cache"),
+            packages_dir: temp.path().join("packages"),
+            registry_cache_dir: temp.path().join("registry"),
+        })
+        .unwrap();
+        let fetcher =
+            ArchiveFetcher::new(temp.path().join("cache"), temp.path().join("fetch")).unwrap();
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            use std::io::Write;
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("pkg/hpm.toml", options).unwrap();
+            write!(
+                zip,
+                "[package]\npath = \"{declared_path}\"\nname = \"x\"\nversion = \"{declared_version}\"\n"
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+        std::fs::create_dir_all(temp.path().join("cache")).unwrap();
+        std::fs::write(
+            temp.path()
+                .join("cache")
+                .join(crate::storage::layout::download_key(dep_name, version).unwrap()),
+            buf.into_inner(),
+        )
+        .unwrap();
+        let source = PackageSource::url("https://example.invalid/p.zip", version).unwrap();
+        let result = fetcher
+            .fetch_into_store::<FetchIntoStoreTestError>(&storage, &source, dep_name, None)
+            .await
+            .map(|(installed, _)| installed);
+        (result, temp)
+    }
+
+    /// A package whose archive declares the identity it was requested under
+    /// installs, including when the request differs only in ASCII case or
+    /// names the bare slug.
+    #[tokio::test]
+    async fn an_archive_declaring_the_requested_identity_installs() {
+        for (dep, version, declared, declared_version) in [
+            ("studio/tool", "1.0.0", "studio/tool", "1.0.0"),
+            ("Studio/Tool", "1.0.0", "studio/tool", "1.0.0"),
+            ("tool", "2.1.0-beta.1", "studio/tool", "2.1.0-beta.1"),
+        ] {
+            let (result, _temp) = fetch_declared(dep, version, declared, declared_version).await;
+            let installed = result.unwrap_or_else(|e| panic!("{dep}@{version}: {e:?}"));
+            assert_eq!(installed.version, declared_version);
+            assert_eq!(installed.manifest.package.path.as_str(), declared);
+        }
+    }
+
+    /// An archive that declares a different package or version than the one
+    /// requested never lands in the store: it would otherwise occupy that
+    /// other package's slot for every project on the machine.
+    #[tokio::test]
+    async fn an_archive_claiming_another_identity_is_refused() {
+        for (dep, version, declared, declared_version) in [
+            ("evil/helper", "1.0.0", "acme/tools", "1.0.0"),
+            ("evil/helper", "1.0.0", "evil/tools", "1.0.0"),
+            ("acme/tools", "1.0.0", "acme/tools", "1.2.0"),
+            ("acme/tools", "1.0.0", "acme/tools", "1.0.0-rc.1"),
+            ("acme/tools", "1.0.0", "other/tools", "1.0.0"),
+            ("helper", "1.0.0", "acme/tools", "1.0.0"),
+        ] {
+            let (result, temp) = fetch_declared(dep, version, declared, declared_version).await;
+            assert!(
+                result.is_err(),
+                "{dep}@{version} installed an archive declaring {declared}@{declared_version}"
+            );
+            let packages = temp.path().join("packages");
+            let slots: Vec<_> = std::fs::read_dir(&packages)
+                .map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name()).collect())
+                .unwrap_or_default();
+            assert!(
+                slots
+                    .iter()
+                    .all(|n| n.to_string_lossy().starts_with('.') || n.to_string_lossy() == "_dev"),
+                "{dep}@{version}: store slots {slots:?}"
+            );
+            assert_eq!(
+                std::fs::read_dir(temp.path().join("fetch"))
+                    .map(|d| d.count())
+                    .unwrap_or(0),
+                0,
+                "{dep}@{version}: staging left behind"
+            );
+        }
     }
 
     #[derive(Debug)]
@@ -682,6 +838,7 @@ mod tests {
                             &storage,
                             &source,
                             "studio/tool",
+                            None,
                         )
                         .await
                         .map(|(installed, _)| installed.install_path)
@@ -694,7 +851,7 @@ mod tests {
                 .expect("every concurrent install succeeds");
         }
 
-        let store = storage.get_package_path("tool", "1.0.0");
+        let store = storage.get_package_path("tool", "1.0.0").unwrap();
         assert_eq!(std::fs::read_dir(store.join("data")).unwrap().count(), 200);
         match crate::install_manifest::verify(&store).unwrap() {
             crate::install_manifest::Verification::Checked(report) => {

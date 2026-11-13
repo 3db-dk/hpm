@@ -248,7 +248,7 @@ async fn remove_package_unlinks_symlink_entries() {
     // Manually plant a symlink/junction at the registry CAS path that
     // `remove_package` resolves to. `get_package_path(name, version)` uses the
     // bare-slug layout, so the link lives at `<packages_dir>/<slug>@<v>/`.
-    let cas_path = storage_manager.get_package_path("foo", "1.0.0");
+    let cas_path = storage_manager.get_package_path("foo", "1.0.0").unwrap();
     std::fs::create_dir_all(cas_path.parent().unwrap()).unwrap();
     create_dev_link(&external, &cas_path).unwrap();
     assert!(cas_path.join("MARKER").exists());
@@ -357,7 +357,9 @@ async fn install_into_cas_without_manifest_fails() {
     let source_dir = temp_dir.path().join("source-pkg");
     std::fs::create_dir_all(&source_dir).unwrap();
 
-    let result = storage_manager.install_into_cas(&source_dir).await;
+    let result = storage_manager
+        .install_into_cas(&source_dir, "creator/foo", "1.0.0")
+        .await;
     assert!(result.is_err());
     match result {
         Err(StorageError::Manifest(ManifestLoadError::NotFound { path })) => {
@@ -501,7 +503,10 @@ async fn list_installed_skips_dev_subtree() {
     // Independent registry-style install of bar@2.0.0
     let reg_source = temp_dir.path().join("reg-source");
     write_source_package(&reg_source, "creator/bar", "2.0.0", "registry");
-    storage_manager.install_into_cas(&reg_source).await.unwrap();
+    storage_manager
+        .install_into_cas(&reg_source, "creator/bar", "2.0.0")
+        .await
+        .unwrap();
 
     let listed = storage_manager.list_installed().unwrap();
     let names: Vec<&str> = listed.iter().map(|p| p.manifest.package.slug()).collect();
@@ -540,7 +545,10 @@ async fn dev_and_registry_installs_coexist_at_same_coordinate() {
 
     let reg_source = temp_dir.path().join("reg-source");
     write_source_package(&reg_source, "creator/foo", "1.0.0", "registry-content");
-    storage_manager.install_into_cas(&reg_source).await.unwrap();
+    storage_manager
+        .install_into_cas(&reg_source, "creator/foo", "1.0.0")
+        .await
+        .unwrap();
 
     let dev_marker = dev_installed.install_path.join("MARKER");
     let reg_marker = temp_dir
@@ -832,7 +840,10 @@ async fn dev_link_and_registry_installs_coexist_at_same_coordinate() {
 
     let reg_source = temp_dir.path().join("reg-source");
     write_source_package(&reg_source, "creator/foo", "1.0.0", "registry-content");
-    storage_manager.install_into_cas(&reg_source).await.unwrap();
+    storage_manager
+        .install_into_cas(&reg_source, "creator/foo", "1.0.0")
+        .await
+        .unwrap();
 
     let link_marker = temp_dir
         .path()
@@ -1541,7 +1552,10 @@ async fn store_installs_carry_an_install_record_through_their_lifecycle() {
 
     let source = temp.path().join("reg-source");
     write_source_package(&source, "creator/bar", "2.0.0", "registry");
-    let installed = storage.install_into_cas(&source).await.unwrap();
+    let installed = storage
+        .install_into_cas(&source, "creator/bar", "2.0.0")
+        .await
+        .unwrap();
     let record = record_path(&installed.install_path).unwrap();
     assert!(record.is_file(), "a store install writes its record");
     assert_eq!(record.parent(), installed.install_path.parent());
@@ -1572,7 +1586,10 @@ async fn store_installs_carry_an_install_record_through_their_lifecycle() {
 
     // An install never replaces a committed copy (a running Houdini may
     // have it loaded): it keeps the existing one, damage and all.
-    let kept = storage.install_into_cas(&source).await.unwrap();
+    let kept = storage
+        .install_into_cas(&source, "creator/bar", "2.0.0")
+        .await
+        .unwrap();
     assert_eq!(kept.install_path, installed.install_path);
     let Verification::Checked(report) = storage.verify_installed(&kept).unwrap() else {
         panic!("still recorded");
@@ -1588,7 +1605,10 @@ async fn store_installs_carry_an_install_record_through_their_lifecycle() {
     let aside = temp.path().join("aside");
     std::fs::rename(&installed.install_path, &aside).unwrap();
     std::fs::rename(&record, temp.path().join("aside.files.json")).unwrap();
-    let reinstalled = storage.install_into_cas(&source).await.unwrap();
+    let reinstalled = storage
+        .install_into_cas(&source, "creator/bar", "2.0.0")
+        .await
+        .unwrap();
     let Verification::Checked(report) = storage.verify_installed(&reinstalled).unwrap() else {
         panic!("a reinstall is recorded");
     };
@@ -1643,19 +1663,20 @@ mod store_layout {
                 format!("[package]\npath = \"{creator}/{slug}\"\nname = \"x\"\nversion = \"{version}\"\n"),
             )
             .unwrap();
-            let installed = rt.block_on(storage.install_into_cas(&source)).unwrap();
+            let installed = rt.block_on(storage.install_into_cas(&source, &format!("{creator}/{slug}"), &version)).unwrap();
 
-            prop_assert_eq!(&storage.get_package_path(&slug, &version), &installed.install_path);
+            prop_assert_eq!(&storage.get_package_path(&slug, &version).unwrap(), &installed.install_path);
             prop_assert!(storage.package_exists(&slug, &version));
             let scoped = format!("{creator}/{slug}");
-            prop_assert_eq!(&storage.get_package_path(&scoped, &version), &installed.install_path);
+            prop_assert_eq!(&storage.get_package_path(&scoped, &version).unwrap(), &installed.install_path);
             prop_assert!(storage.package_exists(&scoped, &version));
             prop_assert_eq!(
                 crate::storage::layout::cas_dir(
                     &storage.config.packages_dir,
                     &format!("{creator}/{slug}"),
                     &version
-                ),
+                )
+                .unwrap(),
                 installed.install_path.clone()
             );
             let listed: Vec<_> = storage
@@ -2059,7 +2080,10 @@ async fn reinstalling_over_a_copy_whose_manifest_no_longer_parses_names_the_mani
     let storage = test_storage(&temp);
     let source = temp.path().join("reg-source");
     write_source_package(&source, "creator/bar", "2.0.0", "registry");
-    let installed = storage.install_into_cas(&source).await.unwrap();
+    let installed = storage
+        .install_into_cas(&source, "creator/bar", "2.0.0")
+        .await
+        .unwrap();
 
     let manifest = installed.install_path.join("hpm.toml");
     let mut perms = std::fs::metadata(&manifest).unwrap().permissions();
@@ -2073,7 +2097,10 @@ async fn reinstalling_over_a_copy_whose_manifest_no_longer_parses_names_the_mani
     )
     .unwrap();
 
-    let err = storage.install_into_cas(&source).await.unwrap_err();
+    let err = storage
+        .install_into_cas(&source, "creator/bar", "2.0.0")
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, StorageError::Manifest(_)),
         "expected the manifest error, got {err}"
@@ -2090,11 +2117,17 @@ async fn a_second_creators_package_with_the_same_slug_is_refused() {
     let storage = test_storage(&temp);
     let first = temp.path().join("first");
     write_source_package(&first, "acme/bar", "2.0.0", "acme");
-    let installed = storage.install_into_cas(&first).await.unwrap();
+    let installed = storage
+        .install_into_cas(&first, "acme/bar", "2.0.0")
+        .await
+        .unwrap();
 
     let second = temp.path().join("second");
     write_source_package(&second, "other/bar", "2.0.0", "other");
-    let err = storage.install_into_cas(&second).await.unwrap_err();
+    let err = storage
+        .install_into_cas(&second, "other/bar", "2.0.0")
+        .await
+        .unwrap_err();
     let text = err.to_string();
     assert!(
         matches!(err, StorageError::SlugCollision { .. }),
@@ -2109,4 +2142,77 @@ async fn a_second_creators_package_with_the_same_slug_is_refused() {
         "acme",
         "the first creator's copy is untouched"
     );
+}
+
+// ------------------------------------------------------------------
+// Store identity: an archive fills only the slot it declares
+// ------------------------------------------------------------------
+
+mod store_identity {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Small domains, so requested and declared identities often agree,
+    /// often differ in one part, and sometimes differ only in case.
+    fn creator() -> impl Strategy<Value = &'static str> {
+        prop::sample::select(vec!["ana", "Ana", "bo"])
+    }
+    fn slug() -> impl Strategy<Value = &'static str> {
+        prop::sample::select(vec!["tool", "Tool", "tools"])
+    }
+    fn version() -> impl Strategy<Value = &'static str> {
+        prop::sample::select(vec!["1.0.0", "1.0.1", "2.0.0-rc.1"])
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        /// `install_into_cas` stores an archive exactly when its manifest
+        /// declares the identity it was requested as (ASCII case aside, a
+        /// bare-slug request matching the slug); otherwise the requested
+        /// slot stays empty.
+        #[test]
+        fn an_archive_fills_only_the_slot_it_declares(
+            // A manifest's own path is lowercase; requests vary in case.
+            declared in (
+                prop::sample::select(vec!["ana", "bo"]),
+                prop::sample::select(vec!["tool", "tools"]),
+                version(),
+            ),
+            requested in (creator(), slug(), version()),
+            scoped_request in any::<bool>(),
+        ) {
+            let (d_creator, d_slug, d_version) = declared;
+            let (r_creator, r_slug, r_version) = requested;
+            let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+            let temp = TempDir::new().unwrap();
+            let storage = test_storage(&temp);
+            let source = temp.path().join("src");
+            std::fs::create_dir_all(&source).unwrap();
+            std::fs::write(
+                source.join("hpm.toml"),
+                format!("[package]\npath = \"{d_creator}/{d_slug}\"\nname = \"x\"\nversion = \"{d_version}\"\n"),
+            )
+            .unwrap();
+            let requested_name = if scoped_request {
+                format!("{r_creator}/{r_slug}")
+            } else {
+                r_slug.to_string()
+            };
+
+            let same = (!scoped_request || d_creator.eq_ignore_ascii_case(r_creator))
+                && d_slug.eq_ignore_ascii_case(r_slug)
+                && d_version == r_version;
+            let result = rt.block_on(storage.install_into_cas(&source, &requested_name, r_version));
+            prop_assert_eq!(result.is_ok(), same, "{:?} as {}@{}: {:?}", declared, requested_name, r_version, result.as_ref().err().map(|e| e.to_string()));
+            if !same {
+                prop_assert!(
+                    matches!(result, Err(StorageError::IdentityMismatch { .. })),
+                    "{:?}", result
+                );
+                prop_assert!(!storage.package_exists(&requested_name, r_version));
+                prop_assert!(storage.list_installed().unwrap().is_empty());
+            }
+        }
+    }
 }

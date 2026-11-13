@@ -44,9 +44,9 @@ pub struct PackageSource {
 }
 
 impl PackageSource {
-    /// Create a new package source. Validates that `url` carries a `http://`
-    /// or `https://` scheme and that `version` is non-empty and not bracketed
-    /// by stray `.` characters.
+    /// Create a new package source. Validates that `url` is https (or plain
+    /// http to this machine; see [`crate::http::check_transport`]) and that
+    /// `version` is a semantic version.
     pub fn url(
         url: impl Into<String>,
         version: impl Into<String>,
@@ -54,12 +54,7 @@ impl PackageSource {
         let url = url.into();
         let version = version.into();
 
-        if !url.starts_with("https://") && !url.starts_with("http://") {
-            return Err(PackageSourceError::InvalidUrl(format!(
-                "URL must start with https:// or http://: {}",
-                url
-            )));
-        }
+        crate::http::check_transport(&url).map_err(PackageSourceError::InvalidUrl)?;
 
         if version.is_empty() {
             return Err(PackageSourceError::InvalidVersion(
@@ -67,9 +62,9 @@ impl PackageSource {
             ));
         }
 
-        if version.starts_with('.') || version.ends_with('.') {
+        if semver::Version::parse(&version).is_err() {
             return Err(PackageSourceError::InvalidVersion(format!(
-                "Version has invalid format: {}",
+                "Version must be a semantic version: {}",
                 version
             )));
         }
@@ -165,7 +160,8 @@ mod tests {
 
     #[test]
     fn http_is_not_secure() {
-        let source = PackageSource::url("http://example.com/pkg.zip", "1.0.0").unwrap();
+        // Plain http is only accepted to this machine, and still warned about.
+        let source = PackageSource::url("http://127.0.0.1:8080/pkg.zip", "1.0.0").unwrap();
         assert!(!source.is_secure());
         assert!(source.security_warning().unwrap().contains("insecure"));
     }
@@ -179,5 +175,31 @@ mod tests {
     #[test]
     fn rejects_empty_version() {
         assert!(PackageSource::url("https://example.com/pkg.zip", "").is_err());
+    }
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+
+    /// Archives are only fetched over https, or plain http to this machine
+    /// (a local mirror or a test server).
+    #[test]
+    fn plain_http_sources_off_this_machine_are_refused() {
+        for url in [
+            "http://pkg.example.invalid/tools-1.0.0.zip",
+            "http://10.0.0.5/tools.zip",
+            "HTTP://pkg.example.invalid/tools.zip",
+        ] {
+            assert!(PackageSource::url(url, "1.0.0").is_err(), "accepted {url}");
+        }
+        for url in [
+            "https://pkg.example.invalid/tools-1.0.0.zip",
+            "http://127.0.0.1:8080/tools.zip",
+            "http://localhost/tools.zip",
+            "http://[::1]:9/tools.zip",
+        ] {
+            assert!(PackageSource::url(url, "1.0.0").is_ok(), "refused {url}");
+        }
     }
 }

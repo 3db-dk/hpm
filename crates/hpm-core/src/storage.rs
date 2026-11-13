@@ -59,6 +59,38 @@ pub struct StorageManager {
     pub config: StorageConfig,
 }
 
+/// Whether `manifest` declares the package it was requested as: the same
+/// `creator/slug` (or slug, for a bare-slug request), ASCII case aside, at
+/// the same semantic version.
+pub(crate) fn check_declared_identity(
+    manifest: &PackageManifest,
+    requested_name: &str,
+    requested_version: &str,
+) -> Result<(), StorageError> {
+    let path = &manifest.package.path;
+    let declared_version = &manifest.package.version;
+    let name_matches = if requested_name.contains('/') {
+        path.as_str().eq_ignore_ascii_case(requested_name)
+    } else {
+        path.slug().eq_ignore_ascii_case(requested_name)
+    };
+    let version_matches = match (
+        semver::Version::parse(requested_version),
+        semver::Version::parse(declared_version),
+    ) {
+        (Ok(requested), Ok(declared)) => requested == declared,
+        _ => false,
+    };
+    if name_matches && version_matches {
+        Ok(())
+    } else {
+        Err(StorageError::IdentityMismatch {
+            requested: format!("{requested_name}@{requested_version}"),
+            declared: format!("{}@{declared_version}", path.as_str()),
+        })
+    }
+}
+
 impl StorageManager {
     pub fn new(config: StorageConfig) -> Result<Self, StorageError> {
         let manager = Self { config };
@@ -82,15 +114,16 @@ impl StorageManager {
 
     /// Whether the store holds `name@version`. `name` is a dependency key
     /// (`creator/slug`) or a bare slug; the store keys by slug.
+    /// A name or version that cannot name a store directory is never in it.
     pub fn package_exists(&self, name: &str, version: &str) -> bool {
         self.get_package_path(name, version)
-            .join("hpm.toml")
-            .exists()
+            .is_ok_and(|dir| dir.join("hpm.toml").exists())
     }
 
     /// The store directory for `name@version` (see [`StoreLayout::cas_dir`]).
-    pub fn get_package_path(&self, name: &str, version: &str) -> PathBuf {
-        self.layout().cas_dir(name, version)
+    /// A name or version that cannot name one is an error, never a path.
+    pub fn get_package_path(&self, name: &str, version: &str) -> Result<PathBuf, StorageError> {
+        Ok(self.layout().cas_dir(name, version)?)
     }
 
     /// Sweep every installed package for programs that lost their executable
@@ -238,7 +271,10 @@ impl StorageManager {
     /// it aside is the caller's decision, and an install never replaces a
     /// committed copy.
     pub fn evict_download(&self, name: &str, version: &str) -> usize {
-        let key = layout::download_key(name, version);
+        // A name or version that cannot name a download has none to evict.
+        let Ok(key) = layout::download_key(name, version) else {
+            return 0;
+        };
         let layout = self.layout();
         let mut dirs = self.fetch_staging_dirs();
         dirs.push(layout.cache_dir().to_path_buf());
@@ -428,10 +464,21 @@ impl StorageManager {
     /// resolves the same coordinate from a registry.
     ///
     /// [`install_as_dev_copy`]: Self::install_as_dev_copy
+    ///
+    /// `requested_name` and `requested_version` are what the package was
+    /// fetched as: a dependency key (`creator/slug`, or a bare slug) and a
+    /// semantic version. The package's own `hpm.toml` must declare that same
+    /// package (ASCII case aside) and version, or nothing is installed —
+    /// an archive's manifest is the publisher's claim, and the store slot it
+    /// would occupy is shared by every project on the machine.
     pub async fn install_into_cas(
         &self,
         source_path: &std::path::Path,
+        requested_name: &str,
+        requested_version: &str,
     ) -> Result<InstalledPackage, StorageError> {
+        let manifest = PackageManifest::from_path(&source_path.join("hpm.toml"))?;
+        check_declared_identity(&manifest, requested_name, requested_version)?;
         self.install_inner(source_path, InstallStyle::CasCopy).await
     }
 
@@ -527,11 +574,11 @@ impl StorageManager {
         // Dev styles share the `_dev/<slug>@<version>` container. A copy lands
         // at a content-addressed `<container>/<hash>` subdirectory; a link's
         // entry *is* the container path.
-        let dev_container = self.layout().dev_container(name, version);
+        let dev_container = self.layout().dev_container(name, version)?;
 
         match style {
             InstallStyle::CasCopy => {
-                let target_dir = self.get_package_path(name, version);
+                let target_dir = self.get_package_path(name, version)?;
                 // Record what is being installed from the extracted archive
                 // itself, before the copy, so a copy cut short shows up as
                 // damage rather than as a smaller healthy package.
@@ -807,7 +854,7 @@ impl StorageManager {
     }
 
     pub async fn remove_package(&self, name: &str, version: &str) -> Result<(), StorageError> {
-        let package_dir = self.get_package_path(name, version);
+        let package_dir = self.get_package_path(name, version)?;
 
         // `symlink_metadata` rather than `exists()` because `exists()` follows
         // links — a junction pointing at a missing target would falsely report

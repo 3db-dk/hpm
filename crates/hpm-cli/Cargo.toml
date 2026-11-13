@@ -1,5 +1,6 @@
 [package]
 name = "hpm-cli"
+publish.workspace = true
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -35,7 +36,6 @@ hpm-package = { path = "../hpm-package" }
 hpm-core = { path = "../hpm-core" }
 hpm-config = { path = "../hpm-config" }
 hpm-assets = { path = "../hpm-assets" }
-semver.workspace = true
 
 
 [dev-dependencies]

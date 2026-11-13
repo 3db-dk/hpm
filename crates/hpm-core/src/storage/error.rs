@@ -6,6 +6,10 @@ use hpm_package::{IoOp, ManifestLoadError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
+    /// A package name or version that cannot name a directory.
+    #[error(transparent)]
+    InvalidCoordinate(#[from] crate::storage::layout::InvalidCoordinate),
+
     /// IO failure with the operation verb, path, and source `io::Error`.
     /// Subsumes the prior DirectoryCreation/DirectoryRead/DirectoryRemoval/
     /// MetadataRead variants.
@@ -22,6 +26,12 @@ pub enum StorageError {
 
     #[error("Package not found: {0}")]
     PackageNotFound(String),
+
+    /// A fetched package declares a different identity in its own
+    /// `hpm.toml` than the one it was requested as. Storing it would put it
+    /// in the other package's slot for every project on the machine.
+    #[error("Refusing {requested}: the downloaded package declares itself as {declared}")]
+    IdentityMismatch { requested: String, declared: String },
 
     /// The store keys a registry install on `<slug>@<version>`, and that
     /// folder already holds another creator's package of the same slug and

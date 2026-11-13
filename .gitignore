@@ -26,3 +26,6 @@ book/
 # Claude Code
 .claude/
 .mcp.json
+
+# Tools CI installs per run (cargo-deny)
+/.tools/

@@ -528,7 +528,10 @@ mod tests {
             // `.`/`..`, which are not names at all (see the example test
             // below).
             let name = if scope.len() % 2 == 0 { format!("{scope}/{slug}") } else { slug.clone() };
-            let pkg = crate::storage::layout::cas_dir(Path::new("/packages"), &name, &version);
+            // Only a semantic version names a store directory.
+            let Ok(pkg) = crate::storage::layout::cas_dir(Path::new("/packages"), &name, &version) else {
+                return Ok(());
+            };
             let stamp = stamp_path(&pkg).expect("a package directory has a name");
 
             prop_assert_eq!(stamp.parent(), pkg.parent());

@@ -84,12 +84,14 @@ impl ProjectManager {
             .map_err(|e| IoOp::wrap("read project packages directory", packages_dir, e))?;
 
         for entry in entries {
-            let path = entry
-                .map_err(|e| IoOp::wrap("read project packages directory", packages_dir, e))?
-                .path();
-            if !path.is_file() {
+            let entry = entry
+                .map_err(|e| IoOp::wrap("read project packages directory", packages_dir, e))?;
+            // The entry's own type, not what a link points at: only regular
+            // files hpm wrote are swept.
+            if !entry.file_type().is_ok_and(|t| t.is_file()) {
                 continue;
             }
+            let path = entry.path();
             let file_name = match path.file_name().and_then(|n| n.to_str()) {
                 Some(name) => name,
                 None => continue,

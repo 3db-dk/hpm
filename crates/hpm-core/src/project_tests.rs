@@ -647,6 +647,7 @@ async fn install_one_dep_short_circuits_on_scoped_name() {
         std::slice::from_ref(&installed),
         "tumblehead/tumblepipe",
         &spec,
+        None,
     )
     .await
     .expect("scoped lookup must short-circuit on the bare-slug InstalledPackage");
@@ -707,6 +708,7 @@ async fn install_one_dep_repairs_a_lost_executable_bit_on_reuse() {
         std::slice::from_ref(&installed),
         "tumblehead/tumblepipe",
         &spec,
+        None,
     )
     .await
     .expect("already-installed dep short-circuits");
@@ -738,6 +740,7 @@ async fn install_one_dep_no_registries_reports_not_configured() {
         &[],
         "tumblepipe",
         &spec,
+        None,
     )
     .await
     .expect_err("no registries configured must be an error");
@@ -2077,7 +2080,7 @@ mod package_env_not_ready {
         .unwrap();
         let installed = manager
             .storage_manager
-            .install_into_cas(&source)
+            .install_into_cas(&source, "acme/tools", "1.0.0")
             .await
             .unwrap();
         let mut lock = crate::lock::LockFile::new("proj".into(), "0.1.0".into());
@@ -2204,6 +2207,228 @@ async fn parallel_downloads_bounds_concurrent_installs() {
             assert_eq!(seen, 1, "limit 1 let {seen} downloads overlap");
         } else {
             assert!(seen > 1, "limit 4 never overlapped downloads");
+        }
+    }
+}
+
+/// A project's `hpm.lock` records each package's tree checksum; a sync
+/// installs exactly the bytes the lock recorded.
+mod lock_enforcement {
+    use super::*;
+    use crate::lock::{LockFile, LockedDependency, LockedSource};
+
+    const MANIFEST: &str = "[package]\npath = \"studio/proj\"\nname = \"proj\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"acme/tools\" = { url = \"https://example.invalid/tools.zip\", version = \"1.0.0\" }\n";
+    const TOOLS_MANIFEST: &str =
+        "[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"1.0.0\"\n";
+
+    /// A zip of `acme/tools@1.0.0` whose payload file holds `payload`.
+    fn tools_zip(payload: &str) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("tools/hpm.toml", options).unwrap();
+            zip.write_all(TOOLS_MANIFEST.as_bytes()).unwrap();
+            zip.start_file("tools/data.txt", options).unwrap();
+            zip.write_all(payload.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    /// The tree checksum the lock records for the archive `tools_zip(payload)`.
+    fn tools_checksum(payload: &str) -> String {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("hpm.toml"), TOOLS_MANIFEST).unwrap();
+        std::fs::write(dir.path().join("data.txt"), payload).unwrap();
+        crate::tree_hash::hash_tree(dir.path()).unwrap()
+    }
+
+    /// Serve `tools_zip(payload)` from the download cache (no network).
+    fn cache_archive(temp: &TempDir, payload: &str) {
+        let cache = temp.path().join(".hpm").join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("acme-tools-1.0.0"), tools_zip(payload)).unwrap();
+    }
+
+    fn write_lock(temp: &TempDir, checksum: Option<String>) {
+        let mut lock = LockFile::new("proj".into(), "0.1.0".into());
+        lock.add_dependency(
+            "acme/tools".into(),
+            LockedDependency {
+                version: "1.0.0".into(),
+                checksum,
+                source: LockedSource::url(
+                    "https://example.invalid/tools.zip".to_string(),
+                    "1.0.0".to_string(),
+                ),
+            },
+        );
+        lock.save(&temp.path().join("project").join("hpm.lock"))
+            .unwrap();
+    }
+
+    fn manager_at(temp: &TempDir, manifest: Option<&str>) -> ProjectManager {
+        let (config, storage) = test_setup(temp.path());
+        let root = temp.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        if let Some(m) = manifest {
+            std::fs::write(root.join("hpm.toml"), m).unwrap();
+        }
+        ProjectManager::new(root, storage, config).unwrap()
+    }
+
+    fn data(manager: &ProjectManager) -> String {
+        let installed = manager.storage_manager.list_installed().unwrap();
+        let pkg = installed
+            .iter()
+            .find(|p| p.manifest.package.path.as_str() == "acme/tools")
+            .expect("acme/tools installed");
+        std::fs::read_to_string(pkg.install_path.join("data.txt")).unwrap()
+    }
+
+    /// The bytes the lock recorded install on a machine that has never seen
+    /// the package, and a second sync reuses them.
+    #[tokio::test]
+    async fn the_locked_bytes_install_on_a_fresh_machine_and_are_reused() {
+        let temp = TempDir::new().unwrap();
+        let manager = manager_at(&temp, Some(MANIFEST));
+        cache_archive(&temp, "release bytes");
+        write_lock(&temp, Some(tools_checksum("release bytes")));
+
+        manager.sync_dependencies().await.unwrap();
+        assert_eq!(data(&manager), "release bytes");
+        manager.sync_dependencies().await.unwrap();
+        assert_eq!(data(&manager), "release bytes");
+    }
+
+    /// Bytes other than the locked ones (a registry or mirror that swapped
+    /// the archive) never install: the sync fails and the store keeps no
+    /// copy of them.
+    #[tokio::test]
+    async fn bytes_other_than_the_locked_ones_are_refused() {
+        let temp = TempDir::new().unwrap();
+        let manager = manager_at(&temp, Some(MANIFEST));
+        cache_archive(&temp, "swapped bytes");
+        write_lock(&temp, Some(tools_checksum("release bytes")));
+
+        let result = manager.sync_dependencies().await;
+        assert!(result.is_err(), "installed bytes the lock did not record");
+        assert!(
+            manager
+                .storage_manager
+                .list_installed()
+                .unwrap()
+                .iter()
+                .all(|p| p.manifest.package.path.as_str() != "acme/tools"),
+            "the swapped bytes stayed in the store"
+        );
+    }
+
+    /// A store copy that differs from the lock (installed earlier, by a
+    /// project without this lock) is not reused.
+    #[tokio::test]
+    async fn a_store_copy_differing_from_the_lock_is_not_reused() {
+        let temp = TempDir::new().unwrap();
+        let manager = manager_at(&temp, Some(MANIFEST));
+        cache_archive(&temp, "swapped bytes");
+        manager.sync_dependencies().await.unwrap();
+        assert_eq!(data(&manager), "swapped bytes");
+
+        write_lock(&temp, Some(tools_checksum("release bytes")));
+        assert!(
+            manager.sync_dependencies().await.is_err(),
+            "reused a store copy the lock did not record"
+        );
+    }
+}
+
+/// Links in a project's own tree: the project may live behind a linked
+/// parent directory, but the `.hpm` tree hpm writes into is its own.
+#[cfg(unix)]
+mod project_tree_links {
+    use super::*;
+
+    const MANIFEST: &str =
+        "[package]\npath = \"studio/proj\"\nname = \"proj\"\nversion = \"0.1.0\"\n";
+
+    /// A project opened through a symlinked parent (a studio's linked
+    /// projects folder, macOS's `/tmp`) syncs and writes its lock as usual.
+    #[tokio::test]
+    async fn a_project_behind_a_linked_parent_syncs() {
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().join("real-projects");
+        std::fs::create_dir_all(real.join("proj")).unwrap();
+        std::fs::write(real.join("proj/hpm.toml"), MANIFEST).unwrap();
+        let linked = temp.path().join("projects");
+        std::os::unix::fs::symlink(&real, &linked).unwrap();
+
+        let (config, storage) = test_setup(temp.path());
+        let manager = ProjectManager::new(linked.join("proj"), storage, config).unwrap();
+        manager.sync_dependencies().await.unwrap();
+        crate::lock::LockFile::new("proj".into(), "0.1.0".into())
+            .save(&linked.join("proj/hpm.lock"))
+            .unwrap();
+        assert!(real.join("proj/.hpm/packages").is_dir());
+        assert!(real.join("proj/hpm.lock").is_file());
+    }
+
+    /// A link planted where a save stages its temporary file never makes
+    /// the save write through it: the link's target is untouched.
+    #[test]
+    fn a_planted_tmp_link_is_not_written_through() {
+        let temp = TempDir::new().unwrap();
+        let victim = temp.path().join("victim.txt");
+        std::fs::write(&victim, "user data").unwrap();
+        let project = temp.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        std::os::unix::fs::symlink(&victim, project.join("hpm.lock.tmp")).unwrap();
+
+        let _ = crate::lock::LockFile::new("proj".into(), "0.1.0".into())
+            .save(&project.join("hpm.lock"));
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "user data");
+        assert!(
+            !std::fs::symlink_metadata(project.join("hpm.lock"))
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false),
+            "hpm.lock became a link"
+        );
+    }
+
+    /// A project whose `.hpm/packages` (or `.hpm`) is a link elsewhere is
+    /// refused before hpm writes or deletes anything there.
+    #[tokio::test]
+    async fn a_linked_project_packages_dir_is_refused() {
+        for linked in [".hpm/packages", ".hpm"] {
+            let temp = TempDir::new().unwrap();
+            let elsewhere = temp.path().join("elsewhere");
+            std::fs::create_dir_all(&elsewhere).unwrap();
+            std::fs::write(elsewhere.join("users-package.json"), "{}").unwrap();
+            let project = temp.path().join("proj");
+            std::fs::create_dir_all(project.join(".hpm")).unwrap();
+            std::fs::write(project.join("hpm.toml"), MANIFEST).unwrap();
+            if linked == ".hpm" {
+                std::fs::remove_dir(project.join(".hpm")).unwrap();
+                std::fs::create_dir_all(elsewhere.join("packages")).unwrap();
+                std::fs::write(elsewhere.join("packages/users-package.json"), "{}").unwrap();
+            }
+            std::os::unix::fs::symlink(&elsewhere, project.join(linked)).unwrap();
+
+            let (config, storage) = test_setup(temp.path());
+            let synced = match ProjectManager::new(project.clone(), storage, config) {
+                Ok(manager) => manager.sync_dependencies().await.map(|_| ()),
+                Err(e) => Err(e),
+            };
+            assert!(synced.is_err(), "{linked}: a linked tree was accepted");
+            assert!(
+                elsewhere.join("users-package.json").exists(),
+                "{linked}: deleted"
+            );
+            assert!(
+                linked != ".hpm" || elsewhere.join("packages/users-package.json").exists(),
+                "{linked}: deleted"
+            );
         }
     }
 }

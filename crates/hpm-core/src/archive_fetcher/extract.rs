@@ -45,17 +45,93 @@ pub(super) fn extract_archive_sync(
     archive_path: &Path,
     target_dir: &Path,
 ) -> Result<(), FetchError> {
+    extract_with_limits(archive_path, target_dir, ExtractLimits::DEFAULT)
+}
+
+/// How much one archive may expand to. Far above any real package (Houdini
+/// packages run to tens of gigabytes), these only stop an archive built to
+/// fill the disk or exhaust inodes.
+#[derive(Clone, Copy, Debug)]
+struct ExtractLimits {
+    entries: u64,
+    bytes: u64,
+}
+
+impl ExtractLimits {
+    const DEFAULT: Self = Self {
+        entries: 1_000_000,
+        bytes: 256 * 1024 * 1024 * 1024,
+    };
+}
+
+/// What is left of an [`ExtractLimits`] as entries are extracted.
+struct ExtractBudget {
+    entries: u64,
+    bytes: u64,
+}
+
+impl ExtractBudget {
+    fn new(limits: ExtractLimits) -> Self {
+        Self {
+            entries: limits.entries,
+            bytes: limits.bytes,
+        }
+    }
+
+    fn take_entry(&mut self) -> Result<(), FetchError> {
+        self.entries = self.entries.checked_sub(1).ok_or_else(|| {
+            FetchError::ExtractionError("archive has too many entries".to_string())
+        })?;
+        Ok(())
+    }
+
+    /// Copy `reader` into `writer`, refusing to write more than the bytes
+    /// left in the budget.
+    fn copy(
+        &mut self,
+        reader: &mut impl Read,
+        writer: &mut impl std::io::Write,
+    ) -> Result<(), FetchError> {
+        let copied = std::io::copy(&mut reader.take(self.bytes), writer)?;
+        let mut probe = [0u8; 1];
+        if reader.read(&mut probe)? > 0 {
+            return Err(FetchError::ExtractionError(
+                "archive expands past the extraction size limit".to_string(),
+            ));
+        }
+        self.bytes -= copied;
+        Ok(())
+    }
+}
+
+fn extract_with_limits(
+    archive_path: &Path,
+    target_dir: &Path,
+    limits: ExtractLimits,
+) -> Result<(), FetchError> {
+    let mut budget = ExtractBudget::new(limits);
     match detect_archive_format(archive_path)? {
-        ArchiveFormat::Zip => extract_zip_sync(archive_path, target_dir),
-        ArchiveFormat::TarGz => extract_tar_gz_sync(archive_path, target_dir),
+        ArchiveFormat::Zip => extract_zip_sync(archive_path, target_dir, &mut budget),
+        ArchiveFormat::TarGz => extract_tar_gz_sync(archive_path, target_dir, &mut budget),
     }
 }
 
 /// Extract a ZIP archive to the target directory (blocking operation).
-fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchError> {
+fn extract_zip_sync(
+    archive_path: &Path,
+    target_dir: &Path,
+    budget: &mut ExtractBudget,
+) -> Result<(), FetchError> {
     let file = std::fs::File::open(archive_path)?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| FetchError::ExtractionError(e.to_string()))?;
+
+    // The central directory states the entry count up front.
+    if archive.len() as u64 > budget.entries {
+        return Err(FetchError::ExtractionError(
+            "archive has too many entries".to_string(),
+        ));
+    }
 
     // Resolve the layout: hpackage (strip `{slug}/`, skip root `{slug}.json`),
     // Git-style single root dir (strip it), or flat (extract as-is).
@@ -65,6 +141,7 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
     std::fs::create_dir_all(target_dir)?;
 
     for i in 0..archive.len() {
+        budget.take_entry()?;
         let mut file = archive
             .by_index(i)
             .map_err(|e| FetchError::ExtractionError(e.to_string()))?;
@@ -111,7 +188,7 @@ fn extract_zip_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchE
             }
 
             let mut outfile = std::fs::File::create(&target_path)?;
-            std::io::copy(&mut file, &mut outfile)?;
+            budget.copy(&mut file, &mut outfile)?;
             drop(outfile);
 
             #[cfg(unix)]
@@ -177,11 +254,7 @@ impl ExtractPlan {
             Some(prefix) => raw.strip_prefix(prefix).unwrap_or(raw),
             None => raw,
         };
-        if relative.as_os_str().is_empty() {
-            return Ok(None);
-        }
-        validate_path_safety_sync(relative)?;
-        Ok(Some(relative.to_path_buf()))
+        confined_relative_path(relative)
     }
 }
 
@@ -263,7 +336,11 @@ fn find_common_root_prefix(names: &[String]) -> Option<PathBuf> {
 }
 
 /// Extract a gzipped tar archive to the target directory (blocking operation).
-fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), FetchError> {
+fn extract_tar_gz_sync(
+    archive_path: &Path,
+    target_dir: &Path,
+    budget: &mut ExtractBudget,
+) -> Result<(), FetchError> {
     // Pass 1: enumerate entry names so we can detect a common root prefix.
     // The tar crate's `Archive` is single-pass, so we open it twice.
     let names = {
@@ -276,6 +353,11 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
             .map_err(|e| FetchError::ExtractionError(e.to_string()))?
         {
             let entry = entry.map_err(|e| FetchError::ExtractionError(e.to_string()))?;
+            if names.len() as u64 >= budget.entries {
+                return Err(FetchError::ExtractionError(
+                    "archive has too many entries".to_string(),
+                ));
+            }
             let path = entry
                 .path()
                 .map_err(|e| FetchError::ExtractionError(e.to_string()))?;
@@ -296,6 +378,7 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
         .entries()
         .map_err(|e| FetchError::ExtractionError(e.to_string()))?
     {
+        budget.take_entry()?;
         let mut entry = entry.map_err(|e| FetchError::ExtractionError(e.to_string()))?;
         let raw_path = entry
             .path()
@@ -316,7 +399,7 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
                 std::fs::create_dir_all(parent)?;
             }
             let mut outfile = std::fs::File::create(&target_path)?;
-            std::io::copy(&mut entry, &mut outfile)?;
+            budget.copy(&mut entry, &mut outfile)?;
             drop(outfile);
 
             #[cfg(unix)]
@@ -370,7 +453,11 @@ fn extract_tar_gz_sync(archive_path: &Path, target_dir: &Path) -> Result<(), Fet
 fn finalize_mode(target_path: &Path, declared: Option<u32>) -> Result<(), FetchError> {
     use std::os::unix::fs::PermissionsExt;
 
-    let mode = declared.unwrap_or(0o644) & 0o7777;
+    // Only owner bits and read/execute for group and other: setuid, setgid
+    // and sticky bits, and group or world write, are never taken from an
+    // archive (on a shared node they would let other users run as the
+    // installer or rewrite the package after the install).
+    let mode = declared.unwrap_or(0o644) & 0o755;
     let repaired = crate::exec_mode::repaired_mode(mode, target_path);
     if repaired != mode {
         debug!(
@@ -389,23 +476,14 @@ fn finalize_mode(target_path: &Path, declared: Option<u32>) -> Result<(), FetchE
     Ok(())
 }
 
-/// Validate that a path doesn't contain traversal attempts.
-fn validate_path_safety_sync(path: &Path) -> Result<(), FetchError> {
-    // Check for backslash-based traversal (e.g. from Windows-style archive entries)
-    let path_str = path.to_string_lossy();
-    if path_str.contains("..\\") || path_str.contains("../") || path_str == ".." {
-        return Err(FetchError::PathTraversalDetected(
-            path.display().to_string(),
-        ));
-    }
-    for component in path.components() {
-        if matches!(component, std::path::Component::ParentDir) {
-            return Err(FetchError::PathTraversalDetected(
-                path.display().to_string(),
-            ));
-        }
-    }
-    Ok(())
+/// The path an archive entry is written to, relative to the target
+/// directory, or `None` for an entry that names the root itself. Every
+/// extracted entry goes through here; the rule is
+/// [`hpm_package::path_util::confined_relative_path`].
+fn confined_relative_path(path: &Path) -> Result<Option<PathBuf>, FetchError> {
+    let relative = hpm_package::path_util::confined_relative_path(path)
+        .map_err(|e| FetchError::PathTraversalDetected(e.0))?;
+    Ok((!relative.as_os_str().is_empty()).then_some(relative))
 }
 
 #[cfg(test)]
@@ -419,30 +497,30 @@ mod tests {
     #[test]
     fn test_validate_path_safety() {
         // Safe paths
-        assert!(validate_path_safety_sync(Path::new("foo/bar/baz.txt")).is_ok());
-        assert!(validate_path_safety_sync(Path::new("src/lib.rs")).is_ok());
+        assert!(confined_relative_path(Path::new("foo/bar/baz.txt")).is_ok());
+        assert!(confined_relative_path(Path::new("src/lib.rs")).is_ok());
 
         // Unsafe paths
-        assert!(validate_path_safety_sync(Path::new("../etc/passwd")).is_err());
-        assert!(validate_path_safety_sync(Path::new("foo/../../etc/passwd")).is_err());
+        assert!(confined_relative_path(Path::new("../etc/passwd")).is_err());
+        assert!(confined_relative_path(Path::new("foo/../../etc/passwd")).is_err());
     }
 
     #[test]
     fn test_path_traversal_parent_directory() {
         // Path traversal with parent directory reference
-        assert!(validate_path_safety_sync(Path::new("../secret")).is_err());
+        assert!(confined_relative_path(Path::new("../secret")).is_err());
     }
 
     #[test]
     fn test_path_traversal_embedded() {
         // Path traversal embedded in path
-        assert!(validate_path_safety_sync(Path::new("foo/../../../etc/passwd")).is_err());
+        assert!(confined_relative_path(Path::new("foo/../../../etc/passwd")).is_err());
     }
 
     #[test]
     fn test_path_traversal_windows_style() {
         // Windows-style path separators shouldn't bypass checks
-        assert!(validate_path_safety_sync(Path::new("..\\secret")).is_err());
+        assert!(confined_relative_path(Path::new("..\\secret")).is_err());
     }
 
     // --- Archive format detection + tar.gz extraction ---
@@ -581,6 +659,365 @@ mod tests {
         match extract_archive_sync(&archive_path, &extract_dir) {
             Err(FetchError::PathTraversalDetected(_)) => {}
             other => panic!("Expected PathTraversalDetected, got {:?}", other),
+        }
+    }
+
+    /// Build a tar.gz whose entry names are written verbatim into the
+    /// header, so the test controls exactly what an archive carries.
+    fn build_raw_tar_gz(entries: &[(&[u8], &[u8])]) -> Vec<u8> {
+        let gz = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar = tar::Builder::new(gz);
+        for (name, contents) in entries {
+            let mut header = tar::Header::new_old();
+            header.as_old_mut().name[..name.len()].copy_from_slice(name);
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append(&header, *contents).unwrap();
+        }
+        tar.into_inner().unwrap().finish().unwrap()
+    }
+
+    /// Archives made with `tar -czf pkg.tgz -C dir .` prefix every member
+    /// with `./`, and real packages carry nested directories, spaces,
+    /// non-ASCII names and dots inside names; all of them extract.
+    #[test]
+    fn test_extract_tar_gz_keeps_legitimate_names() {
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("pkg.tar.gz");
+        let out = temp.path().join("out");
+        let bytes = build_raw_tar_gz(&[
+            (b"./hpm.toml", b"[package]"),
+            (b"./otls/My Tool.hda", b"hda"),
+            ("./docs/\u{e6}bler\u{f8}d.md".as_bytes(), b"doc"),
+            (b"./docs/report..pdf", b"pdf"),
+            (b"./a..b/c.txt", b"c"),
+            (b"./python/pkg/deep/mod.py", b"py"),
+        ]);
+        std::fs::write(&archive_path, &bytes).unwrap();
+        extract_archive_sync(&archive_path, &out).unwrap();
+        for rel in [
+            "hpm.toml",
+            "otls/My Tool.hda",
+            "docs/\u{e6}bler\u{f8}d.md",
+            "docs/report..pdf",
+            "a..b/c.txt",
+            "python/pkg/deep/mod.py",
+        ] {
+            assert!(out.join(rel).is_file(), "{rel} missing");
+        }
+    }
+
+    /// The same legitimate names through the zip extractor.
+    #[test]
+    fn test_extract_zip_keeps_legitimate_names() {
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("pkg.zip");
+        let out = temp.path().join("out");
+        let bytes = build_test_zip(&[
+            ("hpm.toml", b"[package]"),
+            ("otls/My Tool.hda", b"hda"),
+            ("docs/\u{e6}bler\u{f8}d.md", b"doc"),
+            ("docs/report..pdf", b"pdf"),
+            ("a..b/c.txt", b"c"),
+        ]);
+        std::fs::write(&archive_path, &bytes).unwrap();
+        extract_archive_sync(&archive_path, &out).unwrap();
+        for rel in [
+            "hpm.toml",
+            "otls/My Tool.hda",
+            "docs/\u{e6}bler\u{f8}d.md",
+            "docs/report..pdf",
+            "a..b/c.txt",
+        ] {
+            assert!(out.join(rel).is_file(), "{rel} missing");
+        }
+    }
+
+    /// Append a header-only extension record (GNU long name or PAX) whose
+    /// payload carries the next entry's real path.
+    fn append_path_record(
+        tar: &mut tar::Builder<GzEncoder<Vec<u8>>>,
+        kind: tar::EntryType,
+        payload: &[u8],
+    ) {
+        let mut header = tar::Header::new_gnu();
+        let name: &[u8] = if kind == tar::EntryType::XHeader {
+            b"PaxHeaders/x"
+        } else {
+            b"././@LongLink"
+        };
+        header.as_gnu_mut().unwrap().name[..name.len()].copy_from_slice(name);
+        header.set_entry_type(kind);
+        header.set_size(payload.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append(&header, payload).unwrap();
+    }
+
+    /// A tar member naming an absolute path is refused and nothing is
+    /// written outside the target, whichever way the archive spells the
+    /// path: the ustar name field, a GNU long-name record, or a PAX `path`.
+    #[test]
+    fn test_extract_tar_gz_refuses_absolute_members() {
+        for spelling in ["ustar", "gnu-longname", "pax"] {
+            let temp = TempDir::new().unwrap();
+            let archive_path = temp.path().join("evil.tar.gz");
+            let out = temp.path().join("out");
+            let escaped = temp.path().join(format!("escaped-{spelling}.txt"));
+            let abs = escaped.to_str().unwrap().as_bytes().to_vec();
+
+            let gz = GzEncoder::new(Vec::new(), Compression::default());
+            let mut tar = tar::Builder::new(gz);
+            let mut legit = tar::Header::new_old();
+            legit.as_old_mut().name[..10].copy_from_slice(b"pkg/a.txt\0");
+            legit.set_size(1);
+            legit.set_mode(0o644);
+            legit.set_cksum();
+            tar.append(&legit, &b"a"[..]).unwrap();
+
+            let mut header = tar::Header::new_gnu();
+            match spelling {
+                "ustar" => {
+                    header.as_gnu_mut().unwrap().name[..abs.len()].copy_from_slice(&abs);
+                }
+                "gnu-longname" => {
+                    let mut payload = abs.clone();
+                    payload.push(0);
+                    append_path_record(&mut tar, tar::EntryType::GNULongName, &payload);
+                    header.as_gnu_mut().unwrap().name[..5].copy_from_slice(b"short");
+                }
+                _ => {
+                    let record = format!(" path={}\n", escaped.display());
+                    // PAX records are "<len> <key>=<value>\n", len counting itself.
+                    let mut len = record.len() + 1;
+                    if (len.to_string() + &record).len() != len {
+                        len += 1;
+                    }
+                    let payload = format!("{len}{record}");
+                    append_path_record(&mut tar, tar::EntryType::XHeader, payload.as_bytes());
+                    header.as_gnu_mut().unwrap().name[..5].copy_from_slice(b"short");
+                }
+            }
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_size(3);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append(&header, &b"pwn"[..]).unwrap();
+            let bytes = tar.into_inner().unwrap().finish().unwrap();
+            std::fs::write(&archive_path, &bytes).unwrap();
+
+            let result = extract_archive_sync(&archive_path, &out);
+            assert!(!escaped.exists(), "{spelling}: wrote outside the target");
+            assert!(
+                matches!(result, Err(FetchError::PathTraversalDetected(_))),
+                "{spelling}: expected PathTraversalDetected, got {result:?}"
+            );
+        }
+    }
+
+    /// Windows-form names are refused on every host, so one archive yields
+    /// one tree everywhere; near-misses with dots inside names are kept.
+    #[test]
+    fn windows_form_names_are_refused_everywhere() {
+        for bad in [
+            "\\\\server\\share\\x",
+            "C:\\x",
+            "C:x",
+            "\\x",
+            "pkg\\..\\x",
+            "a:b",
+            "pkg/a\u{0}b",
+            "/abs/x",
+            "pkg//abs/../../x",
+        ] {
+            assert!(
+                matches!(
+                    confined_relative_path(Path::new(bad)),
+                    Err(FetchError::PathTraversalDetected(_))
+                ),
+                "accepted {bad:?}"
+            );
+        }
+        for good in ["report..pdf", "a..b/c", "./x/./y", ".hidden/f", "...", "x."] {
+            assert!(
+                matches!(confined_relative_path(Path::new(good)), Ok(Some(_))),
+                "refused {good:?}"
+            );
+        }
+        assert!(matches!(confined_relative_path(Path::new("./")), Ok(None)));
+    }
+
+    mod confinement_properties {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn component() -> impl Strategy<Value = &'static str> {
+            prop::sample::select(vec![
+                "a", "b.txt", "..", ".", "", "C:", "c:x", "\\x", "x\\..", "...", "a b",
+            ])
+        }
+
+        proptest! {
+            /// Whatever an archive names, an accepted path is made only of
+            /// plain components and stays inside the target directory.
+            #[test]
+            fn accepted_paths_stay_inside_the_target(
+                parts in prop::collection::vec(component(), 1..6),
+                absolute in any::<bool>(),
+            ) {
+                let joined = parts.join("/");
+                let name = if absolute { format!("/{joined}") } else { joined };
+                if let Ok(Some(relative)) = confined_relative_path(Path::new(&name)) {
+                    prop_assert!(relative
+                        .components()
+                        .all(|c| matches!(c, std::path::Component::Normal(_))));
+                    let target = Path::new("/target");
+                    prop_assert!(target.join(&relative).starts_with(target));
+                    prop_assert!(!relative.to_string_lossy().contains(['\\', ':']));
+                }
+            }
+        }
+    }
+
+    /// An archive that expands past the size or entry limit is refused and
+    /// stops writing at the limit; one within both extracts in full.
+    #[test]
+    fn extraction_stops_at_the_size_and_entry_limits() {
+        let limits = ExtractLimits {
+            entries: 4,
+            bytes: 1000,
+        };
+        type Entries = Vec<(&'static str, Vec<u8>)>;
+        let cases: [(&str, Entries, bool); 3] = [
+            (
+                "within",
+                vec![("a.txt", vec![b'a'; 600]), ("b.txt", vec![b'b'; 400])],
+                true,
+            ),
+            (
+                "too big",
+                vec![("a.txt", vec![b'a'; 600]), ("b.txt", vec![b'b'; 401])],
+                false,
+            ),
+            (
+                "too many",
+                (0..5)
+                    .map(|i| (["1", "2", "3", "4", "5"][i], vec![b'x']))
+                    .collect(),
+                false,
+            ),
+        ];
+        for (label, entries, ok) in cases {
+            let refs: Vec<(&str, &[u8])> =
+                entries.iter().map(|(n, c)| (*n, c.as_slice())).collect();
+            for (format, bytes) in [
+                ("zip", build_test_zip(&refs)),
+                ("tar.gz", build_test_tar_gz("pkg", &refs)),
+            ] {
+                let temp = TempDir::new().unwrap();
+                let archive = temp.path().join("a.bin");
+                std::fs::write(&archive, &bytes).unwrap();
+                let out = temp.path().join("out");
+                let result = extract_with_limits(&archive, &out, limits);
+                assert_eq!(result.is_ok(), ok, "{label} {format}: {result:?}");
+                let written: u64 = walkdir::WalkDir::new(&out)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file())
+                    .map(|e| e.metadata().unwrap().len())
+                    .sum();
+                assert!(written <= limits.bytes, "{label} {format}: wrote {written}");
+            }
+        }
+    }
+
+    /// Special and group/world-write bits in an archive never reach disk:
+    /// on a shared node, setuid binaries or files other users can rewrite
+    /// would outlive the install. Read and execute bits are kept.
+    #[cfg(unix)]
+    #[test]
+    fn special_and_shared_write_bits_are_dropped() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("pkg.zip");
+        let out = temp.path().join("out");
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            for (name, mode) in [
+                ("suid", 0o4755),
+                ("sgid", 0o2755),
+                ("sticky", 0o1755),
+                ("shared", 0o666),
+                ("world", 0o777),
+            ] {
+                let options = zip::write::SimpleFileOptions::default().unix_permissions(mode);
+                zip.start_file(format!("pkg/{name}"), options).unwrap();
+                zip.write_all(b"data").unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        std::fs::write(&archive_path, buf.into_inner()).unwrap();
+        extract_archive_sync(&archive_path, &out).unwrap();
+        let mode = |p: &str| std::fs::metadata(out.join(p)).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode("suid"), 0o755);
+        assert_eq!(mode("sgid"), 0o755);
+        assert_eq!(mode("sticky"), 0o755);
+        assert_eq!(mode("shared"), 0o644);
+        assert_eq!(mode("world"), 0o755);
+
+        // Tar headers carry the special bits verbatim.
+        let gz = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar = tar::Builder::new(gz);
+        for (name, mode) in [("pkg/suid", 0o4755), ("pkg/sgid", 0o2775)] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(4);
+            header.set_mode(mode);
+            header.set_cksum();
+            tar.append_data(&mut header, name, &b"data"[..]).unwrap();
+        }
+        let tar_path = temp.path().join("pkg.tar.gz");
+        std::fs::write(&tar_path, tar.into_inner().unwrap().finish().unwrap()).unwrap();
+        let tar_out = temp.path().join("tar-out");
+        extract_archive_sync(&tar_path, &tar_out).unwrap();
+        let mode = |p: &str| {
+            std::fs::metadata(tar_out.join(p))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777
+        };
+        assert_eq!(mode("suid"), 0o755);
+        assert_eq!(mode("sgid"), 0o755);
+    }
+
+    /// Only Stored and Deflated entries are decoded: an entry declaring
+    /// another codec (zstd, bzip2, LZMA, ...) is refused as unsupported
+    /// rather than handed to that codec's decoder.
+    #[test]
+    fn entries_in_other_codecs_are_refused() {
+        // A stored zip with its method fields rewritten to another codec.
+        let stored = build_test_zip(&[("pkg/data.txt", b"hello")]);
+        for method in [12u16, 14, 93, 95, 98] {
+            let mut bytes = stored.clone();
+            for (signature, offset) in [(b"PK\x03\x04", 8usize), (b"PK\x01\x02", 10usize)] {
+                let at = bytes
+                    .windows(4)
+                    .position(|w| w == signature)
+                    .expect("zip header present");
+                bytes[at + offset..at + offset + 2].copy_from_slice(&method.to_le_bytes());
+            }
+            let temp = TempDir::new().unwrap();
+            let archive = temp.path().join("a.zip");
+            std::fs::write(&archive, &bytes).unwrap();
+            let err = extract_archive_sync(&archive, &temp.path().join("out")).unwrap_err();
+            assert!(
+                err.to_string().to_lowercase().contains("not supported")
+                    || err.to_string().to_lowercase().contains("unsupported"),
+                "method {method}: {err}"
+            );
         }
     }
 

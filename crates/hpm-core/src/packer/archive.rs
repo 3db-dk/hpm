@@ -111,6 +111,7 @@ pub fn create_archive(
 
     // Collect (source path, archive path) pairs, sorted for determinism.
     let entries = collect_stage_entries(package_dir, ignore, stage_filter, None)?;
+    super::stage_filter::refuse_private_keys(&entries)?;
 
     // Create the output directory if it doesn't exist. `File::create` only
     // creates the file, so a missing parent surfaced as a bare

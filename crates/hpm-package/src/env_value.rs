@@ -480,19 +480,20 @@ fn parse_clause(part: &str) -> Option<Vec<Comparator>> {
         (None, None) => (false, part),
     };
     let lower = SimpleVersion::parse(rest.trim())?;
+    // A bound with no successor (`u64::MAX`) makes the range invalid.
     let upper = if tilde {
         // Below the next minor, or the next major when only a major is given.
         match lower.parts.as_slice() {
-            [major] => vec![major + 1],
-            [major, minor, ..] => vec![*major, minor + 1],
+            [major] => vec![major.checked_add(1)?],
+            [major, minor, ..] => vec![*major, minor.checked_add(1)?],
             _ => return None,
         }
     } else {
         // Below the next change of the leftmost non-zero component.
         match lower.parts.as_slice() {
-            [0, 0, patch] => vec![0, 0, patch + 1],
-            [0, minor, ..] => vec![0, minor + 1],
-            [major, ..] => vec![major + 1],
+            [0, 0, patch] => vec![0, 0, patch.checked_add(1)?],
+            [0, minor, ..] => vec![0, minor.checked_add(1)?],
+            [major, ..] => vec![major.checked_add(1)?],
             _ => return None,
         }
     };

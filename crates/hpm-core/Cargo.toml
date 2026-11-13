@@ -1,5 +1,6 @@
 [package]
 name = "hpm-core"
+publish.workspace = true
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

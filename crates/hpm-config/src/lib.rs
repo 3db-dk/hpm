@@ -47,7 +47,7 @@ pub mod signing;
 pub mod storage;
 
 pub use install::InstallConfig;
-pub use overlay::ConfigOverlay;
+pub use overlay::{ConfigOverlay, ProjectConfigOverlay};
 pub use project_paths::ProjectPaths;
 pub use projects::ProjectsConfig;
 pub use registry::{RegistrySourceConfig, RegistryType};
@@ -90,28 +90,32 @@ impl Config {
     /// exactly the values it sets. If no config files exist, returns the
     /// default configuration.
     pub fn load() -> Result<Self, TomlFileError> {
+        let project_dir = std::env::current_dir().ok();
+        Self::load_layers(&Self::user_config_path(), project_dir.as_deref())
+    }
+
+    /// Load the user config at `user_config_path`, then the project config
+    /// at `<project_dir>/.hpm/config.toml`, over the defaults. Either file
+    /// may be absent.
+    pub fn load_layers(
+        user_config_path: &Path,
+        project_dir: Option<&Path>,
+    ) -> Result<Self, TomlFileError> {
         let mut config = Self::default();
 
-        // Load user config from ~/.hpm/config.toml. A malformed file is a
-        // hard error: silently running with default storage/registry paths
-        // because the config didn't parse produces far more confusing
-        // behavior than an error naming the bad file.
-        let user_config_path = Self::user_config_path();
+        // A malformed file is a hard error: silently running with default
+        // storage/registry paths because the config didn't parse produces
+        // far more confusing behavior than an error naming the bad file.
         if user_config_path.exists() {
             debug!("Loading user config from {:?}", user_config_path);
-            ConfigOverlay::load(&user_config_path)?.apply_to(&mut config);
+            ConfigOverlay::load(user_config_path)?.apply_to(&mut config);
         }
 
-        // Load project config from .hpm/config.toml in current directory
-        if let Ok(current_dir) = std::env::current_dir() {
-            let project_config_path = current_dir.join(".hpm").join("config.toml");
+        if let Some(project_dir) = project_dir {
+            let project_config_path = project_dir.join(".hpm").join("config.toml");
             if project_config_path.exists() {
                 debug!("Loading project config from {:?}", project_config_path);
-                ConfigOverlay::load(&project_config_path)?.apply_to(&mut config);
-                debug!(
-                    "Loaded project configuration from {:?}",
-                    project_config_path
-                );
+                ProjectConfigOverlay::load(&project_config_path)?.apply_to(&mut config);
             }
         }
 
@@ -141,11 +145,6 @@ impl Config {
         let before = self.registries.len();
         self.registries.retain(|r| r.name != name);
         self.registries.len() < before
-    }
-
-    /// Get the cache directory for a specific git registry.
-    pub fn registry_cache_path(&self, registry_name: &str) -> PathBuf {
-        self.storage.registry_cache_dir.join(registry_name)
     }
 
     /// Save the configuration to a file.
@@ -465,5 +464,108 @@ home_dir = "missing closing bracket"
 
         // Error message should mention the path
         assert!(err_string.contains("config.toml"));
+    }
+
+    /// The keys a project's `.hpm/config.toml` is meant to set keep
+    /// layering over the user config, and the user's own storage, projects
+    /// and signing settings keep applying.
+    #[test]
+    fn project_config_layers_install_and_registries_over_the_user_config() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.path().join("user.toml");
+        let home = tmp.path().join("hpm-home");
+        std::fs::write(
+            &user,
+            format!(
+                "[install]\nparallel_downloads = 4\n\n[storage]\nhome_dir = '{}'\n\n[signing]\nkey_path = '{}'\n\n[projects]\nmax_search_depth = 5\n\n[[registries]]\nname = \"user\"\nurl = \"https://user.example.invalid/v1/registry\"\ntype = \"api\"\n",
+                home.display(),
+                tmp.path().join("key.pem").display()
+            ),
+        )
+        .unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(project.join(".hpm")).unwrap();
+        std::fs::write(
+            project.join(".hpm/config.toml"),
+            "[install]\nparallel_downloads = 2\n\n[[registries]]\nname = \"studio\"\nurl = \"https://studio.example.invalid/v1/registry\"\ntype = \"api\"\n",
+        )
+        .unwrap();
+
+        let config = Config::load_layers(&user, Some(&project)).unwrap();
+        assert_eq!(config.install.parallel_downloads.get(), 2);
+        // Registries come from the user config only (see
+        // `project_config_cannot_replace_the_user_registries`).
+        assert_eq!(config.registries.len(), 1);
+        assert_eq!(config.registries[0].name, "user");
+        assert_eq!(config.storage.home_dir, home);
+        assert_eq!(config.storage.packages_dir, home.join("packages"));
+        assert_eq!(config.signing.key_path, Some(tmp.path().join("key.pem")));
+        assert_eq!(config.projects.max_search_depth, 5);
+
+        // With no project file, the user layer alone applies.
+        let alone = Config::load_layers(&user, Some(tmp.path())).unwrap();
+        assert_eq!(alone.install.parallel_downloads.get(), 4);
+        assert_eq!(alone.registries[0].name, "user");
+    }
+
+    /// A project config cannot move hpm's storage, change which projects
+    /// `hpm clean` treats as live, or choose the signing key.
+    #[test]
+    fn project_config_cannot_set_storage_projects_or_signing() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.path().join("user.toml");
+        let home = tmp.path().join("hpm-home");
+        std::fs::write(
+            &user,
+            format!("[storage]\nhome_dir = '{}'\n", home.display()),
+        )
+        .unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(project.join(".hpm")).unwrap();
+        std::fs::write(
+            project.join(".hpm/config.toml"),
+            "[storage]\nhome_dir = \"state\"\ncache_dir = \"c\"\npackages_dir = \"p\"\nregistry_cache_dir = \"r\"\n\n[signing]\nkey_path = \"key.pem\"\n\n[projects]\nsearch_roots = [\"/\"]\nexplicit_paths = [\"/x\"]\nmax_search_depth = 99\nignore_patterns = []\n\n[install]\nparallel_downloads = 3\n",
+        )
+        .unwrap();
+
+        let config = Config::load_layers(&user, Some(&project)).unwrap();
+        assert_eq!(config.storage.home_dir, home);
+        assert_eq!(config.storage.cache_dir, home.join("cache"));
+        assert_eq!(config.storage.packages_dir, home.join("packages"));
+        assert_eq!(config.storage.registry_cache_dir, home.join("registry"));
+        assert_eq!(config.signing.key_path, None);
+        assert_eq!(config.projects, ProjectsConfig::default());
+        // The keys a project may set still apply from the same file.
+        assert_eq!(config.install.parallel_downloads.get(), 3);
+        let overlay = ProjectConfigOverlay::load(&project.join(".hpm/config.toml")).unwrap();
+        assert_eq!(
+            overlay.ignored_sections(),
+            ["storage", "projects", "signing"]
+        );
+    }
+
+    /// A project config cannot replace the user's registries: the registry
+    /// list is what an embedder's credentials are scoped to, so a cloned
+    /// repository must not be able to add its own server to it. (A project
+    /// declares registries in `hpm.toml`, which never widens that scope.)
+    #[test]
+    fn project_config_cannot_replace_the_user_registries() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.path().join("user.toml");
+        std::fs::write(
+            &user,
+            "[[registries]]\nname = \"tumbletrove\"\nurl = \"https://registry.example.invalid/v1/registry\"\ntype = \"api\"\n",
+        )
+        .unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir_all(project.join(".hpm")).unwrap();
+        std::fs::write(
+            project.join(".hpm/config.toml"),
+            "[[registries]]\nname = \"evil\"\nurl = \"https://evil.example.invalid/v1/registry\"\ntype = \"api\"\n",
+        )
+        .unwrap();
+        let config = Config::load_layers(&user, Some(&project)).unwrap();
+        assert_eq!(config.registries.len(), 1);
+        assert_eq!(config.registries[0].name, "tumbletrove");
     }
 }

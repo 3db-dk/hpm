@@ -7,6 +7,189 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- A git registry's url is checked before it reaches `git`, and git runs
+  with only the https, ssh and file transports, no credential prompt and
+  none of the inherited variables that redirect it to another repository.
+  A registry declared in a project's `hpm.toml` could otherwise make
+  `hpm install` run commands or clone into directories outside hpm's cache.
+- Git registry indexes are cached by a digest of their remote URL instead of
+  their display name, so a project registry that reuses the name of one of
+  yours can no longer seed or replace its index; a clone whose origin no
+  longer matches is cloned again.
+
+- A project's `.hpm/config.toml` can no longer set `[storage]`, `[projects]`
+  or `[signing]`. A cloned repository could use them to move hpm's home into
+  its own tree, so that `hpm install` ran a tool the repository shipped, to
+  redirect where packages are stored, or to choose the key `hpm pack` signs
+  with.
+
+- Archive extraction confines every entry to the install directory. A
+  tar.gz package whose member named an absolute path (in the header, a GNU
+  long-name record or a PAX `path`) was written to that path at install
+  time. Entries with a root, drive or `..` component, or a backslash, colon
+  or NUL in a name, are now refused on every platform.
+
+- A `[stage]` place rule's `to` must stay inside the install image. A path
+  dependency's `to` with `..` or an absolute path made `hpm install` write
+  its file anywhere the user could write; `hpm build` and `hpm pack` had
+  the same flaw.
+
+- Package names and versions from manifests, lockfiles and registries can
+  no longer name paths outside the store, archive cache or fetch staging:
+  every such path is built from a checked name (letters, digits, `.`, `_`,
+  `-`; at most `creator/slug`) and a semantic version. A registry entry that
+  names a different package or version than was asked for, or carries a
+  version that is not semver, is refused.
+
+- A downloaded package must declare, in its own `hpm.toml`, the package and
+  version it was requested as. An archive claiming another package's
+  identity was stored in that package's slot and served to every project on
+  the machine that later asked for it.
+
+- `hpm install` reproduces `hpm.lock`: every package the lock pins at the
+  manifest's version must match its locked checksum, whether freshly
+  downloaded (checked before it reaches the store) or reused from the store.
+  A registry or mirror that served different bytes for a locked version was
+  installed, and the lock rewritten to match. `ProjectManager::sync_dependencies`
+  applies the same check for embedders.
+- A project with a committed `hpm.lock` now installs on a machine whose store
+  has never held its packages; it used to fail with "recorded in the lock
+  file but is not installed".
+
+- Saves of lockfiles, config, Houdini package files and records stage to a
+  temporary file created exclusively under a fresh name, so a link planted
+  at `<file>.tmp` in a cloned project no longer makes a save overwrite the
+  link's target.
+- A project whose `.hpm` or `.hpm/packages` is a link is refused before hpm
+  writes or deletes package files there; the stale-manifest sweep removes
+  only regular files.
+
+- An embedder's bearer token (TumbleTrove Desktop's sign-in) is sent only to
+  https API registries, and for a project's registries only to the https
+  origins of the registries configured for the user. A project that declared
+  its own registry, or any plain-http registry, received the token.
+
+- hpm fetches registry answers and package archives only over https, or
+  plain http to this machine (`localhost`, `127.0.0.0/8`, `::1`); redirects
+  follow the same rule and never step down from https to http. Plain http
+  to another host let anyone on the path replace what was installed.
+
+- A package's `[python_dependencies]` entry is one plain requirement: names
+  and extras must be PEP 508 names and versions only version-specifier
+  characters. A version holding a line break could add pip options such as
+  `--index-url` to the requirements file shared by every installed package,
+  or a direct URL to build from. A `-` that does not follow a letter or
+  digit is refused too, since `>=1 --config-settings=...` would pass a
+  per-requirement option.
+
+- The bundled uv moves from 0.5.9 to 0.13.6, past the advisories against
+  0.5.9 (wheel entry points and RECORD files writing or deleting outside the
+  venv, archive-parsing differentials, a distrusted CA in uv's bundled
+  roots). The download is checked against a SHA-256 pinned in hpm for each
+  platform before it is extracted, only a regular file is accepted as the
+  binary, and it is installed under `tools/uv-<version>/`, so a version bump
+  replaces it; the unversioned `tools/uv` of older hpm is removed.
+
+- Bounds on what a registry or package can make hpm consume: an archive
+  may expand to at most 1,000,000 entries and 256 GiB, a registry answer may
+  be at most 64 MiB, and connections must open within 30 s. Downloads no
+  longer have a 5-minute cap on the whole transfer (large packages on slow
+  links were cut off); a download that sends nothing for 2 minutes fails.
+
+- Extracted package files no longer take setuid, setgid or sticky bits, or
+  group or world write permission, from the archive.
+
+- `hpm pack` and `hpm build` refuse to package a PEM private key (however it
+  got into the tree) and a link that points outside the package; such a link
+  used to be packed as the file it pointed at.
+
+- On Windows, `hpm run -- <args>` refuses a forwarded argument holding a
+  double quote or a line break: cmd.exe ends its quoting at either, so the
+  rest of the argument could run as a second command.
+
+- Text from registries and package manifests (search results, package
+  descriptions, warnings and errors carrying them) is printed without
+  control characters or Unicode bidirectional controls, so it cannot inject
+  terminal escape sequences (hidden or recoloured output, hyperlinks, a
+  changed window title).
+
+- Release binaries are published with a `.sha256` file, and a binary already
+  on a release is never replaced (a rerun with identical bytes is a no-op;
+  different bytes need a new version tag). A tag that does not match the
+  workspace version fails CI.
+
+- Package archives are decoded only as Stored or Deflated zip entries (and
+  tar.gz); the bzip2, deflate64, LZMA, PPMd, XZ, zstd and AES decoders are no
+  longer built into hpm, removing their code (zstd's in C) from what an
+  untrusted archive can reach. Archives `hpm pack` writes are unchanged.
+
+### Changed
+
+- Upgrade note: a zip package archive whose entries use a compression method
+  other than Stored or Deflated now fails to extract; repack it with
+  `hpm pack` or a standard zip tool.
+- Upgrade note: on Windows, `hpm run` arguments may not contain `"`, line
+  breaks, or a `%NAME%` variable reference (cmd.exe would expand it before
+  quoting); `%04d`-style frame patterns, a lone `%`, `&`, `|`, `<`, `>` and
+  `^` still pass through inside quotes.
+- Upgrade note: a package containing a symlink to a file outside the package
+  directory no longer packs or dev-installs; replace the link with the file.
+- Upgrade note: the first Python install after upgrading downloads uv
+  0.13.6 into `~/.hpm/tools/uv-0.13.6/`.
+- Upgrade note: `[python_dependencies]` entries with direct URLs (`name @
+  url`), environment markers, or characters outside version specifiers now
+  fail the manifest load.
+- Upgrade note: API registries, registry download URLs and URL
+  dependencies on plain http to another host are refused; serve them over
+  https.
+- `ApiRegistry::with_auth_token` refuses a token for a registry that is not
+  https.
+- Upgrade note: a project whose `.hpm` or `.hpm/packages` directory is a
+  symlink or junction no longer syncs; make it a real directory.
+- Upgrade note: `hpm install` stops when `hpm.lock` exists but cannot be
+  read, instead of warning and regenerating it; delete the file to resolve
+  and lock again.
+- Upgrade note: `--frozen-lockfile` fails when a registry or URL dependency
+  has no lock entry with a checksum at the manifest's version.
+- `ProjectManager::sync_dependencies` reads the project's `hpm.lock` and fails
+  when it exists but cannot be read; `sync_dependencies_with_lock` takes the
+  lock explicitly.
+- Upgrade note: a URL dependency whose key or `version` differs from the
+  package path and version in the archive's `hpm.toml` now fails to install
+  (a bare-slug key still matches the slug).
+- API: `StorageManager::install_into_cas` takes the requested name and
+  version and refuses a package that declares a different identity.
+- Upgrade note: a URL dependency's `version` must be a semantic version.
+- API: `StorageManager::get_package_path`, `storage::layout::cas_dir`,
+  `download_key`, and `StoreLayout::{cas_dir, dev_container, staging_dir}`
+  now return a `Result`; embedders (TumbleTrove Desktop) add `?`.
+- Upgrade note: a `[stage]` place rule whose `to` has a `..` component, a
+  leading `/`, a drive, a backslash or a colon now fails the manifest load.
+- Upgrade note: `hpm pack`, `hpm build` and dev copies of path dependencies
+  refuse a staged file whose name contains a colon or a backslash (such a
+  name means a drive, a stream or a separator on Windows, so the same
+  package would install differently there); rename the file.
+- Upgrade note: `[storage]`, `[projects]`, `[signing]` and `[[registries]]`
+  in a project's `.hpm/config.toml` are now ignored with a warning; set them
+  in `~/.hpm/config.toml` instead, or declare a project's registries in its
+  `hpm.toml`. `[install]` still applies from a project config.
+- Upgrade note: git registry urls starting with `-` or naming a host that
+  starts with `-`, using the
+  `<transport>::` helper syntax, or the `git://` or `http://` schemes are now
+  rejected when `config.toml` or `hpm.toml` is loaded, naming the registry.
+  Use `https://`, `ssh://`, `file://`, `git@host:path` or a local path.
+- Git registry indexes are now cloned under `~/.hpm/registry/<digest>/`; each
+  is cloned once more after upgrading, and the old `~/.hpm/registry/<name>/`
+  directories can be deleted.
+- `hpm_config::Config::registry_cache_path` is removed: the cache directory
+  is derived from the remote URL, not the registry name.
+- API: `GitRegistry::new(name, remote_url: &str, registry_cache_root: &Path)`
+  returns a `Result` (the URL is validated) and takes the root holding every
+  git registry's clone, appending a digest of the remote itself, instead of
+  the registry's own cache directory.
+
 ## [0.39.1] - 2026-11-13
 
 ### Fixed

@@ -8,5 +8,5 @@ build:
   tools:
     rust: latest
   commands:
-    - cargo install mdbook
+    - cargo install mdbook --locked --version 0.5.4
     - mdbook build --dest-dir $READTHEDOCS_OUTPUT/html

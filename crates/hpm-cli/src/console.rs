@@ -136,6 +136,12 @@ impl Console {
     }
 
     fn print_styled(&mut self, level: Level, message: impl Display) {
+        // Warnings and errors routinely carry text from registries and
+        // manifests; hpm's own styling is added below, after this.
+        let message = match level {
+            Level::Warning | Level::Error => untrusted(message),
+            _ => message.to_string(),
+        };
         let should_color = match self.color {
             ColorChoice::Always => true,
             ColorChoice::Never => false,
@@ -159,6 +165,22 @@ impl Console {
             }
         }
     }
+}
+
+/// Text from outside hpm (a registry, a package manifest, an error carrying
+/// either), made safe to print: control characters (which start terminal
+/// escape sequences that recolour or hide output, set hyperlinks or the
+/// window title) and bidirectional overrides (which reorder what is shown)
+/// are dropped (Unicode's Bidi_Control set). Everything else, non-ASCII
+/// included, is kept.
+pub fn untrusted(text: impl Display) -> String {
+    text.to_string()
+        .chars()
+        .filter(|&c| {
+            !(c.is_control() && c != '\n' && c != '\t'
+                || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+        })
+        .collect()
 }
 
 fn style_message(level: Level, message: impl Display) -> String {
@@ -229,5 +251,74 @@ mod tests {
         assert!(!console.should_show(Level::Info));
         assert!(console.should_show(Level::Warning));
         assert!(console.should_show(Level::Error));
+    }
+
+    #[test]
+    fn untrusted_text_keeps_text_and_drops_controls() {
+        assert_eq!(
+            untrusted("Æbleflæsk fx \u{1f525}\nline two\tok"),
+            "Æbleflæsk fx \u{1f525}\nline two\tok"
+        );
+        assert_eq!(
+            untrusted("a\u{1b}[2Jb\u{7}c\u{9b}d\u{202e}e\u{2066}f\u{7f}"),
+            "a[2Jbcdef"
+        );
+    }
+
+    mod properties {
+        use super::super::untrusted;
+        use proptest::prelude::*;
+
+        /// Unicode's Bidi_Control property (PropList.txt).
+        fn is_bidi_control(c: char) -> bool {
+            matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        }
+
+        /// Text a hostile registry could send: escape sequences (7-bit and
+        /// C1), bidi controls, and ordinary text, mixed.
+        fn hostile_text() -> impl Strategy<Value = String> {
+            let piece = prop_oneof![
+                Just("\u{1b}[2J".to_string()),
+                Just("\u{1b}]8;;https://x.invalid\u{7}".to_string()),
+                Just("\u{9b}31m".to_string()),
+                Just("\r".to_string()),
+                Just("\u{202e}".to_string()),
+                Just("\u{2066}".to_string()),
+                Just("\u{061c}".to_string()),
+                "[\\x00-\\x1f\\x7f-\\x9f]",
+                "\\PC{0,6}",
+                any::<char>().prop_map(String::from),
+            ];
+            prop::collection::vec(piece, 0..10).prop_map(|p| p.concat())
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1024))]
+
+            /// Cleaned text holds no control character but newline and tab,
+            /// and no bidi control; cleaning it again changes nothing; and
+            /// what is kept is the input with those characters removed.
+            #[test]
+            fn cleaned_text_cannot_drive_the_terminal(text in hostile_text()) {
+                let clean = untrusted(&text);
+                prop_assert!(
+                    !clean.chars().any(|c| (c.is_control() && c != '\n' && c != '\t') || is_bidi_control(c)),
+                    "{:?}", clean
+                );
+                prop_assert_eq!(&untrusted(&clean), &clean);
+                let expected: String = text
+                    .chars()
+                    .filter(|&c| !((c.is_control() && c != '\n' && c != '\t') || is_bidi_control(c)))
+                    .collect();
+                prop_assert_eq!(clean, expected);
+            }
+
+            /// Printable text, any script, passes through unchanged.
+            #[test]
+            fn printable_text_is_kept(text in "[\\PC\n\t]{0,40}") {
+                prop_assume!(!text.chars().any(is_bidi_control));
+                prop_assert_eq!(untrusted(&text), text);
+            }
+        }
     }
 }

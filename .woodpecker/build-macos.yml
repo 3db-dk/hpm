@@ -18,16 +18,20 @@ steps:
       - git remote add origin ${CI_REPO_CLONE_URL}
       - git fetch --no-tags --depth=1 origin ${CI_COMMIT_SHA}
       - git reset --hard ${CI_COMMIT_SHA}
-      - rustup default stable
+      # rust-toolchain.toml pins the compiler; install it without changing
+      # the shared worker's default toolchain.
+      - rustup toolchain install
       - rustup target add x86_64-apple-darwin aarch64-apple-darwin
-      - cargo build --release -p hpm-cli --bin hpm --target x86_64-apple-darwin
-      - cargo build --release -p hpm-cli --bin hpm --target aarch64-apple-darwin
+      - cargo build --locked --release -p hpm-cli --bin hpm --target x86_64-apple-darwin
+      - cargo build --locked --release -p hpm-cli --bin hpm --target aarch64-apple-darwin
 
   - name: test
     image: bash
     commands:
-      - rustup default stable
-      - cargo test --release --workspace --target aarch64-apple-darwin
+      # rust-toolchain.toml pins the compiler; install it without changing
+      # the shared worker's default toolchain.
+      - rustup toolchain install
+      - cargo test --locked --release --workspace --target aarch64-apple-darwin
 
   - name: upload
     image: bash

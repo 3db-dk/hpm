@@ -97,6 +97,7 @@ update:
 # Security audit
 audit:
     cargo audit
+    cargo deny --locked check
 
 # Find unused dependencies
 machete:
@@ -131,7 +132,7 @@ release-check: quality doc-check audit
 
 # Install development tools
 install-tools:
-    cargo install cargo-audit cargo-machete cargo-watch cargo-nextest just
+    cargo install cargo-audit cargo-deny cargo-machete cargo-watch cargo-nextest just
 
 # Watch for changes and run tests
 watch:

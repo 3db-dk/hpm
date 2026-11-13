@@ -31,13 +31,19 @@ global configuration, and troubleshooting.
 
 ### From a pre-built binary
 
-Download the binary for your platform from the
-[latest release](https://github.com/3db-dk/hpm/releases/latest) and put it on
-your `PATH`. Verify with:
+Download the binary for your platform, and the `.sha256` file beside it, from
+the [latest release](https://github.com/3db-dk/hpm/releases/latest). Check the
+download, then put it on your `PATH`:
 
 ```sh
+sha256sum -c hpm-v<version>-linux-x86_64.sha256   # macOS: shasum -a 256 -c
 hpm --version
 ```
+
+On Windows: `(Get-FileHash hpm-v<version>-windows-x86_64.exe).Hash` must equal
+the hex in the `.sha256` file (case aside). The checksum file comes from the
+same release, so it detects a corrupted or swapped download, not a
+compromised release.
 
 ### From source
 
@@ -760,7 +766,10 @@ openssl genpkey -algorithm ed25519 -out signing.pem
 openssl pkey -in signing.pem -pubout -out signing.pub.pem
 ```
 
-Keep `signing.pem` secret. Publish `signing.pub.pem` so consumers can verify.
+Keep `signing.pem` secret, and outside the package directory: `hpm pack` and
+`hpm build` refuse to package any file that is a PEM private key, and any link
+that points outside the package. Publish `signing.pub.pem` so consumers can
+verify.
 See [Security](security.md#package-signing) for the wire format.
 
 ### `hpm audit`
@@ -1070,7 +1079,11 @@ requests = { version = ">=2.25.0", extras = ["security", "socks"] }
 matplotlib = { version = "^3.5.0", optional = true }
 ```
 
-Version constraints use PEP 440 syntax (same as pip/uv). See
+Version constraints use PEP 440 syntax (same as pip/uv). Each entry must be
+one plain requirement: the name and extras are PEP 508 names, and the version
+holds only letters, digits, spaces and `. , * + ! < > = ~ ^ -`, with a `-`
+only after a letter or digit (`1.0-1`). Direct URLs (`name @ url`),
+environment markers and pip options are refused when the manifest loads. See
 [Python guide](python-guide.md) for the Houdini→Python version mapping and
 venv sharing behavior.
 
@@ -1301,7 +1314,10 @@ platforms you ship under `[compat].platforms`; each per-platform
 `to` path (archive-relative). If `to` ends with `/` it's a directory; the
 file's basename is appended. Otherwise `to` is the literal archive path
 (use when relocating a single file under a renamed name). Both `from`
-and `to` use forward slashes regardless of host OS.
+and `to` use forward slashes regardless of host OS. `to` must stay
+inside the install image: `"./"` or `"."` is its root, and a `to` with a
+`..` component, a leading `/`, a drive, a backslash or a colon fails the
+manifest load.
 
 **Where to put native binaries.** Place them in Houdini's convention
 folders at the package root — `dso/` for HDK plugins, `apexdso/` for APEX
@@ -1667,6 +1683,15 @@ anything no file sets falls back to the built-in default. Setting only
 under it unless they are set explicitly. A malformed config file is a
 hard error, not a silent fallback to defaults.
 
+A project config may set only `[install]`. A project directory is often a
+repository someone else wrote, so `[storage]`, `[projects]`, `[signing]` and
+`[[registries]]` (where hpm keeps its store and tools, what `hpm clean`
+treats as live, which key `hpm pack` signs with, and which servers an
+embedder's sign-in token may be sent to) are read only from
+`~/.hpm/config.toml`; in a project config they are ignored with a warning
+naming the section. A project declares the registries it resolves from in
+`hpm.toml`'s `[[registries]]`.
+
 ```toml
 [install]
 parallel_downloads = 8       # packages a sync fetches and installs at once
@@ -1757,7 +1782,7 @@ Per-project layout:
 ├── hpm.toml
 ├── hpm.lock                         # pinned versions + checksums
 ├── .hpm/
-│   ├── config.toml                  # project-level overrides (optional)
+│   ├── config.toml                  # project-level [install] and [[registries]] (optional)
 │   └── packages/                    # Houdini manifests, one per dependency
 │       ├── studio.utility-nodes.json
 │       └── studio.material-library.json

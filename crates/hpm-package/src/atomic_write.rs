@@ -10,8 +10,14 @@ use crate::IoOp;
 use std::path::Path;
 use std::path::PathBuf;
 
-/// Stage `content` to `<path>.tmp`, then rename onto `path`. Overwrites any
-/// pre-existing `<path>.tmp` from a prior interrupted save.
+/// Stage `content` to a new sibling temporary file, then rename onto `path`.
+///
+/// The temporary file is created exclusively under a name of its own
+/// (`<path>.<pid>-<n>.tmp`), so a file or link already sitting where it
+/// would go (planted in a cloned project, or left by another writer) is
+/// never opened or written through; the rename replaces `path` itself,
+/// never a link's target. A `<path>.tmp` left by an older hpm's interrupted
+/// save is removed (the entry itself, never what a link points at).
 ///
 /// Errors are reported as [`IoOp`], so callers whose error enums carry
 /// `#[from] IoOp` lift them with `?`. The `op` field on the returned
@@ -30,13 +36,52 @@ use std::path::PathBuf;
 /// # }
 /// ```
 pub fn atomic_write(path: &Path, content: impl AsRef<[u8]>) -> Result<(), IoOp> {
-    let tmp_path = tmp_sibling(path);
     let content = content.as_ref();
-    retry_transient(|| std::fs::write(&tmp_path, content))
+    let legacy = legacy_tmp_sibling(path);
+    if std::fs::symlink_metadata(&legacy).is_ok() {
+        let _ = std::fs::remove_file(&legacy);
+    }
+    let tmp_path = retry_transient(|| create_staging_file(path, content))
         .map_err(|e| IoOp::wrap("stage", path, e))?;
-    retry_transient(|| std::fs::rename(&tmp_path, path))
-        .map_err(|e| IoOp::wrap("commit", path, e))?;
+    if let Err(e) = retry_transient(|| std::fs::rename(&tmp_path, path)) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(IoOp::wrap("commit", path, e));
+    }
     Ok(())
+}
+
+/// Create a fresh sibling of `path` with `create_new` (which refuses an
+/// existing entry, links included) and write `content` to it. Returns its
+/// path.
+fn create_staging_file(path: &Path, content: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    loop {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(format!(
+            ".{}-{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let tmp = PathBuf::from(name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(mut file) => {
+                if let Err(e) = file.write_all(content) {
+                    drop(file);
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(e);
+                }
+                return Ok(tmp);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// Run `op`, retrying briefly while it fails the way Windows fails a file
@@ -65,7 +110,8 @@ fn retry_transient<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Re
     op()
 }
 
-fn tmp_sibling(path: &Path) -> PathBuf {
+/// The fixed `<path>.tmp` older hpm versions staged to.
+fn legacy_tmp_sibling(path: &Path) -> PathBuf {
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".tmp");
     PathBuf::from(tmp)
