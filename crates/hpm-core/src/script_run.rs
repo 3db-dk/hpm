@@ -49,6 +49,13 @@ use tracing::debug;
 /// this enum.
 #[derive(Debug, thiserror::Error)]
 pub enum ScriptRunError {
+    /// A forwarded argument that `cmd.exe` cannot be given safely.
+    #[error(
+        "Argument {arg:?} cannot be passed to a script on Windows: double quotes and line \
+         breaks would end cmd.exe's quoting"
+    )]
+    UnsafeWindowsArg { arg: String },
+
     #[error("No script '{name}' defined in package manifest")]
     ScriptNotFound { name: String },
 
@@ -186,7 +193,7 @@ pub async fn prepare_script(
                 name: name.to_string(),
                 host_os: host_os.as_deref().unwrap_or("<unknown>").to_string(),
             })?;
-    let command_line = build_command_string(&resolved_cmd, extra_args);
+    let command_line = build_command_string(&resolved_cmd, extra_args)?;
     debug!("hpm script {}: {}", name, command_line);
 
     let mut env: HashMap<String, String> = HashMap::new();
@@ -356,17 +363,13 @@ fn apply_package_env(run_env: &PackageRunEnv, env_vars: &mut HashMap<String, Str
 /// Build the command line: the base `cmd` with each forwarded arg quoted and
 /// appended. The per-arg quoting targets the shell the sink will spawn into
 /// (`sh -c` / `cmd /S /C`); the sink supplies the outer wrapping.
-fn build_command_string(cmd: &str, extra_args: &[String]) -> String {
-    if extra_args.is_empty() {
-        cmd.to_string()
-    } else {
-        let mut out = cmd.to_string();
-        for arg in extra_args {
-            out.push(' ');
-            out.push_str(&shell_quote(arg));
-        }
-        out
+fn build_command_string(cmd: &str, extra_args: &[String]) -> Result<String, ScriptRunError> {
+    let mut out = cmd.to_string();
+    for arg in extra_args {
+        out.push(' ');
+        out.push_str(&shell_quote(arg)?);
     }
+    Ok(out)
 }
 
 /// Minimal POSIX/cmd shell quoting for trailing-arg pass-through.
@@ -375,15 +378,31 @@ fn build_command_string(cmd: &str, extra_args: &[String]) -> String {
 /// don't contain newlines or NULs in practice. The per-arg quoting targets
 /// the shell the sink will spawn into (`sh -c` / `cmd /S /C`); the sink
 /// supplies the outer wrapping.
-fn shell_quote(arg: &str) -> String {
+fn shell_quote(arg: &str) -> Result<String, ScriptRunError> {
     #[cfg(target_os = "windows")]
     {
-        windows_quote(arg)
+        cmd_forwarded_arg(arg)
     }
     #[cfg(not(target_os = "windows"))]
     {
-        posix_quote(arg)
+        Ok(posix_quote(arg))
     }
+}
+
+/// Quote a forwarded argument for `cmd /S /C`, refusing what would end its
+/// quoting. cmd toggles quoting at every `"` (it does not know the CRT's
+/// `\"` escape) and stops at a line break, so an argument holding either
+/// could put `&`, `|` or `>` outside quotes and run a second command. Every
+/// other character, `%` included (see [`windows_quote`]), stays inside the
+/// quotes and reaches the script as data.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn cmd_forwarded_arg(arg: &str) -> Result<String, ScriptRunError> {
+    if arg.contains(['"', '\r', '\n', '\0']) {
+        return Err(ScriptRunError::UnsafeWindowsArg {
+            arg: arg.to_string(),
+        });
+    }
+    Ok(windows_quote(arg))
 }
 
 /// Single-quote and escape embedded single quotes via `'\''`. Robust for
@@ -450,7 +469,8 @@ mod tests {
 
     #[test]
     fn build_command_appends_args() {
-        let out = build_command_string("python scripts/x.py", &["--foo".into(), "bar".into()]);
+        let out =
+            build_command_string("python scripts/x.py", &["--foo".into(), "bar".into()]).unwrap();
         // Each arg is quoted; both should be present after the base cmd.
         assert!(out.starts_with("python scripts/x.py "));
         assert!(out.contains("--foo"));
@@ -459,7 +479,7 @@ mod tests {
 
     #[test]
     fn build_command_no_args_is_passthrough() {
-        let out = build_command_string("ruff .", &[]);
+        let out = build_command_string("ruff .", &[]).unwrap();
         assert_eq!(out, "ruff .");
     }
 
@@ -593,5 +613,66 @@ mod tests {
         assert_eq!(windows_quote(r"C:\out\\"), r#""C:\out\\\\""#);
         // A backslash not preceding a quote stays a single backslash.
         assert_eq!(windows_quote(r"C:\out\bin"), r#""C:\out\bin""#);
+    }
+
+    /// What `cmd.exe` would treat as command operators: the `& | < > ^`
+    /// characters it sees outside a double-quoted run. cmd toggles quoting
+    /// on every `"` and knows nothing of the CRT's backslash escapes.
+    fn cmd_operators_outside_quotes(line: &str) -> Vec<char> {
+        let mut quoted = false;
+        let mut found = Vec::new();
+        for ch in line.chars() {
+            match ch {
+                '"' => quoted = !quoted,
+                '&' | '|' | '<' | '>' | '^' if !quoted => found.push(ch),
+                _ => {}
+            }
+        }
+        found
+    }
+
+    /// A forwarded argument never reaches `cmd /S /C` in a form that ends
+    /// its quoting: whatever it holds stays one argument to the script.
+    #[test]
+    fn a_forwarded_arg_cannot_end_cmd_quoting() {
+        for arg in [
+            r#"a" & calc & "b"#,
+            r#"x"|whoami"#,
+            r#"\" & calc"#,
+            "line\r\ncalc",
+        ] {
+            match cmd_forwarded_arg(arg) {
+                Err(ScriptRunError::UnsafeWindowsArg { .. }) => {}
+                Err(e) => panic!("{arg:?}: {e}"),
+                Ok(quoted) => {
+                    let line = format!("python script.py {quoted}");
+                    assert!(
+                        cmd_operators_outside_quotes(&line).is_empty()
+                            && !line.contains(['\r', '\n']),
+                        "{arg:?} broke out: {line}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Arguments users pass to Houdini, ffmpeg and render scripts keep
+    /// reaching the script whole: frame patterns with `%`, trailing-separator
+    /// paths, spaces, and characters cmd would treat as operators outside
+    /// quotes.
+    #[test]
+    fn ordinary_windows_args_are_quoted_not_refused() {
+        for arg in [
+            "render.%04d.exr",
+            r"C:\out\",
+            "1001",
+            "a b",
+            "x&y|z<w>v^u",
+            "100%",
+        ] {
+            let quoted = cmd_forwarded_arg(arg).unwrap_or_else(|e| panic!("{arg:?}: {e}"));
+            let line = format!("python script.py {quoted}");
+            assert!(cmd_operators_outside_quotes(&line).is_empty(), "{line}");
+        }
     }
 }

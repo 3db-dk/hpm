@@ -103,8 +103,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   got into the tree) and a link that points outside the package; such a link
   used to be packed as the file it pointed at.
 
+- On Windows, `hpm run -- <args>` refuses a forwarded argument holding a
+  double quote or a line break: cmd.exe ends its quoting at either, so the
+  rest of the argument could run as a second command.
+
 ### Changed
 
+- Upgrade note: on Windows, `hpm run` arguments may not contain `"` or line
+  breaks; `%`, `&`, `|`, `<`, `>` and `^` still pass through inside quotes.
 - Upgrade note: a package containing a symlink to a file outside the package
   directory no longer packs or dev-installs; replace the link with the file.
 - Upgrade note: the first Python install after upgrading downloads uv
