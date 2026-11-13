@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-11-13
+
 ### Security
 
 - A git registry's url is checked before it reaches `git`, and git runs
