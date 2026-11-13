@@ -157,6 +157,77 @@ mod tests {
         assert_eq!(before, hash_tree(dir.path()).unwrap());
     }
 
+    /// A tree as a map of relative path to contents, written into `root`.
+    fn write_tree(root: &Path, tree: &std::collections::BTreeMap<String, Vec<u8>>) {
+        for (path, contents) in tree {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, contents).unwrap();
+        }
+    }
+
+    /// Trees over a tiny alphabet, so paths and contents that differ only in
+    /// where one ends and the next begins come up often.
+    fn tree()
+    -> impl proptest::strategy::Strategy<Value = std::collections::BTreeMap<String, Vec<u8>>> {
+        use proptest::prelude::*;
+        prop::collection::btree_map(
+            prop_oneof!["[ab]{1,3}", "[ab]{1,2}/[ab]{1,2}"],
+            prop::collection::vec(prop_oneof![Just(b'a'), Just(b'b'), Just(b'/')], 0..4),
+            0..4,
+        )
+        .prop_filter("a path cannot be both a file and a directory", |tree| {
+            !tree
+                .keys()
+                .any(|p| tree.keys().any(|q| q.starts_with(&format!("{p}/"))))
+        })
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(128))]
+
+        /// The digest a lock records identifies the tree: different trees
+        /// never share a `v2:` digest, the same tree always gets the same
+        /// one, and a recorded digest of either format recomputes to itself.
+        #[test]
+        fn the_v2_digest_identifies_the_tree(one in tree(), two in tree()) {
+            let (a, b) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+            write_tree(a.path(), &one);
+            write_tree(b.path(), &two);
+            let (ha, hb) = (hash_tree(a.path()).unwrap(), hash_tree(b.path()).unwrap());
+            proptest::prop_assert_eq!(ha == hb, one == two, "{:?} vs {:?}", one, two);
+            proptest::prop_assert_eq!(&hash_tree_as(a.path(), &ha).unwrap(), &ha);
+            let unframed = hash_tree_unframed(a.path()).unwrap();
+            proptest::prop_assert_eq!(hash_tree_as(a.path(), &unframed).unwrap(), unframed);
+        }
+
+        /// Moving the boundary between a file's path and its contents (file
+        /// `a` holding `bc` against file `ab` holding `c`) feeds an unframed
+        /// hash the same bytes; the `v2:` digest must still tell the trees
+        /// apart, alongside any other files.
+        #[test]
+        fn moving_the_path_contents_boundary_changes_the_digest(
+            path in "[ab]{1,3}",
+            contents in "[ab]{1,4}",
+            split in 1usize..4,
+            rest in tree(),
+        ) {
+            let split = split.min(contents.len());
+            let moved_path = format!("{path}{}", &contents[..split]);
+            let moved_contents = &contents[split..];
+            let mut one = rest.clone();
+            let mut two = rest;
+            one.retain(|p, _| !p.starts_with(&path) && !path.starts_with(p.as_str()));
+            two.retain(|p, _| !p.starts_with(&path) && !path.starts_with(p.as_str()));
+            one.insert(path.clone(), contents.clone().into_bytes());
+            two.insert(moved_path, moved_contents.as_bytes().to_vec());
+            let (a, b) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+            write_tree(a.path(), &one);
+            write_tree(b.path(), &two);
+            proptest::prop_assert_ne!(hash_tree(a.path()).unwrap(), hash_tree(b.path()).unwrap());
+        }
+    }
+
     /// File `a` holding `bc` and file `ab` holding `c` are different trees,
     /// but concatenating path and contents with no boundary feeds the hash
     /// `abc` for both. The digest a lock records must tell them apart.
