@@ -31,13 +31,19 @@ global configuration, and troubleshooting.
 
 ### From a pre-built binary
 
-Download the binary for your platform from the
-[latest release](https://github.com/3db-dk/hpm/releases/latest) and put it on
-your `PATH`. Verify with:
+Download the binary for your platform, and the `.sha256` file beside it, from
+the [latest release](https://github.com/3db-dk/hpm/releases/latest). Check the
+download, then put it on your `PATH`:
 
 ```sh
+sha256sum -c hpm-v<version>-linux-x86_64.sha256   # macOS: shasum -a 256 -c
 hpm --version
 ```
+
+On Windows: `(Get-FileHash hpm-v<version>-windows-x86_64.exe).Hash` must equal
+the hex in the `.sha256` file (case aside). The checksum file comes from the
+same release, so it detects a corrupted or swapped download, not a
+compromised release.
 
 ### From source
 

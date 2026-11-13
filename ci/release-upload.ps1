@@ -17,9 +17,12 @@
     2. An uncaught PowerShell error does not reliably set a non-zero process
        exit code, so the script ends in an explicit `exit 0` / `exit 1`.
 
-    Reruns replace an existing asset rather than tolerating the 422 GitHub
-    returns for a duplicate name; tolerating it kept the stale binary on the
-    release while reporting success.
+    Beside the binary it publishes "<asset>.sha256" ("<hex>  <asset>", the
+    format `sha256sum -c` reads), uploaded first. A published binary is never
+    replaced: a rerun whose binary matches the published checksum is a no-op,
+    and a different binary, or a published binary without a checksum file, is
+    an error (new bytes need a new tag). Same behaviour as release-upload.sh,
+    whose tests (ci/tests/release_upload_test.sh) define it.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Source,
@@ -29,6 +32,15 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repo = if ($env:RELEASE_REPO) { $env:RELEASE_REPO } else { '3db-dk/hpm' }
+# The token is sent to these, so they can only be GitHub or this machine.
+$api = if ($env:GITHUB_API_URL) { $env:GITHUB_API_URL } else { 'https://api.github.com' }
+$uploads = if ($env:GITHUB_UPLOADS_URL) { $env:GITHUB_UPLOADS_URL } else { 'https://uploads.github.com' }
+foreach ($base in @($api, $uploads)) {
+    if ($base -notmatch '^(https://(api|uploads)\.github\.com|http://127\.0\.0\.1:[0-9]+)$') {
+        Write-Host "refusing API base ${base}: only GitHub or 127.0.0.1" -ForegroundColor Red
+        exit 1
+    }
+}
 $bodyFile = Join-Path ([System.IO.Path]::GetTempPath()) "hpm-release-body-$PID.json"
 $jsonFile = Join-Path ([System.IO.Path]::GetTempPath()) "hpm-release-$PID.json"
 
@@ -122,7 +134,7 @@ try {
     # All three platform workflows race to create it: one gets 201, the losers
     # get 422. Any other status is a real fault.
 
-    $code = Invoke-Api -Method 'POST' -Url "https://api.github.com/repos/$repo/releases" `
+    $code = Invoke-Api -Method 'POST' -Url "$api/repos/$repo/releases" `
         -ExtraArgs @('-H', 'Content-Type: application/json', '--data-binary', "@$jsonFile")
     switch ($code) {
         '201' { Write-Host "created release $tag" }
@@ -132,53 +144,68 @@ try {
 
     # --- resolve the release id ----------------------------------------------
 
-    $code = Invoke-Api -Method 'GET' -Url "https://api.github.com/repos/$repo/releases/tags/$tag"
+    $code = Invoke-Api -Method 'GET' -Url "$api/repos/$repo/releases/tags/$tag"
     if ($code -ne '200') { throw (Get-FailureMessage "failed to look up release $tag (HTTP $code)") }
     $releaseId = (Get-Body | ConvertFrom-Json).id
     if (-not $releaseId) { throw (Get-FailureMessage 'release lookup returned no id') }
 
-    # --- drop any existing asset of the same name ----------------------------
+    # --- publish the checksum file, then the binary -------------------------
 
-    $assetsUrl = "https://api.github.com/repos/$repo/releases/$releaseId/assets?per_page=100"
-    $code = Invoke-Api -Method 'GET' -Url $assetsUrl
-    if ($code -ne '200') { throw (Get-FailureMessage "failed to list release assets (HTTP $code)") }
-    $existing = Find-Asset -Name $artifact
+    $digest = (Get-FileHash -Path $staged -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sumsName = "$artifact.sha256"
+    $sumsFile = Join-Path 'artifacts' $sumsName
+    Write-Utf8NoBom -Path $sumsFile -Content "$digest  $artifact`n"
 
-    if ($existing) {
-        $code = Invoke-Api -Method 'DELETE' `
-            -Url "https://api.github.com/repos/$repo/releases/assets/$($existing.id)"
-        if ($code -eq '204' -or $code -eq '404') {
-            Write-Host "removed previous $artifact"
+    $assetsUrl = "$api/repos/$repo/releases/$releaseId/assets?per_page=100"
+
+    function Find-ReleaseAsset {
+        param([string]$Name)
+        $code = Invoke-Api -Method 'GET' -Url $assetsUrl
+        if ($code -ne '200') { throw (Get-FailureMessage "failed to list release assets (HTTP $code)") }
+        return (Find-Asset -Name $Name)
+    }
+
+    function Publish-Asset {
+        param([string]$Name, [string]$Path)
+        $code = Invoke-Api -Method 'POST' -Url "$uploads/repos/$repo/releases/$releaseId/assets?name=$Name" `
+            -ExtraArgs @('-H', 'Content-Type: application/octet-stream', '--data-binary', "@$Path")
+        if ($code -ne '201') { throw (Get-FailureMessage "failed to upload $Name (HTTP $code)") }
+        $expected = (Get-Item $Path).Length
+        $asset = Find-ReleaseAsset -Name $Name
+        if (-not $asset) { throw "$Name is missing from the release after a successful upload" }
+        if ($asset.state -ne 'uploaded') { throw "$Name is in state '$($asset.state)', expected uploaded" }
+        if ([long]$asset.size -ne [long]$expected) {
+            throw "$Name is $($asset.size) bytes on the release, expected $expected"
         }
-        else {
-            throw (Get-FailureMessage "failed to delete previous $artifact (HTTP $code)")
+        Write-Host "verified $Name ($($asset.size) bytes)"
+    }
+
+    $publishedSums = Find-ReleaseAsset -Name $sumsName
+    $publishedBin = Find-ReleaseAsset -Name $artifact
+
+    if ($publishedSums) {
+        # Assets of a published release are public; no token is sent.
+        $text = & curl.exe -fsSL $publishedSums.browser_download_url
+        if ($LASTEXITCODE -ne 0) { throw "could not read the published $sumsName" }
+        $published = ("$text".Trim() -split '\s+')[0]
+        if ($published -ne $digest) {
+            throw "release $tag already publishes a different $artifact (sha256 $published); a published binary is never replaced, tag a new version"
         }
+        Write-Host "$sumsName already published and matches"
+    }
+    elseif ($publishedBin) {
+        throw "release $tag already has $artifact without a checksum file; a published binary is never replaced, tag a new version"
+    }
+    else {
+        Publish-Asset -Name $sumsName -Path $sumsFile
     }
 
-    # --- upload ---------------------------------------------------------------
-
-    $uploadUrl = "https://uploads.github.com/repos/$repo/releases/$releaseId/assets?name=$artifact"
-    $code = Invoke-Api -Method 'POST' -Url $uploadUrl `
-        -ExtraArgs @('-H', 'Content-Type: application/octet-stream', '--data-binary', "@$staged")
-    if ($code -ne '201') { throw (Get-FailureMessage "failed to upload $artifact (HTTP $code)") }
-
-    # --- confirm what actually landed -----------------------------------------
-
-    $expected = (Get-Item $staged).Length
-    $code = Invoke-Api -Method 'GET' -Url $assetsUrl
-    if ($code -ne '200') { throw (Get-FailureMessage "failed to verify release assets (HTTP $code)") }
-    $asset = Find-Asset -Name $artifact
-
-    if (-not $asset) {
-        throw "$artifact is missing from the release after a successful upload"
+    if ($publishedBin) {
+        Write-Host "$artifact already published and matches its checksum"
     }
-    if ($asset.state -ne 'uploaded') {
-        throw "$artifact is in state '$($asset.state)', expected uploaded"
+    else {
+        Publish-Asset -Name $artifact -Path $staged
     }
-    if ([long]$asset.size -ne [long]$expected) {
-        throw "$artifact is $($asset.size) bytes on the release, expected $expected"
-    }
-    Write-Host "verified $artifact ($($asset.size) bytes)"
 }
 catch {
     Write-Host "release upload failed: $_" -ForegroundColor Red

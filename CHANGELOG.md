@@ -113,6 +113,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal escape sequences (hidden or recoloured output, hyperlinks, a
   changed window title).
 
+- Release binaries are published with a `.sha256` file, and a binary already
+  on a release is never replaced (a rerun with identical bytes is a no-op;
+  different bytes need a new version tag). A tag that does not match the
+  workspace version fails CI.
+
 ### Changed
 
 - Upgrade note: on Windows, `hpm run` arguments may not contain `"` or line
