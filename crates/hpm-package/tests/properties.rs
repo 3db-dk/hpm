@@ -301,11 +301,24 @@ fn non_blank_strategy() -> impl Strategy<Value = String> {
     "[a-z][a-z0-9_/.]{0,16}"
 }
 
+/// A place-rule `to` inside the install image: plain name segments, with an
+/// optional trailing `/` for a directory target. Never a `.`/`..` segment.
+fn place_target_strategy() -> impl Strategy<Value = String> {
+    (
+        prop::collection::vec("[a-z][a-z0-9_]{0,8}", 1..4),
+        any::<bool>(),
+    )
+        .prop_map(|(segments, dir)| {
+            let joined = segments.join("/");
+            if dir { format!("{joined}/") } else { joined }
+        })
+}
+
 fn place_rules_strategy() -> impl Strategy<Value = StagePlatformRules> {
     prop::collection::vec(
         (
             non_blank_strategy(),
-            prop_oneof![Just("./".to_string()), non_blank_strategy()],
+            prop_oneof![Just("./".to_string()), place_target_strategy()],
         )
             .prop_map(|(from, to)| PlaceRule { from, to }),
         0..3,
