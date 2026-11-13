@@ -26,6 +26,22 @@ pub(crate) fn hpaths(manifest: &Path) -> std::io::Result<Vec<std::path::PathBuf>
     })
 }
 
+/// Record that the Houdini manifest at `manifest_path` points at the dev copy
+/// at `install_path`. A record that cannot be written fails the sync: the
+/// project's claim is what keeps a reclaim from removing the copy while the
+/// manifest still points at it, and a missing one only shows later, as a
+/// package gone from under a running Houdini. The install's hold on the copy
+/// is left in place then, so it stays protected in this process.
+pub(super) fn record_project_claim(
+    install_path: &Path,
+    manifest_path: &Path,
+) -> Result<(), ProjectError> {
+    crate::storage::dev_users::record_project_user(install_path, manifest_path).map_err(|e| {
+        hpm_package::IoOp::wrap("record a project's claim on dev copy", install_path, e)
+    })?;
+    Ok(())
+}
+
 /// File name of the project-level `[runtime]` overrides manifest, written
 /// into the project packages dir alongside the per-package `<creator>.<slug>.json`
 /// files.
@@ -133,17 +149,7 @@ impl ProjectManager {
         // record that this project uses it, then release the hold the install
         // took until this moment (see `storage::dev_users`).
         if installed_package.is_dev {
-            if let Err(e) = crate::storage::dev_users::record_project_user(
-                &installed_package.install_path,
-                &manifest_path,
-            ) {
-                warn!(
-                    "Could not record {} as a user of dev copy {}: {}",
-                    manifest_path.display(),
-                    installed_package.install_path.display(),
-                    e
-                );
-            }
+            record_project_claim(&installed_package.install_path, &manifest_path)?;
             crate::storage::dev_users::settle(&installed_package.install_path);
         }
 
@@ -507,6 +513,30 @@ mod hpaths_tests {
         assert_eq!(
             hpaths(&dir.path().join("missing.json")).unwrap_err().kind(),
             std::io::ErrorKind::NotFound
+        );
+    }
+
+    /// A claim that cannot be written is an error, not a log line: without
+    /// it the reclaim removes the copy while the manifest points at it.
+    #[cfg(unix)]
+    #[test]
+    fn a_claim_that_cannot_be_recorded_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let hash = "a".repeat(64);
+        let container = tmp.path().join("_dev").join("rig@1.0.0");
+        let copy = container.join(&hash);
+        std::fs::create_dir_all(&copy).unwrap();
+        let records = container.join(".users").join(&hash);
+        std::fs::create_dir_all(&records).unwrap();
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let manifest = tmp.path().join("project/.hpm/packages/acme.rig.json");
+        let result = super::record_project_claim(&copy, &manifest);
+        std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("record a project's claim on dev copy"),
+            "{err}"
         );
     }
 }

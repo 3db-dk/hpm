@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, a dev copy could be removed while a project still pointed at
+  it, so Houdini lost the package until the next sync. The likeliest cause:
+  another process (an antivirus scanner, a search indexer) briefly holding
+  a just-written file made the write of the project's claim on the copy
+  fail, the sync only logged it, and the next cleanup saw a copy nobody
+  claimed. Writes hpm stages and renames (lockfiles, config, Houdini
+  package files, claims) now retry briefly when Windows refuses them that
+  way; a claim that still cannot be written fails the sync instead of being
+  logged; and a claim in the middle of being written always keeps its copy.
+
 ## [0.39.0] - 2026-11-13
 
 ### Fixed
