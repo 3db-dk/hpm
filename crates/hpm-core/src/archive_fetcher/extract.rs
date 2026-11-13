@@ -150,10 +150,15 @@ fn extract_zip_sync(
             .name()
             .map_err(|e| FetchError::ExtractionError(e.to_string()))?
             .to_string();
-        let Some(raw_path) = file.enclosed_name() else {
+        if file.enclosed_name().is_none() {
             warn!("Skipping file with invalid path in archive: {name}");
             continue;
-        };
+        }
+        // The path rule reads the entry's own name, whose separator is `/`
+        // (APPNOTE 4.4.17.1). `enclosed_name()` rebuilds it as a native path,
+        // with `\` separators on Windows, which the rule refuses, so every
+        // nested entry failed there.
+        let raw_path = PathBuf::from(&name);
         let Some(relative_path) = layout.target_for(&name, &raw_path)? else {
             continue;
         };

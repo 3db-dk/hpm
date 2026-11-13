@@ -164,8 +164,10 @@ mod tests {
                     prop_assert!(!relative.to_string_lossy().contains(['\\', ':', '\0']));
                     let root = Path::new("/target/dir");
                     prop_assert!(root.join(&relative).starts_with(root));
-                    // Applying the rule again changes nothing.
-                    prop_assert_eq!(confined_relative_path(&relative).unwrap(), relative);
+                    // Applying the rule again, to the `/` form a writer
+                    // records, changes nothing.
+                    let rendered = relative_path_to_forward_slash(&relative);
+                    prop_assert_eq!(confined_relative_path(Path::new(&rendered)).unwrap(), relative);
                 } else {
                     prop_assert!(
                         raw.contains(['\\', ':', '\0'])
