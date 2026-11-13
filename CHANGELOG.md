@@ -165,6 +165,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now return a `Result`; embedders (TumbleTrove Desktop) add `?`.
 - Upgrade note: a `[stage]` place rule whose `to` has a `..` component, a
   leading `/`, a drive, a backslash or a colon now fails the manifest load.
+- Upgrade note: `hpm pack`, `hpm build` and dev copies of path dependencies
+  refuse a staged file whose name contains a colon or a backslash (such a
+  name means a drive, a stream or a separator on Windows, so the same
+  package would install differently there); rename the file.
 - Upgrade note: `[storage]`, `[projects]`, `[signing]` and `[[registries]]`
   in a project's `.hpm/config.toml` are now ignored with a warning; set them
   in `~/.hpm/config.toml` instead, or declare a project's registries in its
