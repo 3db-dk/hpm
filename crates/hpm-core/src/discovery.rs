@@ -272,4 +272,51 @@ description = "Test project {}"
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].manifest.package.path, "studio/shallow");
     }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
+        /// Discovery finds exactly the project folders whose names are not an
+        /// ignore pattern. Names are built from the patterns' own stems, so a
+        /// folder that merely starts with a pattern (`temporal` for `temp`)
+        /// comes up often; missing such a project would let `hpm clean`
+        /// delete its packages.
+        #[test]
+        fn discovery_skips_exactly_the_folders_named_by_a_pattern(
+            names in proptest::collection::btree_set(
+                proptest::prelude::prop_oneof!["(temp|tmp|backup|archive)", "(temp|tmp|backup|archive)[a-z-]{1,4}", "[a-z]{1,6}"],
+                1..8,
+            ),
+            patterns in proptest::sample::subsequence(vec!["temp", "tmp", "backup", "archive"], 0..=4),
+        ) {
+            let root = TempDir::new().unwrap();
+            for name in &names {
+                let dir = root.path().join(name);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(
+                    dir.join("hpm.toml"),
+                    "[package]\npath = \"studio/p\"\nname = \"p\"\nversion = \"1.0.0\"\n",
+                )
+                .unwrap();
+            }
+            let config = ProjectsConfig {
+                explicit_paths: Vec::new(),
+                search_roots: vec![root.path().to_path_buf()],
+                max_search_depth: 2,
+                ignore_patterns: patterns.iter().map(|p| p.to_string()).collect(),
+            };
+            let found: std::collections::BTreeSet<String> = ProjectDiscovery::new(config)
+                .find_projects()
+                .unwrap()
+                .iter()
+                .map(|p| p.path.file_name().unwrap().to_string_lossy().into_owned())
+                .collect();
+            let expected: std::collections::BTreeSet<String> = names
+                .iter()
+                .filter(|n| !patterns.contains(&n.as_str()))
+                .cloned()
+                .collect();
+            proptest::prop_assert_eq!(found, expected);
+        }
+    }
 }
