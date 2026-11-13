@@ -103,3 +103,22 @@ fn frozen_lockfile_requires_every_package_to_carry_a_checksum() {
         "--frozen-lockfile installed a package the lock pins no checksum for"
     );
 }
+
+/// A lock that exists but cannot be read is never silently replaced: the
+/// install stops instead of installing unverified and rewriting it.
+#[test]
+fn an_unreadable_lock_stops_the_install() {
+    let (home, _work, project) = project(None);
+    std::fs::write(project.join("hpm.lock"), "this is [not a lock").unwrap();
+    let out = hpm(home.path(), &project, &["install"]);
+    assert!(
+        !out.status.success(),
+        "installed past an unreadable lock: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("hpm.lock")).unwrap(),
+        "this is [not a lock",
+        "the unreadable lock was overwritten"
+    );
+}

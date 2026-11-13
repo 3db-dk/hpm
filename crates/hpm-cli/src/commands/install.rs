@@ -85,15 +85,14 @@ pub async fn install_dependencies(
                 Some(lock)
             }
             Err(e) => {
-                if frozen_lockfile {
-                    bail!(
-                        "--frozen-lockfile requires a valid hpm.lock, but loading it failed: \
-                         {}. Re-run without --frozen-lockfile to regenerate it.",
-                        e
-                    );
-                }
-                console.warn(format!("Failed to load existing lock file: {e}"));
-                None
+                // Never install past a lock that cannot be read: doing so would
+                // install unverified and then overwrite the lock, discarding the
+                // checksums it pinned.
+                bail!(
+                    "hpm.lock exists but cannot be read: {}. Fix it, or delete it to \
+                     resolve and lock the dependencies again.",
+                    e
+                );
             }
         }
     } else {

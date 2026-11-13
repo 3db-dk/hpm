@@ -144,6 +144,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   https.
 - Upgrade note: a project whose `.hpm` or `.hpm/packages` directory is a
   symlink or junction no longer syncs; make it a real directory.
+- Upgrade note: `hpm install` stops when `hpm.lock` exists but cannot be
+  read, instead of warning and regenerating it; delete the file to resolve
+  and lock again.
 - Upgrade note: `--frozen-lockfile` fails when a registry or URL dependency
   has no lock entry with a checksum at the manifest's version.
 - `ProjectManager::sync_dependencies` reads the project's `hpm.lock` and fails
