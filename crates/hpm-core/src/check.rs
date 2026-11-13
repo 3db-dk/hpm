@@ -420,6 +420,80 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(48))]
+
+        /// The size check measures exactly what `hpm pack` ships: over
+        /// generated trees, ignore files and `[stage]` globs, the large-file
+        /// warnings name exactly the staged files above the threshold, and
+        /// the large-package warning appears exactly when the staged total
+        /// is above its limit. Files are sparse, so sizes cost nothing.
+        #[test]
+        fn the_size_check_measures_the_pack_image(
+            files in crate::packer::prop_support::file_tree(),
+            large in proptest::collection::vec(proptest::bool::ANY, 24),
+            gitignore in crate::packer::prop_support::ignore_file(),
+            include in crate::packer::prop_support::glob_subset(crate::packer::prop_support::STAGE_INCLUDES),
+            exclude in crate::packer::prop_support::glob_subset(crate::packer::prop_support::STAGE_EXCLUDES),
+        ) {
+            let dir = TempDir::new().unwrap();
+            let quote = |globs: &[String]| {
+                globs.iter().map(|g| format!("\"{g}\"")).collect::<Vec<_>>().join(", ")
+            };
+            std::fs::write(
+                dir.path().join("hpm.toml"),
+                format!(
+                    "[package]\npath = \"studio/p\"\nname = \"P\"\nversion = \"1.0.0\"\n\n[stage]\ninclude = [{}]\nexclude = [{}]\n",
+                    quote(&include),
+                    quote(&exclude)
+                ),
+            )
+            .unwrap();
+            std::fs::write(dir.path().join(".gitignore"), &gitignore).unwrap();
+            for (file, big) in files.iter().zip(&large) {
+                let path = dir.path().join(file);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                let size = if *big { LARGE_FILE + 1 } else { 3 };
+                std::fs::File::create(&path).unwrap().set_len(size).unwrap();
+            }
+
+            let manifest = PackageManifest::from_path(&dir.path().join("hpm.toml")).unwrap();
+            let ignore = crate::packer::build_ignore_rules(dir.path()).unwrap();
+            let filter = crate::packer::StageFilter::new(&manifest.stage, None).unwrap();
+            let staged = crate::packer::collect_stage_entries(dir.path(), &ignore, Some(&filter), None).unwrap();
+            let sizes: Vec<(String, u64)> = staged
+                .iter()
+                .map(|(path, _)| {
+                    let rel = path.strip_prefix(dir.path()).unwrap();
+                    (
+                        hpm_package::path_util::relative_path_to_forward_slash(rel),
+                        std::fs::metadata(path).unwrap().len(),
+                    )
+                })
+                .collect();
+            let mut expected_large: Vec<String> = sizes
+                .iter()
+                .filter(|(_, size)| *size > LARGE_FILE)
+                .map(|(path, size)| format!("Large file detected: {} ({:.1} MB)", path, *size as f64 / (1024.0 * 1024.0)))
+                .collect();
+            expected_large.sort();
+            let total: u64 = sizes.iter().map(|(_, size)| size).sum();
+
+            let report = check_package(dir.path());
+            let mut large_warnings: Vec<String> = warnings(&report)
+                .into_iter()
+                .filter(|w| w.starts_with("Large file detected"))
+                .map(str::to_string)
+                .collect();
+            large_warnings.sort();
+            proptest::prop_assert_eq!(large_warnings, expected_large);
+            proptest::prop_assert_eq!(
+                warnings(&report).iter().any(|w| w.starts_with("Package size is large")),
+                total > LARGE_PACKAGE
+            );
+        }
+    }
+
     /// Files the stage walk leaves out (gitignored, `[stage].exclude`) do not
     /// count towards the package size.
     #[test]
