@@ -324,6 +324,18 @@ ignore_patterns = ["backup", ".cache", "temp"]
         assert!(projects_config.should_ignore("node_modules"));
         assert!(!projects_config.should_ignore("my-project"));
         assert!(!projects_config.should_ignore("houdini-scenes"));
+        // A pattern is a whole directory name. Matching it as a prefix
+        // skipped real projects (`temp` hid `temporal-fx`), and a project
+        // discovery misses looks unused to `hpm clean`.
+        for project in [
+            "temporal-fx",
+            "template",
+            "archive-tools",
+            "backups-ui",
+            "tmpfx",
+        ] {
+            assert!(!projects_config.should_ignore(project), "{project}");
+        }
     }
 
     #[test]

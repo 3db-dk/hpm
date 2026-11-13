@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Project discovery no longer skips a project whose folder name merely
+  starts with an ignore pattern. `[projects] ignore_patterns` matched
+  prefixes, so the default `temp` skipped `temporal-fx/` and `template/`,
+  `archive` skipped `archive-tools/`, and so on; `hpm clean` then saw that
+  project's packages as unused and removed them. A pattern now matches a
+  whole folder name. **Upgrade note:** a pattern written to skip a family
+  of folders by prefix (`backup` for `backup-2025/`) now skips only the
+  folder with exactly that name; list the others too.
+
 ### Changed
 
 - `hpm pack` names the archive after the package slug instead of its

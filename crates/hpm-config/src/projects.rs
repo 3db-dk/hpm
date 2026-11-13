@@ -46,9 +46,12 @@ impl ProjectsConfig {
         }
     }
 
+    /// Whether discovery skips a directory named `dir_name`: an exact match
+    /// for one of `ignore_patterns`. Not a prefix: a project discovery
+    /// misses looks unused to `hpm clean`, which then deletes its packages.
     pub fn should_ignore(&self, dir_name: &str) -> bool {
         self.ignore_patterns
             .iter()
-            .any(|pattern| dir_name == pattern || dir_name.starts_with(pattern))
+            .any(|pattern| dir_name == pattern)
     }
 }

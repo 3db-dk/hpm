@@ -1715,7 +1715,7 @@ Any other key in a config file is an error that names it.
 - `explicit_paths` — absolute project paths that are always considered active.
 - `search_roots` — directories scanned recursively for active projects.
 - `max_search_depth` — recursion limit for search_roots (default `3`).
-- `ignore_patterns` — directory names/prefixes to skip during scanning. Matches full names or prefixes, not globs.
+- `ignore_patterns` — directory names to skip during scanning. Each matches a whole directory name exactly (not a prefix or a glob): `temp` skips `temp/` but not `temporal-fx/`.
 
 **`[[registries]]`** — list of registries. Same shape as
 [`[[registries]]`](#registries-array) in `hpm.toml`.
