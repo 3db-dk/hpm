@@ -2373,4 +2373,62 @@ mod project_tree_links {
         assert!(real.join("proj/.hpm/packages").is_dir());
         assert!(real.join("proj/hpm.lock").is_file());
     }
+
+    /// A link planted where a save stages its temporary file never makes
+    /// the save write through it: the link's target is untouched.
+    #[test]
+    fn a_planted_tmp_link_is_not_written_through() {
+        let temp = TempDir::new().unwrap();
+        let victim = temp.path().join("victim.txt");
+        std::fs::write(&victim, "user data").unwrap();
+        let project = temp.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        std::os::unix::fs::symlink(&victim, project.join("hpm.lock.tmp")).unwrap();
+
+        let _ = crate::lock::LockFile::new("proj".into(), "0.1.0".into())
+            .save(&project.join("hpm.lock"));
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "user data");
+        assert!(
+            !std::fs::symlink_metadata(project.join("hpm.lock"))
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false),
+            "hpm.lock became a link"
+        );
+    }
+
+    /// A project whose `.hpm/packages` (or `.hpm`) is a link elsewhere is
+    /// refused before hpm writes or deletes anything there.
+    #[tokio::test]
+    async fn a_linked_project_packages_dir_is_refused() {
+        for linked in [".hpm/packages", ".hpm"] {
+            let temp = TempDir::new().unwrap();
+            let elsewhere = temp.path().join("elsewhere");
+            std::fs::create_dir_all(&elsewhere).unwrap();
+            std::fs::write(elsewhere.join("users-package.json"), "{}").unwrap();
+            let project = temp.path().join("proj");
+            std::fs::create_dir_all(project.join(".hpm")).unwrap();
+            std::fs::write(project.join("hpm.toml"), MANIFEST).unwrap();
+            if linked == ".hpm" {
+                std::fs::remove_dir(project.join(".hpm")).unwrap();
+                std::fs::create_dir_all(elsewhere.join("packages")).unwrap();
+                std::fs::write(elsewhere.join("packages/users-package.json"), "{}").unwrap();
+            }
+            std::os::unix::fs::symlink(&elsewhere, project.join(linked)).unwrap();
+
+            let (config, storage) = test_setup(temp.path());
+            let synced = match ProjectManager::new(project.clone(), storage, config) {
+                Ok(manager) => manager.sync_dependencies().await.map(|_| ()),
+                Err(e) => Err(e),
+            };
+            assert!(synced.is_err(), "{linked}: a linked tree was accepted");
+            assert!(
+                elsewhere.join("users-package.json").exists(),
+                "{linked}: deleted"
+            );
+            assert!(
+                linked != ".hpm" || elsewhere.join("packages/users-package.json").exists(),
+                "{linked}: deleted"
+            );
+        }
+    }
 }

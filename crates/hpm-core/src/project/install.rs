@@ -43,6 +43,9 @@ impl ProjectManager {
         frozen: bool,
     ) -> Result<Vec<(String, InstallOutcome)>, ProjectError> {
         info!("Syncing project dependencies");
+        // Re-checked on every sync: a long-lived manager (an embedder) must
+        // not write into a `.hpm` replaced by a link since it was built.
+        self.ensure_directories()?;
 
         let project_manifest = match self.load_project_manifest()? {
             Some(manifest) => manifest,

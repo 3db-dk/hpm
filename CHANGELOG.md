@@ -58,8 +58,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has never held its packages; it used to fail with "recorded in the lock
   file but is not installed".
 
+- Saves of lockfiles, config, Houdini package files and records stage to a
+  temporary file created exclusively under a fresh name, so a link planted
+  at `<file>.tmp` in a cloned project no longer makes a save overwrite the
+  link's target.
+- A project whose `.hpm` or `.hpm/packages` is a link is refused before hpm
+  writes or deletes package files there; the stale-manifest sweep removes
+  only regular files.
+
 ### Changed
 
+- Upgrade note: a project whose `.hpm` or `.hpm/packages` directory is a
+  symlink or junction no longer syncs; make it a real directory.
 - Upgrade note: `--frozen-lockfile` fails when a registry or URL dependency
   has no lock entry with a checksum at the manifest's version.
 - `ProjectManager::sync_dependencies` reads the project's `hpm.lock` and fails

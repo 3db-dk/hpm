@@ -201,7 +201,7 @@ fn judge_records(
         };
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        // A claim being written: `atomic_write` stages it as `<record>.tmp`
+        // A claim being written: `atomic_write` stages it as `<record>.<pid>-<n>.tmp`
         // before renaming it into place. Its contents may be incomplete,
         // but a claim is on its way, so it keeps the copy; one abandoned
         // long ago by a crash claims nothing.
@@ -240,7 +240,7 @@ fn judge_records(
     in_use
 }
 
-/// How long a staged claim (`<record>.tmp`) counts as being written.
+/// How long a staged claim (`<record>...tmp`) counts as being written.
 /// Writing one takes milliseconds; anything older was left by a crash.
 const STAGED_CLAIM_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
