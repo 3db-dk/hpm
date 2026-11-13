@@ -1559,6 +1559,9 @@ mod dev_copy_props {
         Edit,
         /// Project 0 or 1 syncs (a dev launch, a hython run's pre-sync).
         Sync(usize),
+        /// Both projects sync at once (two launches, or a launch during a
+        /// sync), each in its own task.
+        SyncBoth,
         /// A run against project 0 or 1 starts and holds its copies.
         Hold(usize),
         /// Every run ends.
@@ -1572,6 +1575,7 @@ mod dev_copy_props {
         prop_oneof![
             2 => Just(Step::Edit),
             4 => (0usize..2).prop_map(Step::Sync),
+            2 => Just(Step::SyncBoth),
             1 => (0usize..2).prop_map(Step::Hold),
             1 => Just(Step::Release),
             1 => Just(Step::Bump),
@@ -1655,6 +1659,14 @@ mod dev_copy_props {
                         Step::Sync(i) => {
                             projects[i].sync_dependencies().await.unwrap();
                         }
+                        Step::SyncBoth => {
+                            let (a, b) = tokio::join!(
+                                projects[0].sync_dependencies(),
+                                projects[1].sync_dependencies()
+                            );
+                            a.unwrap();
+                            b.unwrap();
+                        }
                         Step::Hold(i) => {
                             let packages = &projects[i].project_paths.packages_dir;
                             holds.extend(crate::storage::dev_users::hold_project_dev_copies(packages));
@@ -1669,16 +1681,22 @@ mod dev_copy_props {
                             write_version(minor);
                         }
                     }
-                    let in_use: BTreeSet<PathBuf> = projects
-                        .iter()
-                        .filter_map(hpath_of)
-                        .chain(held.iter().cloned())
-                        .collect();
-                    for copy in &in_use {
-                        prop_assert!(
-                            copy.join("hpm.toml").is_file() && copy.join("otls/rig.hda").is_file(),
-                            "{} is in use but gone after {:?}", copy.display(), step
-                        );
+                    // Checked repeatedly while the syncs' background reclaims
+                    // may still run, not once: a copy moved aside and put
+                    // back, or removed late, is gone for a moment only.
+                    for _ in 0..8 {
+                        let in_use: BTreeSet<PathBuf> = projects
+                            .iter()
+                            .filter_map(hpath_of)
+                            .chain(held.iter().cloned())
+                            .collect();
+                        for copy in &in_use {
+                            prop_assert!(
+                                copy.join("hpm.toml").is_file() && copy.join("otls/rig.hda").is_file(),
+                                "{} is in use but gone after {:?}", copy.display(), step
+                            );
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                     }
                 }
 
