@@ -181,9 +181,12 @@ pub fn pack_package(request: PackRequest) -> Result<PackOutcome, PackError> {
 
     let content_prefix = manifest.package.slug().to_string();
     let inject_files = vec![(native_filename, json_bytes)];
+    // The archive is named after the slug, not the display name: the slug
+    // is a valid file name everywhere, and two packages in one output
+    // directory cannot share it.
     let result = super::pack(
         &dir,
-        &manifest.package.name,
+        &content_prefix,
         &manifest.package.version,
         &output_dir,
         key.as_ref(),
@@ -359,6 +362,35 @@ mod tests {
     fn exact_entry_lookup_fails_on_an_unreadable_directory() {
         let dir = tempfile::tempdir().unwrap();
         assert!(find_exact_entry(&dir.path().join("nope"), "README.md").is_err());
+    }
+
+    /// The archive is named after the slug: a display name may hold
+    /// characters Windows refuses in a file name, and two packages may share
+    /// one.
+    #[test]
+    fn the_archive_is_named_after_the_slug() {
+        let dir = tempfile::tempdir().unwrap();
+        let pkg = dir.path().join("pkg");
+        std::fs::create_dir_all(pkg.join("otls")).unwrap();
+        std::fs::write(pkg.join("otls/a.hda"), "x").unwrap();
+        std::fs::write(
+            pkg.join("hpm.toml"),
+            "[package]\npath = \"acme/rbd-tools\"\nname = \"RBD: Tools?\"\nversion = \"1.0.0\"\ndescription = \"d\"\nauthors = [\"A\"]\nkeywords = [\"k\"]\n",
+        )
+        .unwrap();
+        let outcome = pack_package(PackRequest {
+            dir: pkg,
+            output_dir: dir.path().join("out"),
+            key: None,
+            platform: None,
+            target: NativePackageTarget::Generic,
+            verify_assets: false,
+        })
+        .unwrap();
+        assert_eq!(
+            outcome.result.archive_path.file_name().unwrap(),
+            "rbd-tools-1.0.0.zip"
+        );
     }
 
     #[derive(Debug, Clone, Copy)]

@@ -570,7 +570,7 @@ longer relative to anything useful. Option 2 exists to avoid exactly that.
 > **The Package Browser's File > Install Package Archive does not use the
 > shipped json at all.** Houdini honours a bundled package file only when it
 > is named `<archive-stem>.json`; `hpm pack` names the archive
-> `{Name}-{version}-{platform}.zip`, so ours is not merely ignored — it is
+> `{slug}-{version}-{platform}.zip`, so ours is not merely ignored — it is
 > never written to disk. Only the `{slug}/` folder is extracted. Houdini then
 > writes its own package file into a packages directory holding `enable` and
 > `hpath` only, with `hpath` pointing at the extracted folder.

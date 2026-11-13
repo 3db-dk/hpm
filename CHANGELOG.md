@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `hpm pack` names the archive after the package slug instead of its
+  display name: `{slug}-{version}[-{platform}].zip` (`studio-tools-1.0.0.zip`
+  rather than `Studio Tools-1.0.0.zip`). A display name could hold
+  characters Windows refuses in file names (`:`, `?`, `*`, ...), and two
+  packages sharing one could overwrite each other's archive. Read the path
+  from `hpm pack --json`'s `archive` field rather than guessing it.
+
 ## [0.38.2] - 2026-11-13
 
 ### Fixed
