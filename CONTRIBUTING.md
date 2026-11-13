@@ -188,6 +188,7 @@ cargo set-version --bump patch
 ```bash
 PROPTEST_CASES=2000 cargo test --workspace   # Comprehensive testing
 cargo audit                                  # Security audit
+cargo deny --locked check                    # Advisories, licenses, sources (deny.toml; CI gate)
 cargo machete                                # Unused dependencies
 cargo doc --workspace --no-deps              # Documentation
 ```

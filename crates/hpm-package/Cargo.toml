@@ -1,5 +1,6 @@
 [package]
 name = "hpm-package"
+publish.workspace = true
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

@@ -19,6 +19,8 @@ documentation = "https://hpm.readthedocs.io"
 keywords = ["houdini", "package-manager", "vfx", "3d"]
 categories = ["development-tools", "multimedia::images"]
 rust-version = "1.89"
+# Distributed as release binaries, never on crates.io.
+publish = false
 
 [workspace.dependencies]
 # Core dependencies

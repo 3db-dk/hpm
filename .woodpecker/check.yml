@@ -23,3 +23,8 @@ steps:
       - cargo fmt --check
       - cargo clippy --workspace --all-targets -- -D warnings
       - cargo test --workspace
+      # Dependency gate: advisories, licenses, banned and unknown sources
+      # (deny.toml). Installed per run at a pinned version into the
+      # workspace, so the shared host's ~/.cargo/bin is not modified.
+      - cargo install --locked --quiet --root .tools cargo-deny --version 0.20.2
+      - .tools/bin/cargo-deny --locked check
