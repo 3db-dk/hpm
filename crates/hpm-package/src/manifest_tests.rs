@@ -1935,3 +1935,35 @@ fn non_semver_url_dependency_versions_fail_the_load() {
         );
     }
 }
+
+/// The Python dependency forms package authors use keep loading: PEP 440
+/// operators, local versions, prereleases, spaces, hpm's `^` shorthand,
+/// dotted, underscored and mixed-case names, and extras.
+#[test]
+fn python_dependency_forms_load() {
+    let toml_str = r#"
+[package]
+path = "studio/ctx"
+name = "Ctx"
+version = "0.1.0"
+
+[python_dependencies]
+numpy = ">=1.20"
+anyver = "*"
+ranged = ">=1,<2"
+wild = "==1.0.*"
+compat = "~=2.1"
+notthis = "!=1.3"
+exact = "===1.0"
+pre = ">=1.0rc1"
+torch = "==2.1.0+cu118"
+spaced = ">= 1.0, < 2.0"
+caret = "^2.28.0"
+"ruamel.yaml" = ">=0.17"
+typing_extensions = ">=4"
+PyYAML = ">=6"
+requests = { version = ">=2.28", extras = ["socks", "use_chardet_on_py3"] }
+"#;
+    let manifest: PackageManifest = toml::from_str(toml_str).unwrap();
+    assert_eq!(manifest.python_dependencies.len(), 15);
+}
