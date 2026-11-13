@@ -2,7 +2,7 @@
 //!
 //! Searches configured registries for packages matching a query.
 
-use crate::console::Console;
+use crate::console::{Console, untrusted};
 use crate::output::OutputFormat;
 use anyhow::Result;
 use console::style;
@@ -88,17 +88,17 @@ pub async fn search_packages(
 
         console.stdout(format!(
             "  {} {}{}",
-            style(&entry.name).cyan().bold(),
-            style(&entry.version).green(),
+            style(untrusted(&entry.name)).cyan().bold(),
+            style(untrusted(&entry.version)).green(),
             yanked,
         ));
 
         if let Some(ref desc) = entry.description {
-            console.stdout(format!("    {}", style(desc).dim()));
+            console.stdout(format!("    {}", style(untrusted(desc)).dim()));
         }
 
         if let Some(ref compat) = entry.houdini_compat {
-            console.stdout(format!("    Houdini: {}", style(compat).dim()));
+            console.stdout(format!("    Houdini: {}", style(untrusted(compat)).dim()));
         }
     }
 

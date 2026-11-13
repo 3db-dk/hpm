@@ -107,6 +107,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   double quote or a line break: cmd.exe ends its quoting at either, so the
   rest of the argument could run as a second command.
 
+- Text from registries and package manifests (search results, package
+  descriptions, warnings and errors carrying them) is printed without
+  control characters or bidirectional overrides, so it cannot inject
+  terminal escape sequences (hidden or recoloured output, hyperlinks, a
+  changed window title).
+
 ### Changed
 
 - Upgrade note: on Windows, `hpm run` arguments may not contain `"` or line

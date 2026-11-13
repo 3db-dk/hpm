@@ -136,6 +136,12 @@ impl Console {
     }
 
     fn print_styled(&mut self, level: Level, message: impl Display) {
+        // Warnings and errors routinely carry text from registries and
+        // manifests; hpm's own styling is added below, after this.
+        let message = match level {
+            Level::Warning | Level::Error => untrusted(message),
+            _ => message.to_string(),
+        };
         let should_color = match self.color {
             ColorChoice::Always => true,
             ColorChoice::Never => false,
@@ -159,6 +165,21 @@ impl Console {
             }
         }
     }
+}
+
+/// Text from outside hpm (a registry, a package manifest, an error carrying
+/// either), made safe to print: control characters (which start terminal
+/// escape sequences that recolour or hide output, set hyperlinks or the
+/// window title) and bidirectional overrides (which reorder what is shown)
+/// are dropped. Everything else, non-ASCII included, is kept.
+pub fn untrusted(text: impl Display) -> String {
+    text.to_string()
+        .chars()
+        .filter(|&c| {
+            !(c.is_control() && c != '\n' && c != '\t'
+                || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+        })
+        .collect()
 }
 
 fn style_message(level: Level, message: impl Display) -> String {
@@ -229,5 +250,17 @@ mod tests {
         assert!(!console.should_show(Level::Info));
         assert!(console.should_show(Level::Warning));
         assert!(console.should_show(Level::Error));
+    }
+
+    #[test]
+    fn untrusted_text_keeps_text_and_drops_controls() {
+        assert_eq!(
+            untrusted("Æbleflæsk fx \u{1f525}\nline two\tok"),
+            "Æbleflæsk fx \u{1f525}\nline two\tok"
+        );
+        assert_eq!(
+            untrusted("a\u{1b}[2Jb\u{7}c\u{9b}d\u{202e}e\u{2066}f\u{7f}"),
+            "a[2Jbcdef"
+        );
     }
 }

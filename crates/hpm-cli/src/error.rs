@@ -105,7 +105,7 @@ impl CliError {
 
     /// Render the error with its detail message and any help hint.
     pub fn print_error(&self) {
-        eprintln!("{}", self.detail());
+        eprintln!("{}", crate::console::untrusted(self.detail()));
         if let Some(help_text) = self.help() {
             eprintln!("  {}: {}", style("help").cyan(), help_text);
         }
@@ -113,7 +113,11 @@ impl CliError {
 
     /// Render a single-line error without the help hint.
     pub fn print_simple(&self) {
-        eprintln!("{} {}", style("error:").red().bold(), self.detail());
+        eprintln!(
+            "{} {}",
+            style("error:").red().bold(),
+            crate::console::untrusted(self.detail())
+        );
     }
 }
 

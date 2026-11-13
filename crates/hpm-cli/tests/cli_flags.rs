@@ -280,3 +280,36 @@ fn add_records_the_name_without_the_version() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// Text a registry supplies (descriptions, names, versions) is shown as
+/// text: escape sequences in it never reach the terminal, so a registry
+/// cannot recolour, hide or hyperlink hpm's output or retitle the window.
+#[test]
+fn registry_text_reaches_the_terminal_without_escape_sequences() {
+    let url = serve_forever(
+        r#"{"packages":[{"name":"acme/tools","vers":"1.0.0","dl":"https://example.invalid/t.zip","description":"fine \u001b]8;;https://evil.invalid\u0007click\u001b]8;;\u0007 \u001b[2J\u001b]0;pwned\u0007 \u202eexe.txt"}],"total":1}"#
+            .to_string(),
+    );
+    let home = TempDir::new().unwrap();
+    std::fs::create_dir_all(home.path().join(".hpm")).unwrap();
+    std::fs::write(
+        home.path().join(".hpm/config.toml"),
+        format!("[[registries]]\nname = \"fake\"\nurl = \"{url}\"\ntype = \"api\"\n"),
+    )
+    .unwrap();
+    let work = TempDir::new().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_hpm"))
+        .args(["--color", "never", "search", "tools"])
+        .current_dir(work.path())
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env_remove("RUST_LOG")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("click"), "description missing: {stdout}");
+    assert!(
+        !stdout.contains(['\u{1b}', '\u{7}', '\u{202e}']),
+        "escape sequences reached the terminal: {stdout:?}"
+    );
+}
