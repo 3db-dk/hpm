@@ -183,7 +183,7 @@ pub struct LockFile {
 
 pub struct LockedDependency {
     pub version: String,
-    pub checksum: Option<String>,    // hex SHA-256 of the installed tree (tree_hash), no prefix
+    pub checksum: Option<String>,    // "v2:<hex>" SHA-256 of the installed tree (tree_hash); bare <hex> in older locks
     pub source: LockedSource,        // Url { url, version } | Path { path }
 }
 

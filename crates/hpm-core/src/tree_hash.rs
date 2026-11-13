@@ -3,23 +3,80 @@
 //! This is the digest recorded in `hpm.lock` at install time and recomputed
 //! by `LockFile::verify_checksums` — the two sides must agree byte-for-byte,
 //! so there is exactly one implementation.
+//!
+//! Two formats exist. [`hash_tree`] writes `v2:<hex>`, which frames every
+//! path and every file's contents with their lengths. The first format, a
+//! bare `<hex>`, concatenated paths and contents with no boundary, so two
+//! different trees could feed the hash the same bytes (file `a` holding `bc`
+//! and file `ab` holding `c`). Lockfiles written before v2 still hold it, so
+//! [`hash_tree_as`] recomputes a tree in whichever format a lock recorded.
 
 use hpm_package::IoOp;
 use hpm_package::path_util::relative_path_to_forward_slash;
 use sha2::{Digest, Sha256};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Name of the checksum cache file older hpm versions wrote into package
 /// directories. Skipped so a stray leftover can't perturb the digest.
 pub const CHECKSUM_CACHE_FILE: &str = ".hpm-checksum";
 
-/// SHA-256 over every file's forward-slash relative path and contents, in
-/// sorted order. Walk and read errors propagate — a digest computed over a
-/// silently truncated tree would misreport the package hash.
+/// Prefix of a [`hash_tree`] digest.
+pub const V2_PREFIX: &str = "v2:";
+
+/// The digest new lockfile entries record: `v2:` and the hex SHA-256 over
+/// a format tag, then every file in sorted order as its forward-slash
+/// relative path and its contents, each preceded by its length. Walk and
+/// read errors propagate — a digest computed over a silently truncated tree
+/// would misreport the package hash.
 pub fn hash_tree(dir: &Path) -> Result<String, IoOp> {
     let mut hasher = Sha256::new();
+    hasher.update(b"hpm-tree-v2\0");
+    for path in files(dir)? {
+        let relative = relative_path_to_forward_slash(path.strip_prefix(dir).unwrap_or(&path));
+        hasher.update((relative.len() as u64).to_le_bytes());
+        hasher.update(relative.as_bytes());
+        let len = std::fs::metadata(&path)
+            .map_err(|e| IoOp::wrap("stat file for checksum", &path, e))?
+            .len();
+        hasher.update(len.to_le_bytes());
+        let read = feed(&mut hasher, &path)?;
+        if read != len {
+            return Err(IoOp::wrap(
+                "read file for checksum",
+                &path,
+                std::io::Error::other("the file changed size while it was hashed"),
+            ));
+        }
+    }
+    Ok(format!("{V2_PREFIX}{}", crate::digest::finish_hex(hasher)))
+}
 
+/// `dir`'s digest in the format `recorded` uses: [`hash_tree`] for a `v2:`
+/// digest, the first, unframed format for a bare hex one, so a lock written
+/// before v2 still verifies.
+pub fn hash_tree_as(dir: &Path, recorded: &str) -> Result<String, IoOp> {
+    if recorded.starts_with(V2_PREFIX) {
+        hash_tree(dir)
+    } else {
+        hash_tree_unframed(dir)
+    }
+}
+
+/// The first format: paths and contents concatenated without boundaries.
+/// Only for verifying lock entries that recorded it.
+fn hash_tree_unframed(dir: &Path) -> Result<String, IoOp> {
+    let mut hasher = Sha256::new();
+    for path in files(dir)? {
+        let relative = path.strip_prefix(dir).unwrap_or(&path);
+        hasher.update(relative_path_to_forward_slash(relative).as_bytes());
+        feed(&mut hasher, &path)?;
+    }
+    Ok(crate::digest::finish_hex(hasher))
+}
+
+/// Every file under `dir` except the checksum cache, sorted.
+fn files(dir: &Path) -> Result<Vec<PathBuf>, IoOp> {
     let mut entries = Vec::new();
     for entry in walkdir::WalkDir::new(dir).sort_by_file_name() {
         let entry = entry.map_err(|e| {
@@ -40,26 +97,25 @@ pub fn hash_tree(dir: &Path) -> Result<String, IoOp> {
         entries.push(entry.path().to_path_buf());
     }
     entries.sort();
+    Ok(entries)
+}
 
+/// Hash `path`'s contents into `hasher`; returns the number of bytes read.
+fn feed(hasher: &mut Sha256, path: &Path) -> Result<u64, IoOp> {
+    let mut file =
+        std::fs::File::open(path).map_err(|e| IoOp::wrap("open file for checksum", path, e))?;
     let mut buffer = [0u8; 8192];
-    for path in entries {
-        let relative = path.strip_prefix(dir).unwrap_or(&path);
-        hasher.update(relative_path_to_forward_slash(relative).as_bytes());
-
-        let mut file = std::fs::File::open(&path)
-            .map_err(|e| IoOp::wrap("open file for checksum", &path, e))?;
-        loop {
-            let n = file
-                .read(&mut buffer)
-                .map_err(|e| IoOp::wrap("read file for checksum", &path, e))?;
-            if n == 0 {
-                break;
-            }
-            hasher.update(&buffer[..n]);
+    let mut total = 0u64;
+    loop {
+        let n = file
+            .read(&mut buffer)
+            .map_err(|e| IoOp::wrap("read file for checksum", path, e))?;
+        if n == 0 {
+            return Ok(total);
         }
+        hasher.update(&buffer[..n]);
+        total += n as u64;
     }
-
-    Ok(crate::digest::finish_hex(hasher))
 }
 
 #[cfg(test)]
@@ -101,9 +157,25 @@ mod tests {
         assert_eq!(before, hash_tree(dir.path()).unwrap());
     }
 
-    /// `hash_tree` digests feed hpm.lock checksums, so the exact bytes are a
-    /// stored format: pinned for a fixed tree (nested dirs, an empty file,
-    /// non-ASCII names, binary content, and the excluded checksum cache).
+    /// File `a` holding `bc` and file `ab` holding `c` are different trees,
+    /// but concatenating path and contents with no boundary feeds the hash
+    /// `abc` for both. The digest a lock records must tell them apart.
+    #[test]
+    fn trees_differing_only_in_a_path_content_boundary_hash_differently() {
+        let one = TempDir::new().unwrap();
+        let two = TempDir::new().unwrap();
+        write(&one.path().join("a"), "bc");
+        write(&two.path().join("ab"), "c");
+        assert_ne!(
+            hash_tree(one.path()).unwrap(),
+            hash_tree(two.path()).unwrap()
+        );
+    }
+
+    /// Both digest formats are stored in hpm.lock, so their exact bytes are
+    /// pinned for a fixed tree (nested dirs, an empty file, non-ASCII names,
+    /// binary content, and the excluded checksum cache). The unframed digest
+    /// is the one every lockfile before v2 recorded, and must not move.
     #[test]
     fn hash_tree_golden_digest() {
         let tmp = TempDir::new().unwrap();
@@ -115,8 +187,25 @@ mod tests {
         std::fs::write(root.join("bin.dat"), [0u8, 1, 2, 255, 254]).unwrap();
         write(&root.join(CHECKSUM_CACHE_FILE), "ignored");
         assert_eq!(
-            hash_tree(root).unwrap(),
+            hash_tree_unframed(root).unwrap(),
             "9d7e3976ec4826a559d46712856488be47a99d6f6779676efb4839232c00a9b4"
+        );
+        assert_eq!(
+            hash_tree(root).unwrap(),
+            "v2:984be423ea7d3485b38277415fe431323af9bbc88319a5dcf036455c63da6b25"
+        );
+        // A lock entry is recomputed in the format it recorded.
+        assert_eq!(
+            hash_tree_as(
+                root,
+                "9d7e3976ec4826a559d46712856488be47a99d6f6779676efb4839232c00a9b4"
+            )
+            .unwrap(),
+            "9d7e3976ec4826a559d46712856488be47a99d6f6779676efb4839232c00a9b4"
+        );
+        assert_eq!(
+            hash_tree_as(root, "v2:0").unwrap(),
+            hash_tree(root).unwrap()
         );
     }
 }

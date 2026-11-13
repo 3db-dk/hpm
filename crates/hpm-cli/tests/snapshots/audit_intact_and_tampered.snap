@@ -33,7 +33,7 @@ HPM Security Audit
   PASS Lock file exists (hpm.lock)
   PASS Lock file is recent
   WARN local/dep: Uses insecure HTTP URL
-  FAIL Checksum verification failed: Checksum mismatch for local/dep: expected [SHA256], got [SHA256]
+  FAIL Checksum verification failed: Checksum mismatch for local/dep: expected v2:[SHA256], got v2:[SHA256]
   FAIL local/dep@1.0.0: otls/a.hda differs from what was installed
 
 --- stderr

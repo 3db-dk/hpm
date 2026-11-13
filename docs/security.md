@@ -21,8 +21,10 @@ HPM protects against tampering and drift through three layers.
 ### SHA-256 checksums
 
 Every package HPM installs is hashed as installed — a SHA-256 over the
-installed tree's relative paths and file contents — and the hash is recorded
-in `hpm.lock`:
+installed tree's relative paths and file contents, each framed by its length
+— and the hash is recorded in `hpm.lock` as `v2:<hex>`. Lockfiles written
+before this format record a bare `<hex>` digest of the same paths and
+contents without the framing; hpm still verifies those as they are:
 
 ```toml
 # hpm.lock (excerpt)
@@ -33,7 +35,7 @@ version = "1.0.0"
 
 [dependencies."studio/utility-nodes"]
 version = "1.2.0"
-checksum = "a3f2b8c9..."
+checksum = "v2:a3f2b8c9..."
 
 [dependencies."studio/utility-nodes".source]
 type = "url"

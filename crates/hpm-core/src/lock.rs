@@ -276,7 +276,9 @@ impl LockFile {
                     expected_dir: package_dir,
                 });
             }
-            let actual_checksum = compute_directory_checksum(&package_dir)?;
+            // Recomputed in the format the entry recorded, so a lock written
+            // before the framed digest still verifies.
+            let actual_checksum = crate::tree_hash::hash_tree_as(&package_dir, expected_checksum)?;
             if &actual_checksum != expected_checksum {
                 return Err(LockError::ChecksumMismatch {
                     package: name.clone(),
@@ -294,13 +296,6 @@ impl LockedPythonDependency {
     pub fn new(version: String) -> Self {
         Self { version }
     }
-}
-
-/// Compute SHA256 checksum of a directory's contents via the shared
-/// [`crate::tree_hash::hash_tree`] — the same digest the fetcher records
-/// at install time.
-fn compute_directory_checksum(dir: &Path) -> Result<String, LockError> {
-    Ok(crate::tree_hash::hash_tree(dir)?)
 }
 
 /// Get current UTC timestamp in `YYYY-MM-DDTHH:MM:SSZ` ISO 8601 form.
@@ -419,7 +414,7 @@ mod tests {
         let packages_dir = temp_dir.path();
 
         let dir = write_fake_package(packages_dir, "creator/foo", "1.0.0", b"hello");
-        let actual = compute_directory_checksum(&dir).unwrap();
+        let actual = crate::tree_hash::hash_tree(&dir).unwrap();
 
         let mut lock = LockFile::new("root/pkg".to_string(), "1.0.0".to_string());
         lock.add_dependency(
@@ -433,6 +428,43 @@ mod tests {
 
         lock.verify_checksums(packages_dir)
             .expect("matching checksum must verify");
+    }
+
+    /// A lock entry verifies in the format it recorded: the unframed digest
+    /// every lock before v2 holds and the `v2:` digest new installs record
+    /// both pass for an intact package and both catch a changed one.
+    #[test]
+    fn verify_checksums_reads_both_digest_formats() {
+        let temp_dir = TempDir::new().unwrap();
+        let packages_dir = temp_dir.path();
+        let dir = write_fake_package(packages_dir, "creator/foo", "1.0.0", b"hello");
+        let v2 = crate::tree_hash::hash_tree(&dir).unwrap();
+        assert!(v2.starts_with(crate::tree_hash::V2_PREFIX));
+        let unframed = crate::tree_hash::hash_tree_as(&dir, "legacy").unwrap();
+        assert!(!unframed.starts_with(crate::tree_hash::V2_PREFIX));
+
+        let lock_with = |checksum: &str| {
+            let mut lock = LockFile::new("root/pkg".to_string(), "1.0.0".to_string());
+            lock.add_dependency(
+                "creator/foo".to_string(),
+                LockedDependency {
+                    version: "1.0.0".to_string(),
+                    checksum: Some(checksum.to_string()),
+                    source: LockedSource::url("https://example.com/foo.zip", "1.0.0"),
+                },
+            );
+            lock
+        };
+        for checksum in [&v2, &unframed] {
+            lock_with(checksum).verify_checksums(packages_dir).unwrap();
+        }
+        std::fs::write(dir.join("payload.bin"), b"changed").unwrap();
+        for checksum in [&v2, &unframed] {
+            assert!(matches!(
+                lock_with(checksum).verify_checksums(packages_dir),
+                Err(LockError::ChecksumMismatch { .. })
+            ));
+        }
     }
 
     /// Verify the mismatched-checksum path: package present, hash differs.

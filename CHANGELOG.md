@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole folder name. **Upgrade note:** a pattern written to skip a family
   of folders by prefix (`backup` for `backup-2025/`) now skips only the
   folder with exactly that name; list the others too.
+- The checksum `hpm.lock` records for a package now frames each file's path
+  and contents with their lengths. The old digest concatenated them, so two
+  different package trees could hash the same (file `a` holding `bc` and
+  file `ab` holding `c`). New entries are written as `v2:<hex>`; an entry
+  without the prefix, as every existing lockfile holds, is still verified
+  the old way, so no lockfile breaks. **Breaking (hpm-core API):**
+  `tree_hash::hash_tree` returns the `v2:` digest; `tree_hash::hash_tree_as`
+  recomputes a tree in the format a lock recorded.
 - Installing a package whose slug and version match another creator's
   package already in the store (`acme/tools@1.0.0` and `studio/tools@1.0.0`)
   failed silently: the store keys packages by slug, and the install handed
