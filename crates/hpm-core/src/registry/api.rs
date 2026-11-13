@@ -54,6 +54,7 @@ impl ApiRegistry {
         token: Option<&str>,
     ) -> Result<Self, RegistryError> {
         let base_url = base_url.into();
+        crate::http::check_transport(&base_url).map_err(RegistryError::ParseError)?;
         let mut builder = crate::http::client_builder(std::time::Duration::from_secs(30));
 
         if let Some(token) = token {
@@ -375,5 +376,19 @@ mod tests {
         // Unknown platform string + no universal + no match => None.
         let builds = vec![build_with(Some("plan9-amd64"), "plan9.zip")];
         assert!(select_build(&builds, Some(Platform::LinuxX86_64)).is_none());
+    }
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+
+    /// An API registry off this machine must be https: its answers carry the
+    /// download URLs and checksums every install trusts.
+    #[test]
+    fn plain_http_api_registries_off_this_machine_are_refused() {
+        assert!(ApiRegistry::new("r", "http://registry.example.invalid/v1/registry").is_err());
+        assert!(ApiRegistry::new("r", "https://registry.example.invalid/v1/registry").is_ok());
+        assert!(ApiRegistry::new("r", "http://127.0.0.1:9").is_ok());
     }
 }

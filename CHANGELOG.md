@@ -71,8 +71,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   origins of the registries configured for the user. A project that declared
   its own registry, or any plain-http registry, received the token.
 
+- hpm fetches registry answers and package archives only over https, or
+  plain http to this machine (`localhost`, `127.0.0.0/8`, `::1`); redirects
+  follow the same rule and never step down from https to http. Plain http
+  to another host let anyone on the path replace what was installed.
+
 ### Changed
 
+- Upgrade note: API registries, registry download URLs and URL
+  dependencies on plain http to another host are refused; serve them over
+  https.
 - `ApiRegistry::with_auth_token` refuses a token for a registry that is not
   https.
 - Upgrade note: a project whose `.hpm` or `.hpm/packages` directory is a
