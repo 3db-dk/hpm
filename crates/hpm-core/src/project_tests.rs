@@ -1819,6 +1819,68 @@ mod lock_building {
         )
     }
 
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
+        /// `--frozen-lockfile`'s check: a lock built from a sync is current
+        /// for that sync, through a save and load too, and stops being
+        /// current when any dependency version, the dependency set, a
+        /// Python requirement or the project's version changes.
+        #[test]
+        fn a_lock_is_current_exactly_for_the_sync_it_records(
+            deps in proptest::collection::btree_map("acme/[a-z]{1,6}", (0u8..5, 0u8..5), 1..6),
+            python in proptest::collection::btree_map("[a-z]{1,6}", "(>=|==)1\\.[0-9]", 0..4),
+            which in proptest::prelude::any::<proptest::sample::Index>(),
+        ) {
+            let temp = TempDir::new().unwrap();
+            let manifest_text = |version: &str, python: &std::collections::BTreeMap<String, String>| {
+                let mut text = format!(
+                    "[package]\npath = \"studio/proj\"\nname = \"proj\"\nversion = \"{version}\"\n\n[python_dependencies]\n"
+                );
+                for (name, req) in python {
+                    text += &format!("{name} = \"{req}\"\n");
+                }
+                text
+            };
+            let manifest = hpm_package::parse_manifest_str(&manifest_text("0.1.0", &python)).unwrap();
+            let outcomes: Vec<_> = deps
+                .iter()
+                .map(|(name, (major, minor))| {
+                    let version = format!("{major}.{minor}.0");
+                    let source = LockedSource::url(format!("https://r/{name}.zip"), version.clone());
+                    outcome(name, &version, Some("aa"), Some(source))
+                })
+                .collect();
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let lock = rt.block_on(manager(&temp).lock_file(&manifest, &outcomes, None)).unwrap();
+            proptest::prop_assert!(ProjectManager::lock_is_current(&manifest, &outcomes, &lock));
+            let saved = temp.path().join("hpm.lock");
+            lock.save(&saved).unwrap();
+            let loaded = LockFile::load(&saved).unwrap();
+            proptest::prop_assert!(ProjectManager::lock_is_current(&manifest, &outcomes, &loaded));
+
+            let i = which.index(outcomes.len());
+            let mut bumped = outcomes.clone();
+            bumped[i].1.package.version = "9.9.9".to_string();
+            proptest::prop_assert!(!ProjectManager::lock_is_current(&manifest, &bumped, &lock));
+            let mut fewer = outcomes.clone();
+            fewer.remove(i);
+            proptest::prop_assert!(!ProjectManager::lock_is_current(&manifest, &fewer, &lock));
+            let mut more_python = python.clone();
+            more_python.insert("new0".to_string(), ">=1.0".to_string());
+            let more = hpm_package::parse_manifest_str(&manifest_text("0.1.0", &more_python)).unwrap();
+            proptest::prop_assert!(!ProjectManager::lock_is_current(&more, &outcomes, &lock));
+            if let Some(dropped) = python.keys().next() {
+                let mut fewer_python = python.clone();
+                fewer_python.remove(dropped);
+                let fewer = hpm_package::parse_manifest_str(&manifest_text("0.1.0", &fewer_python)).unwrap();
+                proptest::prop_assert!(!ProjectManager::lock_is_current(&fewer, &outcomes, &lock));
+            }
+            let other_version = hpm_package::parse_manifest_str(&manifest_text("0.2.0", &python)).unwrap();
+            proptest::prop_assert!(!ProjectManager::lock_is_current(&other_version, &outcomes, &lock));
+        }
+    }
+
     fn project() -> hpm_package::PackageManifest {
         hpm_package::parse_manifest_str(
             "[package]\npath = \"studio/proj\"\nname = \"proj\"\nversion = \"0.1.0\"\n\n\
