@@ -1,0 +1,15 @@
+# Reviewed gitleaks findings in history (git history is never rewritten).
+# Each is a false positive; the reason is above its fingerprint.
+
+# docs/security.md named the PKCS#8 PEM header in prose (no key material).
+1e1f0d78deac71dcfa0f455bad03474a0d17d2cf:docs/security.md:private-key:86
+a5327801ebf70fe6113bd12a347205d0dc602783:docs/security.md:private-key:236
+
+# A hand-typed placeholder token in an example, in a since-deleted doc.
+be8882a03c7e9119d1c038400a988e2be682bf67:docs/registry-architecture.md:generic-api-key:218
+
+# Test fixtures: fake PEM armor around non-key text, for the pack-time
+# private-key refusal tests. The tests now assemble the armor at run time.
+4da0db27137453c1369c67e618c769c264ff2b7d:crates/hpm-core/src/packer/tests.rs:private-key:1070
+e5c6db68a9e6eed18532a7e2b38bdd1386b8bba2:crates/hpm-core/src/packer/tests.rs:private-key:1135
+e5c6db68a9e6eed18532a7e2b38bdd1386b8bba2:crates/hpm-core/src/packer/tests.rs:private-key:1137
