@@ -584,6 +584,78 @@ mod tests {
         }
     }
 
+    /// Build a tar.gz whose entry names are written verbatim into the
+    /// header, so the test controls exactly what an archive carries.
+    fn build_raw_tar_gz(entries: &[(&[u8], &[u8])]) -> Vec<u8> {
+        let gz = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar = tar::Builder::new(gz);
+        for (name, contents) in entries {
+            let mut header = tar::Header::new_old();
+            header.as_old_mut().name[..name.len()].copy_from_slice(name);
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append(&header, *contents).unwrap();
+        }
+        tar.into_inner().unwrap().finish().unwrap()
+    }
+
+    /// Archives made with `tar -czf pkg.tgz -C dir .` prefix every member
+    /// with `./`, and real packages carry nested directories, spaces,
+    /// non-ASCII names and dots inside names; all of them extract.
+    #[test]
+    fn test_extract_tar_gz_keeps_legitimate_names() {
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("pkg.tar.gz");
+        let out = temp.path().join("out");
+        let bytes = build_raw_tar_gz(&[
+            (b"./hpm.toml", b"[package]"),
+            (b"./otls/My Tool.hda", b"hda"),
+            ("./docs/\u{e6}bler\u{f8}d.md".as_bytes(), b"doc"),
+            (b"./docs/report..pdf", b"pdf"),
+            (b"./a..b/c.txt", b"c"),
+            (b"./python/pkg/deep/mod.py", b"py"),
+        ]);
+        std::fs::write(&archive_path, &bytes).unwrap();
+        extract_archive_sync(&archive_path, &out).unwrap();
+        for rel in [
+            "hpm.toml",
+            "otls/My Tool.hda",
+            "docs/\u{e6}bler\u{f8}d.md",
+            "docs/report..pdf",
+            "a..b/c.txt",
+            "python/pkg/deep/mod.py",
+        ] {
+            assert!(out.join(rel).is_file(), "{rel} missing");
+        }
+    }
+
+    /// The same legitimate names through the zip extractor.
+    #[test]
+    fn test_extract_zip_keeps_legitimate_names() {
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("pkg.zip");
+        let out = temp.path().join("out");
+        let bytes = build_test_zip(&[
+            ("hpm.toml", b"[package]"),
+            ("otls/My Tool.hda", b"hda"),
+            ("docs/\u{e6}bler\u{f8}d.md", b"doc"),
+            ("docs/report..pdf", b"pdf"),
+            ("a..b/c.txt", b"c"),
+        ]);
+        std::fs::write(&archive_path, &bytes).unwrap();
+        extract_archive_sync(&archive_path, &out).unwrap();
+        for rel in [
+            "hpm.toml",
+            "otls/My Tool.hda",
+            "docs/\u{e6}bler\u{f8}d.md",
+            "docs/report..pdf",
+            "a..b/c.txt",
+        ] {
+            assert!(out.join(rel).is_file(), "{rel} missing");
+        }
+    }
+
     #[test]
     fn test_find_common_root_prefix_no_shared_root() {
         let names = vec!["a/x".to_string(), "b/y".to_string()];
