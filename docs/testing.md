@@ -87,19 +87,18 @@ rather than reaching for a round-trip.
 
 ### Property test distribution
 
-Property tests are concentrated in the crates with the most value-shaped
-logic: manifest parsing, Python version handling, storage types. Exact
-counts shift over time — run
-`grep -rh "fn prop_" crates/*/src crates/*/tests | wc -l` for the
-current number (the manifest strategies live in
-`crates/hpm-package/tests/properties.rs` and the CLI strategies in
-`crates/hpm-cli/tests/cli_validation.rs`).
+Property tests sit wherever a rule can be stated over generated inputs.
+Exact counts shift over time — `grep -rc "proptest!" crates/*/src
+crates/*/tests` lists the files that hold them (one `proptest!` block may
+hold several properties, and not every property is named `prop_*`).
 
 | Crate | Focus |
 |-------|-------|
-| `hpm-cli` | Argument parsing, output format round-trips (in `tests/cli_validation.rs`). |
-| `hpm-core` | Storage types, package specs, lockfile round-trips, env merge contracts, the Houdini env emission model (`houdini_emission_model_tests.rs`), and the executable-bit repair (`exec_mode.rs` — the one place hpm changes permissions on a user's installed files, so its invariants are pinned rather than sampled by example). The `python` submodule covers Python versions, dependency resolution, content hashing. |
-| `hpm-package` | Manifest validation, TOML round-trips, native configs (in `tests/properties.rs`). |
+| `hpm-cli` | Every global flag parses on either side of every subcommand, and refused argument values (`tests/cli_flags.rs`); `name@version` parsing in `add`. |
+| `hpm-core` | Store layout and staging, the cleanup plan (dry run equals real run), dev copies living exactly as long as a project or process uses them, including under concurrent syncs and late background reclaims (`project_tests.rs`, `storage/dev_users.rs`), lockfile round-trips and `lock_is_current`, the lockfile tree digest (`tree_hash.rs`), version resolution and the solver (`registry/`), pack descriptors and archive names (`packer/`), the size check against the pack image (`check.rs`), project discovery and ignore patterns (`discovery.rs`), the Houdini env emission model (`houdini_emission_model_tests.rs`), the executable-bit repair (`exec_mode.rs`, the one place hpm changes permissions on a user's installed files), install records, archive extraction, and the `python` submodule's versions and content hashes. |
+| `hpm-package` | Manifest validation and TOML round-trips (`tests/properties.rs`), Houdini range matching against an independent model (`tests/houdini_range_matches.rs`), dependency specs, `name@version` splitting. |
+| `hpm-config` | Config overlays round-trip through TOML and write only the fields that are set (`tests/overlay_properties.rs`). |
+| `hpm-assets` | Asset index serialization. |
 
 ## Running tests
 
@@ -283,12 +282,18 @@ These are source-of-truth regression tests — commit them alongside the fix.
 
 ```
 crates/hpm-core/proptest-regressions/
-├── houdini_emission_model_tests.txt   # Each line is a minimized failing input.
-├── project.txt
-└── storage/types.txt
+├── check.txt          # Each line is a minimized failing input.
+├── discovery.txt
+├── packer/package.txt
+├── project_tests.txt
+├── storage_tests.txt
+└── tree_hash.txt
 ```
 
-`hpm-core` is currently the only crate with recorded regressions.
+`hpm-config` and `hpm-package` keep theirs beside the test file
+(`tests/*.proptest-regressions`). A seed recorded while checking that a
+property catches a deliberately planted bug is worth committing too: it is
+the smallest input that exposes that bug, and proptest replays it first.
 
 Never delete these by hand unless you're *certain* the bug class is gone and
 the input is no longer meaningful.
