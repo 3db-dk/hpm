@@ -1059,3 +1059,36 @@ fn place_rule_targets_cannot_leave_the_image() {
         assert!(packed.is_err(), "hpm pack accepted to = {to:?}");
     }
 }
+
+/// Files that merely mention keys, and public keys, are ordinary content.
+#[test]
+fn public_keys_and_docs_about_keys_pack() {
+    let dir = TempDir::new().unwrap();
+    create_test_package(dir.path());
+    fs::write(
+        dir.path().join("SIGNING.md"),
+        "Generate a key with openssl; it starts with -----BEGIN PRIVATE KEY-----.\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("release.pub"),
+        "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA\n-----END PUBLIC KEY-----\n",
+    )
+    .unwrap();
+    let out = TempDir::new().unwrap();
+    let result = pack(
+        dir.path(),
+        "test-pkg",
+        "1.0.0",
+        out.path(),
+        None,
+        None,
+        &hpm_package::manifest::StageConfig::default(),
+        ArchiveLayout::default(),
+    )
+    .unwrap();
+    let file = fs::File::open(&result.archive_path).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    assert!(zip.by_name("SIGNING.md").is_ok());
+    assert!(zip.by_name("release.pub").is_ok());
+}
