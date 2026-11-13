@@ -43,8 +43,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names a different package or version than was asked for, or carries a
   version that is not semver, is refused.
 
+- A downloaded package must declare, in its own `hpm.toml`, the package and
+  version it was requested as. An archive claiming another package's
+  identity was stored in that package's slot and served to every project on
+  the machine that later asked for it.
+
 ### Changed
 
+- Upgrade note: a URL dependency whose key or `version` differs from the
+  package path and version in the archive's `hpm.toml` now fails to install
+  (a bare-slug key still matches the slug).
+- API: `StorageManager::install_into_cas` takes the requested name and
+  version and refuses a package that declares a different identity.
 - Upgrade note: a URL dependency's `version` must be a semantic version.
 - API: `StorageManager::get_package_path`, `storage::layout::cas_dir`,
   `download_key`, and `StoreLayout::{cas_dir, dev_container, staging_dir}`

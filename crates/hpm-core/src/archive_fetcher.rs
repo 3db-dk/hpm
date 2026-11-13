@@ -143,14 +143,17 @@ impl ArchiveFetcher {
         E: From<FetchError> + From<crate::storage::StorageError>,
     {
         let fetched = self.fetch(source, package_name).await?;
-        let installed = storage.install_into_cas(&fetched.package_path).await?;
+        let installed = storage
+            .install_into_cas(&fetched.package_path, package_name, &source.version)
+            .await;
+        // The staging copy goes whether or not the install was accepted.
         if let Err(e) = tokio::fs::remove_dir_all(&fetched.package_path).await {
             warn!(
-                "Installed {} but could not remove its staging copy at {:?}: {}",
+                "Could not remove the staging copy of {} at {:?}: {}",
                 package_name, fetched.package_path, e
             );
         }
-        Ok((installed, fetched.checksum))
+        Ok((installed?, fetched.checksum))
     }
 
     /// Fetch a package archive — download into the archive cache (keyed by
@@ -496,6 +499,44 @@ mod tests {
             let installed = result.unwrap_or_else(|e| panic!("{dep}@{version}: {e:?}"));
             assert_eq!(installed.version, declared_version);
             assert_eq!(installed.manifest.package.path.as_str(), declared);
+        }
+    }
+
+    /// An archive that declares a different package or version than the one
+    /// requested never lands in the store: it would otherwise occupy that
+    /// other package's slot for every project on the machine.
+    #[tokio::test]
+    async fn an_archive_claiming_another_identity_is_refused() {
+        for (dep, version, declared, declared_version) in [
+            ("evil/helper", "1.0.0", "acme/tools", "1.0.0"),
+            ("evil/helper", "1.0.0", "evil/tools", "1.0.0"),
+            ("acme/tools", "1.0.0", "acme/tools", "1.2.0"),
+            ("acme/tools", "1.0.0", "acme/tools", "1.0.0-rc.1"),
+            ("acme/tools", "1.0.0", "other/tools", "1.0.0"),
+            ("helper", "1.0.0", "acme/tools", "1.0.0"),
+        ] {
+            let (result, temp) = fetch_declared(dep, version, declared, declared_version).await;
+            assert!(
+                result.is_err(),
+                "{dep}@{version} installed an archive declaring {declared}@{declared_version}"
+            );
+            let packages = temp.path().join("packages");
+            let slots: Vec<_> = std::fs::read_dir(&packages)
+                .map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name()).collect())
+                .unwrap_or_default();
+            assert!(
+                slots
+                    .iter()
+                    .all(|n| n.to_string_lossy().starts_with('.') || n.to_string_lossy() == "_dev"),
+                "{dep}@{version}: store slots {slots:?}"
+            );
+            assert_eq!(
+                std::fs::read_dir(temp.path().join("fetch"))
+                    .map(|d| d.count())
+                    .unwrap_or(0),
+                0,
+                "{dep}@{version}: staging left behind"
+            );
         }
     }
 

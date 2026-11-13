@@ -2077,7 +2077,7 @@ mod package_env_not_ready {
         .unwrap();
         let installed = manager
             .storage_manager
-            .install_into_cas(&source)
+            .install_into_cas(&source, "acme/tools", "1.0.0")
             .await
             .unwrap();
         let mut lock = crate::lock::LockFile::new("proj".into(), "0.1.0".into());

@@ -357,7 +357,9 @@ async fn install_into_cas_without_manifest_fails() {
     let source_dir = temp_dir.path().join("source-pkg");
     std::fs::create_dir_all(&source_dir).unwrap();
 
-    let result = storage_manager.install_into_cas(&source_dir).await;
+    let result = storage_manager
+        .install_into_cas(&source_dir, "creator/foo", "1.0.0")
+        .await;
     assert!(result.is_err());
     match result {
         Err(StorageError::Manifest(ManifestLoadError::NotFound { path })) => {
@@ -501,7 +503,10 @@ async fn list_installed_skips_dev_subtree() {
     // Independent registry-style install of bar@2.0.0
     let reg_source = temp_dir.path().join("reg-source");
     write_source_package(&reg_source, "creator/bar", "2.0.0", "registry");
-    storage_manager.install_into_cas(&reg_source).await.unwrap();
+    storage_manager
+        .install_into_cas(&reg_source, "creator/bar", "2.0.0")
+        .await
+        .unwrap();
 
     let listed = storage_manager.list_installed().unwrap();
     let names: Vec<&str> = listed.iter().map(|p| p.manifest.package.slug()).collect();
@@ -540,7 +545,10 @@ async fn dev_and_registry_installs_coexist_at_same_coordinate() {
 
     let reg_source = temp_dir.path().join("reg-source");
     write_source_package(&reg_source, "creator/foo", "1.0.0", "registry-content");
-    storage_manager.install_into_cas(&reg_source).await.unwrap();
+    storage_manager
+        .install_into_cas(&reg_source, "creator/foo", "1.0.0")
+        .await
+        .unwrap();
 
     let dev_marker = dev_installed.install_path.join("MARKER");
     let reg_marker = temp_dir
@@ -832,7 +840,10 @@ async fn dev_link_and_registry_installs_coexist_at_same_coordinate() {
 
     let reg_source = temp_dir.path().join("reg-source");
     write_source_package(&reg_source, "creator/foo", "1.0.0", "registry-content");
-    storage_manager.install_into_cas(&reg_source).await.unwrap();
+    storage_manager
+        .install_into_cas(&reg_source, "creator/foo", "1.0.0")
+        .await
+        .unwrap();
 
     let link_marker = temp_dir
         .path()
@@ -1541,7 +1552,10 @@ async fn store_installs_carry_an_install_record_through_their_lifecycle() {
 
     let source = temp.path().join("reg-source");
     write_source_package(&source, "creator/bar", "2.0.0", "registry");
-    let installed = storage.install_into_cas(&source).await.unwrap();
+    let installed = storage
+        .install_into_cas(&source, "creator/bar", "2.0.0")
+        .await
+        .unwrap();
     let record = record_path(&installed.install_path).unwrap();
     assert!(record.is_file(), "a store install writes its record");
     assert_eq!(record.parent(), installed.install_path.parent());
@@ -1572,7 +1586,10 @@ async fn store_installs_carry_an_install_record_through_their_lifecycle() {
 
     // An install never replaces a committed copy (a running Houdini may
     // have it loaded): it keeps the existing one, damage and all.
-    let kept = storage.install_into_cas(&source).await.unwrap();
+    let kept = storage
+        .install_into_cas(&source, "creator/bar", "2.0.0")
+        .await
+        .unwrap();
     assert_eq!(kept.install_path, installed.install_path);
     let Verification::Checked(report) = storage.verify_installed(&kept).unwrap() else {
         panic!("still recorded");
@@ -1588,7 +1605,10 @@ async fn store_installs_carry_an_install_record_through_their_lifecycle() {
     let aside = temp.path().join("aside");
     std::fs::rename(&installed.install_path, &aside).unwrap();
     std::fs::rename(&record, temp.path().join("aside.files.json")).unwrap();
-    let reinstalled = storage.install_into_cas(&source).await.unwrap();
+    let reinstalled = storage
+        .install_into_cas(&source, "creator/bar", "2.0.0")
+        .await
+        .unwrap();
     let Verification::Checked(report) = storage.verify_installed(&reinstalled).unwrap() else {
         panic!("a reinstall is recorded");
     };
@@ -1643,7 +1663,7 @@ mod store_layout {
                 format!("[package]\npath = \"{creator}/{slug}\"\nname = \"x\"\nversion = \"{version}\"\n"),
             )
             .unwrap();
-            let installed = rt.block_on(storage.install_into_cas(&source)).unwrap();
+            let installed = rt.block_on(storage.install_into_cas(&source, &format!("{creator}/{slug}"), &version)).unwrap();
 
             prop_assert_eq!(&storage.get_package_path(&slug, &version).unwrap(), &installed.install_path);
             prop_assert!(storage.package_exists(&slug, &version));
@@ -2060,7 +2080,10 @@ async fn reinstalling_over_a_copy_whose_manifest_no_longer_parses_names_the_mani
     let storage = test_storage(&temp);
     let source = temp.path().join("reg-source");
     write_source_package(&source, "creator/bar", "2.0.0", "registry");
-    let installed = storage.install_into_cas(&source).await.unwrap();
+    let installed = storage
+        .install_into_cas(&source, "creator/bar", "2.0.0")
+        .await
+        .unwrap();
 
     let manifest = installed.install_path.join("hpm.toml");
     let mut perms = std::fs::metadata(&manifest).unwrap().permissions();
@@ -2074,7 +2097,10 @@ async fn reinstalling_over_a_copy_whose_manifest_no_longer_parses_names_the_mani
     )
     .unwrap();
 
-    let err = storage.install_into_cas(&source).await.unwrap_err();
+    let err = storage
+        .install_into_cas(&source, "creator/bar", "2.0.0")
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, StorageError::Manifest(_)),
         "expected the manifest error, got {err}"
@@ -2091,11 +2117,17 @@ async fn a_second_creators_package_with_the_same_slug_is_refused() {
     let storage = test_storage(&temp);
     let first = temp.path().join("first");
     write_source_package(&first, "acme/bar", "2.0.0", "acme");
-    let installed = storage.install_into_cas(&first).await.unwrap();
+    let installed = storage
+        .install_into_cas(&first, "acme/bar", "2.0.0")
+        .await
+        .unwrap();
 
     let second = temp.path().join("second");
     write_source_package(&second, "other/bar", "2.0.0", "other");
-    let err = storage.install_into_cas(&second).await.unwrap_err();
+    let err = storage
+        .install_into_cas(&second, "other/bar", "2.0.0")
+        .await
+        .unwrap_err();
     let text = err.to_string();
     assert!(
         matches!(err, StorageError::SlugCollision { .. }),

@@ -186,7 +186,10 @@ description = "test"
             "[package]\npath = \"acme/tools\"\nname = \"Tools\"\nversion = \"1.0.0\"\n",
         )
         .unwrap();
-        storage.install_into_cas(&source).await.unwrap();
+        storage
+            .install_into_cas(&source, "acme/tools", "1.0.0")
+            .await
+            .unwrap();
 
         let manifest = fetch_manifest("acme/tools", "1.0.0", &RegistrySet::new(), &storage)
             .await
