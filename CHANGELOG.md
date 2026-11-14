@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.2] - 2026-11-14
+
 ### Fixed
 
 - `[stage]` place rules: `to = ""` and a `to` ending in `/.` now name a
