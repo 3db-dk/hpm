@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `[stage]` place rules: `to = ""` and a `to` ending in `/.` now name a
+  directory, so each file keeps its name under it. Before, `to = ""` put
+  matched files at the image root itself (a nameless zip entry in
+  `hpm pack`, a failed copy in `hpm build`) and `lib/.` became a file
+  named `lib`.
+- Two files placed at the same archive path now fail `hpm pack`,
+  `hpm build` and dev installs with an error naming both files. `hpm pack`
+  used to stop on a duplicate zip entry, and `hpm build` and dev copies
+  silently kept whichever file came last.
+
 ## [0.40.1] - 2026-11-13
 
 ### Fixed

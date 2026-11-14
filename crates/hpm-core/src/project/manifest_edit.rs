@@ -264,4 +264,118 @@ existing = "1.2.3" # keep me
         assert!(!content.contains("existing = "));
         assert!(content.contains("comment must survive edits"));
     }
+
+    mod properties {
+        use super::*;
+        use proptest::prelude::*;
+        use std::collections::BTreeMap;
+
+        #[derive(Debug, Clone)]
+        enum Edit {
+            Upsert(String, DependencySpec),
+            Remove(String),
+        }
+
+        /// Names that collide with each other and with `existing`, including
+        /// ones TOML must quote as keys.
+        fn name() -> impl Strategy<Value = String> {
+            prop::sample::select(vec![
+                "existing",
+                "acme/tools",
+                "acme/tools-2",
+                "dev-pkg",
+                "a.b",
+            ])
+            .prop_map(str::to_string)
+        }
+
+        /// Strings TOML has to escape, next to ordinary values.
+        fn text(plain: &'static [&'static str]) -> impl Strategy<Value = String> {
+            prop_oneof![
+                3 => prop::sample::select(plain).prop_map(str::to_string),
+                1 => prop::sample::select(vec!["with space", "quo\"te", "back\\slash", "uni\u{e6}"])
+                    .prop_map(str::to_string),
+            ]
+        }
+
+        fn spec() -> impl Strategy<Value = DependencySpec> {
+            let version = || text(&["1.2.3", "^2.0", ">=1.0, <2.0", "*"]);
+            prop_oneof![
+                (
+                    version(),
+                    prop::option::of(text(&["tumbletrove", "studio-git"])),
+                    any::<bool>()
+                )
+                    .prop_map(|(version, registry, optional)| {
+                        DependencySpec::Registry {
+                            version,
+                            registry,
+                            optional,
+                        }
+                    }),
+                // Loading requires a url dependency's version to be semver.
+                (
+                    text(&["https://example.com/p.zip"]),
+                    prop::sample::select(vec!["1.2.3", "0.1.0-beta.1"]).prop_map(str::to_string),
+                    any::<bool>(),
+                )
+                    .prop_map(|(url, version, optional)| DependencySpec::Url {
+                        url,
+                        version,
+                        optional
+                    }),
+                (text(&["../dev", "pkgs/tool"]), any::<bool>(), any::<bool>()).prop_map(
+                    |(path, optional, link)| DependencySpec::Path {
+                        path,
+                        optional,
+                        link
+                    }
+                ),
+            ]
+        }
+
+        fn edit() -> impl Strategy<Value = Edit> {
+            prop_oneof![
+                3 => (name(), spec()).prop_map(|(n, s)| Edit::Upsert(n, s)),
+                1 => name().prop_map(Edit::Remove),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(128))]
+
+            /// Any run of `hpm add` / `hpm remove` edits leaves a manifest
+            /// whose `[dependencies]` load back as exactly the specs
+            /// written, with each call reporting whether the name was
+            /// there, and the user's comments intact. Pins the hand-written
+            /// `dependency_item` to the serde shape it mirrors.
+            #[test]
+            fn edits_load_back_as_written(edits in prop::collection::vec(edit(), 1..8)) {
+                let dir = TempDir::new().unwrap();
+                let path = write_manifest(&dir);
+                let mut model: BTreeMap<String, DependencySpec> =
+                    [("existing".to_string(), DependencySpec::registry("1.2.3", None))].into();
+
+                for edit in &edits {
+                    match edit {
+                        Edit::Upsert(name, spec) => {
+                            let replaced = upsert_dependency(&path, name, spec).unwrap();
+                            prop_assert_eq!(replaced, model.insert(name.clone(), spec.clone()).is_some());
+                        }
+                        Edit::Remove(name) => {
+                            let removed = remove_dependency(&path, name).unwrap();
+                            prop_assert_eq!(removed, model.remove(name).is_some());
+                        }
+                    }
+                    let reloaded = hpm_package::PackageManifest::from_path(&path).unwrap();
+                    let loaded: BTreeMap<String, DependencySpec> =
+                        reloaded.dependencies.into_iter().collect();
+                    prop_assert_eq!(&loaded, &model, "after {:?}", edit);
+                }
+                let content = std::fs::read_to_string(&path).unwrap();
+                prop_assert!(content.contains("comment must survive edits"));
+                prop_assert!(content.contains("# inline comment"));
+            }
+        }
+    }
 }

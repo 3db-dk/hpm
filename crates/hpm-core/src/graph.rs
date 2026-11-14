@@ -567,4 +567,116 @@ mod tests {
 
         assert_eq!(graph.node_count(), 0);
     }
+
+    mod properties {
+        use super::*;
+        use proptest::prelude::*;
+        use std::collections::BTreeSet;
+
+        const N: usize = 6;
+
+        fn id(i: usize) -> PackageId {
+            // Two versions of one name, so ids differ only by version too.
+            PackageId::new(format!("pkg{}", i / 2), format!("1.{}.0", i % 2))
+        }
+
+        /// Nodes `0..present` exist; edges and roots may name absent ones,
+        /// which the graph skips.
+        fn build(present: usize, edges: &[(usize, usize)]) -> DependencyGraph {
+            let mut graph = DependencyGraph::new();
+            for i in 0..present {
+                graph.add_node(make_node(&id(i).name, &id(i).version, false));
+                // Adding again is a no-op.
+                graph.add_node(make_node(&id(i).name, &id(i).version, true));
+            }
+            for &(a, b) in edges {
+                graph.add_dependency(&id(a), &id(b));
+            }
+            graph
+        }
+
+        /// Edges between present nodes, as the model sees them.
+        fn live(present: usize, edges: &[(usize, usize)]) -> BTreeSet<(usize, usize)> {
+            edges
+                .iter()
+                .copied()
+                .filter(|&(a, b)| a < present && b < present)
+                .collect()
+        }
+
+        /// The fixed point: roots that exist, plus anything a reached node
+        /// depends on.
+        fn closure(
+            present: usize,
+            edges: &BTreeSet<(usize, usize)>,
+            roots: &[usize],
+        ) -> BTreeSet<usize> {
+            let mut reached: BTreeSet<usize> =
+                roots.iter().copied().filter(|&r| r < present).collect();
+            loop {
+                let next: BTreeSet<usize> = edges
+                    .iter()
+                    .filter(|(a, _)| reached.contains(a))
+                    .map(|&(_, b)| b)
+                    .chain(reached.iter().copied())
+                    .collect();
+                if next == reached {
+                    return reached;
+                }
+                reached = next;
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(512))]
+
+            /// `hpm clean` keeps exactly what the roots reach: nothing a
+            /// project needs is reported unreachable, and nothing else is
+            /// kept.
+            #[test]
+            fn reachable_is_the_closure_of_the_roots(
+                present in 0..=N,
+                edges in prop::collection::vec((0..N + 1, 0..N + 1), 0..14),
+                roots in prop::collection::vec(0..N + 1, 0..4),
+            ) {
+                let graph = build(present, &edges);
+                prop_assert_eq!(graph.node_count(), present);
+                let root_ids: Vec<PackageId> = roots.iter().map(|&r| id(r)).collect();
+                let got = graph.mark_reachable_from_roots(&root_ids);
+                let want: HashSet<PackageId> =
+                    closure(present, &live(present, &edges), &roots).into_iter().map(id).collect();
+                prop_assert_eq!(got, want);
+            }
+
+            /// A node is reported in a cycle exactly when it reaches itself
+            /// along one or more edges, and each reported cycle is a set of
+            /// nodes that all reach each other.
+            #[test]
+            fn cycles_are_the_nodes_that_reach_themselves(
+                present in 0..=N,
+                edges in prop::collection::vec((0..N, 0..N), 0..14),
+            ) {
+                let graph = build(present, &edges);
+                let live = live(present, &edges);
+                let reaches = |a: usize| -> BTreeSet<usize> {
+                    let direct: Vec<usize> =
+                        live.iter().filter(|(x, _)| *x == a).map(|&(_, b)| b).collect();
+                    closure(present, &live, &direct)
+                };
+                let cycles = graph.has_cycles();
+                let reported: HashSet<PackageId> = cycles.iter().flatten().cloned().collect();
+                let want: HashSet<PackageId> =
+                    (0..present).filter(|&i| reaches(i).contains(&i)).map(id).collect();
+                prop_assert_eq!(&reported, &want);
+                prop_assert_eq!(reported.len(), cycles.iter().map(Vec::len).sum::<usize>());
+                for cycle in &cycles {
+                    let members: BTreeSet<usize> =
+                        (0..present).filter(|&i| cycle.contains(&id(i))).collect();
+                    for &a in &members {
+                        prop_assert!(members.iter().all(|b| reaches(a).contains(b)), "{:?}", cycle);
+                    }
+                }
+            }
+        }
+    }
 }

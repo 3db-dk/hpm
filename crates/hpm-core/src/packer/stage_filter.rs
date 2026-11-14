@@ -59,12 +59,19 @@ impl StageFilter {
                         .map_err(|e| PackError::GlobPattern(e.to_string()))?;
                     if platform == target {
                         let trimmed = rule.to.trim();
-                        let to_is_dir = trimmed.ends_with('/') || trimmed == ".";
                         // The confined form drops `.` components and refuses
                         // a `to` that would leave the install image.
                         let confined = rule
                             .confined_to()
                             .map_err(|e| PackError::PlaceTarget(e.to_string()))?;
+                        // A `to` naming the image root (empty, `.`, `./`) or
+                        // ending in `/` or `/.` is a directory: each file
+                        // keeps its name under it. Read as a literal file
+                        // path, an empty one would put files at the root
+                        // itself and `lib/.` would become a file `lib`.
+                        let to_is_dir = confined.as_os_str().is_empty()
+                            || trimmed.ends_with('/')
+                            || trimmed.ends_with("/.");
                         let to = relative_path_to_forward_slash(&confined);
                         target_rules.push(CompiledPlaceRule {
                             from,
@@ -185,6 +192,8 @@ pub(crate) fn collect_stage_entries(
     skip_prefix: Option<&Path>,
 ) -> Result<Vec<(PathBuf, String)>, PackError> {
     let mut entries: Vec<(PathBuf, String)> = Vec::new();
+    // Archive path -> the workspace path staged there.
+    let mut placed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     // Prune ignored directories instead of descending into them: `.git/`,
     // cargo `target/` and CMake build trees can hold tens of thousands of
     // files, and walking them only to discard every entry turns a dev copy of
@@ -305,12 +314,22 @@ pub(crate) fn collect_stage_entries(
                 Some(p) => p,
                 None => continue,
             },
-            None => rel_str,
+            None => rel_str.clone(),
         };
         // Every writer (`hpm build`, `hpm pack`, dev copies) joins this
         // path under its own root; refuse here what would leave it.
         hpm_package::path_util::confined_relative_path(Path::new(&archive_path))
             .map_err(|e| PackError::PlaceTarget(e.to_string()))?;
+        // Two files placed at one path: `hpm pack` would stop on a duplicate
+        // zip entry, while `hpm build` and dev copies kept whichever was
+        // walked last. Refuse it the same way for all of them.
+        if let Some(earlier) = placed.insert(archive_path.clone(), rel_str) {
+            return Err(PackError::PlaceTarget(format!(
+                "'{}' and '{}' would both be placed at '{}'; give each its own `to`, \
+                 or end `to` with '/' so each keeps its name",
+                earlier, placed[&archive_path], archive_path
+            )));
+        }
         entries.push((path.to_path_buf(), archive_path));
     }
     Ok(entries)

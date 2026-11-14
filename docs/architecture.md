@@ -559,7 +559,8 @@ the manifest's `{ path = "...", link = ? }` spec:
   `[stage.platform.*]` place rules, plus `hpm.toml` always. `.git/`, build
   trees and virtualenvs are never copied. The walk is the packer's
   `collect_stage_entries`, shared with pack and build so the three cannot
-  disagree; it skips ignored directories without descending into them, but
+  disagree (two files placed at one image path are refused by all three);
+  it skips ignored directories without descending into them, but
   only when the ignore files have no `!` rules, because a `!` rule can
   re-include a file under an ignored directory (the nearest matching rule
   wins). Subsequent working-tree edits don't reach the install until the next
