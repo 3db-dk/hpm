@@ -1311,13 +1311,17 @@ platforms you ship under `[compat].platforms`; each per-platform
 `[stage.platform.<plat>]` table must reference a platform listed there.
 
 **Place rules.** Each rule has a `from` glob (workspace-relative) and a
-`to` path (archive-relative). If `to` ends with `/` it's a directory; the
-file's basename is appended. Otherwise `to` is the literal archive path
-(use when relocating a single file under a renamed name). Both `from`
-and `to` use forward slashes regardless of host OS. `to` must stay
-inside the install image: `"./"` or `"."` is its root, and a `to` with a
-`..` component, a leading `/`, a drive, a backslash or a colon fails the
-manifest load.
+`to` path (archive-relative). If `to` ends with `/` or `/.` it's a
+directory; the file's basename is appended. `"./"`, `"."` and `""` name
+the root of the install image, also as a directory. Otherwise `to` is the
+literal archive path (use when relocating a single file under a renamed
+name). Both `from` and `to` use forward slashes regardless of host OS.
+`to` must stay inside the install image: a `to` with a `..` component, a
+leading `/`, a drive, a backslash or a colon fails the manifest load.
+Two files placed at the same archive path, for example two matches of a
+literal `to`, or `build/Release/foo.dll` and `build/Debug/foo.dll` under
+one directory, fail `hpm pack`, `hpm build` and dev installs with an error
+naming both.
 
 **Where to put native binaries.** Place them in Houdini's convention
 folders at the package root — `dso/` for HDK plugins, `apexdso/` for APEX

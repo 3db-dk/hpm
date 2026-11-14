@@ -870,7 +870,7 @@ mod properties {
     use super::super::prop_support::{file_tree, ignore_file, write_tree};
     use super::*;
     use proptest::prelude::*;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     /// The reference walk: visit every file and keep the ones that neither the
     /// file nor any ancestor directory excludes. This is the walk
@@ -917,7 +917,72 @@ mod properties {
 
             prop_assert_eq!(walked, reference_files(dir.path(), &ignore));
         }
+
+        /// Every staged file gets its own non-empty archive path inside the
+        /// image, or the walk refuses with a place-target error naming a
+        /// real collision. `hpm pack`, `hpm build` and dev copies all take
+        /// this list, so a shared or empty path would otherwise be a zip
+        /// error in one, a silently dropped file in another.
+        #[test]
+        fn prop_staged_archive_paths_are_distinct_names(
+            files in file_tree(),
+            rules in proptest::collection::vec(
+                (
+                    proptest::sample::select(PLACE_FROM),
+                    proptest::sample::select(PLACE_TO),
+                ),
+                0..4,
+            ),
+        ) {
+            let dir = TempDir::new().unwrap();
+            write_tree(dir.path(), &files);
+            let ignore = build_ignore_rules(dir.path()).unwrap();
+            let linux = hpm_package::platform::Platform::LinuxX86_64;
+            let filter = StageFilter::new(&linux_place(&rules), Some(&linux)).unwrap();
+
+            // What the filter maps each walked file to, before any refusal.
+            let mut mapped: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for rel in &files {
+                if ignore.matched_path_or_any_parents(rel, false).is_ignore() {
+                    continue;
+                }
+                if let Some(dest) = filter.archive_path_for(rel) {
+                    mapped.entry(dest).or_default().push(rel.clone());
+                }
+            }
+
+            match collect_stage_entries(dir.path(), &ignore, Some(&filter), None) {
+                Ok(entries) => {
+                    let mut seen = BTreeSet::new();
+                    for (source, dest) in &entries {
+                        prop_assert!(!dest.is_empty(), "{:?} staged at the image root itself", source);
+                        let confined =
+                            hpm_package::path_util::confined_relative_path(Path::new(dest)).unwrap();
+                        prop_assert_eq!(
+                            &hpm_package::path_util::relative_path_to_forward_slash(&confined),
+                            dest
+                        );
+                        prop_assert!(seen.insert(dest.clone()), "{} staged twice", dest);
+                    }
+                    prop_assert_eq!(seen.len(), mapped.len());
+                }
+                Err(PackError::PlaceTarget(message)) => {
+                    prop_assert!(
+                        mapped.values().any(|sources| sources.len() > 1),
+                        "refused without a collision: {}", message
+                    );
+                }
+                Err(e) => prop_assert!(false, "unexpected error: {}", e),
+            }
+        }
     }
+
+    /// `from` globs over the [`file_tree`] vocabulary: several match the same
+    /// files, and some match files with equal names in different directories.
+    const PLACE_FROM: &[&str] = &["**/*.so", "build/*", "dso/*", "*.txt", "a/**/f.txt"];
+    /// `to` forms: directories (`/`, `.`, `./`, empty, trailing `/.`) keep
+    /// each file's name; a literal path gives every match the same name.
+    const PLACE_TO: &[&str] = &["", ".", "./", "dso/linux/", "lib/.", "bin/tool", "x/lib.so"];
 }
 
 /// The `key_id` (hex of the first 8 public-key bytes) and the signature go
@@ -977,6 +1042,8 @@ fn place_rule_targets_that_must_keep_working() {
         ),
         ("./", "build/libfoo.so", "libfoo.so"),
         (".", "build/libfoo.so", "libfoo.so"),
+        ("", "build/libfoo.so", "libfoo.so"),
+        ("lib/.", "build/libfoo.so", "lib/libfoo.so"),
         ("bin/tool", "build/tool-linux", "bin/tool"),
         ("a/b/c.so", "build/x.so", "a/b/c.so"),
         ("lib..d/", "build/x.so", "lib..d/x.so"),
