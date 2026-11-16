@@ -22,9 +22,7 @@ hpm-cli         binary; clap dispatch, output formatting, exit codes
 ```
 
 Python tooling (bundled `uv`, content-addressable venvs, Houdini→Python
-mapping) lives in the `hpm_core::python` submodule. It was a separate
-crate through 0.16 but collapsed into `hpm-core` since it had no
-external consumers.
+mapping) lives in the `hpm_core::python` submodule.
 
 Leaves are `hpm-package` and `hpm-assets` — neither depends on anything in
 the workspace, so they can be embedded by external tools without dragging in
@@ -79,12 +77,12 @@ hints.
 | `CompatConfig` | Contents of `[compat]`. `houdini: Option<HoudiniRange>` parses and validates at deserialize time; `houdini_min()` extracts its lower bound for Python ABI selection. `platforms: Vec<Platform>` declares the native platforms this package supports — unknown identifiers fail at TOML parse via `Platform::TryFrom<String>`. Must reference platforms used in `[stage.platform.*]` entries. |
 | `DependencySpec` | Enum: `Registry {..} \| Url {..} \| Path {..}`. The bare-string shorthand `pkg = "1.0.0"` round-trips as `Registry { registry: None, optional: false }`. |
 | `PythonDependencySpec` | Untagged enum: `Simple(String) \| Detailed {..}`. |
-| `ManifestEnvEntry`, `EnvMethod` | `[runtime]` entries (method, optional value, `required` flag) and methods (`set`/`prepend`/`append`). `value` is `Option<EnvValue>` — flat string or ordered variant list. `lower(substitutions, is_dev)` is the single emit path; install-source-gated variants are filtered before lowering. |
+| `ManifestEnvEntry`, `EnvMethod` | `[runtime]` entries (method, optional value, `required` flag) and methods (`set`/`prepend`/`append`). `value` is `Option<EnvValue>` — flat string or ordered variant list. `lower(substitutions, InstallSource)` is the single emit path; install-source-gated variants are filtered before lowering. |
 | `EnvValue`, `EnvValueBranch`, `Condition` | Conditional `[runtime]` value support. Variants compile to Houdini's expression-object array via `compile_condition` / `lower_conditional`. Axes: `houdini` (Cargo-style req), `os`, `python` (all runtime-evaluated by Houdini), plus `install_source` (typed `InstallSource`: `dev` / `registry`, filtered by hpm at install time). `os` is a typed `OsKey`; unknown axis values fail at manifest load. |
 | `PackageScripts` | `[scripts]` table. `commands: IndexMap<String, ScriptEntry>` — one entry per script, with per-host variation expressed inside `ScriptEntry::cmd` via the same `when`-grammar that `[runtime]` uses. |
-| `ScriptEntry`, `ScriptEnv` | Untagged enum: `Plain(String)` for the shorthand form, `WithEnv { cmd: EnvValue, python?, requirements?, label?, description?, package_env }` for the table form. `resolve_cmd(host_os)` picks the matching variant when `cmd` is conditional. Accessors `python()`, `requirements()`, `label()`, `description()`, `needs_venv()`, `uses_package_env()` work on both arms. `package_env` (`package-env` in TOML) opts the script into the project's full resolved environment — see `ProjectManager::resolve_package_env`. `label`/`description` are optional, consumer-agnostic display metadata that HPM itself never acts on. |
+| `ScriptEntry`, `ScriptEnv` | Untagged enum: `Plain(String)` for the shorthand form, `WithEnv { cmd: ScriptCommand, python?, requirements?, label?, description?, package_env }` for the table form. `resolve_cmd(host_os)` picks the matching variant when `cmd` is conditional. Accessors `python()`, `requirements()`, `label()`, `description()`, `needs_venv()`, `uses_package_env()` work on both arms. `package_env` (`package-env` in TOML) opts the script into the project's full resolved environment — see `ProjectManager::resolve_package_env`. `label`/`description` are optional, consumer-agnostic display metadata that HPM itself never acts on. |
 | `StageConfig`, `PlatformStaging`, `StagePlatformRules`, `PlaceRule`, `ProfileStaging`, `StageProfileRules` | `[stage]` table. `output_dir` (default `"dist"`), `prepack` script list, workspace `include` / `exclude` globs, and per-platform `place = [{ from, to }]` rules. `from` is a workspace-relative glob; `to` is either a directory (ends with `/` or `/.`, or names the image root: `""`, `.`, `./`) or a literal archive path; two files placed at one archive path are refused. `[stage.profile.<name>]` tables (`StageProfileRules`) layer per-profile `prepack`/`include`/`exclude`/`place` overrides onto the base; `StageConfig::resolved_for_profile(name)` returns the merged config a build uses. |
-| `Platform` | Canonical platform enum, mirroring the TumbleTrove API: `LinuxX86_64`, `LinuxAarch64`, `MacosX86_64`, `MacosAarch64`, `WindowsX86_64`, `WindowsAarch64`, `Universal`. `os_key()` returns `Option<&str>` (`None` for `Universal`). |
+| `Platform` | Canonical platform enum, mirroring the TumbleTrove API: `LinuxX86_64`, `LinuxAarch64`, `MacosX86_64`, `MacosAarch64`, `WindowsX86_64`, `WindowsAarch64`, `Universal`. `os_key()` returns `Option<OsKey>` (`None` for `Universal`). |
 | `RegistryConfig`, `RegistryType` | `[[registries]]` entries in manifests. |
 | `OperatorDecl`, `OperatorKind`, `OperatorSource`, `SourceResolution` | `[[operators]]` entries — the operators (node types) a package bundles, declared by the author so `hpm pack` can emit a searchable asset index. `kind` (`Hda`/`Dso`), `type_name`, and `category` are required; `label`, `tab_submenu`, `icon`, and `source` are optional. `OperatorSource` is either a single archive path or a per-platform table; `OperatorDecl::resolved_source(platform)` resolves it to a `SourceResolution` (`Path` / `Unspecified` / `NotForPlatform`). |
 | `PackageTemplate` | Scaffolding for `hpm init` (standard and `--bare`). |
@@ -140,7 +138,8 @@ Exit codes used by `hpm-cli`:
 | Code | Meaning |
 |------|---------|
 | 0 | Success. |
-| 1 | Any hpm-originated failure — bad configuration, bad input, missing manifest, network or I/O error. |
+| 1 | Any hpm-originated failure — bad configuration, missing manifest, network or I/O error. |
+| 2 | A usage error, raised by clap before any command runs: an unknown flag, or a value a typed flag refuses. |
 | _N_ | Pass-through exit code from an invoked external tool (`ExitStatus::External`). |
 
 ## Design principles

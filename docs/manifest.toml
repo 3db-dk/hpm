@@ -8,11 +8,103 @@ text = "Overview"
 file = "README.md"
 
 [[pages]]
-text = "Getting Started"
-file = "user-guide.md"
+text = "Install hpm"
+file = "install.md"
 
 [[pages]]
-text = "Python Dependencies"
+text = "Quickstart"
+file = "quickstart.md"
+
+[[pages]]
+text = "Concepts"
+file = "concepts.md"
+
+[[pages]]
+text = "Guide: Create your first package"
+file = "guide-first-package.md"
+
+[[pages]]
+text = "Guide: Develop against a live Houdini"
+file = "guide-live-development.md"
+
+[[pages]]
+text = "Guide: Add Python dependencies"
+file = "guide-python-dependencies.md"
+
+[[pages]]
+text = "Guide: Ship an HDK plugin"
+file = "guide-hdk-plugin.md"
+
+[[pages]]
+text = "Guide: Support several Houdini versions"
+file = "guide-multiple-houdini-versions.md"
+
+[[pages]]
+text = "Guide: Publish a package"
+file = "guide-publishing.md"
+
+[[pages]]
+text = "Guide: Run a studio registry"
+file = "guide-studio-registry.md"
+
+[[pages]]
+text = "Guide: Continuous integration"
+file = "guide-ci.md"
+
+[[pages]]
+text = "Guide: Run package code outside Houdini"
+file = "guide-scripts.md"
+
+[[pages]]
+text = "Guide: Set a project's environment"
+file = "guide-studio-environment.md"
+
+[[pages]]
+text = "Guide: Keep disk usage down"
+file = "guide-housekeeping.md"
+
+[[pages]]
+text = "CLI"
+file = "cli.md"
+
+[[pages]]
+text = "The hpm.toml manifest"
+file = "manifest.md"
+
+[[pages]]
+text = "Configuration"
+file = "configuration.md"
+
+[[pages]]
+text = "The hpm.lock lock file"
+file = "lockfile.md"
+
+[[pages]]
+text = "Files and directories"
+file = "files.md"
+
+[[pages]]
+text = "Environment variables"
+file = "environment-variables.md"
+
+[[pages]]
+text = "Registry formats"
+file = "registry-formats.md"
+
+[[pages]]
+text = "Troubleshooting"
+file = "troubleshooting.md"
+
+[[pages]]
+text = "Upgrade notes"
+file = "upgrading.md"
+
+[[pages]]
+text = "How Houdini loads hpm packages"
+file = "houdini-integration.md"
+
+[[pages]]
+text = "Python environments"
 file = "python-guide.md"
 
 [[pages]]
@@ -24,15 +116,19 @@ text = "Security"
 file = "security.md"
 
 [[pages]]
+text = "Design notes"
+file = "design-notes.md"
+
+[[pages]]
 text = "Architecture"
 file = "architecture.md"
 
 [[pages]]
-text = "API Overview"
+text = "API overview"
 file = "api-overview.md"
 
 [[pages]]
-text = "Testing"
+text = "Testing guide"
 file = "testing.md"
 
 [[pages]]

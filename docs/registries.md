@@ -6,19 +6,10 @@ download URLs, checksums, and dependency lists. HPM supports two flavors:
 - **API registries** speak HTTP and serve JSON from a handful of endpoints.
 - **Git registries** are Cargo-style indexes: a Git repository with one JSON-lines file per package.
 
-This guide covers how to add and manage registries, how HPM resolves through
-them, and how to configure them per-user vs. per-project.
-
-## Table of contents
-
-- [Adding a registry](#adding-a-registry)
-- [Per-user vs per-project](#per-user-vs-per-project)
-- [Targeting a specific registry from a dependency](#targeting-a-specific-registry-from-a-dependency)
-- [Refreshing and removing](#refreshing-and-removing)
-- [Auto-detection of registry type](#auto-detection-of-registry-type)
-- [Searching](#searching)
-- [Multi-platform packages](#multi-platform-packages)
-- [Caching](#caching)
+This page covers how to add and manage registries, how HPM resolves through
+them, and how to configure them per user or per project. To host one, see
+[Run a studio registry](guide-studio-registry.md) and
+[Registry formats](registry-formats.md).
 
 ## Adding a registry
 
@@ -165,7 +156,8 @@ If you don't pass `--type`, `hpm registry add` infers it from the URL:
 | Contains `gitea` | `git` |
 | Anything else | `api` |
 
-Override with `--type api` or `--type git` when the heuristic gets it wrong.
+Override with `--type api` or `--type git` when the heuristic gets it wrong,
+for example for a Git index on a host not named above, or a local path.
 
 ## Searching
 
@@ -214,7 +206,7 @@ archive. A version that has no build for your platform still *lists* — you can
 see it exists, and see its Houdini compatibility — it just won't install here.
 
 Use `--platform` on `hpm pack` to build for a platform other than the host;
-see [the user guide](user-guide.md).
+see [`hpm pack`](cli.md#hpm-pack).
 
 ## Caching
 

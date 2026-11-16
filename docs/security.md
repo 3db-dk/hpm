@@ -3,17 +3,6 @@
 This guide covers HPM's security features, the threat model, package signing,
 and operational best practices.
 
-## Table of contents
-
-- [Integrity and reproducibility](#integrity-and-reproducibility)
-- [Package signing](#package-signing)
-- [`hpm audit`](#hpm-audit)
-- [Transport security](#transport-security)
-- [Storage layout](#storage-layout)
-- [Best practices](#best-practices)
-- [Threat model](#threat-model)
-- [Reporting vulnerabilities](#reporting-vulnerabilities)
-
 ## Integrity and reproducibility
 
 HPM protects against tampering and drift through three layers.
@@ -39,12 +28,12 @@ checksum = "v2:a3f2b8c9..."
 
 [dependencies."studio/utility-nodes".source]
 type = "url"
-url = "https://api.tumbletrove.com/v1/registry/packages/studio/utility-nodes/1.2.0/download"
+url = "https://packages.example.com/utility-nodes-1.2.0.zip"
 version = "1.2.0"
 
 [metadata]
 generated_at = "2026-03-14T10:30:00Z"
-hpm_version = "0.29.2"
+hpm_version = "0.40.2"
 platform = "linux-x86_64"
 ```
 
@@ -65,8 +54,10 @@ tampered packages never silently reach Houdini.
 
 ### Lock file pinning
 
-`hpm.lock` pins exact resolved versions of every HPM and Python dependency.
-Commit it to version control. In CI, use `--frozen-lockfile` to fail the
+`hpm.lock` pins the exact version and a checksum of every registry and URL
+dependency. It does **not** pin Python packages: it records their
+constraints, and `uv` resolves them again on each install (see
+[the lock file reference](lockfile.md)). Commit it to version control. In CI, use `--frozen-lockfile` to fail the
 build if the lock would need to change:
 
 ```sh
@@ -92,8 +83,7 @@ does not block the install.
 
 `hpm pack` can sign the archive it produces with an Ed25519 key.
 
-> **hpm signs, but does not verify.** As of 0.32.0 signing is a
-> *produce-only* feature. `hpm` emits a signature and `keyId`, and the
+> **hpm signs, but does not verify.** Signing is a *produce-only* feature. `hpm` emits a signature and `keyId`, and the
 > registry entry carries `sig`/`kid` fields, but no hpm install path reads
 > or checks them — the only integrity check on download is the SHA-256
 > checksum. Verifying a signature is currently the responsibility of
@@ -154,7 +144,7 @@ pipelines and registry upload tooling:
 
 ```json
 {
-  "archive": "dist/my-tools-1.0.0.zip",
+  "archive": "dist/my-tools-1.0.0-linux-x86_64.zip",
   "sha256": "a3f2b8c9...",
   "signature": "base64-standard-encoded-ed25519-signature",
   "key_id": "7a1c3e5f9b2d4860",
@@ -165,7 +155,7 @@ pipelines and registry upload tooling:
 `signature` and `key_id` are present only when a signing key was supplied.
 `platform` is present only when the manifest declares `[compat].platforms`.
 
-The 0.6.0 wire format described above — PKCS#8 PEM keys, Ed25519 signatures,
+The wire format described above — PKCS#8 PEM keys, Ed25519 signatures,
 standard base64, `key_id` as the first 8 bytes of the public key in hex — is
 pinned by a known-answer test over a fixed key and message. Ed25519 is
 deterministic (RFC 8032), so a signature is reproducible byte for byte, and
@@ -209,10 +199,11 @@ Example output:
 HPM Security Audit
 ========================================
 
-  PASS  All URLs use HTTPS
-  PASS  Lock file exists (hpm.lock)
-  PASS  Lock file is recent
-  PASS  Package checksums verified
+  PASS All URLs use HTTPS
+  PASS Lock file exists (hpm.lock)
+  PASS Lock file is recent
+  PASS Package checksums verified
+  PASS Installed files match their install records
 
 No security issues found.
 ```
@@ -223,50 +214,53 @@ No security issues found.
 - Registry answers and package archives are fetched only over HTTPS, or plain HTTP to this machine (`localhost`, `127.0.0.0/8`, `::1`) for local mirrors. Redirects follow the same rule and never step down from HTTPS to HTTP. Git registries accept `https://`, `ssh://`, `file://`, `git@host:path` or a local path, never `git://` or `http://`, and never a URL or host starting with `-`.
 - TLS and checksums protect different things. A download is checked against the registry's checksum and, when the project has a lockfile entry for that version, against the locked tree checksum. On a first resolve with no lockfile, the checksum arrives from the same registry over the same connection, so it detects corruption, not a compromised registry or a TLS-level attacker; a registry entry without a checksum installs with only a warning. Commit `hpm.lock` so later installs are pinned to bytes you have already seen.
 
-## Storage layout
+## What hpm does to an archive before trusting it
 
-HPM stores everything under `~/.hpm/` on every supported platform:
+A package archive comes from wherever its registry entry or URL points, so
+hpm treats its contents as untrusted input:
 
-| Path | Contents |
-|------|----------|
-| `~/.hpm/config.toml` | Global configuration (including `[[registries]]`, `[signing].key_path`). |
-| `~/.hpm/packages/` | Canonical CAS, keyed by `<slug>@<version>/`. Path-installed packages live under the `_dev/` subtree, never substituted for a registry hit. |
-| `~/.hpm/fetch/` | `ArchiveFetcher` staging. Archives are extracted here before being copied into the canonical CAS. |
-| `~/.hpm/venvs/` | Content-addressable Python venvs, keyed by resolved-set hash. |
-| `~/.hpm/cache/` | Download archive cache. |
-| `~/.hpm/registry/` | Per-registry index caches. |
-| `~/.hpm/uv-cache/` | Isolated `uv` cache — never shared with system `uv`. |
+- **Identity.** The archive's own `hpm.toml` must declare the package and
+  version that were requested. An archive claiming to be another package is
+  refused, so it cannot occupy that package's place in the store.
+- **Confinement.** Every entry is extracted inside the install directory.
+  Names with an absolute path, a drive, a `..` component, a backslash, a
+  colon or a NUL are refused, and symlink entries are skipped.
+- **Permissions.** Extracted files never receive setuid, setgid or sticky
+  bits, or group or world write permission.
+- **Size.** An archive may expand to at most 1,000,000 entries and 256 GiB.
+- **Formats.** Only stored and deflated zip entries, and tar.gz, are
+  decoded.
 
-Per-project:
+Names and versions from manifests, lock files and registries are checked
+before they are used in a path, so none of them can address a location
+outside the store, the cache or the staging directory.
 
-| Path | Contents |
-|------|----------|
-| `<project>/hpm.toml` | Manifest. |
-| `<project>/hpm.lock` | Pinned versions + checksums. Commit this. |
-| `<project>/.hpm/packages/{creator}.{slug}.json` | Per-dependency Houdini manifest. Auto-generated. |
-| `<project>/.hpm/config.toml` | Optional project-level configuration override. |
+Text from registries and manifests is printed with control characters and
+Unicode bidirectional controls removed, so it cannot inject terminal escape
+sequences.
 
-Outside both trees, `hpm global` writes into Houdini's own per-user
-preferences directory:
+## Where hpm writes
 
-| Path | Contents |
-|------|----------|
-| `<houdini-user-prefs>/packages/hpm-{creator}.{slug}.json` | Houdini manifest for a globally installed package. |
-| `~/.hpm/global/houdini-{X.Y}.json` | Ledger of what `hpm global` installed for that Houdini version. |
+hpm writes under `~/.hpm/`, in the project's `hpm.lock` and `.hpm/`, and,
+for `hpm global`, one file per package in Houdini's preferences directory.
+[Files and directories](files.md) lists every path.
 
-This is the only directory hpm writes to that it does not own — it is shared
-with SideFX's own files, other tools, and anything you put there by hand. hpm
-therefore never scans it to decide what to delete: writes are confined to the
-`hpm-` prefixed filename for the package being installed, and deletions are
-confined to the exact filename recorded in the ledger. A global install is
-per-user state and is not captured by `hpm.lock`; prefer project installs for
-anything that has to be reproducible.
+Houdini's `packages/` directory is the only one hpm writes to without
+owning it. It is shared with SideFX's files, other tools, and anything you
+put there by hand. hpm therefore never scans it to decide what to delete:
+writes are confined to the `hpm-` prefixed file for the package being
+installed, and deletions to the exact file recorded in the ledger at
+`~/.hpm/global/houdini-{X.Y}.json`.
 
-The defaults live under `$HOME` on every platform. To relocate them (e.g., a
-shared cache on a fast SSD), override `[storage].home_dir` (or individual
-subdirectories) in `~/.hpm/config.toml`. Pick a path that only your user
-account can write — HPM does not attempt to sandbox itself against local
-privilege escalation on a shared machine.
+A cloned project is untrusted too. Its `.hpm/config.toml` may set only
+`[install]`; it cannot move hpm's home, choose a signing key, or redefine
+your registries. A project whose `.hpm` or `.hpm/packages` is a symlink is
+refused, and a Git registry URL a project declares is validated before it
+reaches `git`.
+
+If you relocate the home with `[storage].home_dir`, pick a path that only
+your user account can write. hpm does not sandbox itself against other
+local users.
 
 ## Best practices
 
@@ -335,7 +329,7 @@ Rotate at studio-appropriate cadence and publish the new `keyId`.
 | Man-in-the-middle | Attacker intercepts a download. | TLS (HTTPS only, no downgrade on redirect). The lockfile's checksum catches substituted bytes for a locked version; a first resolve relies on TLS alone. |
 | Lockfile poisoning | Attacker rewrites `hpm.lock` checksums. | Install verifies packages against the lock, so a rewritten checksum fails against the real bytes; a lock rewritten to match substituted bytes is only caught in review. Review lockfile diffs in code review. |
 | Swapped bytes for a locked version | Registry or mirror serves different bytes for a version the lock pins. | Install fails: fetched and stored copies must match the locked checksum. |
-| Dependency drift | Same project produces different installs over time. | Exact version + checksum pinning; `--frozen-lockfile`. |
+| Dependency drift | Same project produces different installs over time. | Exact version + checksum pinning for Houdini packages; `--frozen-lockfile`. Python packages are not pinned by the lock (see below). |
 | Stale dependencies | Old versions with known CVEs. | 90-day staleness warnings; `hpm update` surfaces newer versions. |
 | Replay of a vulnerable version | Registry serves an older artifact than expected. | Version and tree checksum are pinned in the lockfile; a registry answering for a different version than asked, or with different bytes for a locked version, is refused. Without a lockfile, the registry's answer is taken as given. |
 
@@ -346,6 +340,8 @@ HPM does not protect you against:
 - **Malicious code in a legitimate package.** If the author intends to do harm, HPM will faithfully distribute that harm.
 - **Unknown signer.** An unknown party uploading an archive that claims to be from a creator is *not* something hpm detects. `hpm pack --key` produces an Ed25519 signature and `keyId`, but hpm never verifies them on install — mitigation depends entirely on a verifier your registry or CI runs. See [Package signing](#package-signing).
 - **Compromised upstream sources.** If the registry or Git server itself is compromised, HPM trusts what it serves. Checksums pin the bytes to what the lockfile recorded, but a first-time resolve takes the registry at its word, and there is no signature check to fall back on.
+- **Python packages.** `[python_dependencies]` are resolved by `uv` from the Python package index on each install. `hpm.lock` pins neither their versions nor their hashes, so a new or replaced release on the index can change what is installed. Pin with `==` to fix versions; hpm offers no hash pinning for them.
+- **Scripts.** `hpm run` and `[stage].prepack` execute commands a package's manifest declares, with your permissions. `hpm install` runs none of them.
 - **Zero-day vulnerabilities** in dependencies. Use your organization's security scanning.
 - **Supply-chain attacks at the package author.** Sign your own releases, encourage consumers to verify, and rotate on suspicion.
 - **Local privilege escalation** on shared machines. `~/.hpm/` lives in your home directory; anyone with write access to that directory can tamper. Use per-user home directories.
@@ -363,12 +359,11 @@ Do **not** open a public issue for security problems. Instead:
 3. Allow a reasonable window for a fix before public disclosure.
 
 
-## Security changelog
+## Security releases
 
-| Version | Change |
-|---------|--------|
-| 0.7.0 | Houdini version mapping no longer silently falls back to Python 3.9. Unsupported Houdini majors are now install-time errors, preventing silent ABI mismatches. |
-| 0.6.0 | Package signing wire format: PKCS#8 PEM keys, Ed25519 signatures, standard base64 encoding, `keyId` = first 8 bytes of public key hex. Breaking change from the earlier 32-byte-seed format — regenerate keys with `openssl genpkey`. `HPM_SIGNING_KEY` accepts inline PEM. |
-| 0.5.2 | Generated per-dependency Houdini `hpath` points at the package root, so Houdini auto-discovers convention subdirs instead of loading only HDAs. |
-| 0.3.0 | Per-platform native packages via `[native]` + `hpm pack --platform`. |
-| 0.1.0 | SHA-256 checksum verification, HTTPS warnings, `--frozen-lockfile`, `hpm audit`, lock file staleness detection, project-level env overrides. |
+Use hpm **0.40.1 or newer**. 0.40.0 hardened how hpm treats cloned projects,
+registries and archives (most of the checks on this page), and 0.40.1 fixes
+a Windows regression in it. Security-relevant changes are listed under a
+**Security** heading in the
+[changelog](https://github.com/3db-dk/hpm/blob/main/CHANGELOG.md), and
+[Upgrade notes](upgrading.md) lists what they require of you.

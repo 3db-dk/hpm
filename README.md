@@ -12,6 +12,7 @@ Houdini to pick the packages up on launch.
 
 Download a pre-built binary from the
 [latest release](https://github.com/3db-dk/hpm/releases/latest),
+verify it against the `.sha256` beside it (see [Install hpm](docs/install.md)),
 or build from source (requires Rust 1.89+):
 
 ```sh
@@ -65,7 +66,7 @@ authors = ["Name <name@example.com>"]
 license = "MIT"
 
 [compat]
-houdini = ">=20.5, <22"           # Cargo-style range; see User Guide
+houdini = ">=20.5, <22"           # Cargo-style range; see the manifest reference
 platforms = ["linux-x86_64", "macos-aarch64", "windows-x86_64"]   # omit for pure-data
 
 [dependencies]
@@ -74,7 +75,7 @@ platforms = ["linux-x86_64", "macos-aarch64", "windows-x86_64"]   # omit for pur
 local-tools = { path = "../local-tools" }
 
 [python_dependencies]
-numpy = ">=1.20.0"
+numpy = ">=1.26"
 requests = { version = ">=2.25.0", extras = ["security"] }
 
 [runtime]
@@ -87,7 +88,7 @@ HOUDINI_TOOLBAR_PATH = { method = "prepend", value = "$HPM_PACKAGE_ROOT/toolbar"
 output_dir = "dist"
 prepack = ["build-dso"]            # runs entries from [scripts]
 include = ["python/**", "otls/**", "config/**"]
-exclude = ["src/**", "build/**", "tests/**"]
+exclude = ["src/**", "tests/**"]   # exclude wins over place: do not exclude build outputs
 
 [stage.platform.linux-x86_64]
 place = [{ from = "build/linux/*.so", to = "dso/" }]
@@ -99,7 +100,7 @@ place = [{ from = "build/macos/*.dylib", to = "dso/" }]
 place = [{ from = "build/win/*.dll", to = "dso/" }]
 ```
 
-See the [user guide](docs/user-guide.md) for the full manifest reference.
+See the [manifest reference](docs/manifest.md) for every section and key.
 
 ## Commands
 
@@ -134,7 +135,11 @@ bundled copy of [uv](https://github.com/astral-sh/uv) and installed into
 content-addressable virtual environments under `~/.hpm/venvs/`. Packages
 whose resolved Python dependencies hash to the same set share a single venv.
 
-HPM picks the Python version from the lower bound of `[compat].houdini`:
+Version constraints use pip's syntax (PEP 440): `>=1.26`, `~=1.26`, `==1.26.4`.
+The caret (`^1.26`) and a bare version are not accepted.
+
+HPM picks the Python version from the lower bound of the project's
+`[compat].houdini`:
 
 | Houdini    | Python |
 |-----------:|--------|
@@ -144,13 +149,14 @@ HPM picks the Python version from the lower bound of `[compat].houdini`:
 
 Houdini 19.x (Python 3.7) and 20.0–20.4 (Python 3.9) are unsupported — their
 Python interpreters are past upstream EOL. Unsupported versions produce an
-install-time error rather than a silent fallback (this caught a real Houdini-21
-ABI bug in 0.7.0). See the [Python guide](docs/python-guide.md).
+install-time error rather than a silent fallback. See
+[Add Python dependencies](docs/guide-python-dependencies.md) and
+[Python environments](docs/python-guide.md).
 
 ## How it works
 
 - **Resolution** — `hpm install` selects each package on its own: the highest non-yanked version matching its version requirement. hpm-core's `registry::solve` chooses a whole set at once (each version's Houdini range and its requirements of the other packages), which TumbleTrove Desktop uses; `hpm install` does not yet.
-- **Lock file** — `hpm.lock` pins exact versions, sources, and SHA-256 checksums.
+- **Lock file** — `hpm.lock` pins exact versions, sources, and SHA-256 checksums of Houdini packages. Python packages are resolved by uv on each install and are not pinned by it.
 - **Storage** — `~/.hpm/packages/` for packages, `~/.hpm/venvs/` for Python environments (same layout on Linux, macOS, Windows).
 - **Houdini integration** — `hpm install` writes one `{creator}.{slug}.json` per dependency into `<project>/.hpm/packages/`. Point Houdini's `HOUDINI_PACKAGE_PATH` at that directory, or use `hpm global` to install into Houdini's user preferences so a package loads in every session without a project.
 
@@ -181,7 +187,9 @@ workflow.
 ## Documentation
 
 The full documentation lives in [docs/](docs/) and is published at
-[hpm.readthedocs.io](https://hpm.readthedocs.io/). To build it locally:
+[hpm.readthedocs.io](https://hpm.readthedocs.io/). Start with the
+[quickstart](docs/quickstart.md), the [guides](docs/README.md#guides) or the
+[CLI reference](docs/cli.md). To build it locally:
 
 ```sh
 mdbook serve
