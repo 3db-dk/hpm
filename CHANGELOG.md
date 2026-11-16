@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `build/**` while placing files from `build/`. An exclude wins over a
   place rule, so a package copied from them shipped without its plugin. The
   examples and the HDK guide now show a layout that works.
+- The documentation names no registry or product. Examples use one invented
+  studio registry throughout, the one "Run a studio registry" sets up, and
+  the publishing guide no longer points at a specific registry. Earlier
+  entries in this changelog were reworded to match.
 - A test (`crates/hpm-cli/tests/docs.rs`) checks the docs against the code:
   both site indexes list every page, links and anchors resolve, `toml`
   examples load, and the flags in the CLI reference match the real ones.
@@ -114,7 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes or deletes package files there; the stale-manifest sweep removes
   only regular files.
 
-- An embedder's bearer token (TumbleTrove Desktop's sign-in) is sent only to
+- An embedder's bearer token is sent only to
   https API registries, and for a project's registries only to the https
   origins of the registries configured for the user. A project that declared
   its own registry, or any plain-http registry, received the token.
@@ -212,7 +216,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgrade note: a URL dependency's `version` must be a semantic version.
 - API: `StorageManager::get_package_path`, `storage::layout::cas_dir`,
   `download_key`, and `StoreLayout::{cas_dir, dev_container, staging_dir}`
-  now return a `Result`; embedders (TumbleTrove Desktop) add `?`.
+  now return a `Result`; embedders add `?`.
 - Upgrade note: a `[stage]` place rule whose `to` has a `..` component, a
   leading `/`, a drive, a backslash or a colon now fails the manifest load.
 - Upgrade note: `hpm pack`, `hpm build` and dev copies of path dependencies
@@ -340,8 +344,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A range written with a single `=` (`=21`) has a lower bound again, so the
   project's Python version is chosen from it instead of skipped.
 
-- Installing one version from two places at once (hpm and TumbleTrove
-  Desktop, or two syncs) no longer corrupts the store copy. Each fetch now
+- Installing one version from two places at once (hpm and an embedding
+  application, or two syncs) no longer corrupts the store copy. Each fetch now
   extracts into a directory of its own, and a store copy is copied into a
   private staging directory and renamed into place, so the store never
   shows a half-copied tree.
@@ -351,7 +355,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An archive with a root-level file whose name begins like a directory
   beside it (`a` next to `ab/`) no longer loses that file on extraction.
 
-- `fetch_manifest` (used by TumbleTrove Desktop) finds a package already in
+- `fetch_manifest` (used by embedders) finds a package already in
   the store when asked by its scoped `creator/slug` name. It looked in the
   wrong directory, missed, and downloaded and re-copied the package over a
   live store copy. It also stages downloads under `home_dir` like every
@@ -371,7 +375,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   custom `home_dir`, the copies an older hpm left in `~/.hpm` are not
   moved or cleaned up; the first sync rebuilds venvs under the new home,
   and the old directories can be deleted by hand. With the default home
-  nothing moves. TumbleTrove Desktop's `prepare_script_env` reads the
+  nothing moves. `prepare_script_env` reads the
   user's configuration for the same home.
 
 - `[install] parallel_downloads` now bounds how many packages a sync
@@ -382,7 +386,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still loads, with a warning. Any other unknown key in a config file is
   now an error that names it (a misspelt `[registry]` or
   `paralel_downloads` used to be ignored). Config files written by
-  `Config::save` (TumbleTrove Desktop) still load.
+  `Config::save` (as embedders do) still load.
 
 - More of `hpm.toml` is checked when it is read rather than by
   `validate()` later: the package version must be semver, a `python`
@@ -398,7 +402,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`registy = ...` and `optinal = true` used to give an unpinned, required
   dependency; a path dependency's `version` vanished; `{}` parsed). The same
   holds for `[python_dependencies]` tables, which must give `version` and/or
-  `extras`. Every installable published TumbleTrove package still parses.
+  `extras`. Every installable package published on the registry this was checked
+  against still parses.
   **Upgrade note:** the rule applies to every `hpm.toml` hpm reads, including
   packages from `url = ...` dependencies and copies already in the store. A
   store copy whose manifest is now refused is skipped (with a warning) when
@@ -423,8 +428,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - An install never replaces a store copy that is already there (a running
   Houdini may have it loaded); `hpm global add` used to. To repair a damaged
-  copy, move it and its `.files.json` aside first, as TumbleTrove Desktop
-  does. A tree without `hpm.toml` or a stale link is still replaced.
+  copy, move it and its `.files.json` aside first. A tree without `hpm.toml` or a stale link is still replaced.
 
 - `[storage] cache_dir` is honoured: downloaded archives are cached there.
   They used to go to `<home_dir>/cache` whatever it said. Archives an older
@@ -528,7 +532,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Breaking (hpm-core API):** `PackResult::platform` is an
   `Option<Platform>` (it was a string; it serializes the same).
 - Package validation moved into `hpm_core::check` (`check_package` returns
-  a `Report` of typed findings), for pack and TumbleTrove Desktop to share.
+  a `Report` of typed findings), for pack and embedders to share.
 - **Breaking (hpm-core API):** `LockFile::has_changes`. What it checked
   (`--frozen-lockfile`) is `ProjectManager::lock_is_current`, which compares
   a sync's outcomes with the lock without building a new one.
@@ -623,7 +627,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   install.** It chose each dependency's copy by version from the store
   listing, which hides `_dev/`, so a path dependency (a dev override)
   was handed the newest *registry* copy of the package. An embedder that
-  runs hooks from that copy (TumbleTrove Desktop's `tt_prepare`) ran the
+  runs hooks from that copy ran the
   released build's hook instead of the dev build's. The copy is now the
   install the package's emitted Houdini manifest points `hpath` at, which
   is what Houdini loads. Without a readable `hpath`, a registry
@@ -638,7 +642,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cached archive and any extracted copy left in fetch staging, so an embedder
   that found an installed copy damaged can reinstall it from a fresh, verified
   download. A reinstall otherwise reuses a leftover staging copy as it stands,
-  which would reproduce the damage. TumbleTrove Desktop uses it to repair a
+  which would reproduce the damage. An embedder can use it to repair a
   package whose program the OS refuses to start.
 - **`StorageManager::sweep_fetch_staging`** removes what earlier installs
   left in fetch staging, skipping entries younger than a given age so it
@@ -660,7 +664,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path dependency installed as a copy (including a `link = true` one that
   declares native platforms) cloned the entire workspace: `.git/`, cargo
   `target/` dirs, CMake build trees and virtualenvs. On a native package
-  that came to 19 GB and 62,000 files, so a TumbleTrove Desktop dev launch
+  that came to 19 GB and 62,000 files, so an embedder's dev launch
   took longer than the request that asked for it. The copy now
   stages the same files `hpm pack` / `hpm build` would: `.gitignore` and
   `.hpmignore` (with `!` re-includes), `[stage]` include/exclude and the
@@ -682,8 +686,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed package up by bare slug in a map that kept one arbitrary version
   per slug, so with several versions in the store it protected whichever
   the scan met last and removed the one the project depended on, and a
-  scoped `creator/slug` key matched nothing, so every package a TumbleTrove
-  Desktop project used was classified orphaned. A dependency now resolves
+  scoped `creator/slug` key matched nothing, so every package of a project
+  written with scoped keys was classified orphaned. A dependency now resolves
   to the installed copy at the version it names (read as the solver reads
   it: a bare `1.2.3` is exactly that version), else the highest one its
   range admits; a path dependency protects only its `_dev/` install.
@@ -702,9 +706,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A project's dependency reports the installed copy the project uses.**
   `ProjectManager::list_dependencies` matched an installed package by path
   alone, so with several versions in the store it returned whichever the
-  scan met first. A project on TumblePipe 1.76.0 with 1.40.1 also installed
-  was handed 1.40.1: TumbleTrove Desktop ran that release's `tt_*` hooks,
-  which it did not declare, so no launch ever migrated a project, and
+  scan met first. A project on a package's 1.76.0 with 1.40.1 also installed
+  was handed 1.40.1: an embedder then ran that release's hooks, which it
+  did not declare, and
   `generate_houdini_manifests` could point Houdini at the old copy. The copy
   is now the version the project manifest names, else the highest installed.
 
@@ -715,8 +719,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Registry entries carry `deps`, and `registry::solve` chooses a set of
   versions that works together.** The registry index has always had Cargo's
   `deps` field, but `RegistryEntry` dropped it, so nothing could see that
-  TumblePipe 1.74 declares `tumbletrove/tumbletrove = ">=0.47, <0.48"`, and a
-  client taking each package's newest version paired it with TumbleTrove
+  a package's 1.74 declares `acme/core = ">=0.47, <0.48"`, and a
+  client taking each package's newest version paired it with `acme/core`
   0.48, which removed an API 1.74 calls. `RegistryEntry::deps` reads the
   field, and `registry::solve::solve` picks one version per package given
   the target Houdini and any pins: a pin stands, an unpinned package takes
@@ -847,9 +851,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   platform.** A registry answers `/packages/<name>` with one row per *build*,
   and `RegistrySet::get_versions` passed those rows straight through as if
   they were versions, so a package shipping a Windows and a Linux archive had
-  every such version appear twice in any version listing — the TumbleTrove
-  desktop project editor showed TumbleRig's 1.7.9 and up duplicated in its
-  version select, and again in the selected-version label. `get_versions` and
+  every such version appear twice in any version listing. `get_versions` and
   `RegistrySet::search` now collapse a version's builds to one entry,
   preferring the host's build.
 - **An unpinned range on a multi-platform package could resolve to another
@@ -1045,7 +1047,7 @@ Linux and macOS assets — 0.30.1 is the first 0.30.x carrying all three.
   extracting the archive into a Houdini packages directory got a package that
   *registers* (env vars set) but loads nothing: every `hpath`/`HOUDINI_PATH`/
   `HOUDINI_DSO_PATH` entry dangled, so OTLs, DSOs, and toolbars were silently
-  absent (reported by SideFX for TumbleRig 1.7.9; reproduced headless — flat
+  absent (reported by SideFX for a published package; reproduced headless — flat
   layout registers 0 of the package's 96 SOP operator types, wrapped layout
   registers all 96). Archives now use the Houdini "hpackage" layout the json
   expects: `{slug}.json` at the root next to a `{slug}/` content folder. A
@@ -1138,8 +1140,7 @@ Linux and macOS assets — 0.30.1 is the first 0.30.x carrying all three.
   longer resolves.** Every doc and doc-comment example used
   `https://api.3db.dk/v1/registry` with the alias `houdinihub`. `api.3db.dk`
   does not resolve at all, so the examples were not merely off-brand — they
-  were broken. Replaced throughout with `https://api.tumbletrove.com/v1/registry`
-  and the alias `tumbletrove` (the default that TumbleTrove Desktop registers).
+  were broken. Replaced throughout with a registry URL that resolves.
 - **`--help` referenced `hpm sync`, which was removed in favour of
   `hpm install`.** Fixed in `add --link`'s help text and two internal doc
   comments.
@@ -1169,8 +1170,7 @@ Linux and macOS assets — 0.30.1 is the first 0.30.x carrying all three.
 
 ### Added
 
-- `docs/manifest.toml`, so the docs can be assembled into
-  [docs.tumbletrove.com/hpm/](https://docs.tumbletrove.com/hpm/) alongside
+- `docs/manifest.toml`, so the docs can be assembled into a second site alongside
   the existing mdBook build on Read the Docs. Contributor docs
   (architecture, API overview, testing) are now listed in `SUMMARY.md` too,
   so they render on both sites instead of being silently dropped.
@@ -1359,8 +1359,8 @@ Library API, for embedders (the desktop client):
   index paths resolve; a non-scoped package name is an error.
 - **Bare-OS registry platform tags (`"LINUX"`, `"WINDOWS"`).** These
   carried a silent x86_64 assumption; only canonical arch-suffixed tags
-  (and `universal`) are recognized. Verified against the live
-  TumbleTrove registry: all current and historical entries already use
+  (and `universal`) are recognized. Verified against a live
+  registry: all current and historical entries already use
   canonical tags.
 - **`-p/--package` manifest flag.** The manifest path is `-m/--manifest`
   on every command (add, remove, update, list, install, build, audit).
@@ -1580,7 +1580,7 @@ Library API, for embedders (the desktop client):
 
 - **`script_run::ScriptSink` now requires `Send`** (`pub trait ScriptSink:
   Send`). Lets embedders drive `run_prepack` / `run_script` from a
-  multi-threaded executor (e.g. the tumbletrove desktop awaits the runner
+  multi-threaded executor (e.g. a Tauri application awaits the runner
   inside `tauri::async_runtime::spawn`, which requires `Send + 'static`
   futures). Every real sink is already `Send`, so this is a no-op for existing
   implementations including the CLI's `Console` sink.
@@ -2251,7 +2251,7 @@ Each section's rewrite is mechanical:
 ## [0.13.0] - 2026-05-15
 
 ### Changed
-- **Platform identifiers aligned with the TumbleTrove API.** `Platform` now
+- **Platform identifiers aligned with the registry API.** `Platform` now
   carries arch-suffixed variants — `linux-x86_64`, `linux-aarch64`,
   `macos-x86_64`, `macos-aarch64`, `windows-x86_64`, `windows-aarch64` — plus
   an OS-agnostic `universal`, matching the registry's `build.platform` enum
@@ -2281,7 +2281,7 @@ Each section's rewrite is mechanical:
   (`VIRTUAL_ENV`, prepended `PATH`) the caller must apply before spawning.
   `apply_to(&mut HashMap<String,String>)` folds those mutations into a
   caller-staged env map, so outside embedders — `hpm run` (shells via
-  `cmd /C` / `sh -c`) and the tumbletrove-desktop hook runner
+  `cmd /C` / `sh -c`) and an embedder's hook runner
   (direct-spawn via `CreateProcessW` / `execvp`) — consume the same handle
   through their own spawn primitives. Plain string entries and table-form
   entries with neither `python` nor `requirements` get a default no-op
@@ -2302,8 +2302,8 @@ Each section's rewrite is mechanical:
   builds its own `RegistrySet` internally inside `sync_dependencies` and
   `resolve_and_install_from_registry`, and those previously went through
   the no-auth constructors regardless of how the embedder built its own
-  registry sets. For visibility-gated registries (e.g. TumbleTrove's
-  `/v1/registry`), that meant a desktop pre-flight could resolve a
+  registry sets. For visibility-gated registries (an API registry that shows
+  private packages only to signed-in callers), that meant a desktop pre-flight could resolve a
   PRIVATE dep correctly via an authenticated set, then `hpm install`'s
   Simple/Registry → registry-lookup branch would fire its own anonymous
   `get_version` for the same dep and 404. The new constructor stashes an
@@ -2320,10 +2320,10 @@ Each section's rewrite is mechanical:
 
 ### Added
 - **`ApiRegistry::with_auth_token` and `RegistrySet::from_configs_with_auth`.**
-  Embedded callers (e.g. TumbleTrove Desktop) can now build a registry set
+  Embedded callers can now build a registry set
   that attaches `Authorization: Bearer <token>` to every API-registry
-  request. Required for visibility-gated registries: server-side, the
-  TumbleTrove `/v1/registry` route shows anonymous callers only PUBLIC
+  request. Required for visibility-gated registries: server-side, such
+  a registry shows anonymous callers only PUBLIC
   packages, so an org member trying to install their own org's PRIVATE
   package previously got a 404 from `get_versions` and the package was
   silently dropped from the generated `hpm.toml`. The token header is
@@ -2356,7 +2356,7 @@ Each section's rewrite is mechanical:
 
 ### Changed
 - **`ProjectManager::new` now takes an `Arc<Config>` parameter** (breaking
-  change for library consumers, e.g. the TumbleTrove desktop). The
+  change for library consumers). The
   constructor used to call `Config::load()` internally, and so did
   `resolve_and_install_from_registry` / `sync_dependencies` — so a single
   embedded "install package" operation triggered three disk reads of
@@ -2416,8 +2416,8 @@ Each section's rewrite is mechanical:
   highest matching version per package, which doesn't need a constraint
   solver. Re-add when transitive resolution becomes a real requirement.
 - **`hpm publish` subcommand.** The body was a help blurb pointing users
-  at the registry publishing workflow that lives elsewhere (the
-  tumbletrove creator API). A command that pretends to be documentation
+  at the registry publishing workflow that lives elsewhere (with the
+  registry). A command that pretends to be documentation
   is worse than no command.
 - **`hpm clean --package <name>` flag.** Declared, parsed by clap, and
   tested, but `execute_clean` never read it — pure CLI fiction.
@@ -2501,8 +2501,8 @@ fix and the platform-selection change ship together in v0.11.3.
   `cmd`, optional `python`, and optional `requirements`:
 
   ```toml
-  [scripts.tt_setup]
-  cmd          = "python scripts/tt_setup.py"
+  [scripts.setup]
+  cmd          = "python scripts/setup.py"
   python       = "3.11"
   requirements = ["PySide6>=6.6"]
   ```
@@ -2563,7 +2563,7 @@ fix and the platform-selection change ship together in v0.11.3.
   through to the byte versions). `SigningKey` is re-exported from
   `hpm_core::packer` so downstream callers don't need a direct
   `ed25519-dalek` dependency. Lets tooling that mutates archive bytes
-  after pack — e.g. `tumbletrove-desktop`'s SideFX upload flow, which
+  after pack — e.g. a SideFX upload flow, which
   reshapes the flat `hpm pack` archive into hpackage's expected
   `{slug}.json`-at-root + content-under-`{slug}/` layout — recompute
   the SHA-256 and re-sign without round-tripping through disk.
@@ -3039,7 +3039,7 @@ fix and the platform-selection change ship together in v0.11.3.
 - Existing `hpm.toml` files without a `path` field will fail validation
 
 ### Added
-- Scoped package paths: packages are identified by `creator/slug` (e.g. `tumblehead/tumble-rig`)
+- Scoped package paths: packages are identified by `creator/slug` (e.g. `acme/rock-tools`)
 - Version-qualified paths use `@`: `creator/slug@1.0.0`
 - `PackageInfo::identifier()`, `creator()`, `slug()` helper methods
 - `PackageManifest::is_valid_package_path()` and `is_valid_slug()` validation
