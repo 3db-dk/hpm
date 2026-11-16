@@ -25,11 +25,14 @@ Pin the version. Cache `~/.hpm/` between jobs to avoid downloading packages,
 ## A project: reproduce the committed lock
 
 ```sh
-hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove --if-not-exists
+hpm registry add git@git.studio.example:pipeline/hpm-index.git --name studio --type git --if-not-exists
 hpm install --frozen-lockfile
 hpm audit
 ```
 
+- A Git registry is cloned with `git`, so the runner needs read access to
+  the index repository: a deploy key for the `git@` form, or an `https://`
+  URL the runner can already read.
 - `--if-not-exists` makes the registry step safe to repeat. Registries
   declared in the project's own `hpm.toml` need no step at all.
 - `--frozen-lockfile` fails if `hpm.lock` is missing, does not match
@@ -90,8 +93,9 @@ Notes:
   and differ in the `platform` field of `pack.json`. Pack on the platform
   you built on; `--platform` exists for cross-packing prebuilt binaries, and
   an archive with Unix executables must be packed on Unix.
-- Step 5 depends on the registry: an API call for TumbleTrove, a commit to
-  the index repository for a [studio registry](guide-studio-registry.md).
+- Step 5 depends on the registry: a commit to the index repository for a
+  [Git registry](guide-studio-registry.md), or whatever the operator of an
+  API registry provides.
 
 ## Exit codes
 

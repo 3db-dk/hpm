@@ -29,10 +29,10 @@ cargo build --release
 hpm init my-tools
 
 # Add a registry (one-time, per user)
-hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove
+hpm registry add git@git.studio.example:pipeline/hpm-index.git --name studio --type git
 
 # Add dependencies
-hpm add some-creator/geometry-tools@1.0.0
+hpm add acme/rock-tools@0.1.0
 hpm add local-tools --path ../local-tools
 
 # Install everything (HPM packages + Python deps)
@@ -49,7 +49,7 @@ For a tool you want in every Houdini session rather than in one project,
 skip the project entirely:
 
 ```sh
-hpm global add some-creator/utility-nodes --houdini 21.0
+hpm global add acme/rock-tools --houdini 21.0
 ```
 
 ## Package manifest
@@ -58,7 +58,7 @@ Packages are defined in `hpm.toml`:
 
 ```toml
 [package]
-path = "my-studio/my-tools"       # scoped creator/slug identifier
+path = "acme/my-tools"       # scoped creator/slug identifier
 name = "My Tools"                 # display name
 version = "1.0.0"
 description = "Custom Houdini tools"
@@ -70,8 +70,8 @@ houdini = ">=20.5, <22"           # Cargo-style range; see the manifest referenc
 platforms = ["linux-x86_64", "macos-aarch64", "windows-x86_64"]   # omit for pure-data
 
 [dependencies]
-"my-studio/utility-nodes" = "1.0.0"
-"my-studio/material-lib" = { version = "2.0.0", optional = true }
+"acme/utility-nodes" = "1.0.0"
+"acme/material-lib" = { version = "2.0.0", optional = true }
 local-tools = { path = "../local-tools" }
 
 [python_dependencies]
@@ -155,7 +155,7 @@ install-time error rather than a silent fallback. See
 
 ## How it works
 
-- **Resolution** — `hpm install` selects each package on its own: the highest non-yanked version matching its version requirement. hpm-core's `registry::solve` chooses a whole set at once (each version's Houdini range and its requirements of the other packages), which TumbleTrove Desktop uses; `hpm install` does not yet.
+- **Resolution** — `hpm install` selects each package on its own: the highest non-yanked version matching its version requirement. hpm-core's `registry::solve` chooses a whole set at once (each version's Houdini range and its requirements of the other packages), for applications that embed hpm; `hpm install` does not use it yet.
 - **Lock file** — `hpm.lock` pins exact versions, sources, and SHA-256 checksums of Houdini packages. Python packages are resolved by uv on each install and are not pinned by it.
 - **Storage** — `~/.hpm/packages/` for packages, `~/.hpm/venvs/` for Python environments (same layout on Linux, macOS, Windows).
 - **Houdini integration** — `hpm install` writes one `{creator}.{slug}.json` per dependency into `<project>/.hpm/packages/`. Point Houdini's `HOUDINI_PACKAGE_PATH` at that directory, or use `hpm global` to install into Houdini's user preferences so a package loads in every session without a project.

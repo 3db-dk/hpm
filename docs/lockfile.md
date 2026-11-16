@@ -18,7 +18,7 @@ checksum = "v2:ce3d0027c2544dc52a41ed3715101bfda903b837f724b7438fc812b13351db3d"
 
 [dependencies."acme/rock-tools".source]
 type = "url"
-url = "https://packages.example.com/rock-tools-0.1.0.zip"
+url = "https://packages.studio.example/rock-tools-0.1.0.zip"
 version = "0.1.0"
 
 [dependencies."local/my-tools"]

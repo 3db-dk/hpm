@@ -159,10 +159,10 @@ See the [Testing Guide](docs/testing.md) for property-based testing details.
 
 ## Documentation
 
-`docs/` is published twice: at [hpm.readthedocs.io](https://hpm.readthedocs.io/)
-(mdBook, navigation in `docs/SUMMARY.md`) and at
-[docs.tumbletrove.com/hpm/](https://docs.tumbletrove.com/hpm/) (VitePress,
-navigation in `docs/manifest.toml`). The second site copies only the pages
+`docs/` is published at [hpm.readthedocs.io](https://hpm.readthedocs.io/)
+(mdBook, navigation in `docs/SUMMARY.md`), and is also built into a second
+site by a VitePress pipeline that takes its navigation from
+`docs/manifest.toml`. The second site copies only the pages
 `manifest.toml` declares, so:
 
 - Adding, renaming or removing a page means editing **both** `SUMMARY.md`

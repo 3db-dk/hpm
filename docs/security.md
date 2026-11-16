@@ -19,16 +19,16 @@ contents without the framing; hpm still verifies those as they are:
 # hpm.lock (excerpt)
 
 [package]
-name = "my-studio/my-tools"
+name = "acme/my-tools"
 version = "1.0.0"
 
-[dependencies."studio/utility-nodes"]
+[dependencies."acme/utility-nodes"]
 version = "1.2.0"
 checksum = "v2:a3f2b8c9..."
 
-[dependencies."studio/utility-nodes".source]
+[dependencies."acme/utility-nodes".source]
 type = "url"
-url = "https://packages.example.com/utility-nodes-1.2.0.zip"
+url = "https://packages.studio.example/utility-nodes-1.2.0.zip"
 version = "1.2.0"
 
 [metadata]
@@ -169,7 +169,7 @@ published.
 - Treat `keyId` as public — it leaks nothing about the private key, but anchors verification to a specific key version.
 - Rotate by generating a new key pair, publishing the new `keyId`, and re-signing future releases. Your verifier should accept both the old and new `keyId` during the overlap window.
 - A `keyId` mismatch at verification time means either the wrong public key is configured, or the signer rotated without updating the registry. Note that this check happens in *your* verifier — hpm does not perform it (see the note under [Package signing](#package-signing)).
-- TumbleTrove publishes creator public keys at `https://api.tumbletrove.com/v1/signing/public-keys`, which is the key source an external verifier should resolve `keyId` against.
+- A registry that stores signatures should also publish its signers' public keys; that is the key source an external verifier resolves `keyId` against.
 
 ## `hpm audit`
 
@@ -269,14 +269,14 @@ local users.
 ```toml
 # Good
 [[registries]]
-name = "studio"
-url = "https://packages.studio.com/v1/registry"
+name = "vendor"
+url = "https://registry.vendor.example/v1/registry"
 type = "api"
 
 # Refused — plaintext leaks names and lets attackers swap archives in flight
 [[registries]]
-name = "studio"
-url = "http://packages.studio.com/v1/registry"
+name = "vendor"
+url = "http://registry.vendor.example/v1/registry"
 type = "api"
 ```
 

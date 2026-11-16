@@ -80,13 +80,13 @@ version found is written to `hpm.toml`. It then installs, like `hpm install`.
 **Examples**
 
 ```sh
-hpm add studio/utility-nodes@1.0.0
-hpm add studio/a@1.0.0 studio/b@2.0.0
+hpm add acme/utility-nodes@1.0.0
+hpm add acme/a@1.0.0 acme/b@2.0.0
 hpm add local-tools --path ../local-tools
 hpm add local-tools --path ../local-tools --link  # live edits → Houdini
-hpm add studio/visualize@1.0.0 --optional
-hpm add studio/lib@1.0.0 -m /path/to/project
-hpm add studio/internal@1.0.0 --registry studio   # pin to one registry
+hpm add acme/visualize@1.0.0 --optional
+hpm add acme/lib@1.0.0 -m /path/to/project
+hpm add acme/internal@1.0.0 --registry studio   # pin to one registry
 ```
 
 ## `hpm remove`
@@ -121,8 +121,8 @@ Install does the following:
 
 Two things install does not do:
 
-- **It does not resolve ranges.** `"studio/tools" = "^1.2"` fails with "version not found". Write an exact version, or let `hpm add` and `hpm update` choose one and write it for you.
-- **It does not install dependencies of dependencies.** Only the packages listed in the project's own `[dependencies]` are installed. If a package you use needs another package, add that one too. (TumbleTrove Desktop adds required packages for you when it writes a project's manifest; the command line does not.)
+- **It does not resolve ranges.** `"acme/tools" = "^1.2"` fails with "version not found". Write an exact version, or let `hpm add` and `hpm update` choose one and write it for you.
+- **It does not install dependencies of dependencies.** Only the packages listed in the project's own `[dependencies]` are installed. If a package you use needs another package, add that one too. An application that embeds hpm can work the required packages out and write the complete list; the command line does not.
 
 The venv is built from the Python dependencies of the *installed packages*.
 `[python_dependencies]` in the project's own manifest are used by
@@ -172,7 +172,7 @@ answer the prompt.
 ```sh
 hpm update --dry-run
 hpm update
-hpm update studio/geometry-tools
+hpm update acme/geometry-tools
 hpm --output json update --yes      # CI-friendly
 ```
 
@@ -231,14 +231,14 @@ Behaviour:
 **Example**
 
 ```toml
-[scripts.tt_setup]
-cmd          = "python scripts/tt_setup.py"
+[scripts.setup]
+cmd          = "python scripts/setup.py"
 python       = "3.11"
 requirements = ["PySide6>=6.6"]
 ```
 
 ```sh
-hpm run tt_setup
+hpm run setup
 ```
 
 ## `hpm search`
@@ -595,10 +595,10 @@ There is no `hpm global update` yet: with no manifest to rewrite, updating is
 **Examples**
 
 ```sh
-hpm global add studio/utility-nodes --houdini 21.0
-hpm global add studio/utility-nodes@1.2.0 --houdini 21.0 --registry studio
+hpm global add acme/utility-nodes --houdini 21.0
+hpm global add acme/utility-nodes@1.2.0 --houdini 21.0 --registry studio
 hpm global list --houdini 21.0
-hpm global remove studio/utility-nodes --houdini 21.0
+hpm global remove acme/utility-nodes --houdini 21.0
 ```
 
 Only public packages resolve today: the standalone CLI has nowhere to store

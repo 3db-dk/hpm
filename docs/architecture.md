@@ -277,7 +277,7 @@ that every chosen version's `deps` on the others hold: a pin stands as
 written, and an unpinned package takes its newest non-yanked version that
 supports the Houdini, backtracking when that version cannot coexist with
 the rest. A requirement on a package outside the set constrains nothing;
-it does not add the package. TumbleTrove Desktop writes a project's
+it does not add the package. An embedding application can write a project's
 manifest from these selections, which is what keeps a release that breaks
 an older version of a dependent package from reaching projects on that
 version.
@@ -703,9 +703,9 @@ use hpm_config::{Config, RegistrySourceConfig, RegistryType};
 
 let mut config = Config::default();
 config.add_registry(RegistrySourceConfig {
-    name: "tumbletrove".into(),
-    url: "https://api.tumbletrove.com/v1/registry".into(),
-    registry_type: RegistryType::Api,
+    name: "studio".into(),
+    url: "git@git.studio.example:pipeline/hpm-index.git".into(),
+    registry_type: RegistryType::Git,
 });
 config.install.parallel_downloads = std::num::NonZeroUsize::new(4).unwrap();
 ```

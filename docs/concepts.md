@@ -62,8 +62,8 @@ anything a team must reproduce.
 
 A **registry** is an index that maps `creator/slug` and a version to a
 download URL and checksum. hpm consults the registries you have added when
-you run `hpm add`, `hpm install`, `hpm update` or `hpm search`. The public
-TumbleTrove registry is one; a studio can [run its own](guide-studio-registry.md).
+you run `hpm add`, `hpm install`, `hpm update` or `hpm search`. A registry
+can be public or private; a studio can [run its own](guide-studio-registry.md).
 
 A dependency does not have to come from a registry. It can also be a
 **URL** to an archive, or a **path** to a package directory on disk, which
@@ -77,8 +77,9 @@ what is written.
 
 `hpm install` installs the packages the project lists. It does not read
 those packages' own dependencies and install them too. If a package needs
-another package, the project lists both. TumbleTrove Desktop, which builds
-on hpm, works those requirements out and writes the complete list for you.
+another package, the project lists both. An application
+that embeds hpm can work those requirements out and write the complete list;
+the `hpm` command line does not.
 
 ## Lock file
 

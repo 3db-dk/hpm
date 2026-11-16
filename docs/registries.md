@@ -20,19 +20,19 @@ hpm registry add <URL> [--name <alias>] [--type api|git] [--if-not-exists]
 Examples:
 
 ```sh
-# API registry
-hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove
+# Git-index registry
+hpm registry add git@git.studio.example:pipeline/hpm-index.git --name studio --type git
 
-# Git-index registry (explicit)
-hpm registry add https://github.com/studio/hpm-packages.git --name studio --type git
+# API registry
+hpm registry add https://registry.vendor.example/v1/registry --name vendor
 
 # No --name: HPM infers an alias from the URL
-hpm registry add https://api.studio.com/registry
+hpm registry add https://api.vendor.example/registry
 # → added as "registry"
 
 # Idempotent add: succeed silently if a registry with this name already
 # exists, instead of erroring. Useful in provisioning scripts.
-hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove --if-not-exists
+hpm registry add git@git.studio.example:pipeline/hpm-index.git --name studio --type git --if-not-exists
 ```
 
 By default, adding a registry whose name already exists is an error. Pass
@@ -43,14 +43,14 @@ This writes to `~/.hpm/config.toml`:
 
 ```toml
 [[registries]]
-name = "tumbletrove"
-url = "https://api.tumbletrove.com/v1/registry"
-type = "api"
+name = "studio"
+url = "git@git.studio.example:pipeline/hpm-index.git"
+type = "git"
 
 [[registries]]
-name = "studio"
-url = "https://github.com/studio/hpm-packages.git"
-type = "git"
+name = "vendor"
+url = "https://registry.vendor.example/v1/registry"
+type = "api"
 ```
 
 A git registry's `url` may be an `https://`, `ssh://` or `file://` URL, an
@@ -80,17 +80,17 @@ the registries it resolves against:
 ```toml
 # hpm.toml
 [[registries]]
-name = "tumbletrove"
-url = "https://api.tumbletrove.com/v1/registry"
-type = "api"
+name = "studio"
+url = "git@git.studio.example:pipeline/hpm-index.git"
+type = "git"
 
 [[registries]]
-name = "studio"
-url = "https://packages.studio.com/v1/registry"
+name = "vendor"
+url = "https://registry.vendor.example/v1/registry"
 type = "api"
 
 [dependencies]
-"studio/internal-tool" = { version = "1.0.0", registry = "studio" }
+"acme/rock-tools" = { version = "0.1.0", registry = "studio" }
 ```
 
 Every team member who clones the project gets the same registry set, without
@@ -104,13 +104,13 @@ use the detailed dependency form:
 
 ```toml
 [dependencies]
-"studio/internal-tool" = { version = "1.0.0", registry = "studio" }
+"acme/rock-tools" = { version = "0.1.0", registry = "studio" }
 ```
 
 Or from the command line, which records the pin in `hpm.toml` for you:
 
 ```sh
-hpm add studio/internal-tool@1.0.0 --registry studio
+hpm add acme/rock-tools@0.1.0 --registry studio
 ```
 
 The pin is **authoritative**. Resolution, install, and `hpm update` consult

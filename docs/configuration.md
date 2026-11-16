@@ -44,9 +44,9 @@ max_search_depth = 3
 ignore_patterns = [".git", ".hg", ".svn", "node_modules", "backup", "archive", ".cache", "temp", "tmp"]
 
 [[registries]]
-name = "tumbletrove"
-url = "https://api.tumbletrove.com/v1/registry"
-type = "api"
+name = "studio"
+url = "git@git.studio.example:pipeline/hpm-index.git"
+type = "git"
 
 [signing]
 key_path = "/Users/me/.hpm/signing.pem"    # fallback for `hpm pack`

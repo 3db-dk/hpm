@@ -15,7 +15,7 @@ Both registry types describe a published archive with the same JSON object:
 {
   "name": "acme/rock-tools",
   "vers": "1.2.0",
-  "dl": "https://packages.example.com/rock-tools-1.2.0.zip",
+  "dl": "https://packages.studio.example/rock-tools-1.2.0.zip",
   "cksum": "sha256:40c67f243a852eff6b08ebf52bd15757115db71e0a509fad67bade62ce3c436f",
   "houdini_compat": ">=21, <23",
   "platform": "linux-x86_64",
@@ -92,7 +92,7 @@ API registries are queried live on every resolution; nothing is cached, and
 `hpm registry update` has nothing to do for them.
 
 The `hpm` command line sends no credentials, so it can resolve public
-packages only. Applications that embed hpm, such as TumbleTrove Desktop, can
+packages only. Applications that embed hpm can
 attach a bearer token; it is sent only to `https` registries configured for
 the user, never to one a project declares.
 

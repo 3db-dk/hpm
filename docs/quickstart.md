@@ -6,11 +6,14 @@ or newer.
 
 ## 1. Add a registry
 
-A registry is where hpm looks packages up. Add the public TumbleTrove
-registry once per machine:
+A registry is where hpm looks packages up. Add the one you install from,
+once per machine. This documentation uses one example registry throughout:
+a studio's own, named `studio`, which
+[Run a studio registry](guide-studio-registry.md) builds from nothing.
+Substitute your registry's URL:
 
 ```sh
-hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove
+hpm registry add git@git.studio.example:pipeline/hpm-index.git --name studio --type git
 ```
 
 ## 2. Create a project
@@ -31,8 +34,8 @@ version they are installed for.
 ## 3. Find and add a package
 
 ```sh
-hpm search scatter
-hpm add some-creator/scatter-tools
+hpm search rock
+hpm add acme/rock-tools
 ```
 
 `hpm add` takes the full `creator/slug` name that `hpm search` prints. It
@@ -40,10 +43,10 @@ picks the newest version, writes it to `hpm.toml`, and installs it:
 
 ```toml
 [dependencies]
-"some-creator/scatter-tools" = "1.4.2"
+"acme/rock-tools" = "0.1.0"
 ```
 
-To get a specific version, ask for it: `hpm add some-creator/scatter-tools@1.3.0`.
+To get a specific version, ask for it: `hpm add acme/rock-tools@0.1.0`.
 
 ## 4. See what was installed
 
@@ -97,8 +100,8 @@ If the package is missing, see
 ## Day to day
 
 ```sh
-hpm add another/package          # add one more
-hpm remove some-creator/scatter-tools
+hpm add acme/fast-scatter         # add one more
+hpm remove acme/rock-tools
 hpm update --dry-run             # what newer versions exist?
 hpm update                       # move to them
 hpm install                      # after pulling a teammate's hpm.toml and hpm.lock
@@ -112,9 +115,9 @@ For a personal tool you always want, skip the project and install it into
 Houdini's own preferences for one Houdini version:
 
 ```sh
-hpm global add some-creator/scatter-tools --houdini 21.0
+hpm global add acme/rock-tools --houdini 21.0
 hpm global list --houdini 21.0
-hpm global remove some-creator/scatter-tools --houdini 21.0
+hpm global remove acme/rock-tools --houdini 21.0
 ```
 
 It then loads in every Houdini 21.0 session with no environment variable.

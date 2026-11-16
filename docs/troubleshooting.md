@@ -18,10 +18,10 @@ error: Package error: Failed to sync project dependencies: Cannot install foo 1.
 no package registries are configured. Run 'hpm registry add <url>' to add one.
 ```
 
-Add one. For TumbleTrove:
+Add one, with your registry's URL:
 
 ```sh
-hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove
+hpm registry add git@git.studio.example:pipeline/hpm-index.git --name studio --type git
 ```
 
 ### Version not found in registry

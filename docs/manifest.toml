@@ -1,7 +1,7 @@
 name = "hpm"
 slug = "hpm"
 order = 30
-description = "The TumbleTrove package manager for Houdini — install, update, and pin Houdini plugin versions."
+description = "A package manager for Houdini — install, update, and pin Houdini plugin versions."
 
 [[pages]]
 text = "Overview"

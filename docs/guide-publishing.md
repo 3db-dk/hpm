@@ -81,16 +81,16 @@ file after packing; the checksum and signature cover its exact bytes.
 
 ## 6. Register the version
 
-Tell a registry the package path, version, download URL, checksum, and
-platform.
+Tell the registry the package path, version, download URL, checksum, and
+platform. How depends on the registry, and on whether it accepts packages
+from you at all: a registry decides who may publish to it.
 
-- **TumbleTrove.** Register the version from your creator account on
-  [tumbletrove.com](https://tumbletrove.com), or from CI through its API.
-  The archive stays on your host; TumbleTrove stores the URL and checksum.
-  See the TumbleTrove documentation at
-  [docs.tumbletrove.com](https://docs.tumbletrove.com) for the steps.
-- **Your own Git registry.** Append one line to the package's index file
-  and push. See [Run a studio registry](guide-studio-registry.md).
+- **A Git registry you control.** Append one line to the package's index
+  file and push. See [Run a studio registry](guide-studio-registry.md).
+- **An API registry.** hpm only reads from API registries; registering a
+  version is done through whatever its operator provides. The fields it
+  needs are the ones in the `hpm pack --json` output. See
+  [Registry formats](registry-formats.md) for what such a registry serves.
 
 Then check it from a clean project:
 
@@ -108,7 +108,7 @@ Two ways to hand a package to someone directly:
 
   ```toml
   [dependencies]
-  "acme/rock-tools" = { url = "https://packages.example.com/rock-tools-1.0.0.zip", version = "1.0.0" }
+  "acme/rock-tools" = { url = "https://packages.studio.example/rock-tools-1.0.0.zip", version = "1.0.0" }
   ```
 
   The key and `version` must match the archive's own `hpm.toml`.

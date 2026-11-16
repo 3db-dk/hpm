@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 /// my-package = "1.0.0"
 ///
 /// # Registry-resolved with options
-/// my-package = { version = "1.0.0", registry = "tumbletrove", optional = true }
+/// my-package = { version = "1.0.0", registry = "studio", optional = true }
 ///
 /// # Direct URL download (legacy/explicit)
 /// my-package = { url = "https://pkg.example.com/packages/my-package/1.0.0/my-package-1.0.0.zip", version = "1.0.0" }

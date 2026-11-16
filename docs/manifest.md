@@ -12,7 +12,7 @@ A minimal manifest:
 
 ```toml
 [package]
-path = "my-studio/my-tools"
+path = "acme/my-tools"
 name = "My Tools"
 version = "1.0.0"
 ```
@@ -23,7 +23,7 @@ All sections, in the order they appear in practice:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `path` | yes | Scoped identifier, `creator/slug`. Both segments must be kebab-case (lowercase letters, digits, hyphens). Example: `tumblehead/tumble-rig`. `hpm init` defaults the creator to `local`, producing `local/<name>` — change it before publishing. |
+| `path` | yes | Scoped identifier, `creator/slug`. Both segments must be kebab-case (lowercase letters, digits, hyphens). Example: `acme/rock-tools`. `hpm init` defaults the creator to `local`, producing `local/<name>` — change it before publishing. |
 | `name` | yes | Freeform display name. |
 | `version` | yes | Semantic version per [semver.org](https://semver.org/). `major.minor.patch` is required; pre-release identifiers (`1.0.0-alpha.1`, `1.0.0-rc.2`) and build metadata (`1.0.0+build.5`) are accepted. |
 | `description` | no | Short description. |
@@ -88,14 +88,14 @@ one of four shapes:
 [dependencies]
 
 # 1. Registry, version-only (shorthand)
-"studio/utility-nodes" = "1.0.0"
+"acme/utility-nodes" = "1.0.0"
 
 # 2. Registry with options
-"studio/material-library" = { version = "2.0.0", optional = true }
-"studio/internal-tool" = { version = "1.0.0", registry = "studio" }
+"acme/material-library" = { version = "2.0.0", optional = true }
+"acme/internal-tool" = { version = "1.0.0", registry = "studio" }
 
 # 3. Direct URL (pre-built archive — ZIP or gzipped tar both accepted)
-"studio/prebuilt" = { url = "https://pkg.example.com/prebuilt-1.0.0.zip", version = "1.0.0" }
+"acme/prebuilt" = { url = "https://packages.studio.example/prebuilt-1.0.0.zip", version = "1.0.0" }
 
 # 4. Local path (development). Installs a copy of the package's install
 #    image: the files `hpm pack` would ship (see [stage]), not the whole
@@ -144,7 +144,7 @@ Which of the two to write depends on who reads the manifest:
   When a version is published, its registry dependencies (not `path` or
   `url` ones) are registered with it, and the registry serves them as that
   version's `deps`. A client that chooses versions for a whole project
-  (TumbleTrove Desktop does, at every launch) gives each unpinned package
+  (an application that embeds hpm can) gives each unpinned package
   the newest version whose `[compat].houdini` supports the project's Houdini
   and whose ranges agree with the versions chosen for the other packages,
   and adds a required package the project does not list. Give an upper
@@ -152,7 +152,7 @@ Which of the two to write depends on who reads the manifest:
 
   ```toml
   [dependencies]
-  "tumbletrove/tumbletrove" = ">=0.47, <0.48"
+  "acme/core" = ">=0.47, <0.48"
   ```
 
 `hpm install` itself installs only the packages a project lists; it does not
@@ -392,8 +392,7 @@ place = [{ from = "build/macos/*.dylib", to = "dso/" }]
 place = [{ from = "build/win/*.dll", to = "dso/" }]
 ```
 
-**Platforms.** Valid platform identifiers (TumbleTrove API build platform
-enum verbatim): `linux-x86_64`, `linux-aarch64`, `macos-x86_64`,
+**Platforms.** Valid platform identifiers (the spelling registries use): `linux-x86_64`, `linux-aarch64`, `macos-x86_64`,
 `macos-aarch64`, `windows-x86_64`, `windows-aarch64`, `universal`. Use
 `universal` for OS-agnostic content (pure-Python / data). Declare the
 platforms you ship under `[compat].platforms`; each per-platform
@@ -536,14 +535,14 @@ Per-project registries. Same shape as the global version in `~/.hpm/config.toml`
 
 ```toml
 [[registries]]
-name = "tumbletrove"
-url = "https://api.tumbletrove.com/v1/registry"
-type = "api"
+name = "studio"
+url = "git@git.studio.example:pipeline/hpm-index.git"
+type = "git"
 
 [[registries]]
-name = "studio"
-url = "https://github.com/studio/hpm-packages.git"
-type = "git"
+name = "vendor"
+url = "https://registry.vendor.example/v1/registry"
+type = "api"
 ```
 
 Project registries are additive to global registries.
@@ -620,13 +619,13 @@ into a uv-managed virtual environment by switching from the shorthand
 string to the table form:
 
 ```toml
-[scripts.tt_setup]
-cmd          = "python scripts/tt_setup.py"
+[scripts.setup]
+cmd          = "python scripts/setup.py"
 python       = "3.11"
 requirements = ["PySide6>=6.6"]
 ```
 
-`hpm run tt_setup` then resolves `requirements` through the same uv
+`hpm run setup` then resolves `requirements` through the same uv
 pipeline that backs `[python_dependencies]`, materialises a venv at
 `~/.hpm/venvs/<hash>/`, prepends its `bin/` (or `Scripts/` on Windows) to
 `PATH`, and sets `VIRTUAL_ENV` so `python` in the command resolves to the
@@ -663,7 +662,7 @@ resolved environment instead:
 
 ```toml
 [scripts.farm]
-cmd         = "python -m tumblepipe.farm"
+cmd         = "python -m rock_tools.farm"
 package-env = true
 ```
 
@@ -694,7 +693,7 @@ The table form also accepts plain inline-table syntax:
 
 ```toml
 [scripts]
-tt_setup = { cmd = "python scripts/tt_setup.py", python = "3.11", requirements = ["PySide6>=6.6"] }
+setup = { cmd = "python scripts/setup.py", python = "3.11", requirements = ["PySide6>=6.6"] }
 ```
 
 
