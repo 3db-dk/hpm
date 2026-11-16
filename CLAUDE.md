@@ -39,6 +39,14 @@ cargo fmt --check    # check formatting
 
 Adding or renaming a page means updating **both** `SUMMARY.md` and
 `manifest.toml`, or the page silently vanishes from one site.
+`crates/hpm-cli/tests/docs.rs` fails when the two disagree, and also checks
+links, `toml` examples, the flags in `cli.md` and the identifiers the
+contributor pages name.
+
+Pages are flat files grouped by purpose: `guide-*.md` are task walkthroughs,
+`cli.md` / `manifest.md` / `configuration.md` and the other reference pages
+state every option, and the "How it works" pages explain. `changelog.md`
+only includes the top-level `CHANGELOG.md`.
 
 The canonical registry is `https://api.tumbletrove.com/v1/registry`, aliased
 `tumbletrove` in examples. The old `houdinihub` / `api.3db.dk` naming is dead

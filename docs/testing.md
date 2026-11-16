@@ -100,6 +100,24 @@ hold several properties, and not every property is named `prop_*`).
 | `hpm-config` | Config overlays round-trip through TOML and write only the fields that are set (`tests/overlay_properties.rs`). |
 | `hpm-assets` | Asset index serialization. |
 
+### Documentation checks
+
+`crates/hpm-cli/tests/docs.rs` tests `docs/` against the code:
+
+- `SUMMARY.md` and `manifest.toml` each list exactly the pages in `docs/`.
+- Every relative link, and every `#anchor`, points at a page and heading
+  that exist.
+- Every `toml` block parses, and every block made of `hpm.toml` sections
+  loads as a manifest.
+- The long flags `cli.md` mentions are the long flags clap defines, in both
+  directions.
+- Identifiers named in `architecture.md`, `api-overview.md` and this page
+  exist somewhere in `crates/`.
+
+A failure names the page and line. Where a page legitimately names
+something that is not a Rust item, or a flag of another program, add it to
+the allow-list beside the test.
+
 ## Running tests
 
 ```sh
