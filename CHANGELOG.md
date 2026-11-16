@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- The documentation is restructured. The single user guide is split into
+  getting-started pages (install, quickstart, concepts), eleven task guides,
+  and reference pages for the CLI, `hpm.toml`, configuration, the lock file,
+  on-disk files, environment variables and registry formats, with
+  troubleshooting and upgrade notes on their own pages. Links to
+  `user-guide.html` on hpm.readthedocs.io redirect to the quickstart.
+- Corrected where the docs disagreed with hpm: the store layout
+  (`~/.hpm/packages/<slug>@<version>/`), that `hpm install` installs exact
+  versions and does not install a dependency's own dependencies, that
+  `[python_dependencies]` take PEP 440 specifiers (no `^`, no bare version)
+  and are not pinned by `hpm.lock`, the release file names, and the error
+  messages quoted in troubleshooting.
+- The `[stage]` examples in the manifest reference and the README excluded
+  `build/**` while placing files from `build/`. An exclude wins over a
+  place rule, so a package copied from them shipped without its plugin. The
+  examples and the HDK guide now show a layout that works.
+- A test (`crates/hpm-cli/tests/docs.rs`) checks the docs against the code:
+  both site indexes list every page, links and anchors resolve, `toml`
+  examples load, and the flags in the CLI reference match the real ones.
+
 ## [0.40.2] - 2026-11-14
 
 ### Fixed
