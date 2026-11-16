@@ -18,7 +18,7 @@
 //! embedder may stream to its own terminal widget and log instead.
 //!
 //! A sink runs [`PreparedScript::command_line`] through a shell. That is the
-//! contract `[scripts]` publishes (see `docs/user-guide.md`, `hpm run`), so
+//! contract `[scripts]` publishes (see `docs/cli.md`, `hpm run`), so
 //! every `cmd` in every released package was written expecting shell
 //! semantics — globbing, `~`, word splitting, `$VAR` expanding to empty when
 //! unset. A sink that tokenizes the string and spawns argv directly is not

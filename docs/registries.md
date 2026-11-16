@@ -6,19 +6,10 @@ download URLs, checksums, and dependency lists. HPM supports two flavors:
 - **API registries** speak HTTP and serve JSON from a handful of endpoints.
 - **Git registries** are Cargo-style indexes: a Git repository with one JSON-lines file per package.
 
-This guide covers how to add and manage registries, how HPM resolves through
-them, and how to configure them per-user vs. per-project.
-
-## Table of contents
-
-- [Adding a registry](#adding-a-registry)
-- [Per-user vs per-project](#per-user-vs-per-project)
-- [Targeting a specific registry from a dependency](#targeting-a-specific-registry-from-a-dependency)
-- [Refreshing and removing](#refreshing-and-removing)
-- [Auto-detection of registry type](#auto-detection-of-registry-type)
-- [Searching](#searching)
-- [Multi-platform packages](#multi-platform-packages)
-- [Caching](#caching)
+This page covers how to add and manage registries, how HPM resolves through
+them, and how to configure them per user or per project. To host one, see
+[Run a studio registry](guide-studio-registry.md) and
+[Registry formats](registry-formats.md).
 
 ## Adding a registry
 
@@ -29,19 +20,19 @@ hpm registry add <URL> [--name <alias>] [--type api|git] [--if-not-exists]
 Examples:
 
 ```sh
-# API registry
-hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove
+# Git-index registry
+hpm registry add git@git.studio.example:pipeline/hpm-index.git --name studio --type git
 
-# Git-index registry (explicit)
-hpm registry add https://github.com/studio/hpm-packages.git --name studio --type git
+# API registry
+hpm registry add https://registry.vendor.example/v1/registry --name vendor
 
 # No --name: HPM infers an alias from the URL
-hpm registry add https://api.studio.com/registry
+hpm registry add https://api.vendor.example/registry
 # → added as "registry"
 
 # Idempotent add: succeed silently if a registry with this name already
 # exists, instead of erroring. Useful in provisioning scripts.
-hpm registry add https://api.tumbletrove.com/v1/registry --name tumbletrove --if-not-exists
+hpm registry add git@git.studio.example:pipeline/hpm-index.git --name studio --type git --if-not-exists
 ```
 
 By default, adding a registry whose name already exists is an error. Pass
@@ -52,14 +43,14 @@ This writes to `~/.hpm/config.toml`:
 
 ```toml
 [[registries]]
-name = "tumbletrove"
-url = "https://api.tumbletrove.com/v1/registry"
-type = "api"
+name = "studio"
+url = "git@git.studio.example:pipeline/hpm-index.git"
+type = "git"
 
 [[registries]]
-name = "studio"
-url = "https://github.com/studio/hpm-packages.git"
-type = "git"
+name = "vendor"
+url = "https://registry.vendor.example/v1/registry"
+type = "api"
 ```
 
 A git registry's `url` may be an `https://`, `ssh://` or `file://` URL, an
@@ -89,17 +80,17 @@ the registries it resolves against:
 ```toml
 # hpm.toml
 [[registries]]
-name = "tumbletrove"
-url = "https://api.tumbletrove.com/v1/registry"
-type = "api"
+name = "studio"
+url = "git@git.studio.example:pipeline/hpm-index.git"
+type = "git"
 
 [[registries]]
-name = "studio"
-url = "https://packages.studio.com/v1/registry"
+name = "vendor"
+url = "https://registry.vendor.example/v1/registry"
 type = "api"
 
 [dependencies]
-"studio/internal-tool" = { version = "1.0.0", registry = "studio" }
+"acme/rock-tools" = { version = "0.1.0", registry = "studio" }
 ```
 
 Every team member who clones the project gets the same registry set, without
@@ -113,13 +104,13 @@ use the detailed dependency form:
 
 ```toml
 [dependencies]
-"studio/internal-tool" = { version = "1.0.0", registry = "studio" }
+"acme/rock-tools" = { version = "0.1.0", registry = "studio" }
 ```
 
 Or from the command line, which records the pin in `hpm.toml` for you:
 
 ```sh
-hpm add studio/internal-tool@1.0.0 --registry studio
+hpm add acme/rock-tools@0.1.0 --registry studio
 ```
 
 The pin is **authoritative**. Resolution, install, and `hpm update` consult
@@ -165,7 +156,8 @@ If you don't pass `--type`, `hpm registry add` infers it from the URL:
 | Contains `gitea` | `git` |
 | Anything else | `api` |
 
-Override with `--type api` or `--type git` when the heuristic gets it wrong.
+Override with `--type api` or `--type git` when the heuristic gets it wrong,
+for example for a Git index on a host not named above, or a local path.
 
 ## Searching
 
@@ -214,7 +206,7 @@ archive. A version that has no build for your platform still *lists* — you can
 see it exists, and see its Houdini compatibility — it just won't install here.
 
 Use `--platform` on `hpm pack` to build for a platform other than the host;
-see [the user guide](user-guide.md).
+see [`hpm pack`](cli.md#hpm-pack).
 
 ## Caching
 

@@ -157,6 +157,30 @@ async fn test_functionality() {
 
 See the [Testing Guide](docs/testing.md) for property-based testing details.
 
+## Documentation
+
+`docs/` is published at [hpm.readthedocs.io](https://hpm.readthedocs.io/)
+(mdBook, navigation in `docs/SUMMARY.md`), and is also built into a second
+site by a VitePress pipeline that takes its navigation from
+`docs/manifest.toml`. The second site copies only the pages
+`manifest.toml` declares, so:
+
+- Adding, renaming or removing a page means editing **both** `SUMMARY.md`
+  and `manifest.toml`.
+- Keep pages flat in `docs/`, and link between them with relative
+  `page.md#anchor` links.
+- `docs/changelog.md` only includes the top-level `CHANGELOG.md`; edit that
+  file.
+- The pages are grouped by purpose: guides (`guide-*.md`) walk through one
+  task, reference pages state every option, the "How it works" pages
+  explain. Put new material where a reader would look for it, and link
+  rather than repeat.
+- Example commands and output in the docs should be ones you have run.
+  `architecture.md` and `api-overview.md` name types and functions that
+  nothing compiles, so grep `docs/` when renaming a public item.
+
+Preview with `mdbook serve`.
+
 ## Contribution Workflow
 
 1. Create a feature branch: `git checkout -b feature/your-feature`

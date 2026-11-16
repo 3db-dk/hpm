@@ -1,32 +1,57 @@
-# HPM Documentation
+# HPM documentation
 
-HPM (Houdini Package Manager) is a Rust-based package manager for SideFX
-Houdini. It manages both Houdini packages and their Python dependencies,
-produces reproducible installs with a lock file and SHA-256 checksums, and
-generates the `package.json` files Houdini needs to load packages at launch.
+HPM is a package manager for SideFX Houdini. It installs Houdini packages
+and the Python packages they need, records exactly what it installed in a
+lock file, and writes the files Houdini reads to load them. It is a single
+command-line program, `hpm`.
 
-## User documentation
+## Start here
 
-- **[User guide](user-guide.md)** — install, commands, the `hpm.toml` manifest, global configuration, troubleshooting.
-- **[Python dependencies](python-guide.md)** — `[python_dependencies]`, Houdini-to-Python version mapping, venv sharing, cleanup.
-- **[Registries](registries.md)** — configuring API and Git registries, per-user vs per-project, search and caching.
-- **[Security](security.md)** — checksums, package signing, `hpm audit`, threat model.
+- **[Install hpm](install.md)**
+- **[Quickstart](quickstart.md)**: install a package into a project and load it in Houdini.
+- **[Concepts](concepts.md)**: packages, projects, the store, registries, the lock file.
 
-## Contributor documentation
+## Guides
 
-- **[Architecture](architecture.md)** — system design, dependency resolution, cleanup, Python integration.
-- **[API overview](api-overview.md)** — crate structure and key public types. Full rustdoc via `cargo doc`.
-- **[Testing guide](testing.md)** — property-based testing strategy.
-- **[CONTRIBUTING.md](https://github.com/3db-dk/hpm/blob/main/CONTRIBUTING.md)** — development setup, workflow, pull request guidelines.
+Step-by-step, one task each.
 
-## Where these docs are published
+| I want to | Guide |
+|-----------|-------|
+| Make a package | [Create your first package](guide-first-package.md) |
+| See my edits in Houdini while I work | [Develop against a live Houdini](guide-live-development.md) |
+| Use numpy or other Python packages | [Add Python dependencies](guide-python-dependencies.md) |
+| Ship compiled plugins | [Ship an HDK plugin](guide-hdk-plugin.md) |
+| Cover Houdini 21 and 22 | [Support several Houdini versions](guide-multiple-houdini-versions.md) |
+| Release a package | [Publish a package](guide-publishing.md) |
+| Host in-house packages | [Run a studio registry](guide-studio-registry.md) |
+| Automate installs and releases | [Continuous integration](guide-ci.md) |
+| Run tools and farm tasks | [Run package code outside Houdini](guide-scripts.md) |
+| Set OCIO, asset roots, show paths | [Set a project's environment](guide-studio-environment.md) |
+| Free disk space | [Keep disk usage down](guide-housekeeping.md) |
 
-This directory is the single source for two sites:
+## Reference
 
-- [hpm.readthedocs.io](https://hpm.readthedocs.io/) builds it with mdBook
-  (`book.toml`, `.readthedocs.yaml`), driven by `SUMMARY.md`.
-- [docs.tumbletrove.com/hpm/](https://docs.tumbletrove.com/hpm/) pulls it in
-  via the `tumbletrove-docs` assembler, driven by `manifest.toml`.
+- [CLI](cli.md): every command and flag.
+- [The `hpm.toml` manifest](manifest.md): every section and key.
+- [Configuration](configuration.md): `~/.hpm/config.toml`.
+- [The `hpm.lock` lock file](lockfile.md)
+- [Files and directories](files.md)
+- [Environment variables](environment-variables.md)
+- [Registry formats](registry-formats.md)
+- [Troubleshooting](troubleshooting.md)
+- [Upgrade notes](upgrading.md)
 
-Adding or renaming a page means updating **both** `SUMMARY.md` and
-`manifest.toml`, or it will go missing from one of the two sites.
+## How it works
+
+- [How Houdini loads hpm packages](houdini-integration.md)
+- [Python environments](python-guide.md)
+- [Registries](registries.md)
+- [Security](security.md)
+- [Design notes](design-notes.md)
+
+## Contributing
+
+- [Architecture](architecture.md)
+- [API overview](api-overview.md)
+- [Testing guide](testing.md)
+- [CONTRIBUTING.md](https://github.com/3db-dk/hpm/blob/main/CONTRIBUTING.md): development setup, workflow, and how these docs are published.

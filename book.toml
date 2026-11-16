@@ -6,3 +6,8 @@ src = "docs"
 
 [output.html]
 git-repository-url = "https://github.com/3db-dk/hpm"
+
+# Pages that moved. `docs/user-guide.md` was split into the Getting started,
+# Guides and Reference sections.
+[output.html.redirect]
+"/user-guide.html" = "quickstart.html"

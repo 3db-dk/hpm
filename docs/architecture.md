@@ -55,9 +55,7 @@ depend on the library crates and skip the CLI entirely).
 
 Python tooling — bundled `uv`, content-addressable venvs, the
 Houdini→Python ABI mapping, and per-script venv resolution — lives in
-`hpm_core::python`. It was a separate `hpm-python` crate through 0.16
-but folded into `hpm-core` since it had no consumers other than
-`hpm-core` and `hpm-cli`.
+`hpm_core::python`.
 
 `hpm-package` and `hpm-assets` are the workspace leaves — neither depends on
 another HPM crate. `hpm-config` depends on `hpm-package` (for the registry
@@ -111,8 +109,7 @@ pub struct PackageManifest {
 }
 // All collections and section structs use `#[serde(default,
 // skip_serializing_if = ...)]` so an absent TOML section round-trips to
-// the same in-memory representation as an empty one. `Option` was
-// removed in 0.17 — see CHANGELOG.
+// the same in-memory representation as an empty one.
 
 pub struct PackageScripts {
     pub commands: IndexMap<String, ScriptEntry>,  // flat entries under [scripts]
@@ -129,8 +126,8 @@ pub enum ScriptEntry {
 }
 
 pub struct ScriptEnv {
-    pub cmd: EnvValue,             // flat string or [{ when = { os }, set }, ...]
-    pub python: Option<String>,        // e.g. "3.11"
+    pub cmd: ScriptCommand,            // flat string or [{ when = { os }, set }, ...]
+    pub python: Option<PythonTag>,     // e.g. "3.11"
     pub requirements: Vec<String>,     // e.g. ["PySide6>=6.6"]
     pub label: Option<String>,         // display name for UIs; hpm never acts on it
     pub description: Option<String>,   // one-line description for tooltips/help
@@ -280,7 +277,7 @@ that every chosen version's `deps` on the others hold: a pin stands as
 written, and an unpinned package takes its newest non-yanked version that
 supports the Houdini, backtracking when that version cannot coexist with
 the rest. A requirement on a package outside the set constrains nothing;
-it does not add the package. TumbleTrove Desktop writes a project's
+it does not add the package. An embedding application can write a project's
 manifest from these selections, which is what keeps a release that breaks
 an older version of a dependent package from reaching projects on that
 version.
@@ -331,7 +328,8 @@ client runs the same flow.
  │     remove-and-recopy that breaks on Windows when Houdini is open),  │
  │     but still get one exec_mode::ensure_repaired sweep — nothing     │
  │     else ever revisits a tree installed by an older hpm.             │
- │  4. Merge [python_dependencies] from root + every dep manifest       │
+ │  4. Merge [python_dependencies] from every installed dep manifest    │
+ │     (the root manifest's own are used by package-env scripts only)   │
  │     Python ABI = root manifest's [compat].houdini lower bound        │
  │  5. Ensure managed CPython installed under ~/.hpm/uv-python/         │
  │     (uv python install <ver>) — auto-downloads on clean machines     │
@@ -411,44 +409,13 @@ in each venv, which list the HPM packages using that venv.
 
 ## Storage architecture
 
-HPM stores everything under `~/.hpm/` on every supported platform. The
-layout is content-addressable where it helps:
-
-```text
-~/.hpm/
-├── config.toml
-├── packages/                       # canonical CAS — written by StorageManager
-│   ├── slug@1.0.0/                 # registry / URL installs
-│   │   ├── hpm.toml
-│   │   ├── (package sources)
-│   │   └── … (Houdini convention subdirs)
-│   ├── slug@1.0.0.exec-modes       # executable-bit sweep stamp; sits
-│   │                               # beside the tree, not in it, since
-│   │                               # the package checksum covers contents
-│   ├── slug@1.0.0.files.json       # install record: path, size and
-│   │                               # sha256 of every installed file,
-│   │                               # written last; read by verify
-│   └── _dev/                       # path-installed (dev) packages
-│       └── slug@1.0.0/             # never substituted for a registry hit
-│           └── …                   # at the same (slug, version)
-├── fetch/                          # ArchiveFetcher staging — extracted
-│   └── creator-slug-1.0.0/         # archives live here briefly before
-│                                   # install_into_cas copies into packages/
-├── venvs/
-│   └── <12-char hash>/             # hash of resolved set + Python version
-│       ├── pyvenv.cfg
-│       ├── bin/                    # or Scripts/ on Windows
-│       ├── lib/pythonX.Y/site-packages/
-│       └── metadata.json
-├── cache/                          # download archive cache
-├── registry/                       # one subdir per registry
-│   └── <registry name>/
-├── tools/                          # bundled uv binary
-├── uv-cache/                       # isolated uv cache
-├── uv-config/
-├── uv-python/                      # managed CPython installs (UV_PYTHON_INSTALL_DIR)
-└── fetch/                          # staging for downloaded archives
-```
+[Files and directories](files.md) is the reference for the on-disk layout.
+This section explains how the store is written. Two details of the layout
+matter below: the store is keyed `<slug>@<version>/` with the
+`.exec-modes` stamp and `.files.json` install record *beside* each tree
+(the package checksum covers the tree's contents, so nothing hpm adds may
+live inside it), and `fetch/` is where `ArchiveFetcher` extracts an archive
+before `install_into_cas` copies it into the store.
 
 `hpm install` routes URL/registry deps through a two-step flow:
 `ArchiveFetcher` downloads + extracts into `~/.hpm/fetch/`,
@@ -456,19 +423,6 @@ then `StorageManager::install_into_cas` copies into the canonical CAS at
 `~/.hpm/packages/<slug>@<version>/`. Path deps skip the fetcher entirely
 and go straight to `~/.hpm/packages/_dev/<slug>@<version>/` via
 `install_as_dev_copy`.
-
-Per-project:
-
-```text
-<project>/
-├── hpm.toml
-├── hpm.lock
-└── .hpm/
-    ├── config.toml                 # optional
-    └── packages/
-        ├── utility-nodes.json      # generated Houdini manifests, one per dep
-        └── material-library.json   # absolute paths into the global CAS
-```
 
 Global packages are shared across projects; each project holds only the
 per-dependency Houdini manifest and a lockfile. This keeps disk usage sane
@@ -653,8 +607,8 @@ on a Windows junction would recurse into and delete the user's workspace
 on the next sync or orphan sweep.
 
 Both styles set `InstalledPackage::is_dev = true`. That flag flows
-through to `build_houdini_package`, which forwards it to
-`ManifestEnvEntry::lower(.., is_dev)`. The `install_source` axis on each
+through to `build_houdini_package`, which forwards it, as an `InstallSource`, to
+`ManifestEnvEntry::lower`. The `install_source` axis on each
 conditional `[runtime]` variant is filtered there: variants gated to
 `"dev"` only survive for path-installed packages, variants gated to
 `"registry"` only survive for registry/URL installs, and variants with no
@@ -693,66 +647,25 @@ The Python layer runs on four ideas, in descending order of importance:
 
 ### Hash function
 
-```rust
-// crates/hpm-core/src/python/types.rs
-impl ResolvedDependencySet {
-    pub fn hash(&self) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(format!("python:{}", self.python_version));
-        for (name, version) in &self.packages {
-            hasher.update(format!("{}:{}", name, version));
-        }
-        hasher
-            .finalize()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>()[..16]
-            .to_string()
-    }
-}
-```
-
-`packages` is a `BTreeMap<String, String>`, so it iterates in sorted order
-without an explicit sort. Only names and versions are hashed — extras are
-not part of the resolved set.
+`ResolvedDependencySet::hash` (`crates/hpm-core/src/python/types.rs`) is a
+SHA-256 over `python:<version>` followed by each `name:version` pair,
+truncated to 16 hex characters. `packages` is a `BTreeMap`, so iteration is
+sorted without an explicit sort. Only names and versions are hashed; extras
+are not part of the resolved set.
 
 ### Houdini→Python mapping
 
-| Houdini | Python |
-|---------|--------|
-| 20.5+ | 3.11 |
-| 21.x | 3.11 |
-| 22.x | 3.13 |
-
-The mapping is sourced from the lower bound of the **root** manifest's
-`[compat].houdini` — the project's Houdini build is what determines the
-embedded CPython ABI that wheels in the venv must match. A dependency
-package's own `[compat].houdini` describes a compatibility floor (the
-oldest Houdini it runs on) and is **not** consulted for ABI selection: a
-`[compat].houdini = ">=21.0"` package consumed by a Houdini-22 project
-still gets a 3.13 venv.
-
-Unsupported versions return an error. No silent fallback — an ABI-mismatched
-venv would break C-extension imports at Houdini launch instead of surfacing
-the mapping gap at install time. Houdini 19.x (Python 3.7) and 20.0–20.4
-(Python 3.9) are unsupported: their Python interpreters are past upstream EOL.
+`map_houdini_to_python_version` (`python/collection.rs`) holds the table
+shown in [Python environments](python-guide.md#which-python). It is applied
+to the lower bound of the **root** manifest's `[compat].houdini`; a
+dependency's own range is not consulted. Unsupported versions return an
+error rather than a fallback. Adding a Houdini major means adding an arm
+there and updating the table in the user docs.
 
 ### Generated Houdini manifest
 
-```json
-{
-  "hpath": ["/Users/me/.hpm/packages/studio/my-tool@1.0.0"],
-  "env": [
-    {
-      "PYTHONPATH": {
-        "method": "prepend",
-        "value": "/Users/me/.hpm/venvs/a1b2c3d4e5f6/lib/python3.11/site-packages"
-      }
-    }
-  ],
-  "enable": "houdini_version >= '20.5'"
-}
-```
+[How Houdini loads hpm packages](houdini-integration.md#what-hpm-install-writes)
+shows the emitted file.
 
 `method: "prepend"` delegates path-separator handling to Houdini so the same
 manifest works on Windows (`;`) and Unix (`:`) without embedding an
@@ -790,9 +703,9 @@ use hpm_config::{Config, RegistrySourceConfig, RegistryType};
 
 let mut config = Config::default();
 config.add_registry(RegistrySourceConfig {
-    name: "tumbletrove".into(),
-    url: "https://api.tumbletrove.com/v1/registry".into(),
-    registry_type: RegistryType::Api,
+    name: "studio".into(),
+    url: "git@git.studio.example:pipeline/hpm-index.git".into(),
+    registry_type: RegistryType::Git,
 });
 config.install.parallel_downloads = std::num::NonZeroUsize::new(4).unwrap();
 ```
@@ -820,9 +733,3 @@ resolution), which constructs them through `from_configs_with_auth`. `ProjectMan
 delegates with `None`, so anonymous use is unchanged. As with the
 `RegistrySet` variant, refreshing tokens are handled by rebuilding the
 `ProjectManager` per operation.
-
-### Plugin system
-
-Not implemented. The CLI surface is currently fixed at compile time. A
-dynamic plugin system is on the roadmap but not prioritized — most studios
-are better served by wrapping HPM in a higher-level pipeline tool.
