@@ -72,6 +72,10 @@ indexmap = { version = "2.14", features = ["serde"] }
 zip = { version = "9.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 tar = "0.4"
 flate2 = "1.1"
+# Solid `.tar.zst` release archives (`hpm pack --solid`, experimental): one
+# zstd stream over the whole tar, so near-identical files compress against
+# each other. `zstdmt` lets the level-19 pack use every core.
+zstd = { version = "0.13", features = ["zstdmt"] }
 
 [profile.release]
 lto = true

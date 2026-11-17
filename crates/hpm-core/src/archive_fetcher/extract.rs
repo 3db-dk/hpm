@@ -13,7 +13,15 @@ use super::FetchError;
 enum ArchiveFormat {
     Zip,
     TarGz,
+    /// A tar compressed as one zstd stream (`hpm pack --solid`).
+    TarZst,
 }
+
+/// The largest zstd window (log2) a solid archive may ask the decoder for.
+/// `hpm pack` writes 27 (128 MiB), the limit stock zstd decoders accept
+/// unasked; 30 (1 GiB) leaves room for a larger window later while still
+/// bounding the memory one archive can make the decoder allocate.
+const ZSTD_WINDOW_LOG_MAX: u32 = 30;
 
 /// Sniff the archive format from the file's leading bytes.
 ///
@@ -30,8 +38,11 @@ fn detect_archive_format(archive_path: &Path) -> Result<ArchiveFormat, FetchErro
     if n >= 2 && magic[0] == 0x1F && magic[1] == 0x8B {
         return Ok(ArchiveFormat::TarGz);
     }
+    if n >= 4 && magic == [0x28, 0xB5, 0x2F, 0xFD] {
+        return Ok(ArchiveFormat::TarZst);
+    }
     Err(FetchError::ExtractionError(format!(
-        "Unrecognized archive format (magic bytes: {:02X?}); expected ZIP (PK..) or gzip/tar.gz (1F 8B)",
+        "Unrecognized archive format (magic bytes: {:02X?}); expected ZIP (PK..), gzip/tar.gz (1F 8B) or zstd/tar.zst (28 B5 2F FD)",
         &magic[..n]
     )))
 }
@@ -112,7 +123,21 @@ fn extract_with_limits(
     let mut budget = ExtractBudget::new(limits);
     match detect_archive_format(archive_path)? {
         ArchiveFormat::Zip => extract_zip_sync(archive_path, target_dir, &mut budget),
-        ArchiveFormat::TarGz => extract_tar_gz_sync(archive_path, target_dir, &mut budget),
+        ArchiveFormat::TarGz => extract_tar_sync(
+            || Ok(Box::new(GzDecoder::new(std::fs::File::open(archive_path)?))),
+            target_dir,
+            &mut budget,
+        ),
+        ArchiveFormat::TarZst => extract_tar_sync(
+            || {
+                let file = std::io::BufReader::new(std::fs::File::open(archive_path)?);
+                let mut decoder = zstd::stream::read::Decoder::with_buffer(file)?;
+                decoder.window_log_max(ZSTD_WINDOW_LOG_MAX)?;
+                Ok(Box::new(decoder))
+            },
+            target_dir,
+            &mut budget,
+        ),
     }
 }
 
@@ -340,18 +365,18 @@ fn find_common_root_prefix(names: &[String]) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Extract a gzipped tar archive to the target directory (blocking operation).
-fn extract_tar_gz_sync(
-    archive_path: &Path,
+/// Extract a compressed tar archive to the target directory (blocking
+/// operation). `open` yields a fresh decompressed stream of the archive each
+/// time it is called (gzip or zstd).
+fn extract_tar_sync(
+    open: impl Fn() -> std::io::Result<Box<dyn Read>>,
     target_dir: &Path,
     budget: &mut ExtractBudget,
 ) -> Result<(), FetchError> {
     // Pass 1: enumerate entry names so we can detect a common root prefix.
     // The tar crate's `Archive` is single-pass, so we open it twice.
     let names = {
-        let file = std::fs::File::open(archive_path)?;
-        let gz = GzDecoder::new(file);
-        let mut archive = tar::Archive::new(gz);
+        let mut archive = tar::Archive::new(open()?);
         let mut names = Vec::new();
         for entry in archive
             .entries()
@@ -375,9 +400,7 @@ fn extract_tar_gz_sync(
     std::fs::create_dir_all(target_dir)?;
 
     // Pass 2: extract.
-    let file = std::fs::File::open(archive_path)?;
-    let gz = GzDecoder::new(file);
-    let mut archive = tar::Archive::new(gz);
+    let mut archive = tar::Archive::new(open()?);
 
     for entry in archive
         .entries()

@@ -268,6 +268,11 @@ pub enum Commands {
         /// `[compat].houdini` or the version cannot be expressed there.
         #[arg(long)]
         sidefx: bool,
+        /// Experimental: also write a solid `.tar.zst` (one zstd stream with
+        /// long-distance matching) next to the zip. The zip is unchanged;
+        /// only hpm builds that know the format can install the `.tar.zst`.
+        #[arg(long, hide = true)]
+        solid: bool,
     },
     /// Run security audit on dependencies
     Audit {
@@ -609,6 +614,7 @@ async fn run_command(
             platform,
             verify_assets,
             sidefx,
+            solid,
         } => {
             let config = load_cli_config()?;
             // `--json` and the global `--output json*` are equivalent here:
@@ -624,6 +630,7 @@ async fn run_command(
                     platform,
                     verify_assets,
                     sidefx,
+                    solid,
                 },
                 console,
             )

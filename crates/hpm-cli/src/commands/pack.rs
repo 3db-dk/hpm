@@ -27,6 +27,8 @@ pub struct PackOptions {
     /// re-zipped. Fails the pack when the manifest declares something
     /// hpackage cannot represent.
     pub sidefx: bool,
+    /// Also write a solid `.tar.zst` next to the zip (experimental).
+    pub solid: bool,
 }
 
 /// CLI entry for `hpm pack`: resolve the signing key, run
@@ -40,6 +42,7 @@ pub async fn execute(config: &Config, options: PackOptions, console: &mut Consol
         platform,
         verify_assets,
         sidefx,
+        solid,
     } = options;
 
     let package_dir = super::manifest_utils::package_dir(manifest)?;
@@ -73,6 +76,7 @@ pub async fn execute(config: &Config, options: PackOptions, console: &mut Consol
             NativePackageTarget::Generic
         },
         verify_assets,
+        solid,
     };
     // Zip I/O; keep it off the async runtime.
     let outcome = match tokio::task::spawn_blocking(move || packer::pack_package(request))
@@ -105,7 +109,7 @@ pub async fn execute(config: &Config, options: PackOptions, console: &mut Consol
     if json {
         // Machine-readable JSON output for CI. Single-line payload; the
         // shape is an established contract and must not change.
-        let json_output = serde_json::json!({
+        let mut json_output = serde_json::json!({
             "archive": result.archive_path.display().to_string(),
             "sha256": result.checksum,
             "signature": result.signature,
@@ -113,6 +117,16 @@ pub async fn execute(config: &Config, options: PackOptions, console: &mut Consol
             "platform": result.platform,
             "assets": asset_index.assets,
         });
+        // Only with --solid, so the payload without it is unchanged.
+        if let Some(solid) = &outcome.solid {
+            json_output["solid"] = serde_json::json!({
+                "format": "tar.zst",
+                "archive": solid.archive_path.display().to_string(),
+                "sha256": solid.checksum,
+                "signature": solid.signature,
+                "key_id": solid.key_id,
+            });
+        }
         console.stdout(serde_json::to_string(&json_output).unwrap());
     } else {
         // Human-readable output
@@ -123,6 +137,10 @@ pub async fn execute(config: &Config, options: PackOptions, console: &mut Consol
         }
         console.stdout(format!("  archive: {}", result.archive_path.display()));
         console.stdout(format!("  sha256:  {}", result.checksum));
+        if let Some(solid) = &outcome.solid {
+            console.stdout(format!("  solid:   {}", solid.archive_path.display()));
+            console.stdout(format!("  sha256:  {}", solid.checksum));
+        }
         if let Some(ref p) = result.platform {
             console.stdout(format!("  platform: {}", p));
         }

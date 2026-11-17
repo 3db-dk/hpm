@@ -27,6 +27,10 @@ pub struct PackRequest {
     /// Fail, and remove the archive, when a declared operator source is not
     /// in it, instead of warning.
     pub verify_assets: bool,
+    /// Also write a solid `.tar.zst` next to the zip (experimental). The zip
+    /// stays the primary archive every hpm can install; the solid one is
+    /// smaller for packages with many near-identical files.
+    pub solid: bool,
 }
 
 /// A packed archive with its operator index, the manifest it was packed
@@ -37,6 +41,8 @@ pub struct PackOutcome {
     pub manifest: PackageManifest,
     pub asset_index: AssetIndex,
     pub warnings: Vec<PackWarning>,
+    /// The solid `.tar.zst` written next to the zip, when requested.
+    pub solid: Option<PackResult>,
 }
 
 /// Something a pack reports without failing.
@@ -146,6 +152,7 @@ pub fn pack_package(request: PackRequest) -> Result<PackOutcome, PackError> {
         platform,
         target,
         verify_assets,
+        solid,
     } = request;
     let mut warnings = Vec::new();
 
@@ -232,11 +239,39 @@ pub fn pack_package(request: PackRequest) -> Result<PackOutcome, PackError> {
         );
     }
 
+    // The solid archive carries the very entries the zip does (same staging,
+    // same layout), so the zip's asset index describes it too.
+    let solid = if solid {
+        match super::pack_as(
+            super::ArchiveKind::TarZst,
+            &dir,
+            &content_prefix,
+            &manifest.package.version,
+            &output_dir,
+            key.as_ref(),
+            platform.as_ref(),
+            &manifest.stage,
+            ArchiveLayout {
+                inject_files: &inject_files,
+                content_prefix: Some(&content_prefix),
+            },
+        ) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                remove_archive(&result.archive_path);
+                return Err(e);
+            }
+        }
+    } else {
+        None
+    };
+
     Ok(PackOutcome {
         result,
         manifest,
         asset_index,
         warnings,
+        solid,
     })
 }
 
@@ -385,6 +420,7 @@ mod tests {
             platform: None,
             target: NativePackageTarget::Generic,
             verify_assets: false,
+            solid: false,
         })
         .unwrap();
         assert_eq!(
@@ -426,6 +462,7 @@ mod tests {
                 platform: None,
                 target: NativePackageTarget::Generic,
                 verify_assets: false,
+                solid: false,
             })
             .unwrap();
             let file = outcome.result.archive_path.file_name().unwrap().to_str().unwrap().to_string();
@@ -486,6 +523,7 @@ mod tests {
                 platform: None,
                 target: NativePackageTarget::Generic,
                 verify_assets: false,
+                solid: false,
             })
             .unwrap();
 

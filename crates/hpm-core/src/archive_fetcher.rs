@@ -10,6 +10,8 @@ use tokio::io::AsyncWriteExt;
 use tracing::{debug, info, warn};
 
 mod extract;
+#[cfg(test)]
+mod solid_tests;
 
 use extract::extract_archive_sync;
 

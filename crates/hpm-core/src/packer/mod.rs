@@ -21,7 +21,9 @@ pub(crate) mod prop_support;
 mod signing;
 mod stage_filter;
 
-pub use archive::{PackResult, create_archive};
+pub use archive::{ArchiveKind, PackResult, SolidParams, create_archive, create_archive_as};
+#[cfg(test)]
+pub(crate) use archive::{EntrySource, PlannedEntry, write_tar_zst, write_zip};
 pub use package::{PackOutcome, PackRequest, PackWarning, pack_package};
 pub use signing::{
     SigningKey, compute_archive_checksum, compute_bytes_checksum, load_signing_key,
@@ -171,11 +173,40 @@ pub fn pack(
     stage_config: &StageConfig,
     layout: ArchiveLayout<'_>,
 ) -> Result<PackResult, PackError> {
+    pack_as(
+        ArchiveKind::Zip,
+        package_dir,
+        name,
+        version,
+        output_dir,
+        signing_key,
+        platform,
+        stage_config,
+        layout,
+    )
+}
+
+/// [`pack`] in the given container: the archive, its SHA-256 and, with a
+/// key, its own Ed25519 signature (a solid archive is a different byte
+/// stream from the zip, so it is checksummed and signed on its own).
+#[allow(clippy::too_many_arguments)]
+pub fn pack_as(
+    kind: ArchiveKind,
+    package_dir: &Path,
+    name: &str,
+    version: &str,
+    output_dir: &Path,
+    signing_key: Option<&SigningKey>,
+    platform: Option<&Platform>,
+    stage_config: &StageConfig,
+    layout: ArchiveLayout<'_>,
+) -> Result<PackResult, PackError> {
     let ignore = build_ignore_rules(package_dir)?;
 
     let stage_filter = StageFilter::new(stage_config, platform)?;
 
-    let archive_path = create_archive(
+    let archive_path = create_archive_as(
+        kind,
         package_dir,
         name,
         version,
