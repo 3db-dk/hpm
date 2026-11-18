@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `hpm_core::registry::solve::solve_with` chooses versions for a set of
+  packages together with the packages those versions require. The caller
+  passes the packages it can offer; one is part of the answer only when a
+  chosen version requires it, and it constrains nothing while it is not. A
+  version whose requirements cannot be met, because the required package has
+  no version that fits or rules the version out itself, is passed over for an
+  older one. A caller that added required packages to the set and solved
+  again could alternate between two answers without ever finishing. `solve`
+  is unchanged.
+
 ### Documentation
 
 - The documentation is restructured. The single user guide is split into

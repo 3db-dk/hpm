@@ -277,7 +277,21 @@ that every chosen version's `deps` on the others hold: a pin stands as
 written, and an unpinned package takes its newest non-yanked version that
 supports the Houdini, backtracking when that version cannot coexist with
 the rest. A requirement on a package outside the set constrains nothing;
-it does not add the package. An embedding application can write a project's
+it does not add the package.
+
+`solve_with` also takes packages that are *available*. One of those is part
+of the answer exactly when a chosen version requires it, directly or through
+another available package, and it constrains nothing while it is not. A
+version whose requirements cannot be met, because the required package has
+no version that fits or rules that version out itself, is passed over for an
+older one. An application that wants required packages installed offers
+them, and offers again whatever the answer's versions require that it had
+not fetched yet, until nothing is missing. The choice has to be made inside
+the search: adding a required package to the set and removing it when the
+next answer no longer requires it can alternate between two answers and
+never finish.
+
+An embedding application can write a project's
 manifest from these selections, which is what keeps a release that breaks
 an older version of a dependent package from reaching projects on that
 version.
