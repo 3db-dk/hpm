@@ -27,11 +27,23 @@
 //!   Houdini, newest first, and the search backtracks, so the result is the
 //!   first acceptable assignment in input order: earlier packages get their
 //!   newest fitting version before later ones are considered.
-//! - **Requirements constrain the set; they do not extend it.** A `deps`
-//!   entry naming a package outside the set is ignored here. A caller that
-//!   wants such packages installed adds them to the set and solves again
-//!   until nothing new is required (TumbleTrove Desktop does), since only
-//!   it knows which packages the user has switched off.
+//! - **Requirements constrain the set; they extend it only with what the
+//!   caller offers.** A `deps` entry naming a package the caller did not
+//!   pass is ignored. [`solve_with`] also takes packages that are
+//!   *available*: one of those is part of the answer exactly when a chosen
+//!   version requires it, directly or through another, and it constrains
+//!   nothing while it is not. A caller that wants required packages
+//!   installed offers them, and offers again whatever the answer's versions
+//!   require that it had not fetched yet, until nothing is missing. Only the
+//!   caller knows which packages the user has switched off, so it decides
+//!   what to offer.
+//!
+//!   Whether a required package is present has to be decided in the search.
+//!   A caller that added required packages to the set as ordinary roots,
+//!   and dropped them again when a later answer no longer required them,
+//!   never finished when a required package's own requirements moved the
+//!   version that required it: the package was dropped, the newer version
+//!   came back, and it was required again.
 
 use super::types::RegistryEntry;
 use hpm_package::HoudiniRange;
@@ -181,27 +193,73 @@ pub fn solve(
     roots: &[Root<'_>],
     houdini: Option<HoudiniTarget>,
 ) -> Result<Vec<Selection>, SolveError> {
+    solve_with(roots, &[], houdini)
+}
+
+/// [`solve`], with packages that join the set only when required.
+///
+/// Each of `available` is part of the answer exactly when a version chosen
+/// for a root requires it, directly or through other available packages. One
+/// that is not required is left out and constrains nothing. One that is
+/// required is chosen like a root: its newest version that fits, held to
+/// every requirement on it, and its own requirements hold the rest. A
+/// version whose requirement no version of an available package can meet is
+/// not chosen, so a root falls back to an older version whose requirements
+/// can be met.
+///
+/// An available package with no usable version (all yanked, or none for the
+/// target Houdini) is not an error by itself: it rules out the versions that
+/// require it. A name that is also a root is a root.
+///
+/// Selections come back with the roots first, in their order, then the
+/// required packages in the order the search came to need them. Every root
+/// is settled before any available package is, so the roots get the best
+/// versions for which the rest can be completed.
+pub fn solve_with(
+    roots: &[Root<'_>],
+    available: &[Root<'_>],
+    houdini: Option<HoudiniTarget>,
+) -> Result<Vec<Selection>, SolveError> {
     let mut unique: Vec<&Root<'_>> = Vec::new();
     for root in roots {
         if !unique.iter().any(|r| r.name == root.name) {
             unique.push(root);
         }
     }
+    let listed = unique.len();
+    for root in available {
+        if !unique.iter().any(|r| r.name == root.name) {
+            unique.push(root);
+        }
+    }
 
     let mut candidates: Vec<Vec<Candidate<'_>>> = Vec::with_capacity(unique.len());
-    for root in &unique {
-        candidates.push(candidates_for(root, houdini)?);
+    let mut unusable: Vec<Option<String>> = Vec::with_capacity(unique.len());
+    for (i, root) in unique.iter().enumerate() {
+        match candidates_for(root, houdini) {
+            Ok(c) => {
+                candidates.push(c);
+                unusable.push(None);
+            }
+            Err(e) if i >= listed => {
+                candidates.push(Vec::new());
+                unusable.push(Some(e.to_string()));
+            }
+            Err(e) => return Err(e),
+        }
     }
 
     // Pins first: they cannot move, so placing them early makes every
     // unpinned package's check against them immediate.
-    let mut order: Vec<usize> = (0..unique.len()).collect();
-    order.sort_by_key(|&i| unique[i].pin.is_none());
+    let mut agenda: Vec<usize> = (0..listed).collect();
+    agenda.sort_by_key(|&i| unique[i].pin.is_none());
 
     let mut search = Search {
         names: unique.iter().map(|r| r.name).collect(),
         candidates: &candidates,
-        order: &order,
+        unusable: &unusable,
+        listed,
+        agenda,
         chosen: vec![0; unique.len()],
         steps: 0,
         deepest: None,
@@ -209,16 +267,18 @@ pub fn solve(
     match search.place(0) {
         Ok(true) => {}
         Ok(false) => {
-            let (pos, rejected) = search.deepest.take().unwrap_or_default();
+            let (_, package, rejected) = search.deepest.take().unwrap_or_default();
             return Err(SolveError::Conflict {
-                name: unique[order[pos]].name.to_string(),
+                name: unique[package].name.to_string(),
                 rejected,
             });
         }
         Err(e) => return Err(e),
     }
 
-    Ok((0..unique.len())
+    let required = search.agenda.iter().copied().filter(|&i| i >= listed);
+    Ok((0..listed)
+        .chain(required)
         .map(|i| {
             let c = &candidates[i][search.chosen[i]];
             Selection {
@@ -276,26 +336,37 @@ fn candidates_for<'a>(
 }
 
 struct Search<'s, 'a> {
+    /// Every package: the roots, then the available ones.
     names: Vec<&'s str>,
     candidates: &'s [Vec<Candidate<'a>>],
-    order: &'s [usize],
-    /// Candidate index per root (indexed like `names`), valid for the roots
-    /// placed so far.
+    /// Per package, why it has no candidates. Only an available package can
+    /// be in that state; for a root it is the solve's error.
+    unusable: &'s [Option<String>],
+    /// How many of `names` are roots.
+    listed: usize,
+    /// The packages to place, in order: the roots, then each available
+    /// package as a placed version comes to require it. What a candidate
+    /// adds is taken back when the search moves off that candidate.
+    agenda: Vec<usize>,
+    /// Candidate index per package (indexed like `names`), valid for the
+    /// packages placed so far.
     chosen: Vec<usize>,
     steps: usize,
-    /// The furthest position the search failed at, with why each candidate
-    /// there was refused — the most informative failure to report.
-    deepest: Option<(usize, Vec<Rejection>)>,
+    /// The furthest position the search failed at and the package there,
+    /// with why each of its candidates was refused: the most informative
+    /// failure to report.
+    deepest: Option<(usize, usize, Vec<Rejection>)>,
 }
 
 impl Search<'_, '_> {
     fn place(&mut self, pos: usize) -> Result<bool, SolveError> {
-        if pos == self.order.len() {
+        if pos == self.agenda.len() {
             return Ok(true);
         }
-        let root = self.order[pos];
+        let root = self.agenda[pos];
+        let candidates = self.candidates;
         let mut rejected = Vec::new();
-        for (ci, cand) in self.candidates[root].iter().enumerate() {
+        for (ci, cand) in candidates[root].iter().enumerate() {
             self.steps += 1;
             if self.steps > MAX_STEPS {
                 return Err(SolveError::TooComplex(MAX_STEPS));
@@ -308,21 +379,43 @@ impl Search<'_, '_> {
                 continue;
             }
             self.chosen[root] = ci;
+            let planned = self.agenda.len();
+            for dep in cand.deps() {
+                if let Some(required) = self.available(&dep.name)
+                    && !self.agenda.contains(&required)
+                {
+                    self.agenda.push(required);
+                }
+            }
             if self.place(pos + 1)? {
                 return Ok(true);
             }
+            self.agenda.truncate(planned);
         }
-        if self.deepest.as_ref().is_none_or(|(p, _)| pos >= *p) && !rejected.is_empty() {
-            self.deepest = Some((pos, rejected));
+        if self.deepest.as_ref().is_none_or(|(p, _, _)| pos >= *p) && !rejected.is_empty() {
+            self.deepest = Some((pos, root, rejected));
         }
         Ok(false)
     }
 
-    /// The first requirement between `cand` (for `root`) and the roots
-    /// already placed that does not hold, in words.
+    /// The index of the available package called `name`, if there is one.
+    fn available(&self, name: &str) -> Option<usize> {
+        (self.listed..self.names.len()).find(|&i| self.names[i] == name)
+    }
+
+    /// The first requirement between `cand` (for `root`) and the packages
+    /// already placed that does not hold, in words; or a requirement of
+    /// `cand` on an available package that has no version to offer.
     fn clash(&self, root: usize, cand: &Candidate<'_>, pos: usize) -> Option<String> {
         let name = self.names[root];
-        for &other in &self.order[..pos] {
+        for dep in cand.deps() {
+            if let Some(required) = self.available(&dep.name)
+                && let Some(why) = &self.unusable[required]
+            {
+                return Some(format!("requires {}, and {}", dep.name, why));
+            }
+        }
+        for &other in &self.agenda[..pos] {
             let other_name = self.names[other];
             let placed = &self.candidates[other][self.chosen[other]];
             for dep in cand.deps().iter().filter(|d| d.name == other_name) {
@@ -797,6 +890,283 @@ mod tests {
                     prop_assert!(roots.iter().any(|r| candidates_for(r, target).is_err()), "{e}");
                     prop_assert_eq!(expected, None);
                 }
+            }
+        }
+    }
+
+    // ---- Packages that join only when required ---------------------------
+
+    const MODEL: &str = "b/model";
+    const PIPE: &str = "a/pipe";
+    const UTIL: &str = "b/util";
+
+    fn root<'a>(name: &'a str, versions: &'a [RegistryEntry]) -> Root<'a> {
+        Root {
+            name,
+            pin: None,
+            versions,
+        }
+    }
+
+    #[test]
+    fn a_required_package_joins_after_the_roots() {
+        let pipe = vec![entry(PIPE, "2.0.0", None, &[(UTIL, ">=1")])];
+        let util = vec![
+            entry(UTIL, "1.1.0", None, &[]),
+            entry(UTIL, "0.9.0", None, &[]),
+        ];
+        let model = vec![entry(MODEL, "1.0.0", None, &[])];
+        let sel = solve_with(
+            &[root(PIPE, &pipe), root(MODEL, &model)],
+            &[root(UTIL, &util)],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            versions(&sel),
+            [(PIPE, "2.0.0"), (MODEL, "1.0.0"), (UTIL, "1.1.0")]
+        );
+    }
+
+    /// An available package nobody requires is not in the answer, and what
+    /// it requires holds nobody: here it would otherwise pull Pipe back.
+    #[test]
+    fn an_available_package_nobody_requires_is_left_out_and_constrains_nothing() {
+        let pipe = vec![
+            entry(PIPE, "2.0.0", None, &[]),
+            entry(PIPE, "1.0.0", None, &[]),
+        ];
+        let util = vec![entry(UTIL, "1.0.0", None, &[(PIPE, "<2")])];
+        let sel = solve_with(&[root(PIPE, &pipe)], &[root(UTIL, &util)], None).unwrap();
+        assert_eq!(versions(&sel), [(PIPE, "2.0.0")]);
+    }
+
+    /// The newest Model requires Pipe, and Pipe works only with the older
+    /// Model. The newest Model's requirements cannot be met, so the answer
+    /// is the older Model, which needs no Pipe. Adding Pipe as a root and
+    /// dropping it when the answer stopped requiring it alternated between
+    /// the two for ever.
+    #[test]
+    fn a_required_package_that_rules_out_its_requirer_moves_the_requirer() {
+        let model = vec![
+            entry(MODEL, "2.0.0", None, &[(PIPE, ">=1")]),
+            entry(MODEL, "1.0.0", None, &[]),
+        ];
+        let pipe = vec![entry(PIPE, "1.0.0", None, &[(MODEL, "<2")])];
+        let sel = solve_with(&[root(MODEL, &model)], &[root(PIPE, &pipe)], None).unwrap();
+        assert_eq!(versions(&sel), [(MODEL, "1.0.0")]);
+    }
+
+    /// The same without a cycle: the newest Pipe needs a Util that another
+    /// root rules out, so Pipe falls back to the version that needs none.
+    #[test]
+    fn a_requirement_another_root_rules_out_moves_the_requirer() {
+        let pipe = vec![
+            entry(PIPE, "2.0.0", None, &[(UTIL, ">=2")]),
+            entry(PIPE, "1.0.0", None, &[]),
+        ];
+        let model = vec![entry(MODEL, "1.0.0", None, &[(UTIL, "<2")])];
+        let util = vec![
+            entry(UTIL, "2.0.0", None, &[]),
+            entry(UTIL, "1.0.0", None, &[]),
+        ];
+        let sel = solve_with(
+            &[root(PIPE, &pipe), root(MODEL, &model)],
+            &[root(UTIL, &util)],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            versions(&sel),
+            [(PIPE, "1.0.0"), (MODEL, "1.0.0"), (UTIL, "1.0.0")]
+        );
+    }
+
+    #[test]
+    fn requirements_are_followed_through_required_packages() {
+        let pipe = vec![entry(PIPE, "1.0.0", None, &[(MODEL, ">=1")])];
+        let model = vec![entry(MODEL, "1.0.0", None, &[(UTIL, "<1")])];
+        let util = vec![
+            entry(UTIL, "1.0.0", None, &[]),
+            entry(UTIL, "0.9.0", None, &[]),
+        ];
+        let sel = solve_with(
+            &[root(PIPE, &pipe)],
+            &[root(UTIL, &util), root(MODEL, &model)],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            versions(&sel),
+            [(PIPE, "1.0.0"), (MODEL, "1.0.0"), (UTIL, "0.9.0")]
+        );
+    }
+
+    /// A required package with nothing for the target Houdini rules out the
+    /// versions that require it; when that leaves none, the conflict says
+    /// which requirement and why.
+    #[test]
+    fn a_required_package_with_no_usable_version_rules_out_its_requirers() {
+        let util = vec![entry(UTIL, "1.0.0", Some(">=22,<=22"), &[])];
+        let both = vec![
+            entry(PIPE, "2.0.0", None, &[(UTIL, ">=1")]),
+            entry(PIPE, "1.0.0", None, &[]),
+        ];
+        let target = HoudiniTarget::parse("21.0");
+        let sel = solve_with(&[root(PIPE, &both)], &[root(UTIL, &util)], target).unwrap();
+        assert_eq!(versions(&sel), [(PIPE, "1.0.0")]);
+
+        let only = vec![entry(PIPE, "2.0.0", None, &[(UTIL, ">=1")])];
+        let err = solve_with(&[root(PIPE, &only)], &[root(UTIL, &util)], target).unwrap_err();
+        let text = err.to_string();
+        assert!(matches!(err, SolveError::Conflict { ref name, .. } if name == PIPE));
+        assert!(
+            text.contains("requires b/util, and no version of b/util supports Houdini 21.0"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_name_offered_both_ways_is_a_root() {
+        let util = vec![entry(UTIL, "1.0.0", None, &[])];
+        let sel = solve_with(&[root(UTIL, &util)], &[root(UTIL, &util)], None).unwrap();
+        assert_eq!(versions(&sel), [(UTIL, "1.0.0")]);
+    }
+
+    // ---- Property: solve_with agrees with brute force --------------------
+    //
+    // The same pools as above, with each package drawn as a root or as
+    // available, so a requirement often names an available package and that
+    // package's own requirements often name a root.
+
+    /// One package's place in a brute-force assignment: the candidate chosen
+    /// for it, or `None` for an available package left out.
+    type Assignment = Vec<Option<usize>>;
+
+    /// Whether `assignment` is an answer: every root present, every
+    /// requirement of a present version on a package in play met by a
+    /// present version, and the available packages present exactly the ones
+    /// reachable from the roots through those requirements.
+    fn is_answer(
+        names: &[&str],
+        is_root: &[bool],
+        per_package: &[Vec<Candidate<'_>>],
+        assignment: &Assignment,
+    ) -> bool {
+        let n = names.len();
+        let index = |name: &str| names.iter().position(|x| *x == name);
+        if (0..n).any(|i| is_root[i] && assignment[i].is_none()) {
+            return false;
+        }
+        let mut reachable = is_root.to_vec();
+        let mut queue: Vec<usize> = (0..n).filter(|&i| is_root[i]).collect();
+        while let Some(i) = queue.pop() {
+            let Some(ci) = assignment[i] else {
+                return false;
+            };
+            for dep in per_package[i][ci].deps() {
+                let Some(j) = index(&dep.name) else { continue };
+                match assignment[j] {
+                    Some(cj) if meets(&dep.req, &per_package[j][cj]) => {}
+                    _ => return false,
+                }
+                if !reachable[j] {
+                    reachable[j] = true;
+                    queue.push(j);
+                }
+            }
+        }
+        (0..n).all(|i| reachable[i] == assignment[i].is_some())
+    }
+
+    /// Every answer, by brute force over all assignments.
+    fn all_answers(
+        names: &[&str],
+        is_root: &[bool],
+        per_package: &[Vec<Candidate<'_>>],
+    ) -> Vec<Assignment> {
+        let n = names.len();
+        // Per package: one more state than it has candidates, the last
+        // meaning "left out".
+        let states: Vec<usize> = per_package.iter().map(|c| c.len() + 1).collect();
+        let mut found = Vec::new();
+        let mut idx = vec![0usize; n];
+        loop {
+            let assignment: Assignment = (0..n)
+                .map(|i| (idx[i] < per_package[i].len()).then_some(idx[i]))
+                .collect();
+            if is_answer(names, is_root, per_package, &assignment) {
+                found.push(assignment);
+            }
+            let mut k = n;
+            loop {
+                if k == 0 {
+                    return found;
+                }
+                k -= 1;
+                idx[k] += 1;
+                if idx[k] < states[k] {
+                    break;
+                }
+                idx[k] = 0;
+            }
+        }
+    }
+
+    proptest! {
+        /// What `solve_with` returns is an answer, its roots' versions are
+        /// the best any answer has (earlier roots first, newest first), and
+        /// it refuses only when there is no answer at all.
+        #[test]
+        fn prop_solve_with_matches_brute_force(
+            (lists, pins, houdini) in arb_problem(),
+            is_root in prop::collection::vec(any::<bool>(), 3),
+        ) {
+            let target = houdini.and_then(HoudiniTarget::parse);
+            let make = |i: usize| Root {
+                name: NAMES[i],
+                pin: if is_root[i] { pins[i].as_deref() } else { None },
+                versions: &lists[i],
+            };
+            let roots: Vec<Root<'_>> = (0..3).filter(|&i| is_root[i]).map(make).collect();
+            let available: Vec<Root<'_>> = (0..3).filter(|&i| !is_root[i]).map(make).collect();
+            let root_error = roots.iter().any(|r| candidates_for(r, target).is_err());
+
+            // An available package with nothing to offer has no candidates,
+            // which is exactly what leaves "left out" as its only state.
+            let per_package: Vec<Vec<Candidate<'_>>> = (0..3)
+                .map(|i| candidates_for(&make(i), target).unwrap_or_default())
+                .collect();
+            let answers = if root_error {
+                Vec::new()
+            } else {
+                all_answers(&NAMES, &is_root, &per_package)
+            };
+            let root_choices = |a: &Assignment| -> Vec<usize> {
+                (0..3).filter(|&i| is_root[i]).map(|i| a[i].unwrap()).collect()
+            };
+
+            match solve_with(&roots, &available, target) {
+                Ok(sel) => {
+                    let got: Assignment = (0..3)
+                        .map(|i| {
+                            sel.iter().find(|s| s.name == NAMES[i]).map(|s| {
+                                per_package[i].iter().position(|c| c.version == s.version).unwrap()
+                            })
+                        })
+                        .collect();
+                    prop_assert!(answers.contains(&got), "not an answer: {:?}", versions(&sel));
+                    let best = answers.iter().map(root_choices).min().unwrap();
+                    prop_assert_eq!(root_choices(&got), best, "a better choice for the roots exists");
+                    let root_names: Vec<&str> = roots.iter().map(|r| r.name).collect();
+                    let first: Vec<&str> = sel.iter().take(roots.len()).map(|s| s.name.as_str()).collect();
+                    prop_assert_eq!(first, root_names, "roots first, in order");
+                }
+                Err(SolveError::Conflict { .. }) => {
+                    prop_assert!(!root_error);
+                    prop_assert!(answers.is_empty(), "refused, but {:?} is an answer", answers[0]);
+                }
+                Err(e) => prop_assert!(root_error, "{e}"),
             }
         }
     }
