@@ -11,7 +11,7 @@ Diagnostics go to stderr, results to stdout.
 ## Installing hpm in a job
 
 ```sh
-VERSION=0.40.2
+VERSION=0.41.0
 BASE=https://github.com/3db-dk/hpm/releases/download/v$VERSION
 curl -fsSLO $BASE/hpm-v$VERSION-linux-x86_64
 curl -fsSLO $BASE/hpm-v$VERSION-linux-x86_64.sha256
