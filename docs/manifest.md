@@ -130,9 +130,11 @@ checksum for each dependency, so later installs reproduce the same bytes.
 
 ### Versions and ranges
 
-A full version (`"1.0.0"`) means exactly that version, here as everywhere in
-the manifest. Anything else is a range in Cargo's syntax: `"^1.0"`,
-`"~1.2"`, `">=1.0, <2"`.
+A full version (`"1.0.0"`) on its own means exactly that version, here as
+everywhere in the manifest. Anything else is a range in Cargo's syntax:
+`"^1.0"`, `"~1.2"`, `">=1.0, <2"`. Inside a comma list each comparator
+follows Cargo, so a bare full version there is a caret: `">=1.0, 1.2.3"`
+means `">=1.0, ^1.2.3"`.
 
 Which of the two to write depends on who reads the manifest:
 
@@ -147,8 +149,11 @@ Which of the two to write depends on who reads the manifest:
   (an application that embeds hpm can) gives each unpinned package
   the newest version whose `[compat].houdini` supports the project's Houdini
   and whose ranges agree with the versions chosen for the other packages,
-  and adds a required package the project does not list. Give an upper
-  bound when a dependency's next release may break you:
+  and adds a required package the project does not list. It never
+  chooses a yanked version of a package the project does not pin, whatever
+  the range says, an exact one included: a yanked version is installed only
+  where the project itself names it at that version. Give an upper bound
+  when a dependency's next release may break you:
 
   ```toml
   [dependencies]
