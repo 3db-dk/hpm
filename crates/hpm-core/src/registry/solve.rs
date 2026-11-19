@@ -24,9 +24,16 @@
 //!   cannot coexist are a [`SolveError::Conflict`].
 //! - **An unpinned package takes the newest version that fits.** Candidates
 //!   are the non-yanked versions whose `houdini_compat` admits the target
-//!   Houdini, newest first, and the search backtracks, so the result is the
+//!   Houdini and that have a build for the host platform (or a universal
+//!   one), newest first, and the search backtracks, so the result is the
 //!   first acceptable assignment in input order: earlier packages get their
-//!   newest fitting version before later ones are considered.
+//!   newest fitting version before later ones are considered. The platform
+//!   rule is the one install applies when it picks a build
+//!   ([`has_build_for`](super::has_build_for)): a version the solver chose
+//!   but install could not download for this machine would fail the whole
+//!   install with `NoCompatibleBuild`, even when an older version covers
+//!   the host. A pinned version with no host build is still selected, and
+//!   install names it.
 //! - **Requirements constrain the set; they extend it only with what the
 //!   caller offers.** A `deps` entry naming a package the caller did not
 //!   pass is ignored. [`solve_with`] also takes packages that are
@@ -46,7 +53,7 @@
 //!   came back, and it was required again.
 
 use super::types::RegistryEntry;
-use hpm_package::HoudiniRange;
+use hpm_package::{HoudiniRange, Platform};
 use semver::Version;
 use std::fmt;
 
@@ -141,6 +148,10 @@ pub enum SolveError {
     /// No non-yanked version of an unpinned package supports the target.
     #[error("no version of {name} supports Houdini {houdini}")]
     NoVersionForHoudini { name: String, houdini: String },
+    /// Versions of an unpinned package support the target Houdini, but none
+    /// of them has a build for the host platform.
+    #[error("no version of {name} has a build for {platform}")]
+    NoVersionForPlatform { name: String, platform: String },
     /// The packages' requirements of each other cannot all be met. `name` is
     /// the package the search could not place; `rejected` says why its
     /// candidates were refused.
@@ -189,6 +200,9 @@ impl Candidate<'_> {
 /// Choose a version for every root. See the module docs for the rules.
 /// Selections come back in the order of `roots`; a name given twice is
 /// solved once, at its first position.
+///
+/// Versions are held to the platform this process runs on
+/// ([`Platform::current`]); see [`solve_for_host`] to name another.
 pub fn solve(
     roots: &[Root<'_>],
     houdini: Option<HoudiniTarget>,
@@ -207,18 +221,34 @@ pub fn solve(
 /// not chosen, so a root falls back to an older version whose requirements
 /// can be met.
 ///
-/// An available package with no usable version (all yanked, or none for the
-/// target Houdini) is not an error by itself: it rules out the versions that
+/// An available package with no usable version (all yanked, none for the
+/// target Houdini, or none with a build for the host) is not an error by
+/// itself: it rules out the versions that
 /// require it. A name that is also a root is a root.
 ///
 /// Selections come back with the roots first, in their order, then the
 /// required packages in the order the search came to need them. Every root
 /// is settled before any available package is, so the roots get the best
 /// versions for which the rest can be completed.
+///
+/// Versions are held to the platform this process runs on
+/// ([`Platform::current`]), the one install downloads for.
 pub fn solve_with(
     roots: &[Root<'_>],
     available: &[Root<'_>],
     houdini: Option<HoudiniTarget>,
+) -> Result<Vec<Selection>, SolveError> {
+    solve_for_host(roots, available, houdini, Platform::current())
+}
+
+/// [`solve_with`] for the platform `host` rather than this process's. `None`
+/// is a host hpm does not recognise, which only a universal build serves, as
+/// at install.
+pub fn solve_for_host(
+    roots: &[Root<'_>],
+    available: &[Root<'_>],
+    houdini: Option<HoudiniTarget>,
+    host: Option<Platform>,
 ) -> Result<Vec<Selection>, SolveError> {
     let mut unique: Vec<&Root<'_>> = Vec::new();
     for root in roots {
@@ -236,7 +266,7 @@ pub fn solve_with(
     let mut candidates: Vec<Vec<Candidate<'_>>> = Vec::with_capacity(unique.len());
     let mut unusable: Vec<Option<String>> = Vec::with_capacity(unique.len());
     for (i, root) in unique.iter().enumerate() {
-        match candidates_for(root, houdini) {
+        match candidates_for(root, houdini, host) {
             Ok(c) => {
                 candidates.push(c);
                 unusable.push(None);
@@ -293,6 +323,7 @@ pub fn solve_with(
 fn candidates_for<'a>(
     root: &Root<'a>,
     houdini: Option<HoudiniTarget>,
+    host: Option<Platform>,
 ) -> Result<Vec<Candidate<'a>>, SolveError> {
     if let Some(pin) = root.pin {
         let entry = root.versions.iter().find(|e| e.version == pin);
@@ -309,9 +340,23 @@ fn candidates_for<'a>(
             name: root.name.to_string(),
         });
     }
-    let mut fitting: Vec<Candidate<'a>> = live
+    let for_houdini: Vec<&RegistryEntry> = live
         .into_iter()
         .filter(|e| houdini.is_none_or(|h| h.admits(e)))
+        .collect();
+    if for_houdini.is_empty() {
+        return Err(SolveError::NoVersionForHoudini {
+            name: root.name.to_string(),
+            houdini: houdini.map(|h| h.to_string()).unwrap_or_default(),
+        });
+    }
+    // One entry per version is the version view, whose survivor is the
+    // host's build when the version has one (`dedupe_builds_by_version`);
+    // a list of raw build rows works too, keeping the rows this host can
+    // install. Either way, the rule is install's.
+    let mut fitting: Vec<Candidate<'a>> = for_houdini
+        .into_iter()
+        .filter(|e| super::has_build_for(e, host))
         .map(|e| Candidate {
             version: e.version.clone(),
             semver: Version::parse(&e.version).ok(),
@@ -319,9 +364,11 @@ fn candidates_for<'a>(
         })
         .collect();
     if fitting.is_empty() {
-        return Err(SolveError::NoVersionForHoudini {
+        return Err(SolveError::NoVersionForPlatform {
             name: root.name.to_string(),
-            houdini: houdini.map(|h| h.to_string()).unwrap_or_default(),
+            platform: host
+                .map(|p| p.as_str().to_string())
+                .unwrap_or_else(Platform::host_id),
         });
     }
     // Newest first. A version that is not semver cannot meet a requirement
@@ -458,7 +505,7 @@ pub(crate) fn requirement(req: &str) -> Option<super::requirement::VersionRequir
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::types::RegistryDep;
+    use crate::registry::types::{PlatformTag, RegistryDep};
     use proptest::prelude::*;
 
     fn entry(
@@ -728,6 +775,107 @@ mod tests {
         );
     }
 
+    /// The registry lists 2.0.0 for Windows only and 1.0.0 for every
+    /// platform; a Linux host takes 1.0.0, which install can download.
+    fn split_by_platform() -> Vec<RegistryEntry> {
+        let mut windows_only = entry(TT, "2.0.0", None, &[]);
+        windows_only.platform = Some(PlatformTag::Platform(Platform::WindowsX86_64));
+        let mut linux = entry(TT, "1.0.0", None, &[]);
+        linux.platform = Some(PlatformTag::Platform(Platform::LinuxX86_64));
+        let universal = entry(TT, "0.9.0", None, &[]);
+        vec![windows_only, linux, universal]
+    }
+
+    #[test]
+    fn an_unpinned_package_skips_a_version_with_no_build_for_the_host() {
+        let tt = split_by_platform();
+        let linux = solve_for_host(&[root(TT, &tt)], &[], None, Some(Platform::LinuxX86_64));
+        assert_eq!(linux.unwrap()[0].version, "1.0.0");
+        let windows = solve_for_host(&[root(TT, &tt)], &[], None, Some(Platform::WindowsX86_64));
+        assert_eq!(windows.unwrap()[0].version, "2.0.0");
+        // A universal build serves every host, a host hpm does not know too.
+        let mac = solve_for_host(&[root(TT, &tt)], &[], None, Some(Platform::MacosAarch64));
+        assert_eq!(mac.unwrap()[0].version, "0.9.0");
+        let unknown = solve_for_host(&[root(TT, &tt)], &[], None, None);
+        assert_eq!(unknown.unwrap()[0].version, "0.9.0");
+    }
+
+    #[test]
+    fn a_pin_with_no_build_for_the_host_is_kept() {
+        let tt = split_by_platform();
+        let pinned = Root {
+            name: TT,
+            pin: Some("2.0.0"),
+            versions: &tt,
+        };
+        let sel = solve_for_host(&[pinned], &[], None, Some(Platform::LinuxX86_64)).unwrap();
+        assert_eq!(sel[0].version, "2.0.0");
+    }
+
+    #[test]
+    fn nothing_for_the_host_is_its_own_error() {
+        let tt = &split_by_platform()[..1];
+        let err = solve_for_host(&[root(TT, tt)], &[], None, Some(Platform::LinuxX86_64));
+        assert_eq!(
+            err.unwrap_err(),
+            SolveError::NoVersionForPlatform {
+                name: TT.to_string(),
+                platform: "linux-x86_64".to_string(),
+            }
+        );
+    }
+
+    /// An offered package's newest version for another platform is passed
+    /// over, and one with nothing for the host rules out its requirers.
+    #[test]
+    fn an_offered_package_is_held_to_the_host_too() {
+        let tt = split_by_platform();
+        let tp = vec![
+            entry(TP, "2.0.0", None, &[(TT, ">=2")]),
+            entry(TP, "1.0.0", None, &[(TT, ">=1")]),
+        ];
+        let sel = solve_for_host(
+            &[root(TP, &tp)],
+            &[root(TT, &tt)],
+            None,
+            Some(Platform::LinuxX86_64),
+        );
+        assert_eq!(versions(&sel.unwrap()), [(TP, "1.0.0"), (TT, "1.0.0")]);
+
+        let only_windows = &tt[..1];
+        let err = solve_for_host(
+            &[root(TP, &tp[1..])],
+            &[root(TT, only_windows)],
+            None,
+            Some(Platform::LinuxX86_64),
+        )
+        .unwrap_err();
+        assert!(matches!(err, SolveError::Conflict { .. }), "{err}");
+        assert!(
+            err.to_string().contains("has a build for linux-x86_64"),
+            "{err}"
+        );
+    }
+
+    /// Raw build rows (one per platform) select the same version as the
+    /// deduplicated view, and the host's row.
+    #[test]
+    fn raw_build_rows_select_the_hosts_row() {
+        let mut linux = entry(TT, "2.0.0", None, &[]);
+        linux.platform = Some(PlatformTag::Platform(Platform::LinuxX86_64));
+        linux.dl = "https://pkg.example/linux.zip".into();
+        let mut windows = linux.clone();
+        windows.platform = Some(PlatformTag::Platform(Platform::WindowsX86_64));
+        windows.dl = "https://pkg.example/windows.zip".into();
+        let rows = vec![windows, linux];
+        let sel =
+            solve_for_host(&[root(TT, &rows)], &[], None, Some(Platform::LinuxX86_64)).unwrap();
+        assert_eq!(
+            sel[0].entry.as_ref().unwrap().dl,
+            "https://pkg.example/linux.zip"
+        );
+    }
+
     #[test]
     fn houdini_target_parsing() {
         assert_eq!(
@@ -761,6 +909,10 @@ mod tests {
     const NAMES: [&str; 3] = ["a/x", "a/y", "a/z"];
     const VERSIONS: [&str; 4] = ["0.1.0", "0.2.0", "1.0.0", "1.1.0"];
     const COMPATS: [Option<&str>; 3] = [None, Some(">=21"), Some(">=22,<=22")];
+    /// The host the property tests solve for, and the build platforms an
+    /// entry may carry: universal, the host's, another's.
+    const HOST: Platform = Platform::LinuxX86_64;
+    const PLATFORMS: [Option<Platform>; 3] = [None, Some(HOST), Some(Platform::WindowsX86_64)];
 
     fn arb_req() -> impl Strategy<Value = String> {
         (
@@ -776,8 +928,9 @@ mod tests {
             prop::sample::select(&COMPATS[..]),
             any::<bool>(),
             prop::collection::vec((prop::sample::select(&NAMES[..]), arb_req()), 0..3),
+            prop::sample::select(&PLATFORMS[..]),
         )
-            .prop_map(move |(v, compat, yanked, deps)| {
+            .prop_map(move |(v, compat, yanked, deps, platform)| {
                 let deps: Vec<(&str, &str)> = deps
                     .iter()
                     .filter(|(n, _)| *n != name)
@@ -785,6 +938,7 @@ mod tests {
                     .collect();
                 let mut e = entry(name, v, compat, &deps);
                 e.yanked = yanked && v != "0.1.0";
+                e.platform = platform.map(PlatformTag::Platform);
                 e
             })
     }
@@ -828,7 +982,7 @@ mod tests {
     fn brute_force(roots: &[Root<'_>], houdini: Option<HoudiniTarget>) -> Option<Vec<String>> {
         let per_root: Vec<Vec<Candidate<'_>>> = roots
             .iter()
-            .map(|r| candidates_for(r, houdini).ok())
+            .map(|r| candidates_for(r, houdini, Some(HOST)).ok())
             .collect::<Option<_>>()?;
         let mut idx = vec![0usize; roots.len()];
         loop {
@@ -875,19 +1029,19 @@ mod tests {
                 .collect();
             let target = houdini.and_then(HoudiniTarget::parse);
             let expected = brute_force(&roots, target);
-            match solve(&roots, target) {
+            match solve_for_host(&roots, &[], target, Some(HOST)) {
                 Ok(sel) => {
                     let got: Vec<String> = sel.iter().map(|s| s.version.clone()).collect();
                     prop_assert_eq!(Some(got), expected);
                 }
                 Err(SolveError::Conflict { .. }) => {
                     // Candidates existed for every root, but no combination fit.
-                    let had_candidates = roots.iter().all(|r| candidates_for(r, target).is_ok());
+                    let had_candidates = roots.iter().all(|r| candidates_for(r, target, Some(HOST)).is_ok());
                     prop_assert!(had_candidates);
                     prop_assert_eq!(expected, None);
                 }
                 Err(e) => {
-                    prop_assert!(roots.iter().any(|r| candidates_for(r, target).is_err()), "{e}");
+                    prop_assert!(roots.iter().any(|r| candidates_for(r, target, Some(HOST)).is_err()), "{e}");
                     prop_assert_eq!(expected, None);
                 }
             }
@@ -1130,12 +1284,12 @@ mod tests {
             };
             let roots: Vec<Root<'_>> = (0..3).filter(|&i| is_root[i]).map(make).collect();
             let available: Vec<Root<'_>> = (0..3).filter(|&i| !is_root[i]).map(make).collect();
-            let root_error = roots.iter().any(|r| candidates_for(r, target).is_err());
+            let root_error = roots.iter().any(|r| candidates_for(r, target, Some(HOST)).is_err());
 
             // An available package with nothing to offer has no candidates,
             // which is exactly what leaves "left out" as its only state.
             let per_package: Vec<Vec<Candidate<'_>>> = (0..3)
-                .map(|i| candidates_for(&make(i), target).unwrap_or_default())
+                .map(|i| candidates_for(&make(i), target, Some(HOST)).unwrap_or_default())
                 .collect();
             let answers = if root_error {
                 Vec::new()
@@ -1146,7 +1300,7 @@ mod tests {
                 (0..3).filter(|&i| is_root[i]).map(|i| a[i].unwrap()).collect()
             };
 
-            match solve_with(&roots, &available, target) {
+            match solve_for_host(&roots, &available, target, Some(HOST)) {
                 Ok(sel) => {
                     let got: Assignment = (0..3)
                         .map(|i| {
@@ -1168,6 +1322,177 @@ mod tests {
                 }
                 Err(e) => prop_assert!(root_error, "{e}"),
             }
+        }
+    }
+
+    // ---- Build rows and the host platform --------------------------------
+    //
+    // The brute force above takes its candidates from `candidates_for`, so
+    // it cannot catch a mistake in the filter itself. These properties check
+    // the answer against install's rule directly, and against the listing
+    // view (`dedupe_builds_by_version`) the solver is normally fed.
+
+    /// Build platforms a row may carry, for a host drawn from the same pool.
+    const BUILD_PLATFORMS: [Option<&str>; 5] = [
+        None,
+        Some("universal"),
+        Some("linux-x86_64"),
+        Some("windows-x86_64"),
+        Some("macos-aarch64"),
+    ];
+    const HOSTS: [Option<Platform>; 4] = [
+        Some(Platform::LinuxX86_64),
+        Some(Platform::WindowsX86_64),
+        Some(Platform::MacosAarch64),
+        None,
+    ];
+
+    /// A package's raw build rows, as a registry serves them: one to three
+    /// rows per version, differing only in platform, download and yanked,
+    /// the version's other metadata shared.
+    fn arb_rows(name: &'static str) -> impl Strategy<Value = Vec<RegistryEntry>> {
+        let builds = prop::collection::vec(
+            (prop::sample::select(&BUILD_PLATFORMS[..]), any::<bool>()),
+            1..4,
+        );
+        prop::collection::vec((arb_entry(name), builds), 1..5).prop_map(|versions| {
+            let mut seen = std::collections::HashSet::new();
+            let mut rows = Vec::new();
+            for (base, builds) in versions {
+                if !seen.insert(base.version.clone()) {
+                    continue;
+                }
+                for (i, (platform, yanked)) in builds.into_iter().enumerate() {
+                    let mut row = base.clone();
+                    row.platform = platform.map(|p| PlatformTag::from(p.to_string()));
+                    row.yanked = yanked;
+                    row.dl = format!("{}#{i}", base.dl);
+                    rows.push(row);
+                }
+            }
+            rows
+        })
+    }
+
+    /// Per package its rows, pin and whether it is a root; then the Houdini
+    /// and the host.
+    type RowProblem = (
+        Vec<Vec<RegistryEntry>>,
+        Vec<Option<String>>,
+        Vec<bool>,
+        Option<&'static str>,
+        Option<Platform>,
+    );
+
+    fn arb_row_problem() -> impl Strategy<Value = RowProblem> {
+        (
+            (arb_rows(NAMES[0]), arb_rows(NAMES[1]), arb_rows(NAMES[2]))
+                .prop_map(|(a, b, c)| vec![a, b, c]),
+            prop::collection::vec(
+                prop::option::weighted(
+                    0.3,
+                    prop::sample::select(&VERSIONS[..]).prop_map(str::to_string),
+                ),
+                3,
+            ),
+            prop::collection::vec(any::<bool>(), 3),
+            prop::sample::select(&[None, Some("21.0"), Some("22.0.1")][..]),
+            prop::sample::select(&HOSTS[..]),
+        )
+    }
+
+    /// Roots and available packages from a problem: `is_root[i]` places
+    /// package `i`; only a root carries its pin.
+    fn split<'a>(
+        lists: &'a [Vec<RegistryEntry>],
+        pins: &'a [Option<String>],
+        is_root: &[bool],
+    ) -> (Vec<Root<'a>>, Vec<Root<'a>>) {
+        let make = |i: usize| Root {
+            name: NAMES[i],
+            pin: if is_root[i] { pins[i].as_deref() } else { None },
+            versions: &lists[i],
+        };
+        (
+            (0..3).filter(|&i| is_root[i]).map(make).collect(),
+            (0..3).filter(|&i| !is_root[i]).map(make).collect(),
+        )
+    }
+
+    /// The error's kind, for comparing two solves that should fail alike.
+    fn kind(e: &SolveError) -> std::mem::Discriminant<SolveError> {
+        std::mem::discriminant(e)
+    }
+
+    proptest! {
+        /// Install's rule, checked without the solver's own filter: every
+        /// version chosen for an unpinned or offered package is live,
+        /// supports the Houdini, and is a row install can download on the
+        /// host; every pin is chosen as written.
+        #[test]
+        fn prop_every_unpinned_choice_is_installable(
+            (lists, pins, is_root, houdini, host) in arb_row_problem(),
+        ) {
+            let target = houdini.and_then(HoudiniTarget::parse);
+            let (roots, available) = split(&lists, &pins, &is_root);
+            let Ok(sel) = solve_for_host(&roots, &available, target, host) else {
+                return Ok(());
+            };
+            for s in &sel {
+                if let Some(pin) = roots.iter().find(|r| r.name == s.name).and_then(|r| r.pin) {
+                    prop_assert_eq!(&s.version, pin);
+                    continue;
+                }
+                let e = s.entry.as_ref().expect("an unpinned choice is a listed row");
+                prop_assert!(!e.yanked, "{} {} is yanked", s.name, s.version);
+                prop_assert!(target.is_none_or(|h| h.admits(e)));
+                let installable = match &e.platform {
+                    None => true,
+                    Some(tag) => tag.is_universal() || host.is_some_and(|h| tag.matches(h)),
+                };
+                prop_assert!(installable, "{} {} has no build for {:?}", s.name, s.version, host);
+            }
+        }
+
+        /// Solving the raw build rows and solving the listing view of them
+        /// (what `RegistrySet::get_versions` returns, and what callers pass)
+        /// choose the same versions, or fail the same way.
+        #[test]
+        fn prop_raw_rows_and_the_listing_solve_alike(
+            (lists, pins, is_root, houdini, host) in arb_row_problem(),
+        ) {
+            let target = houdini.and_then(HoudiniTarget::parse);
+            let listed: Vec<Vec<RegistryEntry>> = lists
+                .iter()
+                .map(|rows| crate::registry::dedupe_builds_by_version(rows.clone(), host))
+                .collect();
+            let (raw_roots, raw_available) = split(&lists, &pins, &is_root);
+            let (roots, available) = split(&listed, &pins, &is_root);
+            let raw = solve_for_host(&raw_roots, &raw_available, target, host);
+            let view = solve_for_host(&roots, &available, target, host);
+            match (raw, view) {
+                (Ok(a), Ok(b)) => prop_assert_eq!(versions(&a), versions(&b)),
+                (Err(a), Err(b)) => prop_assert_eq!(kind(&a), kind(&b), "{} vs {}", a, b),
+                (a, b) => prop_assert!(false, "raw {:?}, listing {:?}", a, b),
+            }
+        }
+
+        /// A universal build serves every host: when every row is universal,
+        /// the host makes no difference to the answer.
+        #[test]
+        fn prop_universal_builds_ignore_the_host(
+            (mut lists, pins, is_root, houdini, host) in arb_row_problem(),
+        ) {
+            for rows in &mut lists {
+                for (i, row) in rows.iter_mut().enumerate() {
+                    row.platform = (i % 2 == 0).then(|| PlatformTag::from("universal".to_string()));
+                }
+            }
+            let target = houdini.and_then(HoudiniTarget::parse);
+            let (roots, available) = split(&lists, &pins, &is_root);
+            let here = solve_for_host(&roots, &available, target, host);
+            let linux = solve_for_host(&roots, &available, target, Some(Platform::LinuxX86_64));
+            prop_assert_eq!(here, linux);
         }
     }
 }

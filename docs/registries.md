@@ -204,6 +204,8 @@ platform match first, then a `universal` build, and otherwise
 `NoCompatibleBuild` rather than a silent fall back to some other platform's
 archive. A version that has no build for your platform still *lists* — you can
 see it exists, and see its Houdini compatibility — it just won't install here.
+An application that embeds hpm and chooses versions for a whole project passes
+over such a version unless the project pins it.
 
 Use `--platform` on `hpm pack` to build for a platform other than the host;
 see [`hpm pack`](cli.md#hpm-pack).

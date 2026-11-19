@@ -155,7 +155,7 @@ install-time error rather than a silent fallback. See
 
 ## How it works
 
-- **Resolution** — `hpm install` selects each package on its own: the highest non-yanked version matching its version requirement. hpm-core's `registry::solve` chooses a whole set at once (each version's Houdini range and its requirements of the other packages), for applications that embed hpm; `hpm install` does not use it yet.
+- **Resolution** — `hpm install` selects each package on its own: the highest non-yanked version matching its version requirement. hpm-core's `registry::solve` chooses a whole set at once (each version's Houdini range, whether it has a build for the host, and its requirements of the other packages), for applications that embed hpm; `hpm install` does not use it yet.
 - **Lock file** — `hpm.lock` pins exact versions, sources, and SHA-256 checksums of Houdini packages. Python packages are resolved by uv on each install and are not pinned by it.
 - **Storage** — `~/.hpm/packages/` for packages, `~/.hpm/venvs/` for Python environments (same layout on Linux, macOS, Windows).
 - **Houdini integration** — `hpm install` writes one `{creator}.{slug}.json` per dependency into `<project>/.hpm/packages/`. Point Houdini's `HOUDINI_PACKAGE_PATH` at that directory, or use `hpm global` to install into Houdini's user preferences so a package loads in every session without a project.

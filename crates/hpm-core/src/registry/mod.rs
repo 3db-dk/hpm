@@ -473,7 +473,9 @@ fn vet_entry(
 /// the first row — so a version whose builds are all for other platforms
 /// still *lists*, carrying its own metadata, rather than vanishing from a
 /// version picker. Ruling it uninstallable here is
-/// [`select_build_for_host`]'s job at install time, not the listing's.
+/// [`select_build_for_host`]'s job at install time, not the listing's, and
+/// [`solve`] passes it over for an unpinned package ([`has_build_for`] on the
+/// survivor answers for the version).
 /// Non-yanked builds win over yanked ones within a version, so a yanked
 /// host build cannot hide a live one from `highest_matching`; a version whose
 /// builds are *all* yanked still lists, and still reads as yanked.
@@ -534,6 +536,19 @@ pub(crate) fn select_build(
     builds
         .iter()
         .find(|b| b.platform.as_ref().is_none_or(PlatformTag::is_universal))
+}
+
+/// Whether install could use `entry` on `host`: it is the host's build or a
+/// universal one. `None` is a host hpm does not recognise, which only a
+/// universal build serves.
+///
+/// This is the rule [`solve`] holds unpinned versions to. Called on an entry
+/// of the version view ([`RegistrySet::get_versions`]) it answers for the
+/// whole version, since that view keeps the host's build, then a universal
+/// one, when the version has either. Called on a raw build row it answers for
+/// that row.
+pub fn has_build_for(entry: &RegistryEntry, host: Option<hpm_package::Platform>) -> bool {
+    select_build(std::slice::from_ref(entry), host).is_some()
 }
 
 /// [`select_build`] against the current host, erroring with
@@ -757,6 +772,30 @@ mod dedupe_tests {
             // Every survivor is one of the rows that went in, unmodified.
             for e in &out {
                 prop_assert!(entries.contains(e));
+            }
+        }
+
+        /// `has_build_for` on a listed entry answers for its version: true
+        /// exactly when one of the version's live builds (all of them, when
+        /// every build is yanked) is the host's or universal. Callers that
+        /// rank the version view themselves rely on this.
+        #[test]
+        fn prop_has_build_for_answers_for_the_version(
+            entries in build_rows(),
+            host in prop::sample::select(vec![
+                Some(Platform::WindowsX86_64),
+                Some(Platform::LinuxX86_64),
+                Some(Platform::MacosAarch64),
+                None,
+            ]),
+        ) {
+            for listed in dedupe_builds_by_version(entries.clone(), host) {
+                let rows: Vec<&RegistryEntry> =
+                    entries.iter().filter(|e| e.version == listed.version).collect();
+                let live: Vec<&RegistryEntry> = rows.iter().copied().filter(|e| !e.yanked).collect();
+                let pool = if live.is_empty() { &rows } else { &live };
+                let expected = pool.iter().any(|e| has_build_for(e, host));
+                prop_assert_eq!(has_build_for(&listed, host), expected, "{}", listed.version);
             }
         }
 
