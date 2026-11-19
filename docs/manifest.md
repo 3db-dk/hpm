@@ -152,8 +152,11 @@ Which of the two to write depends on who reads the manifest:
   and adds a required package the project does not list. It never
   chooses a yanked version of a package the project does not pin, whatever
   the range says, an exact one included: a yanked version is installed only
-  where the project itself names it at that version. Give an upper bound
-  when a dependency's next release may break you:
+  where the project itself names it at that version. Nor does it choose a
+  version that has neither a build for the machine it installs on nor a
+  universal one; it takes the newest version that has. A version the
+  project pins is kept, and installing it fails with an error that names
+  it. Give an upper bound when a dependency's next release may break you:
 
   ```toml
   [dependencies]

@@ -275,8 +275,13 @@ ranges that version requires of other packages (its manifest's
 target Houdini, and any pins, and returns one version per package such
 that every chosen version's `deps` on the others hold: a pin stands as
 written, and an unpinned package takes its newest non-yanked version that
-supports the Houdini, backtracking when that version cannot coexist with
-the rest. A requirement on a package outside the set constrains nothing;
+supports the Houdini and has a build for the host (or a universal one),
+backtracking when that version cannot coexist with the rest. The platform
+rule is install's, and `registry::has_build_for` is that rule on its own for
+an application that ranks versions itself: the version views list a version
+with no build for the host, and a solver that chose it would fail the
+install with `NoCompatibleBuild` even when an older version would have
+installed. A requirement on a package outside the set constrains nothing;
 it does not add the package.
 
 `solve_with` also takes packages that are *available*. One of those is part
