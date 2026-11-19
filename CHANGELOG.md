@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `hpm_core::registry::solve::solve` and `solve_with` no longer choose a
+  version with no build for the host platform. Such a version still lists
+  (a version picker shows it), so an unpinned or offered package could be
+  given its newest version, which install then refused with
+  `NoCompatibleBuild`, although an older version had a build for the host.
+  The solver now applies install's rule: a version is a candidate only when
+  it has a build for the host or a universal one. A pinned version is kept
+  as before and install names it. A package with no such version is
+  `SolveError::NoVersionForPlatform`, a new variant, so a caller matching
+  `SolveError` exhaustively needs an arm for it.
+
+### Added
+
+- `hpm_core::registry::solve::solve_for_host` solves for a named platform
+  rather than the one hpm runs on.
+- `hpm_core::registry::has_build_for` says whether install could use a
+  registry entry on a given platform, the rule the solver applies, so a
+  caller that ranks versions itself does not need its own copy.
+
 ## [0.41.0] - 2026-11-18
 
 ### Added
