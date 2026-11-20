@@ -133,11 +133,85 @@ pub struct Selection {
     pub entry: Option<RegistryEntry>,
 }
 
-/// Why a version was ruled out, for [`SolveError::Conflict`].
+/// A version of the package [`SolveError::Conflict`] could not place, and
+/// everything that ruled it out against the versions selected at the time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejection {
     pub version: String,
-    pub reason: String,
+    /// At least one. The first is the one the error's text names.
+    pub causes: Vec<Cause>,
+}
+
+/// One reason a [`Rejection`]'s version could not be chosen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cause {
+    /// `by` requires the unplaced package with `requirement`, and this
+    /// version does not meet it.
+    ExcludedBy { by: Selected, requirement: String },
+    /// This version requires `selected.name` with `requirement`, and the
+    /// version selected for it does not meet it.
+    Requires {
+        requirement: String,
+        selected: Selected,
+    },
+    /// This version requires `name` with `requirement`, an available package
+    /// with no version to offer at all. `error` says why: it is a
+    /// [`SolveError::NoUsableVersion`], [`SolveError::NoVersionForHoudini`]
+    /// or [`SolveError::NoVersionForPlatform`] for `name`.
+    Unavailable {
+        name: String,
+        requirement: String,
+        error: Box<SolveError>,
+    },
+}
+
+impl fmt::Display for Cause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Cause::ExcludedBy { by, requirement } => write!(
+                f,
+                "is excluded by {} {}, which requires {requirement}",
+                by.name, by.version
+            ),
+            Cause::Requires {
+                requirement,
+                selected,
+            } => write!(
+                f,
+                "requires {} {requirement}, but {} is selected",
+                selected.name, selected.version
+            ),
+            Cause::Unavailable { name, error, .. } => write!(f, "requires {name}, and {error}"),
+        }
+    }
+}
+
+/// A package the search had selected when it refused a version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Selected {
+    pub name: String,
+    pub version: String,
+    pub origin: Origin,
+}
+
+/// How a package came into the set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Origin {
+    /// One of the roots: a package the project lists itself.
+    Listed { pinned: bool },
+    /// An available package that a selected version required. `chain` runs
+    /// from the root that started it to the version that requires this
+    /// package, so `chain[0]` is always [`Origin::Listed`]. When several
+    /// selected versions require the package, this is the one the search
+    /// came to it through.
+    Required { chain: Vec<PackageVersion> },
+}
+
+/// A package at a version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageVersion {
+    pub name: String,
+    pub version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -153,14 +227,19 @@ pub enum SolveError {
     #[error("no version of {name} has a build for {platform}")]
     NoVersionForPlatform { name: String, platform: String },
     /// The packages' requirements of each other cannot all be met. `name` is
-    /// the package the search could not place; `rejected` says why its
-    /// candidates were refused.
+    /// the package the search could not place and `origin` how it came into
+    /// the set. `rejected` has one entry per version it could take, newest
+    /// first, each with every requirement between that version and the
+    /// versions selected at the time that does not hold. All of those
+    /// selected versions belong to one assignment, so together they rule
+    /// out every version of `name`; they are a witness, not the only one.
     #[error(
         "no version of {name} works with the other packages: {}",
         describe(rejected)
     )]
     Conflict {
         name: String,
+        origin: Origin,
         rejected: Vec<Rejection>,
     },
     /// The search gave up. Not reachable at the sizes a project has; it
@@ -174,7 +253,10 @@ fn describe(rejected: &[Rejection]) -> String {
     let mut parts: Vec<String> = rejected
         .iter()
         .take(SHOWN)
-        .map(|r| format!("{} {}", r.version, r.reason))
+        .map(|r| match r.causes.first() {
+            Some(cause) => format!("{} {cause}", r.version),
+            None => r.version.clone(),
+        })
         .collect();
     if rejected.len() > SHOWN {
         parts.push(format!("and {} older", rejected.len() - SHOWN));
@@ -264,7 +346,7 @@ pub fn solve_for_host(
     }
 
     let mut candidates: Vec<Vec<Candidate<'_>>> = Vec::with_capacity(unique.len());
-    let mut unusable: Vec<Option<String>> = Vec::with_capacity(unique.len());
+    let mut unusable: Vec<Option<SolveError>> = Vec::with_capacity(unique.len());
     for (i, root) in unique.iter().enumerate() {
         match candidates_for(root, houdini, host) {
             Ok(c) => {
@@ -273,7 +355,7 @@ pub fn solve_for_host(
             }
             Err(e) if i >= listed => {
                 candidates.push(Vec::new());
-                unusable.push(Some(e.to_string()));
+                unusable.push(Some(e));
             }
             Err(e) => return Err(e),
         }
@@ -286,6 +368,8 @@ pub fn solve_for_host(
 
     let mut search = Search {
         names: unique.iter().map(|r| r.name).collect(),
+        pinned: unique[..listed].iter().map(|r| r.pin.is_some()).collect(),
+        via: vec![None; unique.len()],
         candidates: &candidates,
         unusable: &unusable,
         listed,
@@ -297,10 +381,17 @@ pub fn solve_for_host(
     match search.place(0) {
         Ok(true) => {}
         Ok(false) => {
-            let (_, package, rejected) = search.deepest.take().unwrap_or_default();
+            // A failure always records its position: the search fails only
+            // where every candidate of a package clashed (an available
+            // package with nothing to offer is never placed).
+            let deepest = search
+                .deepest
+                .take()
+                .expect("a failed search records where it failed");
             return Err(SolveError::Conflict {
-                name: unique[package].name.to_string(),
-                rejected,
+                name: unique[deepest.package].name.to_string(),
+                origin: deepest.origin,
+                rejected: deepest.rejected,
             });
         }
         Err(e) => return Err(e),
@@ -416,9 +507,14 @@ struct Search<'s, 'a> {
     /// Every package: the roots, then the available ones.
     names: Vec<&'s str>,
     candidates: &'s [Vec<Candidate<'a>>],
+    /// Per root, whether it is pinned.
+    pinned: Vec<bool>,
+    /// Per available package on the agenda, the package whose placed
+    /// version put it there. Entries for packages off the agenda are stale.
+    via: Vec<Option<usize>>,
     /// Per package, why it has no candidates. Only an available package can
     /// be in that state; for a root it is the solve's error.
-    unusable: &'s [Option<String>],
+    unusable: &'s [Option<SolveError>],
     /// How many of `names` are roots.
     listed: usize,
     /// The packages to place, in order: the roots, then each available
@@ -432,7 +528,24 @@ struct Search<'s, 'a> {
     /// The furthest position the search failed at and the package there,
     /// with why each of its candidates was refused: the most informative
     /// failure to report.
-    deepest: Option<(usize, usize, Vec<Rejection>)>,
+    deepest: Option<Failure>,
+}
+
+struct Failure {
+    pos: usize,
+    package: usize,
+    origin: Origin,
+    rejected: Vec<Rejection>,
+}
+
+/// A [`Cause`] as the search finds it: indices only, so refusing a
+/// candidate costs no names or chains. Only the failure that gets reported
+/// is spelled out ([`Search::spell`]). `dep` indexes the requiring
+/// candidate's `deps`.
+enum Clash {
+    Unavailable { dep: usize, package: usize },
+    Requires { dep: usize, other: usize },
+    ExcludedBy { dep: usize, other: usize },
 }
 
 impl Search<'_, '_> {
@@ -448,11 +561,9 @@ impl Search<'_, '_> {
             if self.steps > MAX_STEPS {
                 return Err(SolveError::TooComplex(MAX_STEPS));
             }
-            if let Some(reason) = self.clash(root, cand, pos) {
-                rejected.push(Rejection {
-                    version: cand.version.clone(),
-                    reason,
-                });
+            let clashes = self.clashes(root, cand, pos);
+            if !clashes.is_empty() {
+                rejected.push((ci, clashes));
                 continue;
             }
             self.chosen[root] = ci;
@@ -462,6 +573,7 @@ impl Search<'_, '_> {
                     && !self.agenda.contains(&required)
                 {
                     self.agenda.push(required);
+                    self.via[required] = Some(root);
                 }
             }
             if self.place(pos + 1)? {
@@ -469,8 +581,25 @@ impl Search<'_, '_> {
             }
             self.agenda.truncate(planned);
         }
-        if self.deepest.as_ref().is_none_or(|(p, _, _)| pos >= *p) && !rejected.is_empty() {
-            self.deepest = Some((pos, root, rejected));
+        // The packages before `pos` are still placed as they were when
+        // each candidate was refused, so the clashes can be spelled now.
+        if self.deepest.as_ref().is_none_or(|d| pos >= d.pos) && !rejected.is_empty() {
+            let rejected = rejected
+                .into_iter()
+                .map(|(ci, clashes)| {
+                    let cand = &candidates[root][ci];
+                    Rejection {
+                        version: cand.version.clone(),
+                        causes: clashes.iter().map(|c| self.spell(cand, c)).collect(),
+                    }
+                })
+                .collect();
+            self.deepest = Some(Failure {
+                pos,
+                package: root,
+                origin: self.origin(root),
+                rejected,
+            });
         }
         Ok(false)
     }
@@ -480,39 +609,97 @@ impl Search<'_, '_> {
         (self.listed..self.names.len()).find(|&i| self.names[i] == name)
     }
 
-    /// The first requirement between `cand` (for `root`) and the packages
-    /// already placed that does not hold, in words; or a requirement of
-    /// `cand` on an available package that has no version to offer.
-    fn clash(&self, root: usize, cand: &Candidate<'_>, pos: usize) -> Option<String> {
+    /// How `package` came into the set. Valid for a package on the agenda
+    /// whose requirers are placed: every package before the current
+    /// position, and the one at it.
+    fn origin(&self, package: usize) -> Origin {
+        if package < self.listed {
+            return Origin::Listed {
+                pinned: self.pinned[package],
+            };
+        }
+        let mut chain = Vec::new();
+        let mut at = package;
+        while at >= self.listed {
+            let requirer = self.via[at].expect("a required package records its requirer");
+            chain.push(PackageVersion {
+                name: self.names[requirer].to_string(),
+                version: self.placed(requirer).version.clone(),
+            });
+            at = requirer;
+        }
+        chain.reverse();
+        Origin::Required { chain }
+    }
+
+    fn placed(&self, package: usize) -> &Candidate<'_> {
+        &self.candidates[package][self.chosen[package]]
+    }
+
+    fn selected(&self, package: usize) -> Selected {
+        Selected {
+            name: self.names[package].to_string(),
+            version: self.placed(package).version.clone(),
+            origin: self.origin(package),
+        }
+    }
+
+    /// Every requirement between `cand` (for `root`) and the packages
+    /// already placed that does not hold, and every requirement of `cand`
+    /// on an available package that has no version to offer. Empty when
+    /// `cand` fits.
+    fn clashes(&self, root: usize, cand: &Candidate<'_>, pos: usize) -> Vec<Clash> {
         let name = self.names[root];
-        for dep in cand.deps() {
-            if let Some(required) = self.available(&dep.name)
-                && let Some(why) = &self.unusable[required]
+        let mut clashes = Vec::new();
+        for (dep, d) in cand.deps().iter().enumerate() {
+            if let Some(package) = self.available(&d.name)
+                && self.unusable[package].is_some()
             {
-                return Some(format!("requires {}, and {}", dep.name, why));
+                clashes.push(Clash::Unavailable { dep, package });
             }
         }
         for &other in &self.agenda[..pos] {
             let other_name = self.names[other];
-            let placed = &self.candidates[other][self.chosen[other]];
-            for dep in cand.deps().iter().filter(|d| d.name == other_name) {
-                if !meets(&dep.req, placed) {
-                    return Some(format!(
-                        "requires {} {}, but {} is selected",
-                        other_name, dep.req, placed.version
-                    ));
+            let placed = self.placed(other);
+            for (dep, d) in cand.deps().iter().enumerate() {
+                if d.name == other_name && !meets(&d.req, placed) {
+                    clashes.push(Clash::Requires { dep, other });
                 }
             }
-            for dep in placed.deps().iter().filter(|d| d.name == name) {
-                if !meets(&dep.req, cand) {
-                    return Some(format!(
-                        "is excluded by {} {}, which requires {}",
-                        other_name, placed.version, dep.req
-                    ));
+            for (dep, d) in placed.deps().iter().enumerate() {
+                if d.name == name && !meets(&d.req, cand) {
+                    clashes.push(Clash::ExcludedBy { dep, other });
                 }
             }
         }
-        None
+        clashes
+    }
+
+    /// `clash`, found for `cand`, as the [`Cause`] it reports. Valid while
+    /// the packages it names are placed as they were when it was found.
+    fn spell(&self, cand: &Candidate<'_>, clash: &Clash) -> Cause {
+        match *clash {
+            Clash::Unavailable { dep, package } => {
+                let d = &cand.deps()[dep];
+                Cause::Unavailable {
+                    name: d.name.clone(),
+                    requirement: d.req.clone(),
+                    error: Box::new(
+                        self.unusable[package]
+                            .clone()
+                            .expect("an unavailable package records why"),
+                    ),
+                }
+            }
+            Clash::Requires { dep, other } => Cause::Requires {
+                requirement: cand.deps()[dep].req.clone(),
+                selected: self.selected(other),
+            },
+            Clash::ExcludedBy { dep, other } => Cause::ExcludedBy {
+                by: self.selected(other),
+                requirement: self.placed(other).deps()[dep].req.clone(),
+            },
+        }
     }
 }
 
@@ -667,11 +854,28 @@ mod tests {
             },
         ];
         let err = solve(&roots, None).unwrap_err();
-        let SolveError::Conflict { name, rejected } = &err else {
+        let SolveError::Conflict {
+            name,
+            origin,
+            rejected,
+        } = &err
+        else {
             panic!("expected a conflict, got {err:?}");
         };
         assert_eq!(name, TP);
+        assert_eq!(*origin, Origin::Listed { pinned: true });
         assert_eq!(rejected[0].version, "1.74.3");
+        assert_eq!(
+            rejected[0].causes,
+            [Cause::Requires {
+                requirement: ">=0.47,<0.48".to_string(),
+                selected: Selected {
+                    name: TT.to_string(),
+                    version: "0.48.0".to_string(),
+                    origin: Origin::Listed { pinned: true },
+                },
+            }]
+        );
         assert!(err.to_string().contains(">=0.47,<0.48"), "{err}");
         assert!(err.to_string().contains("0.48.0"), "{err}");
     }
@@ -1352,6 +1556,291 @@ mod tests {
                 }
                 Err(e) => prop_assert!(root_error, "{e}"),
             }
+        }
+    }
+
+    // ---- What a conflict names ------------------------------------------
+
+    const RIG: &str = "b/rig";
+    const WOBL: &str = "b/wobl";
+    const KIT: &str = "c/kit";
+    const LICENSE: &str = "c/license";
+
+    /// Two listed packages need a shared package nobody lists, at versions
+    /// no release of it meets. The conflict names the shared package, says
+    /// who pulled it in, and names both requirers with their requirements,
+    /// as listed packages a user can act on.
+    #[test]
+    fn a_conflict_on_a_shared_package_names_the_listed_packages_that_require_it() {
+        let rig = vec![entry(RIG, "3.0.0", None, &[(KIT, ">=1.3")])];
+        let wobl = vec![entry(WOBL, "0.9.0", None, &[(KIT, "<1.3")])];
+        let kit = vec![
+            entry(KIT, "1.3.0", None, &[]),
+            entry(KIT, "1.2.0", None, &[]),
+        ];
+        let err = solve_with(
+            &[root(RIG, &rig), root(WOBL, &wobl)],
+            &[root(KIT, &kit)],
+            None,
+        )
+        .unwrap_err();
+        let SolveError::Conflict {
+            name,
+            origin,
+            rejected,
+        } = &err
+        else {
+            panic!("expected a conflict, got {err:?}");
+        };
+        assert_eq!(name, KIT);
+        let rig_3 = PackageVersion {
+            name: RIG.to_string(),
+            version: "3.0.0".to_string(),
+        };
+        assert_eq!(
+            *origin,
+            Origin::Required {
+                chain: vec![rig_3.clone()]
+            }
+        );
+        let listed = |name: &str, version: &str| Selected {
+            name: name.to_string(),
+            version: version.to_string(),
+            origin: Origin::Listed { pinned: false },
+        };
+        assert_eq!(
+            rejected,
+            &[
+                Rejection {
+                    version: "1.3.0".to_string(),
+                    causes: vec![Cause::ExcludedBy {
+                        by: listed(WOBL, "0.9.0"),
+                        requirement: "<1.3".to_string(),
+                    }],
+                },
+                Rejection {
+                    version: "1.2.0".to_string(),
+                    causes: vec![Cause::ExcludedBy {
+                        by: listed(RIG, "3.0.0"),
+                        requirement: ">=1.3".to_string(),
+                    }],
+                },
+            ]
+        );
+        assert_eq!(
+            err.to_string(),
+            "no version of c/kit works with the other packages: \
+             1.3.0 is excluded by b/wobl 0.9.0, which requires <1.3; \
+             1.2.0 is excluded by b/rig 3.0.0, which requires >=1.3"
+        );
+    }
+
+    /// A requirer two levels down is named with the chain that pulled it in,
+    /// and a version every selected requirer rules out names all of them.
+    #[test]
+    fn a_deeper_requirer_carries_its_chain_and_every_cause_is_named() {
+        let rig = vec![entry(RIG, "3.0.0", None, &[(KIT, ">=1")])];
+        let wobl = vec![entry(WOBL, "0.9.0", None, &[(LICENSE, "<2")])];
+        let kit = vec![entry(KIT, "1.3.0", None, &[(LICENSE, ">=2")])];
+        let license = vec![
+            entry(LICENSE, "2.0.0", None, &[]),
+            entry(LICENSE, "1.0.0", None, &[]),
+        ];
+        let err = solve_with(
+            &[root(RIG, &rig), root(WOBL, &wobl)],
+            &[root(KIT, &kit), root(LICENSE, &license)],
+            None,
+        )
+        .unwrap_err();
+        let SolveError::Conflict {
+            name,
+            origin,
+            rejected,
+        } = &err
+        else {
+            panic!("expected a conflict, got {err:?}");
+        };
+        assert_eq!(name, LICENSE);
+        let pv = |name: &str, version: &str| PackageVersion {
+            name: name.to_string(),
+            version: version.to_string(),
+        };
+        // Wobl is placed before Kit, so the search comes to License
+        // through Wobl.
+        assert_eq!(
+            *origin,
+            Origin::Required {
+                chain: vec![pv(WOBL, "0.9.0")]
+            }
+        );
+        let kit_by = Selected {
+            name: KIT.to_string(),
+            version: "1.3.0".to_string(),
+            origin: Origin::Required {
+                chain: vec![pv(RIG, "3.0.0")],
+            },
+        };
+        assert_eq!(rejected[0].version, "2.0.0");
+        assert_eq!(
+            rejected[1].causes,
+            [Cause::ExcludedBy {
+                by: kit_by,
+                requirement: ">=2".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_required_package_with_nothing_to_offer_is_named_with_its_own_error() {
+        let rig = vec![entry(RIG, "3.0.0", None, &[(KIT, ">=1")])];
+        let mut kit = vec![entry(KIT, "1.3.0", None, &[])];
+        kit[0].yanked = true;
+        let err = solve_with(&[root(RIG, &rig)], &[root(KIT, &kit)], None).unwrap_err();
+        let SolveError::Conflict { rejected, .. } = &err else {
+            panic!("expected a conflict, got {err:?}");
+        };
+        assert_eq!(
+            rejected[0].causes,
+            [Cause::Unavailable {
+                name: KIT.to_string(),
+                requirement: ">=1".to_string(),
+                error: Box::new(SolveError::NoUsableVersion {
+                    name: KIT.to_string()
+                }),
+            }]
+        );
+    }
+
+    /// Whether `version` meets `req`, by the grammar alone.
+    fn holds(req: &str, version: &str) -> bool {
+        requirement(req)
+            .zip(Version::parse(version).ok())
+            .is_some_and(|(r, v)| r.matches(&v))
+    }
+
+    proptest! {
+        /// A conflict tells the truth, and enough of it: every version of
+        /// the unplaced package it could take is named; every cause is a
+        /// requirement that the registry really declares and that really
+        /// fails; every selected package it names has one version and the
+        /// origin it really has; so the named requirements together rule out
+        /// every version of the unplaced package.
+        #[test]
+        fn prop_a_conflict_names_real_requirements_that_rule_out_every_version(
+            (lists, pins, houdini) in arb_problem(),
+            is_root in prop::collection::vec(any::<bool>(), 3),
+        ) {
+            let target = houdini.and_then(HoudiniTarget::parse);
+            let (roots, available) = split(&lists, &pins, &is_root);
+            let Err(SolveError::Conflict { name, origin, rejected }) =
+                solve_for_host(&roots, &available, target, Some(HOST))
+            else {
+                return Ok(());
+            };
+            let index = |n: &str| NAMES.iter().position(|&m| m == n).unwrap();
+            let make = |i: usize| Root {
+                name: NAMES[i],
+                pin: if is_root[i] { pins[i].as_deref() } else { None },
+                versions: &lists[i],
+            };
+            let deps_of = |n: &str, v: &str| -> Vec<RegistryDep> {
+                lists[index(n)].iter().find(|e| e.version == v).map(|e| e.deps.clone()).unwrap_or_default()
+            };
+            let requires = |n: &str, v: &str, on: &str, req: &str| {
+                deps_of(n, v).iter().any(|d| d.name == on && d.req == req)
+            };
+
+            // Every candidate is named, in the solver's order, with a cause.
+            let candidates: Vec<String> = candidates_for(&make(index(&name)), target, Some(HOST))
+                .unwrap()
+                .into_iter()
+                .map(|c| c.version)
+                .collect();
+            let named: Vec<String> = rejected.iter().map(|r| r.version.clone()).collect();
+            prop_assert_eq!(named, candidates);
+
+            let mut assignment: Vec<(String, String)> = Vec::new();
+            let mut check_origin = |pkg: &str, version: Option<&str>, origin: &Origin|
+                -> Result<(), TestCaseError>
+            {
+                if let Some(v) = version {
+                    match assignment.iter().find(|(n, _)| n == pkg) {
+                        Some((_, w)) => prop_assert_eq!(w.as_str(), v, "{} named at two versions", pkg),
+                        None => assignment.push((pkg.to_string(), v.to_string())),
+                    }
+                }
+                let i = index(pkg);
+                match origin {
+                    Origin::Listed { pinned } => {
+                        prop_assert!(is_root[i], "{} is not listed", pkg);
+                        prop_assert_eq!(*pinned, pins[i].is_some());
+                        if let (Some(pin), Some(v)) = (&pins[i], version) {
+                            prop_assert_eq!(pin.as_str(), v);
+                        }
+                    }
+                    Origin::Required { chain } => {
+                        prop_assert!(!is_root[i], "{} is listed", pkg);
+                        prop_assert!(!chain.is_empty());
+                        prop_assert!(is_root[index(&chain[0].name)], "chain starts unlisted");
+                        for link in chain.windows(2) {
+                            prop_assert!(!is_root[index(&link[1].name)]);
+                            prop_assert!(deps_of(&link[0].name, &link[0].version).iter().any(|d| d.name == link[1].name));
+                        }
+                        let last = chain.last().unwrap();
+                        prop_assert!(deps_of(&last.name, &last.version).iter().any(|d| d.name == pkg));
+                    }
+                }
+                Ok(())
+            };
+            check_origin(&name, None, &origin)?;
+
+            for r in &rejected {
+                prop_assert!(!r.causes.is_empty(), "{} {} has no cause", name, r.version);
+                for cause in &r.causes {
+                    match cause {
+                        Cause::ExcludedBy { by, requirement } => {
+                            prop_assert!(requires(&by.name, &by.version, &name, requirement));
+                            prop_assert!(!holds(requirement, &r.version));
+                            check_origin(&by.name, Some(&by.version), &by.origin)?;
+                        }
+                        Cause::Requires { requirement, selected } => {
+                            prop_assert!(requires(&name, &r.version, &selected.name, requirement));
+                            prop_assert!(!holds(requirement, &selected.version));
+                            check_origin(&selected.name, Some(&selected.version), &selected.origin)?;
+                        }
+                        Cause::Unavailable { name: on, requirement, error } => {
+                            prop_assert!(requires(&name, &r.version, on, requirement));
+                            prop_assert!(!is_root[index(on)]);
+                            prop_assert_eq!(
+                                Err(error.as_ref().clone()),
+                                candidates_for(&make(index(on)), target, Some(HOST)).map(|_| ())
+                            );
+                        }
+                    }
+                }
+            }
+            prop_assert!(assignment.iter().all(|(n, _)| *n != name), "the unplaced package is named as selected");
+        }
+    }
+
+    proptest! {
+        /// Pinning every root at the version the solver chose gives back
+        /// the same answer, the available packages included: following the
+        /// advice to pin what works never moves anything.
+        #[test]
+        fn prop_pinning_the_answer_keeps_it(
+            (lists, pins, is_root, houdini, host) in arb_row_problem(),
+        ) {
+            let target = houdini.and_then(HoudiniTarget::parse);
+            let (roots, available) = split(&lists, &pins, &is_root);
+            let Ok(sel) = solve_for_host(&roots, &available, target, host) else { return Ok(()); };
+            let pinned: Vec<Root<'_>> = roots.iter().map(|r| Root {
+                pin: Some(sel.iter().find(|s| s.name == r.name).unwrap().version.as_str()),
+                ..*r
+            }).collect();
+            let again = solve_for_host(&pinned, &available, target, host);
+            prop_assert_eq!(again.map(|a| versions(&a).into_iter().map(|(n,v)|(n.to_string(),v.to_string())).collect::<Vec<_>>()),
+                Ok(versions(&sel).into_iter().map(|(n,v)|(n.to_string(),v.to_string())).collect::<Vec<_>>()));
         }
     }
 

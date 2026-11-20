@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `hpm_core::registry::solve::SolveError::Conflict` says in data, not only in
+  its text, why each version of the package it could not place was ruled
+  out. `Rejection::reason` (a string) is replaced by `Rejection::causes`, every
+  requirement between that version and the selected versions that fails,
+  each a `Cause`: `ExcludedBy` (a selected package requires this one, and
+  this version does not meet it), `Requires` (this version requires a
+  selected package, and its selected version does not meet it) or
+  `Unavailable` (this version requires a package with no usable version,
+  with that package's own `SolveError`). Each names the package and version
+  it means as a `Selected`, whose `Origin` says whether the project lists it
+  (and whether it is pinned) or which chain of requirements pulled it in,
+  and `Conflict` gains the same `origin` for the unplaced package. An
+  application that embeds hpm can now tell a user which of their own
+  packages to update or pin, instead of naming a package they never listed.
+  The error's text is unchanged.
+
 ### Fixed
 
 - `solve_with` given raw build rows rather than the version view no longer
