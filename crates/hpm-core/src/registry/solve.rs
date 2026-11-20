@@ -326,7 +326,18 @@ fn candidates_for<'a>(
     host: Option<Platform>,
 ) -> Result<Vec<Candidate<'a>>, SolveError> {
     if let Some(pin) = root.pin {
-        let entry = root.versions.iter().find(|e| e.version == pin);
+        // The pinned version's row install would use, as the listing view
+        // (`dedupe_builds_by_version`) keeps it: among its live rows if it
+        // has any, the host's build, else a universal one, else the first.
+        let rows: Vec<&RegistryEntry> = root.versions.iter().filter(|e| e.version == pin).collect();
+        let live: Vec<&RegistryEntry> = rows.iter().copied().filter(|e| !e.yanked).collect();
+        let pool = if live.is_empty() { &rows } else { &live };
+        let entry = pool
+            .iter()
+            .copied()
+            .find(|e| built_for(e, host))
+            .or_else(|| pool.iter().copied().find(|e| super::has_build_for(e, None)))
+            .or_else(|| pool.first().copied());
         return Ok(vec![Candidate {
             version: pin.to_string(),
             semver: Version::parse(pin).ok(),
@@ -353,16 +364,29 @@ fn candidates_for<'a>(
     // One entry per version is the version view, whose survivor is the
     // host's build when the version has one (`dedupe_builds_by_version`);
     // a list of raw build rows works too, keeping the rows this host can
-    // install. Either way, the rule is install's.
-    let mut fitting: Vec<Candidate<'a>> = for_houdini
+    // install. Either way, the rule is install's. A version is one
+    // candidate however many of its rows the host can install, standing
+    // for the row install would pick (`select_build`: the first built for
+    // the host, else the first universal one); two candidates of one
+    // version would be searched twice and named twice in a conflict.
+    let mut fitting: Vec<Candidate<'a>> = Vec::new();
+    for e in for_houdini
         .into_iter()
         .filter(|e| super::has_build_for(e, host))
-        .map(|e| Candidate {
-            version: e.version.clone(),
-            semver: Version::parse(&e.version).ok(),
-            entry: Some(e),
-        })
-        .collect();
+    {
+        match fitting.iter_mut().find(|c| c.version == e.version) {
+            Some(c) => {
+                if c.entry.is_some_and(|kept| !built_for(kept, host)) && built_for(e, host) {
+                    c.entry = Some(e);
+                }
+            }
+            None => fitting.push(Candidate {
+                version: e.version.clone(),
+                semver: Version::parse(&e.version).ok(),
+                entry: Some(e),
+            }),
+        }
+    }
     if fitting.is_empty() {
         return Err(SolveError::NoVersionForPlatform {
             name: root.name.to_string(),
@@ -380,6 +404,12 @@ fn candidates_for<'a>(
         (None, None) => std::cmp::Ordering::Equal,
     });
     Ok(fitting)
+}
+
+/// Whether `entry` is a build for `host` itself, which install prefers to a
+/// universal one (`select_build`).
+fn built_for(entry: &RegistryEntry, host: Option<Platform>) -> bool {
+    host.is_some_and(|h| entry.platform.as_ref().is_some_and(|t| t.matches(h)))
 }
 
 struct Search<'s, 'a> {
@@ -1419,11 +1449,6 @@ mod tests {
         )
     }
 
-    /// The error's kind, for comparing two solves that should fail alike.
-    fn kind(e: &SolveError) -> std::mem::Discriminant<SolveError> {
-        std::mem::discriminant(e)
-    }
-
     proptest! {
         /// Install's rule, checked without the solver's own filter: every
         /// version chosen for an unpinned or offered package is live,
@@ -1456,7 +1481,9 @@ mod tests {
 
         /// Solving the raw build rows and solving the listing view of them
         /// (what `RegistrySet::get_versions` returns, and what callers pass)
-        /// choose the same versions, or fail the same way.
+        /// give the same result: the same versions, standing for the same
+        /// build rows, or the same error, a conflict naming each version
+        /// once.
         #[test]
         fn prop_raw_rows_and_the_listing_solve_alike(
             (lists, pins, is_root, houdini, host) in arb_row_problem(),
@@ -1470,11 +1497,7 @@ mod tests {
             let (roots, available) = split(&listed, &pins, &is_root);
             let raw = solve_for_host(&raw_roots, &raw_available, target, host);
             let view = solve_for_host(&roots, &available, target, host);
-            match (raw, view) {
-                (Ok(a), Ok(b)) => prop_assert_eq!(versions(&a), versions(&b)),
-                (Err(a), Err(b)) => prop_assert_eq!(kind(&a), kind(&b), "{} vs {}", a, b),
-                (a, b) => prop_assert!(false, "raw {:?}, listing {:?}", a, b),
-            }
+            prop_assert_eq!(raw, view);
         }
 
         /// A universal build serves every host: when every row is universal,

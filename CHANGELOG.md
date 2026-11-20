@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `solve_with` given raw build rows rather than the version view no longer
+  treats each installable row of a version as a separate candidate. It
+  searched such a version once per row and named it once per row in a
+  conflict; it is now one candidate standing for the row install would pick
+  (the host's build, else a universal one). A pinned version's `Selection`
+  carries that row too, among the version's live rows, where it carried the
+  version's first row even when that row was yanked. Solving raw rows and
+  solving the version view now give the same result.
+
 ## [0.42.0] - 2026-11-19
 
 ### Fixed
