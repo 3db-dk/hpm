@@ -296,6 +296,21 @@ the search: adding a required package to the set and removing it when the
 next answer no longer requires it can alternate between two answers and
 never finish.
 
+When no set of versions works, the error is `SolveError::Conflict`, and
+it says in data, not only in its text, what went wrong. It names the
+package the search could not place and how that package came into the set,
+and for each version the package could have taken, every requirement that
+rules it out against the versions selected at the time (a `Cause`): a
+selected package that requires this one at versions this one is not, this
+version requiring a selected package at versions that package is not, or
+this version requiring a package that has no usable version at all. Each
+selected package carries its `Origin`: listed by the project (and whether
+pinned), or pulled in through a chain of requirements that starts at a
+listed package. An application can therefore tell a user which of the
+packages they listed to update or pin, even when the conflict is in a
+package they never listed. The selected versions are one witness that the
+package cannot be placed, not the only one.
+
 An embedding application can write a project's
 manifest from these selections, which is what keeps a release that breaks
 an older version of a dependent package from reaching projects on that
