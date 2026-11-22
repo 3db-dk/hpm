@@ -1,6 +1,8 @@
 when:
   - event: tag
     ref: "refs/tags/v*"
+  # A manual run builds and tests the Linux binary without uploading it.
+  - event: manual
 
 depends_on:
   - check
@@ -20,8 +22,13 @@ steps:
       - git reset --hard ${CI_COMMIT_SHA}
       # rust-toolchain.toml pins the compiler; install it without changing
       # the shared worker's default toolchain.
-      - rustup toolchain install
-      - cargo build --locked --release -p hpm-cli --bin hpm
+      # In an AlmaLinux 8 image (ci/linux-el8/), not on this Ubuntu 24.04
+      # worker: built here, hpm needed glibc 2.39 and ran on no older
+      # distro. The script refuses a binary above Houdini 22's floors
+      # (glibc 2.28, GLIBCXX_3.4.22; ci/linux-floors.sh) and writes
+      # target/el8/release/hpm, out of reach of the test step's build.
+      - bash ci/build-linux-el8.sh
+      - target/el8/release/hpm --version
 
   - name: test
     image: bash
@@ -33,8 +40,10 @@ steps:
 
   - name: upload
     image: bash
+    when:
+      - event: tag
     environment:
       GITHUB_TOKEN:
         from_secret: github_token
     commands:
-      - bash ci/release-upload.sh target/release/hpm linux-x86_64
+      - bash ci/release-upload.sh target/el8/release/hpm linux-x86_64

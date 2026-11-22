@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Linux release binary runs on distributions older than the build
+  machine. It was built on Ubuntu 24.04 and needed glibc 2.39, so it failed
+  to start on Rocky or Alma Linux 8 and 9, Ubuntu 22.04 and Debian 12. It is
+  now built on AlmaLinux 8 and needs at most glibc 2.28, as Houdini 22 does;
+  the release refuses a binary that needs more.
+
 ## [0.43.0] - 2026-11-20
 
 ### Changed
