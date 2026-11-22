@@ -1,6 +1,9 @@
 when:
   - event: tag
     ref: "refs/tags/v*"
+  # A manual run checks a branch (and lets build-linux, which depends on
+  # this, build it) without a tag; only the version step needs one.
+  - event: manual
 
 labels:
   platform: linux/amd64
@@ -26,9 +29,7 @@ steps:
       # is depth 1) before anything is built. gitleaks 8.30.1, checked
       # against its published SHA-256; reviewed history findings live in
       # .gitleaksignore.
-      # The tag must name the version being released, and the release
-      # scripts must still behave (fake GitHub API on 127.0.0.1).
-      - bash ci/check-version.sh
+      # The release scripts must still behave (fake GitHub API on 127.0.0.1).
       - bash ci/tests/release_upload_test.sh
       # The Linux binary's glibc / libstdc++ floor check (seeded properties;
       # TEST_SEED=<seed> reproduces a failure).
@@ -46,3 +47,12 @@ steps:
       # workspace, so the shared host's ~/.cargo/bin is not modified.
       - cargo install --locked --quiet --root .tools cargo-deny --version 0.20.2
       - .tools/bin/cargo-deny --locked check
+
+  # The tag must name the version being released (tags only: a manual run
+  # has none). The check step's checkout is still in the workspace.
+  - name: version
+    image: bash
+    when:
+      - event: tag
+    commands:
+      - bash ci/check-version.sh
