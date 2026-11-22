@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to start on Rocky or Alma Linux 8 and 9, Ubuntu 22.04 and Debian 12. It is
   now built on AlmaLinux 8 and needs at most glibc 2.28, as Houdini 22 does;
   the release refuses a binary that needs more.
+- `url` updated to 2.5.9 for RUSTSEC-2026-0592 (stack overflow in
+  `Url::origin()` on nested `blob:` URLs).
 
 ## [0.43.0] - 2026-11-20
 
