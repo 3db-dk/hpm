@@ -231,7 +231,8 @@ Every pipeline in `.woodpecker/` is gated on `event: tag` /
 `ref: refs/tags/v*`, so pushing the tag is what triggers the build:
 
 - `check.yml` runs `cargo fmt --check`, clippy, and `cargo test --workspace`
-  with `HPM_REQUIRE_HOUDINI=1` on a worker that has Houdini installed.
+  with `HPM_REQUIRE_HOUDINI=1` on a worker that has Houdini installed, then
+  checks that the tag names the workspace version (`ci/check-version.sh`).
 - `build-linux.yml`, `build-macos.yml`, and `build-windows.yml` each
   `depends_on: check`, so a failing check skips every platform build — the
   tag lands but publishes no binaries.
@@ -239,7 +240,15 @@ Every pipeline in `.woodpecker/` is gated on `event: tag` /
 Artifacts are uploaded to GitHub Releases on `3db-dk/hpm` as
 `hpm-v<version>-linux-x86_64`, `hpm-v<version>-darwin-universal` (a lipo of
 `x86_64` and `aarch64`), and `hpm-v<version>-windows-x86_64.exe`. The builds
-run natively on per-platform workers; `cross` is not used.
+run natively on per-platform workers; `cross` is not used. The Linux binary
+is the exception to "natively": `ci/build-linux-el8.sh` builds it in an
+AlmaLinux 8 container (`ci/linux-el8/Containerfile`, the pinned toolchain)
+on the Linux worker, so it needs glibc 2.28 rather than the worker's own,
+and `ci/linux-floors.sh` refuses a binary that needs more than glibc 2.28 or
+GLIBCXX_3.4.22.
+
+`check.yml` and `build-linux.yml` also run on a manual pipeline, as a dry
+run of a branch: everything but the version check and the upload.
 
 The upload itself lives in `ci/release-upload.sh` (linux, macOS) and
 `ci/release-upload.ps1` (Windows) rather than inline in the pipeline YAML.

@@ -1,0 +1,31 @@
+# hpm's Linux release build image: AlmaLinux 8 (glibc 2.28) with
+# gcc-toolset-11 as the linker and C compiler (aws-lc-sys), and the Rust
+# toolchain rust-toolchain.toml pins. Built on the Ubuntu 24.04 worker itself,
+# hpm needed glibc 2.39, so it ran on that distro and nothing older; it must
+# run wherever Houdini 22 does, which needs glibc 2.28 (ci/linux-floors.sh).
+# ci/build-linux-el8.sh builds this image, tagged by a hash of it and the
+# toolchain file, and hpm in it. Build context: a directory holding this file
+# and rust-toolchain.toml.
+FROM docker.io/library/almalinux:8.10
+
+RUN dnf -y install \
+      gcc-toolset-11-gcc gcc-toolset-11-gcc-c++ gcc-toolset-11-binutils \
+      make cmake git perl pkgconf-pkg-config which findutils tar \
+ && dnf clean all
+
+# Rust: the pinned channel only. The build sets RUSTUP_TOOLCHAIN to it, so
+# rustup ignores rust-toolchain.toml's components and cross targets (it
+# cannot write /opt/rustup at build time, and the Linux binary needs none of
+# them). CARGO_HOME (the registry and git checkouts) is set per run to a
+# cache folder on the worker.
+ENV RUSTUP_HOME=/opt/rustup PATH=/opt/cargo/bin:$PATH
+COPY rust-toolchain.toml /tmp/rust-toolchain.toml
+RUN channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' /tmp/rust-toolchain.toml) \
+ && test -n "$channel" \
+ && curl -sSf https://sh.rustup.rs \
+      | CARGO_HOME=/opt/cargo sh -s -- -y --no-modify-path --profile minimal \
+          --default-toolchain "$channel" \
+ && chmod -R a+rX /opt/cargo /opt/rustup
+
+# gcc-toolset-11 first on PATH: what `scl enable gcc-toolset-11` sets.
+ENV PATH=/opt/rh/gcc-toolset-11/root/usr/bin:$PATH CC=gcc CXX=g++
