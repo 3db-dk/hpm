@@ -27,7 +27,12 @@
 //!   Houdini and that have a build for the host platform (or a universal
 //!   one), newest first, and the search backtracks, so the result is the
 //!   first acceptable assignment in input order: earlier packages get their
-//!   newest fitting version before later ones are considered. The platform
+//!   newest fitting version before later ones are considered. Input order
+//!   is the order of the packages passed in, never the order a version
+//!   lists its `deps` in: those are taken by name, then requirement, since
+//!   the same release reaches callers in the publisher's order from a
+//!   registry and sorted from a manifest read offline, and a set with
+//!   several answers must not resolve differently between them. The platform
 //!   rule is the one install applies when it picks a build
 //!   ([`has_build_for`](super::has_build_for)): a version the solver chose
 //!   but install could not download for this machine would fail the whole
@@ -52,7 +57,7 @@
 //!   version that required it: the package was dropped, the newer version
 //!   came back, and it was required again.
 
-use super::types::RegistryEntry;
+use super::types::{RegistryDep, RegistryEntry};
 use hpm_package::{HoudiniRange, Platform};
 use semver::Version;
 use std::fmt;
@@ -271,11 +276,30 @@ struct Candidate<'a> {
     version: String,
     semver: Option<Version>,
     entry: Option<&'a RegistryEntry>,
+    /// The entry's `deps`, by name, then requirement. The order they are
+    /// listed in is the publisher's or the reader's (a registry serves
+    /// manifest order, a working copy read offline comes out sorted), so
+    /// the search must not depend on it: it decides which required package
+    /// is placed first, and so which of several answers is found and what
+    /// a conflict names.
+    deps: Vec<&'a RegistryDep>,
 }
 
-impl Candidate<'_> {
-    fn deps(&self) -> &[super::types::RegistryDep] {
-        self.entry.map(|e| e.deps.as_slice()).unwrap_or(&[])
+impl<'a> Candidate<'a> {
+    fn new(version: String, entry: Option<&'a RegistryEntry>) -> Self {
+        let mut deps: Vec<&RegistryDep> =
+            entry.map(|e| e.deps.iter().collect()).unwrap_or_default();
+        deps.sort_by(|a, b| (&a.name, &a.req).cmp(&(&b.name, &b.req)));
+        Candidate {
+            semver: Version::parse(&version).ok(),
+            version,
+            entry,
+            deps,
+        }
+    }
+
+    fn deps(&self) -> &[&'a RegistryDep] {
+        &self.deps
     }
 }
 
@@ -309,7 +333,10 @@ pub fn solve(
 /// require it. A name that is also a root is a root.
 ///
 /// Selections come back with the roots first, in their order, then the
-/// required packages in the order the search came to need them. Every root
+/// required packages in the order the search came to need them, each
+/// version's requirements taken by name. Neither the answer nor a
+/// conflict's explanation depends on the order a version lists its `deps`
+/// in. Every root
 /// is settled before any available package is, so the roots get the best
 /// versions for which the rest can be completed.
 ///
@@ -429,11 +456,7 @@ fn candidates_for<'a>(
             .find(|e| built_for(e, host))
             .or_else(|| pool.iter().copied().find(|e| super::has_build_for(e, None)))
             .or_else(|| pool.first().copied());
-        return Ok(vec![Candidate {
-            version: pin.to_string(),
-            semver: Version::parse(pin).ok(),
-            entry,
-        }]);
+        return Ok(vec![Candidate::new(pin.to_string(), entry)]);
     }
 
     let live: Vec<&RegistryEntry> = root.versions.iter().filter(|e| !e.yanked).collect();
@@ -468,14 +491,10 @@ fn candidates_for<'a>(
         match fitting.iter_mut().find(|c| c.version == e.version) {
             Some(c) => {
                 if c.entry.is_some_and(|kept| !built_for(kept, host)) && built_for(e, host) {
-                    c.entry = Some(e);
+                    *c = Candidate::new(e.version.clone(), Some(e));
                 }
             }
-            None => fitting.push(Candidate {
-                version: e.version.clone(),
-                semver: Version::parse(&e.version).ok(),
-                entry: Some(e),
-            }),
+            None => fitting.push(Candidate::new(e.version.clone(), Some(e))),
         }
     }
     if fitting.is_empty() {
@@ -1556,6 +1575,180 @@ mod tests {
                 }
                 Err(e) => prop_assert!(root_error, "{e}"),
             }
+        }
+    }
+
+    // ---- The order requirements are listed in ----------------------------
+
+    /// The same release reaches the solver with its `deps` in different
+    /// orders: a registry serves the publisher's manifest order, a working
+    /// copy or installed manifest read offline comes out sorted. The search
+    /// took the first answer in the order a version listed its `deps`, so
+    /// when a set had several answers, the CLI and an application that
+    /// embeds hpm could install different versions of one project.
+    #[test]
+    fn the_order_a_version_lists_its_requirements_in_changes_nothing() {
+        const RIG_A: &str = "a/rig";
+        let rig = vec![
+            entry(RIG_A, "3.0.0", None, &[(MODEL, "<2")]),
+            entry(RIG_A, "1.0.0", None, &[]),
+        ];
+        let model = vec![
+            entry(MODEL, "2.0.0", None, &[]),
+            entry(MODEL, "1.0.0", None, &[]),
+        ];
+        let solve_pipe = |deps: &[(&str, &str)]| {
+            let pipe = vec![entry(PIPE, "1.0.0", None, deps)];
+            let sel = solve_for_host(
+                &[root(PIPE, &pipe)],
+                &[root(RIG_A, &rig), root(MODEL, &model)],
+                None,
+                Some(HOST),
+            )
+            .unwrap();
+            versions(&sel)
+                .into_iter()
+                .map(|(n, v)| (n.to_string(), v.to_string()))
+                .collect::<Vec<_>>()
+        };
+        let model_first = solve_pipe(&[(MODEL, "<3"), (RIG_A, "*")]);
+        let rig_first = solve_pipe(&[(RIG_A, "*"), (MODEL, "<3")]);
+        assert_eq!(model_first, rig_first);
+        // Both are answers; the one found is the one for the requirements
+        // by name: a/rig is placed before b/model and takes its newest.
+        assert_eq!(
+            rig_first,
+            [(PIPE, "1.0.0"), (RIG_A, "3.0.0"), (MODEL, "1.0.0")]
+                .map(|(n, v)| (n.to_string(), v.to_string()))
+        );
+    }
+
+    /// A world built to have several answers often: one listed package
+    /// requiring two others, which require each other, so the order the two
+    /// are placed in decides which answer the search finds first. The two
+    /// are sometimes listed too, and requirements may name one package
+    /// twice. Names, the root flags, then the versions per name.
+    fn arb_ordered_world()
+    -> impl Strategy<Value = ([&'static str; 3], [bool; 3], Vec<Vec<RegistryEntry>>)> {
+        const WORLD: [&str; 3] = ["a/pipe", "a/rig", "b/model"];
+        // Mostly loose requirements: a tight one leaves a single answer.
+        let dep = |names: &'static [&'static str]| {
+            (
+                prop::sample::select(names),
+                prop_oneof![1 => Just("*".to_string()), 2 => arb_req()],
+            )
+        };
+        let versions = |name: &'static str, deps: BoxedStrategy<Vec<(&'static str, String)>>| {
+            prop::collection::vec((prop::sample::select(&VERSIONS[..]), deps), 1..5).prop_map(
+                move |vs| {
+                    let mut seen = std::collections::HashSet::new();
+                    vs.into_iter()
+                        .filter(|(v, _)| seen.insert(*v))
+                        .map(|(v, deps)| {
+                            let deps: Vec<(&str, &str)> =
+                                deps.iter().map(|(n, r)| (*n, r.as_str())).collect();
+                            entry(name, v, None, &deps)
+                        })
+                        .collect::<Vec<_>>()
+                },
+            )
+        };
+        (
+            versions(
+                WORLD[0],
+                prop::collection::vec(dep(&WORLD[1..]), 1..4).boxed(),
+            ),
+            versions(
+                WORLD[1],
+                prop::collection::vec(dep(&WORLD[2..]), 0..3).boxed(),
+            ),
+            versions(
+                WORLD[2],
+                prop::collection::vec(dep(&WORLD[1..2]), 0..3).boxed(),
+            ),
+            prop::bool::weighted(0.2),
+            prop::bool::weighted(0.2),
+        )
+            .prop_map(|(pipe, rig, model, rig_listed, model_listed)| {
+                (
+                    WORLD,
+                    [true, rig_listed, model_listed],
+                    vec![pipe, rig, model],
+                )
+            })
+    }
+
+    /// `world`'s solve: what it selects, in order, or why it refuses.
+    fn solve_world(
+        names: &[&str; 3],
+        is_root: &[bool; 3],
+        lists: &[Vec<RegistryEntry>],
+    ) -> Result<Vec<(String, String)>, SolveError> {
+        let make = |i: usize| root(names[i], &lists[i]);
+        let roots: Vec<Root<'_>> = (0..3).filter(|&i| is_root[i]).map(make).collect();
+        let available: Vec<Root<'_>> = (0..3).filter(|&i| !is_root[i]).map(make).collect();
+        solve_for_host(&roots, &available, None, Some(HOST))
+            .map(|sel| sel.into_iter().map(|s| (s.name, s.version)).collect())
+    }
+
+    /// Guards the property below against passing vacuously: the worlds it
+    /// draws must often have more than one answer, or no listing order
+    /// could change the result. Without the solver's sort, the property
+    /// failed within its first few hundred cases.
+    #[test]
+    fn the_ordered_worlds_often_have_several_answers() {
+        use proptest::strategy::ValueTree;
+        let mut runner = proptest::test_runner::TestRunner::deterministic();
+        let strategy = arb_ordered_world();
+        let draws = 400;
+        let several = (0..draws)
+            .filter(|_| {
+                let (names, is_root, lists) = strategy.new_tree(&mut runner).unwrap().current();
+                let per_package: Vec<Vec<Candidate<'_>>> = (0..3)
+                    .map(|i| candidates_for(&root(names[i], &lists[i]), None, Some(HOST)).unwrap())
+                    .collect();
+                all_answers(&names, &is_root, &per_package).len() > 1
+            })
+            .count();
+        assert!(
+            several * 5 >= draws,
+            "only {several} of {draws} worlds have several answers"
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1024))]
+
+        /// Listing every version's requirements in another order (reversed,
+        /// or rotated by one) changes neither what is selected, nor its
+        /// order, nor the error and everything a conflict names.
+        #[test]
+        fn prop_the_order_requirements_are_listed_in_changes_nothing(
+            (names, is_root, lists) in arb_ordered_world(),
+        ) {
+            let relisted = |reorder: fn(&mut Vec<RegistryDep>)| -> Vec<Vec<RegistryEntry>> {
+                lists
+                    .iter()
+                    .map(|vs| {
+                        vs.iter()
+                            .map(|e| {
+                                let mut e = e.clone();
+                                reorder(&mut e.deps);
+                                e
+                            })
+                            .collect()
+                    })
+                    .collect()
+            };
+            let listed = solve_world(&names, &is_root, &lists);
+            let reversed = solve_world(&names, &is_root, &relisted(|d| d.reverse()));
+            let rotated = solve_world(&names, &is_root, &relisted(|d| {
+                if !d.is_empty() {
+                    d.rotate_left(1)
+                }
+            }));
+            prop_assert_eq!(&listed, &reversed);
+            prop_assert_eq!(&listed, &rotated);
         }
     }
 

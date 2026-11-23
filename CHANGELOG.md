@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `hpm_core::registry::solve::solve` and `solve_with` no longer depend on
+  the order a version lists its `deps` in. When a set had more than one
+  answer, the search took the first one in that order, and the same release
+  reaches callers in different orders: a registry serves the publisher's
+  manifest order, a manifest read offline comes out sorted. So two
+  applications solving the same project could select different versions.
+  The requirements are now taken by name, then requirement; the
+  `SolveError::Conflict` explanation follows the same order. The order of
+  the packages passed in still decides which gets its newest version first.
+
 ## [0.44.0] - 2026-11-23
 
 ### Added
