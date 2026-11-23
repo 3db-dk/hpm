@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.1] - 2026-11-23
+
 ### Fixed
 
 - `hpm_core::registry::solve::solve` and `solve_with` no longer depend on
