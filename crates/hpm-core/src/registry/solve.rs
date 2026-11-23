@@ -1752,6 +1752,120 @@ mod tests {
         }
     }
 
+    /// A general world (pins, yanked versions, Houdini ranges, platforms,
+    /// some packages only available) with every list it is made of
+    /// reordered: each version's `deps`, each package's versions, and the
+    /// available packages.
+    type Relisted = (
+        Vec<Vec<RegistryEntry>>,
+        Vec<Option<String>>,
+        Option<&'static str>,
+        Vec<bool>,
+        Vec<Vec<RegistryEntry>>,
+        Vec<usize>,
+    );
+
+    fn arb_relisted_problem() -> impl Strategy<Value = Relisted> {
+        (arb_problem(), prop::collection::vec(any::<bool>(), 3)).prop_flat_map(
+            |((lists, pins, houdini), is_root)| {
+                let relisted: Vec<_> = lists
+                    .iter()
+                    .map(|versions| {
+                        let entries: Vec<_> = versions
+                            .iter()
+                            .map(|e| {
+                                let e = e.clone();
+                                Just(e.deps.clone())
+                                    .prop_shuffle()
+                                    .prop_map(move |deps| RegistryEntry { deps, ..e.clone() })
+                            })
+                            .collect();
+                        entries.prop_flat_map(|es| Just(es).prop_shuffle())
+                    })
+                    .collect();
+                (
+                    Just(lists),
+                    Just(pins),
+                    Just(houdini),
+                    Just(is_root),
+                    relisted,
+                    Just(vec![0usize, 1, 2]).prop_shuffle(),
+                )
+            },
+        )
+    }
+
+    /// Solve NAMES with `lists`: the roots in NAMES order, the rest offered
+    /// as available in `offer` order. What is selected, in order, or why
+    /// not.
+    fn solve_listed(
+        lists: &[Vec<RegistryEntry>],
+        pins: &[Option<String>],
+        houdini: Option<&str>,
+        is_root: &[bool],
+        offer: &[usize],
+        extra: &[Root<'_>],
+    ) -> Result<Vec<(String, String)>, SolveError> {
+        let make = |i: usize| Root {
+            name: NAMES[i],
+            pin: if is_root[i] { pins[i].as_deref() } else { None },
+            versions: &lists[i],
+        };
+        let roots: Vec<Root<'_>> = (0..3).filter(|&i| is_root[i]).map(make).collect();
+        let mut available: Vec<Root<'_>> = offer
+            .iter()
+            .copied()
+            .filter(|&i| !is_root[i])
+            .map(make)
+            .collect();
+        available.extend_from_slice(extra);
+        solve_for_host(
+            &roots,
+            &available,
+            houdini.and_then(HoudiniTarget::parse),
+            Some(HOST),
+        )
+        .map(|sel| sel.into_iter().map(|s| (s.name, s.version)).collect())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// The order of the lists a caller passes in, other than the roots,
+        /// is how a registry or a reader happens to produce them: a Git
+        /// index and an API registry list versions differently, and a
+        /// caller offers available packages in whatever order it fetched
+        /// them. None of it changes what is selected, its order, or the
+        /// error.
+        #[test]
+        fn prop_the_order_a_world_is_listed_in_changes_nothing(
+            (lists, pins, houdini, is_root, relisted, offer) in arb_relisted_problem(),
+        ) {
+            let listed = solve_listed(&lists, &pins, houdini, &is_root, &[0, 1, 2], &[]);
+            let reordered = solve_listed(&relisted, &pins, houdini, &is_root, &offer, &[]);
+            prop_assert_eq!(listed, reordered);
+        }
+
+        /// Offering a package nothing requires, even one with no usable
+        /// version, or offering one twice or as a root as well, changes
+        /// nothing: an available package takes part only when required.
+        #[test]
+        fn prop_offering_more_than_is_required_changes_nothing(
+            (lists, pins, houdini) in arb_problem(),
+            is_root in prop::collection::vec(any::<bool>(), 3),
+            unrequired in arb_versions("c/unrequired"),
+            twice in 0usize..3,
+        ) {
+            let listed = solve_listed(&lists, &pins, houdini, &is_root, &[0, 1, 2], &[]);
+            let extra = [
+                Root { name: "c/unrequired", pin: None, versions: &unrequired },
+                Root { name: NAMES[twice], pin: None, versions: &lists[twice] },
+            ];
+            let offered = solve_listed(&lists, &pins, houdini, &is_root, &[0, 1, 2], &extra);
+            prop_assert_eq!(listed, offered);
+        }
+    }
+
     // ---- What a conflict names ------------------------------------------
 
     const RIG: &str = "b/rig";
