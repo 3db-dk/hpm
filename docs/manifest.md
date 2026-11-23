@@ -587,6 +587,34 @@ may use them (falling back to the entry key when `label` is absent), but
 nothing in HPM treats a labelled script as special. Both are omitted from
 round-tripped manifests when unset.
 
+### Applications (`app` and `icon`)
+
+Two more optional fields describe a script that opens a program the user
+works in, such as an editor or a review tool, rather than a task that runs
+to completion:
+
+```toml
+[scripts.editor]
+cmd         = "python -m mytool.editor"
+label       = "Editor"
+description = "Open the editor on this project"
+app         = true
+icon        = "resources/editor.png"
+```
+
+`app = true` marks the script as an application, which a frontend may offer
+as a launch target of its own rather than one entry in a list of scripts.
+`icon` is a path, relative to the package root, of a PNG or SVG image that
+represents the script; ship the file in the archive (see [`[stage]`](#stage)).
+Like `label`, both are consumer-agnostic: `hpm run` runs an app like any
+other script, and HPM never reads the icon. `hpm check` reports which scripts
+are apps and warns when `icon` names a path that is not a file in the
+package. Both are omitted from round-tripped manifests when unset.
+
+An older HPM refuses a manifest that uses either field (unknown fields are
+errors), and so refuses to install a package version that declares one. Add
+them only once the HPM versions that install your package understand them.
+
 ### Per-host variation
 
 Scripts whose command differs per OS use a conditional `cmd` value — the

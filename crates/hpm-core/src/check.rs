@@ -250,11 +250,11 @@ fn check_best_practices(project_dir: &Path, manifest: &PackageManifest, report: 
         report.info("No version control detected - consider initializing git");
     }
 
-    check_scripts(manifest, report);
+    check_scripts(project_dir, manifest, report);
     check_package_size(project_dir, manifest, report);
 }
 
-fn check_scripts(manifest: &PackageManifest, report: &mut Report) {
+fn check_scripts(project_dir: &Path, manifest: &PackageManifest, report: &mut Report) {
     if manifest.scripts.commands.is_empty() {
         return;
     }
@@ -276,6 +276,9 @@ fn check_scripts(manifest: &PackageManifest, report: &mut Report) {
                 } else if let Some(label) = entry.label() {
                     report.info(format!("Script '{}' labelled '{}'", name, label));
                 }
+                if entry.is_app() {
+                    report.info(format!("Script '{}' is an app", name));
+                }
             }
             // Legitimate (the script exists only for other platforms), but
             // worth a hint so authors notice typos in their `when` axes.
@@ -283,6 +286,17 @@ fn check_scripts(manifest: &PackageManifest, report: &mut Report) {
                 "Script '{}' has no command for host OS — only matches other platforms",
                 name
             )),
+        }
+        // hpm never reads the icon, but a tool that shows it will look for it
+        // in the installed package, so a name that resolves to nothing here
+        // is almost certainly a typo.
+        if let Some(icon) = entry.icon()
+            && !project_dir.join(icon).is_file()
+        {
+            report.warning(format!(
+                "Script '{}' names icon '{}', which is not a file in the package",
+                name, icon
+            ));
         }
     }
 }
@@ -418,6 +432,32 @@ mod tests {
                 "{compat}: {report:?}"
             );
         }
+    }
+
+    /// A script's icon is checked against the package: a name that is not a
+    /// file there is warned about, one that is passes silently.
+    #[test]
+    fn warns_about_an_icon_that_is_not_a_file_in_the_package() {
+        let dir = package(
+            "[package]\npath = \"studio/p\"\nname = \"P\"\nversion = \"1.0.0\"\n\n[scripts.editor]\ncmd = \"python -m p.editor\"\nlabel = \"Editor\"\napp = true\nicon = \"resources/editor.png\"\n",
+        );
+        let icon_warnings = |report: &Report| -> Vec<String> {
+            warnings(report)
+                .into_iter()
+                .filter(|w| w.contains("names icon"))
+                .map(str::to_string)
+                .collect()
+        };
+        assert_eq!(
+            icon_warnings(&check_package(dir.path())),
+            [
+                "Script 'editor' names icon 'resources/editor.png', which is not a file in the package"
+            ]
+        );
+
+        std::fs::create_dir_all(dir.path().join("resources")).unwrap();
+        std::fs::write(dir.path().join("resources/editor.png"), b"png").unwrap();
+        assert!(icon_warnings(&check_package(dir.path())).is_empty());
     }
 
     proptest::proptest! {

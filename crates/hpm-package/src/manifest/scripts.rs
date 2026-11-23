@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 /// description = "Provisions the TT working environment"
 /// ```
 ///
-/// `label` and `description` are optional, consumer-agnostic metadata for
-/// tools that present scripts to users (menus, tooltips); hpm itself never
-/// acts on them. `python` and `requirements` are both optional; when either is set, hpm
+/// `label`, `description`, `app` and `icon` are optional, consumer-agnostic
+/// metadata for tools that present scripts to users (menus, buttons,
+/// tooltips); hpm itself never acts on them. `python` and `requirements` are both optional; when either is set, hpm
 /// resolves them through the same uv pipeline that backs `[python_dependencies]`
 /// and runs `cmd` with the resolved interpreter on PATH. When both are absent,
 /// the table form behaves identically to the shorthand.
@@ -56,6 +56,19 @@ pub struct ScriptEnv {
     /// and help text in tools that surface scripts. Purely informational.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Marks this script as an application: a program the user opens and
+    /// works in until they close it, rather than a task that runs to
+    /// completion. Consumer-agnostic metadata, like `label`: a tool that
+    /// presents scripts may offer an app as a launch target of its own.
+    /// hpm itself never acts on it, and `hpm run` runs an app like any other
+    /// script.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub app: bool,
+    /// Optional path, relative to the package root, of an image (PNG or SVG)
+    /// that represents this script in tools that show it. Purely
+    /// informational: hpm never reads the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// Run this script inside the package's full resolved environment: the
     /// merged uv venv built from `[python_dependencies]` across the project
     /// and its installed hpm dependencies, with every involved package's
@@ -134,6 +147,23 @@ impl ScriptEntry {
         match self {
             ScriptEntry::Plain(_) => None,
             ScriptEntry::WithEnv(env) => env.description.as_deref(),
+        }
+    }
+
+    /// Whether the entry declares itself an application (`app = true`).
+    /// Plain entries never do.
+    pub fn is_app(&self) -> bool {
+        match self {
+            ScriptEntry::Plain(_) => false,
+            ScriptEntry::WithEnv(env) => env.app,
+        }
+    }
+
+    /// Package-relative icon path, if the entry set one.
+    pub fn icon(&self) -> Option<&str> {
+        match self {
+            ScriptEntry::Plain(_) => None,
+            ScriptEntry::WithEnv(env) => env.icon.as_deref(),
         }
     }
 
@@ -361,6 +391,8 @@ mod tests {
             requirements: Vec::new(),
             label: None,
             description: None,
+            app: false,
+            icon: None,
             package_env: false,
         });
         let toml = toml::to_string(&entry).unwrap();
@@ -417,6 +449,8 @@ mod tests {
             requirements: Vec::new(),
             label: None,
             description: None,
+            app: false,
+            icon: None,
             package_env: false,
         });
         let toml = toml::to_string(&entry).unwrap();
@@ -434,6 +468,8 @@ mod tests {
             requirements: Vec::new(),
             label: Some("Launch My Tool".to_string()),
             description: Some("Open the main UI".to_string()),
+            app: false,
+            icon: None,
             package_env: false,
         });
         let toml = toml::to_string(&entry).unwrap();
@@ -450,11 +486,98 @@ mod tests {
             requirements: Vec::new(),
             label: None,
             description: None,
+            app: false,
+            icon: None,
             package_env: true,
         });
         let toml = toml::to_string(&entry).unwrap();
         assert!(toml.contains("package-env = true"), "{toml}");
         let back: ScriptEntry = toml::from_str(&toml).unwrap();
         assert!(back.uses_package_env());
+    }
+
+    #[test]
+    fn parses_app_and_icon() {
+        let scripts: PackageScripts = toml::from_str(
+            r#"
+            plain = "ruff ."
+
+            [editor]
+            cmd = "python -m mytool.editor"
+            label = "Editor"
+            app = true
+            icon = "resources/editor.png"
+
+            [task]
+            cmd = "python -m mytool.task"
+            label = "Task"
+            "#,
+        )
+        .unwrap();
+
+        let plain = scripts.commands.get("plain").unwrap();
+        assert!(!plain.is_app());
+        assert_eq!(plain.icon(), None);
+
+        let editor = scripts.commands.get("editor").unwrap();
+        assert!(editor.is_app());
+        assert_eq!(editor.icon(), Some("resources/editor.png"));
+
+        // Unset, both default: not an app, no icon.
+        let task = scripts.commands.get("task").unwrap();
+        assert!(!task.is_app());
+        assert_eq!(task.icon(), None);
+    }
+
+    #[test]
+    fn unset_app_and_icon_are_not_serialized() {
+        let entry = ScriptEntry::WithEnv(ScriptEnv {
+            cmd: ScriptCommand::Flat("ruff .".to_string()),
+            python: None,
+            requirements: Vec::new(),
+            label: None,
+            description: None,
+            app: false,
+            icon: None,
+            package_env: false,
+        });
+        let toml = toml::to_string(&entry).unwrap();
+        assert!(
+            !toml.contains("app") && !toml.contains("icon"),
+            "unset app/icon must not round-trip: {toml}"
+        );
+    }
+
+    #[test]
+    fn app_and_icon_round_trip() {
+        let entry = ScriptEntry::WithEnv(ScriptEnv {
+            cmd: ScriptCommand::Flat("python -m mytool.editor".to_string()),
+            python: None,
+            requirements: Vec::new(),
+            label: Some("Editor".to_string()),
+            description: None,
+            app: true,
+            icon: Some("resources/editor.svg".to_string()),
+            package_env: false,
+        });
+        let toml = toml::to_string(&entry).unwrap();
+        assert!(toml.contains("app = true"), "{toml}");
+        let back: ScriptEntry = toml::from_str(&toml).unwrap();
+        assert!(back.is_app());
+        assert_eq!(back.icon(), Some("resources/editor.svg"));
+    }
+
+    /// `app` is a boolean: a string or table there is a parse error, not an
+    /// app that silently fails to show.
+    #[test]
+    fn app_must_be_a_boolean() {
+        let parsed = toml::from_str::<PackageScripts>(
+            r#"
+            [editor]
+            cmd = "python -m mytool.editor"
+            app = { icon = "resources/editor.png" }
+            "#,
+        );
+        assert!(parsed.is_err(), "{parsed:?}");
     }
 }

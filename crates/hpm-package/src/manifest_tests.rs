@@ -294,6 +294,8 @@ fn strict_accepts_plain_script_entries() {
             requirements: Vec::new(),
             label: None,
             description: None,
+            app: false,
+            icon: None,
             package_env: false,
         }),
     );

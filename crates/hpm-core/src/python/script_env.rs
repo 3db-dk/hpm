@@ -295,6 +295,8 @@ mod tests {
             requirements: vec![],
             label: None,
             description: None,
+            app: false,
+            icon: None,
             package_env: false,
         });
         let handle = prepare_script_env(&entry).await.unwrap();

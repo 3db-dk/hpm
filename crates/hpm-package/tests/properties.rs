@@ -268,15 +268,19 @@ fn script_entry_strategy() -> impl Strategy<Value = ScriptEntry> {
             prop::option::of(text_strategy()),
             prop::option::of(text_strategy()),
             any::<bool>(),
+            prop::option::of(text_strategy()),
+            any::<bool>(),
         )
             .prop_map(
-                |(cmd, python, requirements, label, description, package_env)| {
+                |(cmd, python, requirements, label, description, app, icon, package_env)| {
                     ScriptEntry::WithEnv(ScriptEnv {
                         cmd,
                         python: python.map(|p| hpm_package::PythonTag::parse(p).unwrap()),
                         requirements,
                         label,
                         description,
+                        app,
+                        icon,
                         package_env,
                     })
                 }

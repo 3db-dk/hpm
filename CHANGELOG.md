@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Optional `app` and `icon` fields on table-form `[scripts]` entries.
+  `app = true` marks a script that opens a program the user works in, so a
+  frontend that presents scripts can offer it as a launch target of its own;
+  `icon` names a package-relative PNG or SVG that represents it. Like `label`
+  and `description`, they are metadata only: `hpm run` treats an app like any
+  other script and HPM never reads the icon. `hpm check` lists the apps and
+  warns about an `icon` that is not a file in the package. A manifest using
+  either field cannot be read by an earlier HPM.
+
 ## [0.43.1] - 2026-11-22
 
 ### Fixed
