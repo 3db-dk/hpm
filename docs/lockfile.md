@@ -60,6 +60,16 @@ older versions hold a bare `<hex>` digest; those are still verified.
 A lock entry whose version differs from the manifest's is stale and pins
 nothing; the install replaces it.
 
+## Required packages
+
+A package the project does not list, installed because a listed package
+requires it, gets an entry like any other. The next install keeps that
+version, verified against its checksum, while it still satisfies every
+requirement on it. When it no longer does (a listed package moved to a
+version that needs a newer one), the install chooses it again and the lock
+changes. `hpm update` chooses all of them again, the newest version that
+fits. An entry for a package nothing requires any more is dropped.
+
 ## `--frozen-lockfile`
 
 `hpm install --frozen-lockfile` fails instead of writing the lock when:
@@ -67,7 +77,10 @@ nothing; the install replaces it.
 - `hpm.lock` does not exist;
 - the installed versions, or the Python constraints, differ from what the
   lock records;
-- a registry or URL dependency has no checksum in the lock.
+- a registry or URL package, listed or required, has no checksum in the
+  lock;
+- a required package's locked version no longer satisfies the packages that
+  require it.
 
 Use it in CI and on render nodes, where a lock that needs to change means
 someone forgot to commit it.

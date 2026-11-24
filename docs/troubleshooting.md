@@ -37,16 +37,31 @@ order:
 1. The name is the full `creator/slug`, not the bare slug.
 2. The version exists: `hpm search <slug>`.
 3. For a Git registry, the local index is current: `hpm registry update`.
-4. The version in `hpm.toml` is an exact version. If the message quotes a
-   range (`Version '^1.2' ... not found`), that is the cause: `hpm install`
-   does not resolve ranges. Write an exact version, or run
-   `hpm update <package>` to have one chosen and written for you.
+4. The version in `hpm.toml` is the one you meant. An exact version is
+   looked up as written; `hpm update <package>` chooses the newest and
+   writes it for you.
 
 ### A package's own dependency is missing in Houdini
 
-`hpm install` installs the packages your project lists and nothing else. If
-a package you installed needs another package, add that one to the project
-with `hpm add`.
+`hpm install` adds the packages your packages require, from the
+dependencies each version was published with. If one is still missing:
+
+- The version was published without it. Check its `deps` in the registry,
+  or the `[dependencies]` in its `hpm.toml`; a `path` or `url` dependency
+  there is not followed. Add the package to the project with `hpm add`.
+- The project was installed with an hpm older than 0.45.0, which installed
+  only the listed packages. Run `hpm install` again.
+
+### The project's packages cannot be installed together
+
+```
+The project's packages cannot be installed together: no version of acme/core works with the other packages: ...
+```
+
+Two packages need versions of a third that no single version satisfies, or
+the project pins a version another package rules out. The message names the
+versions and the requirement each one failed. Change the pin it names, or
+move the package that holds it back with `hpm update`.
 
 ### Checksum mismatch
 

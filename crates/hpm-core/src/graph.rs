@@ -214,7 +214,19 @@ impl DependencyResolver {
         // project pins another version of the same name. `walked` is keyed
         // by name and version, so another version of a package already
         // walked is still walked.
-        for (dep_name, dep_spec) in &project.manifest.dependencies {
+        //
+        // The roots are the manifest's dependencies and every registry or
+        // URL package the project's `hpm.lock` records, at that exact
+        // version. A package installed because another requires it is in
+        // the lock, not the manifest, and the version the lock kept may not
+        // be the newest installed one a requirement's range matches.
+        let locked = locked_roots(&project.path);
+        let roots = project
+            .manifest
+            .dependencies
+            .iter()
+            .chain(locked.iter().map(|(name, spec)| (name, spec)));
+        for (dep_name, dep_spec) in roots {
             let (package_id, installed_package) =
                 self.resolve_dependency(dep_name, dep_spec, installed_map);
 
@@ -371,6 +383,40 @@ impl DependencyResolver {
 /// bare slug in older manifests) that a dependency on `requirement` uses:
 /// the copy at exactly that version, else the highest copy the requirement
 /// admits, read as the solver reads it. `None` when no installed copy satisfies it.
+/// The registry and URL packages `<project>/hpm.lock` records, each as a
+/// dependency on exactly the locked version. None when there is no lock; a
+/// lock that cannot be read adds nothing, and is logged.
+fn locked_roots(project: &std::path::Path) -> Vec<(String, DependencySpec)> {
+    let path = project.join("hpm.lock");
+    if !path.exists() {
+        return Vec::new();
+    }
+    match crate::lock::LockFile::load(&path) {
+        Ok(lock) => lock
+            .dependencies
+            .into_iter()
+            .filter(|(_, entry)| entry.source.is_url())
+            .map(|(name, entry)| {
+                (
+                    name,
+                    DependencySpec::Registry {
+                        version: entry.version,
+                        registry: None,
+                        optional: false,
+                    },
+                )
+            })
+            .collect(),
+        Err(e) => {
+            warn!(
+                "Cannot read {}, so only its project's hpm.toml decides what clean keeps: {e}",
+                path.display()
+            );
+            Vec::new()
+        }
+    }
+}
+
 fn installed_copy_for<'a>(
     installed: &'a [InstalledPackage],
     name: &str,
@@ -555,6 +601,202 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(graph.node_count(), 2 * DEPTH);
+    }
+
+    /// A package the project's lock kept at an older version than another
+    /// installed one its requirer's range matches is still a root: clean
+    /// must not delete the version the project loads.
+    #[tokio::test]
+    async fn a_locked_required_version_is_kept_beside_a_newer_one() {
+        let temp = TempDir::new().unwrap();
+        let storage = std::sync::Arc::new(
+            StorageManager::new(StorageConfig {
+                home_dir: temp.path().to_path_buf(),
+                cache_dir: temp.path().join("cache"),
+                packages_dir: temp.path().join("packages"),
+                registry_cache_dir: temp.path().join("registry"),
+            })
+            .unwrap(),
+        );
+        let install = |slug: &str, version: &str, deps: &str| {
+            let dir = temp.path().join(format!("packages/{slug}@{version}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("hpm.toml"),
+                format!(
+                    "[package]\npath = \"acme/{slug}\"\nname = \"{slug}\"\nversion = \"{version}\"\n{deps}"
+                ),
+            )
+            .unwrap();
+        };
+        install(
+            "rig",
+            "1.0.0",
+            "\n[dependencies]\n\"acme/kit\" = \">=0.3.0\"\n",
+        );
+        install("kit", "0.3.0", "");
+        install("kit", "0.4.0", "");
+        let root = temp.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut lock = crate::lock::LockFile::new("app".into(), "0.1.0".into());
+        for (name, version) in [("acme/rig", "1.0.0"), ("acme/kit", "0.3.0")] {
+            lock.add_dependency(
+                name.into(),
+                crate::lock::LockedDependency {
+                    version: version.into(),
+                    source: crate::lock::LockedSource::Url {
+                        url: format!("https://packages.studio.example/{version}.zip"),
+                        version: version.into(),
+                    },
+                    checksum: None,
+                },
+            );
+        }
+        lock.save(&root.join("hpm.lock")).unwrap();
+        let project = DiscoveredProject {
+            path: root,
+            manifest: hpm_package::parse_manifest_str(
+                "[package]\npath = \"acme/app\"\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"acme/rig\" = \"1.0.0\"\n",
+            )
+            .unwrap(),
+        };
+
+        let graph = DependencyResolver::new(storage)
+            .build_dependency_graph(std::slice::from_ref(&project))
+            .await
+            .unwrap();
+
+        let roots: Vec<PackageId> = graph
+            .nodes()
+            .filter(|n| n.is_root)
+            .map(|n| n.id.clone())
+            .collect();
+        let kept = graph.mark_reachable_from_roots(&roots);
+        assert!(
+            kept.contains(&PackageId::new("kit".into(), "0.3.0".into())),
+            "{kept:?}"
+        );
+    }
+
+    mod lock_roots {
+        use super::*;
+        use proptest::prelude::*;
+
+        const KITS: [&str; 3] = ["0.1.0", "0.2.0", "0.3.0"];
+        const RANGES: [&str; 5] = ["*", ">=0.2.0", "<0.3.0", "0.2.0", "^0.3"];
+
+        /// What clean keeps of kit for one project, worked out by hand: the
+        /// version its lock records (when installed), and the version rig's
+        /// range resolves to when rig is a root (the newest installed one in
+        /// it).
+        fn model(
+            installed: &[usize],
+            range: &str,
+            rig_root: bool,
+            locked_kit: Option<usize>,
+        ) -> std::collections::BTreeSet<String> {
+            let mut kept = std::collections::BTreeSet::new();
+            if let Some(k) = locked_kit.filter(|k| installed.contains(k)) {
+                kept.insert(KITS[k].to_string());
+            }
+            if rig_root {
+                let req = crate::registry::solve::requirement(range).unwrap();
+                if let Some(k) = installed
+                    .iter()
+                    .filter(|k| req.matches(&semver::Version::parse(KITS[**k]).unwrap()))
+                    .max()
+                {
+                    kept.insert(KITS[*k].to_string());
+                }
+            }
+            kept
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
+            /// Clean keeps exactly the kit versions a project can load: the
+            /// one its lock records and the one its rig's range resolves to,
+            /// and no other installed version.
+            #[test]
+            fn prop_clean_keeps_the_locked_versions_and_nothing_else(
+                installed in prop::collection::btree_set(0usize..3, 1..=3),
+                range in 0usize..5,
+                listed in any::<bool>(),
+                rig_locked in any::<bool>(),
+                locked_kit in prop::option::of(0usize..3),
+            ) {
+                let installed: Vec<usize> = installed.into_iter().collect();
+                let temp = TempDir::new().unwrap();
+                let storage = std::sync::Arc::new(
+                    StorageManager::new(StorageConfig {
+                        home_dir: temp.path().to_path_buf(),
+                        cache_dir: temp.path().join("cache"),
+                        packages_dir: temp.path().join("packages"),
+                        registry_cache_dir: temp.path().join("registry"),
+                    })
+                    .unwrap(),
+                );
+                let install = |slug: &str, version: &str, deps: &str| {
+                    let dir = temp.path().join(format!("packages/{slug}@{version}"));
+                    std::fs::create_dir_all(&dir).unwrap();
+                    std::fs::write(
+                        dir.join("hpm.toml"),
+                        format!("[package]\npath = \"acme/{slug}\"\nname = \"{slug}\"\nversion = \"{version}\"\n{deps}"),
+                    )
+                    .unwrap();
+                };
+                install("rig", "1.0.0", &format!("\n[dependencies]\n\"acme/kit\" = \"{}\"\n", RANGES[range]));
+                for k in &installed {
+                    install("kit", KITS[*k], "");
+                }
+                let root = temp.path().join("project");
+                std::fs::create_dir_all(&root).unwrap();
+                let mut lock = crate::lock::LockFile::new("app".into(), "0.1.0".into());
+                let locked: Vec<(&str, &str)> = rig_locked
+                    .then_some(("acme/rig", "1.0.0"))
+                    .into_iter()
+                    .chain(locked_kit.map(|k| ("acme/kit", KITS[k])))
+                    .collect();
+                for (name, version) in locked {
+                    lock.add_dependency(
+                        name.into(),
+                        crate::lock::LockedDependency {
+                            version: version.into(),
+                            source: crate::lock::LockedSource::Url {
+                                url: format!("https://packages.studio.example/{version}.zip"),
+                                version: version.into(),
+                            },
+                            checksum: None,
+                        },
+                    );
+                }
+                lock.save(&root.join("hpm.lock")).unwrap();
+                let deps = if listed { "\n[dependencies]\n\"acme/rig\" = \"1.0.0\"\n" } else { "" };
+                let project = DiscoveredProject {
+                    path: root,
+                    manifest: hpm_package::parse_manifest_str(&format!(
+                        "[package]\npath = \"acme/app\"\nname = \"app\"\nversion = \"0.1.0\"\n{deps}"
+                    ))
+                    .unwrap(),
+                };
+
+                let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+                let graph = runtime
+                    .block_on(DependencyResolver::new(storage).build_dependency_graph(std::slice::from_ref(&project)))
+                    .unwrap();
+                let roots: Vec<PackageId> = graph.nodes().filter(|n| n.is_root).map(|n| n.id.clone()).collect();
+                let kept: std::collections::BTreeSet<String> = graph
+                    .mark_reachable_from_roots(&roots)
+                    .into_iter()
+                    .filter(|id| id.name == "kit")
+                    .filter(|id| installed.iter().any(|k| KITS[*k] == id.version))
+                    .map(|id| id.version)
+                    .collect();
+
+                prop_assert_eq!(kept, model(&installed, RANGES[range], listed || rig_locked, locked_kit));
+            }
+        }
     }
 
     #[tokio::test]

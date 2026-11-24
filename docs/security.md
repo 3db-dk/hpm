@@ -55,7 +55,8 @@ tampered packages never silently reach Houdini.
 ### Lock file pinning
 
 `hpm.lock` pins the exact version and a checksum of every registry and URL
-dependency. It does **not** pin Python packages: it records their
+package installed, including the ones installed because another package
+requires them. It does **not** pin Python packages: it records their
 constraints, and `uv` resolves them again on each install (see
 [the lock file reference](lockfile.md)). Commit it to version control. In CI, use `--frozen-lockfile` to fail the
 build if the lock would need to change:

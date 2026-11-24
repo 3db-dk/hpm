@@ -79,7 +79,9 @@ mod digest_spec;
 // etc.); the top-level aliases just spare callers a deeper import.
 
 // Project orchestration — the entry point most library consumers use.
-pub use project::{InstallOutcome, PackageRunEnv, ProjectDependency, ProjectError, ProjectManager};
+pub use project::{
+    InstallOutcome, PackageRunEnv, ProjectDependency, ProjectError, ProjectManager, SyncOptions,
+};
 
 // Shared `[scripts]` runner. Embedders implement `ScriptSink` (spawn +
 // diagnostics) and drive `run_script` / `run_prepack`; the script-env

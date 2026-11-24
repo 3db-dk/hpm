@@ -12,6 +12,20 @@ use tracing::info;
 
 use super::{InstallOutcome, ProjectError, ProjectManager};
 
+/// How a sync treats `hpm.lock` ([`ProjectManager::sync_dependencies_with`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SyncOptions {
+    /// Every registry and URL package the sync installs, listed or
+    /// required, must be pinned by the lock at the version installed, with
+    /// a checksum, or the sync fails before installing it. The versions the
+    /// lock recorded are kept; a set that no longer fits them is an error.
+    pub frozen: bool,
+    /// Choose every package the project does not pin anew, the newest
+    /// version that fits, instead of keeping the version the lock recorded
+    /// while it still fits. What `hpm update` installs with.
+    pub refresh: bool,
+}
+
 impl ProjectManager {
     /// Install the project's dependencies, reproducing `hpm.lock` when the
     /// project has one: every package whose locked version is the one the
@@ -34,14 +48,49 @@ impl ProjectManager {
     }
 
     /// [`Self::sync_dependencies`] against the given lock. With `frozen`,
-    /// every registry and URL dependency must be pinned by the lock at its
-    /// manifest version with a checksum, or the sync fails before anything
-    /// is installed.
+    /// every registry and URL package must be pinned by the lock at the
+    /// version installed with a checksum, or the sync fails before it is
+    /// installed. [`Self::sync_dependencies_with`] with the lock's versions
+    /// kept.
     pub async fn sync_dependencies_with_lock(
         &self,
         lock: Option<&crate::lock::LockFile>,
         frozen: bool,
     ) -> Result<Vec<(String, InstallOutcome)>, ProjectError> {
+        self.sync_dependencies_with(
+            lock,
+            SyncOptions {
+                frozen,
+                refresh: false,
+            },
+        )
+        .await
+    }
+
+    /// Install the project's dependencies and every package their versions
+    /// require that the project does not list, directly or through each
+    /// other ([`crate::registry::closure::select_closed`], the choice an
+    /// application that embeds hpm makes too).
+    ///
+    /// A registry dependency written as a full version is pinned there; a
+    /// range takes the newest version in it that fits. A path or URL
+    /// dependency takes part at the version its `hpm.toml` declares,
+    /// requiring what that file's registry dependencies require. Versions
+    /// are held to the lower bound of the project's `[compat].houdini`, and
+    /// requirements between packages must all hold, or the sync fails
+    /// before installing anything from a registry.
+    ///
+    /// Unless `options.refresh`, a package the project does not pin keeps
+    /// the version `lock` recorded for it while the set still fits that
+    /// version; when it does not, every such package is chosen anew.
+    pub async fn sync_dependencies_with(
+        &self,
+        lock: Option<&crate::lock::LockFile>,
+        options: SyncOptions,
+    ) -> Result<Vec<(String, InstallOutcome)>, ProjectError> {
+        use crate::registry::closure::{self, Candidates};
+        use hpm_package::DependencySpec;
+
         info!("Syncing project dependencies");
         // Re-checked on every sync: a long-lived manager (an embedder) must
         // not write into a `.hpm` replaced by a link since it was built.
@@ -56,40 +105,92 @@ impl ProjectManager {
         };
 
         let project_houdini = project_manifest.compat.houdini_min();
+        let houdini = project_houdini.as_deref().and_then(houdini_target);
         let project_env_overrides = project_manifest.runtime;
         let manifest_registries = project_manifest.registries;
         let dependencies = project_manifest.dependencies;
 
-        // The checksum the lock pins for each dependency, when the lock
-        // records the very version the manifest asks for. A lock entry for
-        // another version is stale (the manifest moved on) and pins nothing.
-        let mut locked: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
+        // The lock entry for `name` at `version`, if the lock records that
+        // very version. One for another version is stale and pins nothing.
+        let locked_at = |name: &str, version: &str| -> Option<String> {
+            lock.and_then(|l| l.get_dependency(name))
+                .filter(|e| e.version == version)
+                .and_then(|e| e.checksum.clone())
+        };
+        let frozen_check = |name: &str, version: &str| -> Result<(), ProjectError> {
+            if options.frozen && locked_at(name, version).is_none() {
+                return Err(ProjectError::FrozenLockIncomplete {
+                    name: name.to_string(),
+                });
+            }
+            Ok(())
+        };
+
+        // Fetch list of globally installed packages once for short-circuit lookups
+        let all_installed = Arc::new(self.storage_manager.list_installed()?);
+        let stored = |name: &str, version: &str| -> Option<&InstalledPackage> {
+            all_installed
+                .iter()
+                .find(|p| ProjectManager::matches_spec_name(p, name) && p.version == version)
+        };
+
+        // URL dependencies first: their version is fixed, and what they
+        // require is in the `hpm.toml` the archive carries.
+        let mut outcomes: Vec<(String, InstallOutcome)> = Vec::new();
         for (name, spec) in &dependencies {
-            let pinned_version = match spec {
-                hpm_package::DependencySpec::Registry { version, .. }
-                | hpm_package::DependencySpec::Url { version, .. } => version,
-                hpm_package::DependencySpec::Path { .. } => continue,
-            };
-            let entry = lock
-                .and_then(|l| l.get_dependency(name))
-                .filter(|e| &e.version == pinned_version);
-            match entry.and_then(|e| e.checksum.clone()) {
-                Some(checksum) => {
-                    locked.insert(name.clone(), checksum);
-                }
-                None if frozen => {
-                    return Err(ProjectError::FrozenLockIncomplete { name: name.clone() });
-                }
-                None => {}
+            if let DependencySpec::Url { version, .. } = spec {
+                frozen_check(name, version)?;
             }
         }
-        let locked = Arc::new(locked);
+        let url_deps: Vec<(String, DependencySpec)> = dependencies
+            .iter()
+            .filter(|(_, spec)| matches!(spec, DependencySpec::Url { .. }))
+            .map(|(n, s)| (n.clone(), s.clone()))
+            .collect();
+        outcomes.extend(
+            self.install_all(url_deps, None, &all_installed, &locked_at)
+                .await?,
+        );
 
-        // Build the project's registry set once for any registry-resolved
-        // deps. Wrapped in Arc so each spawned task can hold a cheap clone.
+        // The project's packages as the solver sees them: registry
+        // dependencies in manifest order, then the packages on disk or
+        // already fetched (path and URL dependencies) at their declared
+        // version.
+        let mut on_disk: Vec<Candidates> = Vec::new();
+        for (name, spec) in &dependencies {
+            match spec {
+                DependencySpec::Path { path, .. } => {
+                    let manifest = hpm_package::PackageManifest::from_path(
+                        &std::path::Path::new(path).join("hpm.toml"),
+                    )?;
+                    on_disk.push(closure::working_copy(name, &manifest));
+                }
+                DependencySpec::Url { .. } => {
+                    if let Some((_, o)) = outcomes.iter().find(|(n, _)| n == name) {
+                        on_disk.push(Candidates {
+                            on_disk: false,
+                            ..closure::working_copy(name, &o.package.manifest)
+                        });
+                    }
+                }
+                DependencySpec::Registry { .. } => {}
+            }
+        }
+
+        let registry_deps: Vec<(&String, &String, Option<&str>)> = dependencies
+            .iter()
+            .filter_map(|(name, spec)| match spec {
+                DependencySpec::Registry {
+                    version, registry, ..
+                } => Some((name, version, registry.as_deref())),
+                _ => None,
+            })
+            .collect();
+        let anything_required = on_disk
+            .iter()
+            .any(|c| c.versions.iter().any(|e| !e.deps.is_empty()));
         let registry_set: Option<Arc<crate::registry::RegistrySet>> =
-            if dependencies.values().any(|spec| spec.is_registry()) {
+            if !registry_deps.is_empty() || anything_required {
                 let set = crate::registry::RegistrySet::for_project(
                     &manifest_registries,
                     &self.config,
@@ -101,51 +202,185 @@ impl ProjectManager {
                 None
             };
 
-        // Fetch list of globally installed packages once for short-circuit lookups
-        let all_installed = Arc::new(self.storage_manager.list_installed()?);
-
-        // Phase 1: spawn all installs in parallel via a JoinSet. Each task owns
-        // a clone of (StorageManager, ArchiveFetcher, RegistrySet) and its dep
-        // spec, so resolve→fetch→copy-into-CAS chains overlap across deps.
-        // At most `[install] parallel_downloads` installs run at once.
-        let slots = Arc::new(tokio::sync::Semaphore::new(
-            self.config.install.parallel_downloads.get(),
-        ));
-        let mut tasks: JoinSet<(String, Result<InstallOutcome, ProjectError>)> = JoinSet::new();
-        for (name, spec) in dependencies {
-            let storage = self.storage_manager.clone();
-            let fetcher = self.fetcher.clone();
-            let registry_set = registry_set.clone();
-            let all_installed = all_installed.clone();
-            let slots = slots.clone();
-            let locked = locked.clone();
-
-            tasks.spawn(async move {
-                let _slot = slots
-                    .acquire_owned()
-                    .await
-                    .expect("the install semaphore is never closed");
-                let result = install_one_dep(
-                    &storage,
-                    &fetcher,
-                    registry_set.as_deref(),
-                    &all_installed,
-                    &name,
-                    &spec,
-                    locked.get(&name).map(String::as_str),
-                )
-                .await;
-                (name, result)
+        // Each registry dependency, fresh (as the manifest writes it) and
+        // with the lock's version kept (a range pinned at the locked version
+        // while that is in it).
+        let mut listed_fresh: Vec<Candidates> = Vec::new();
+        let mut listed_locked: Vec<Candidates> = Vec::new();
+        for (name, version, registry) in &registry_deps {
+            let requirement = crate::registry::requirement::VersionRequirement::parse(version)
+                .map_err(|_| ProjectError::RegistryResolution {
+                    name: name.to_string(),
+                    version_req: version.to_string(),
+                    source: Box::new(crate::registry::RegistryError::ParseError(format!(
+                        "{version:?} is not a version or a version range"
+                    ))),
+                })?;
+            if matches!(
+                requirement,
+                crate::registry::requirement::VersionRequirement::Exact(_)
+            ) {
+                // A pin is selected as written; only its requirements are
+                // needed, from the store copy when there is one, so an
+                // installed project resolves without the network. A pin the
+                // registry cannot give is still selected, and installing it
+                // reports why.
+                let entry = match stored(name, version) {
+                    Some(pkg) => Some(closure::entry_of(name, &pkg.manifest)),
+                    None => match registry_set.as_deref() {
+                        Some(set) if !set.is_empty() => {
+                            set.get_version_in(name, version, *registry).await.ok()
+                        }
+                        _ => None,
+                    },
+                };
+                let pinned = Candidates {
+                    name: name.to_string(),
+                    pin: Some(version.to_string()),
+                    versions: entry.into_iter().collect(),
+                    on_disk: false,
+                };
+                listed_fresh.push(pinned.clone());
+                listed_locked.push(pinned);
+                continue;
+            }
+            let set = registry_set
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| ProjectError::NoRegistriesConfigured {
+                    name: name.to_string(),
+                    version_req: version.to_string(),
+                })?;
+            let versions: Vec<crate::registry::RegistryEntry> = set
+                .get_versions_in(name, *registry)
+                .await
+                .map_err(|source| ProjectError::RegistryResolution {
+                    name: name.to_string(),
+                    version_req: version.to_string(),
+                    source: Box::new(source),
+                })?
+                .into_iter()
+                .filter(|e| {
+                    semver::Version::parse(&e.version).is_ok_and(|v| requirement.matches(&v))
+                })
+                .collect();
+            let locked_version = lock
+                .and_then(|l| l.get_dependency(name))
+                .map(|e| e.version.clone())
+                .filter(|v| versions.iter().any(|e| &e.version == v));
+            listed_locked.push(Candidates {
+                name: name.to_string(),
+                pin: locked_version,
+                versions: versions.clone(),
+                on_disk: false,
+            });
+            listed_fresh.push(Candidates {
+                name: name.to_string(),
+                pin: None,
+                versions,
+                on_disk: false,
             });
         }
+        listed_fresh.extend(on_disk.iter().cloned());
+        listed_locked.extend(on_disk);
 
-        let mut outcomes: Vec<(String, InstallOutcome)> = Vec::new();
-        while let Some(joined) = tasks.join_next().await {
-            // A spawned-task panic leaks structural confusion; let the runtime
-            // surface it rather than synthesising a typed ProjectError.
-            let (name, result) = joined.expect("dependency install task panicked");
-            outcomes.push((name, result?));
+        // The packages the lock recorded that the project does not list,
+        // offered at the locked version: each is used exactly when the set
+        // still requires it.
+        let mut supplied: Vec<Candidates> = Vec::new();
+        if !options.refresh {
+            for (name, entry) in lock.map(|l| l.dependencies.iter()).into_iter().flatten() {
+                if dependencies.contains_key(name) || !entry.source.is_url() {
+                    continue;
+                }
+                let known = match stored(name, &entry.version) {
+                    Some(pkg) => Some(closure::entry_of(name, &pkg.manifest)),
+                    None => match registry_set.as_deref() {
+                        Some(set) if !set.is_empty() => {
+                            set.get_version_in(name, &entry.version, None).await.ok()
+                        }
+                        _ => None,
+                    },
+                };
+                if let Some(known) = known {
+                    supplied.push(Candidates {
+                        name: name.clone(),
+                        pin: Some(entry.version.clone()),
+                        versions: vec![known],
+                        on_disk: false,
+                    });
+                }
+            }
         }
+
+        let mut source = RegistrySource {
+            set: registry_set.clone(),
+        };
+        let selections = if options.refresh {
+            closure::select_closed(&listed_fresh, &[], houdini, &mut source, |_| false).await
+        } else {
+            closure::select_keeping(
+                closure::Kept {
+                    listed: &listed_locked,
+                    supplied: &supplied,
+                },
+                &listed_fresh,
+                houdini,
+                &mut source,
+                options.frozen,
+            )
+            .await
+        }
+        .map_err(ProjectError::Resolution)?;
+
+        // What to install from a registry: each registry dependency at the
+        // version chosen for it, and each required package the project does
+        // not list. Path and URL dependencies install from their own source.
+        let mut installs: Vec<(String, DependencySpec)> = Vec::new();
+        for sel in &selections {
+            match dependencies.get(&sel.name) {
+                Some(DependencySpec::Registry {
+                    registry, optional, ..
+                }) => installs.push((
+                    sel.name.clone(),
+                    DependencySpec::Registry {
+                        version: sel.version.clone(),
+                        registry: registry.clone(),
+                        optional: *optional,
+                    },
+                )),
+                Some(_) => {}
+                None => {
+                    info!(
+                        "Installing {} {}: a package the project uses requires it",
+                        sel.name, sel.version
+                    );
+                    installs.push((
+                        sel.name.clone(),
+                        DependencySpec::Registry {
+                            version: sel.version.clone(),
+                            registry: None,
+                            optional: false,
+                        },
+                    ));
+                }
+            }
+        }
+        for (name, spec) in &installs {
+            if let DependencySpec::Registry { version, .. } = spec {
+                frozen_check(name, version)?;
+            }
+        }
+        installs.extend(
+            dependencies
+                .iter()
+                .filter(|(_, spec)| matches!(spec, DependencySpec::Path { .. }))
+                .map(|(n, s)| (n.clone(), s.clone())),
+        );
+        outcomes.extend(
+            self.install_all(installs, registry_set, &all_installed, &locked_at)
+                .await?,
+        );
 
         // Snapshot the installed-package list once for downstream steps; the
         // outcomes hang onto richer metadata for the lockfile, but Python
@@ -180,14 +415,102 @@ impl ProjectManager {
         // Sweep stale per-package manifests left over from previous syncs.
         // Houdini reads every .json file in `packages_dir` on launch, so a
         // manifest whose slug has dropped out of the dependency set (dev override
-        // removed, registry yank, manual edit) keeps loading the package even
-        // though hpm.toml no longer asks for it.
+        // removed, registry yank, manual edit, a requirement no longer
+        // needed) keeps loading the package even though nothing asks for it.
         self.sweep_stale_houdini_manifests(&installed)?;
 
         reclaim_superseded_dev_copies(&installed);
 
         info!("Successfully synced project dependencies");
         Ok(outcomes)
+    }
+
+    /// Install `deps` in parallel, at most `[install] parallel_downloads`
+    /// at once. Each task owns a clone of (StorageManager, ArchiveFetcher,
+    /// RegistrySet) and its spec, so resolve, fetch and copy-into-CAS
+    /// overlap across packages.
+    async fn install_all(
+        &self,
+        deps: Vec<(String, hpm_package::DependencySpec)>,
+        registry_set: Option<Arc<crate::registry::RegistrySet>>,
+        all_installed: &Arc<Vec<InstalledPackage>>,
+        locked_at: &impl Fn(&str, &str) -> Option<String>,
+    ) -> Result<Vec<(String, InstallOutcome)>, ProjectError> {
+        let slots = Arc::new(tokio::sync::Semaphore::new(
+            self.config.install.parallel_downloads.get(),
+        ));
+        let mut tasks: JoinSet<(String, Result<InstallOutcome, ProjectError>)> = JoinSet::new();
+        for (name, spec) in deps {
+            let storage = self.storage_manager.clone();
+            let fetcher = self.fetcher.clone();
+            let registry_set = registry_set.clone();
+            let all_installed = all_installed.clone();
+            let slots = slots.clone();
+            let locked = match &spec {
+                hpm_package::DependencySpec::Registry { version, .. }
+                | hpm_package::DependencySpec::Url { version, .. } => locked_at(&name, version),
+                hpm_package::DependencySpec::Path { .. } => None,
+            };
+
+            tasks.spawn(async move {
+                let _slot = slots
+                    .acquire_owned()
+                    .await
+                    .expect("the install semaphore is never closed");
+                let result = install_one_dep(
+                    &storage,
+                    &fetcher,
+                    registry_set.as_deref(),
+                    &all_installed,
+                    &name,
+                    &spec,
+                    locked.as_deref(),
+                )
+                .await;
+                (name, result)
+            });
+        }
+
+        let mut outcomes: Vec<(String, InstallOutcome)> = Vec::new();
+        while let Some(joined) = tasks.join_next().await {
+            // A spawned-task panic leaks structural confusion; let the runtime
+            // surface it rather than synthesising a typed ProjectError.
+            let (name, result) = joined.expect("dependency install task panicked");
+            outcomes.push((name, result?));
+        }
+        Ok(outcomes)
+    }
+}
+
+/// The Houdini a project's `[compat].houdini` lower bound names, for the
+/// solver: `22` reads as `22.0`. None when there is no usable bound.
+fn houdini_target(lower_bound: &str) -> Option<crate::registry::solve::HoudiniTarget> {
+    use crate::registry::solve::HoudiniTarget;
+    HoudiniTarget::parse(lower_bound).or_else(|| HoudiniTarget::parse(&format!("{lower_bound}.0")))
+}
+
+/// Where a sync finds the versions of a package the project does not list:
+/// the project's registries, first one that has it.
+struct RegistrySource {
+    set: Option<Arc<crate::registry::RegistrySet>>,
+}
+
+impl crate::registry::closure::VersionSource for RegistrySource {
+    async fn versions(
+        &mut self,
+        name: &str,
+    ) -> Result<Vec<crate::registry::RegistryEntry>, crate::registry::closure::Unsupplied> {
+        use crate::registry::closure::Unsupplied;
+        match self.set.as_deref() {
+            Some(set) if !set.is_empty() => set
+                .get_versions(name)
+                .await
+                .map_err(|e| Unsupplied::Failed(e.to_string())),
+            _ => Err(Unsupplied::Failed(
+                "no package registries are configured; run 'hpm registry add <url>' to add one"
+                    .into(),
+            )),
+        }
     }
 }
 

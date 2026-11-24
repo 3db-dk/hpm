@@ -42,6 +42,28 @@ pub async fn install_dependencies(
     frozen_lockfile: bool,
     console: &mut Console,
 ) -> Result<()> {
+    install_dependencies_with(
+        config,
+        manifest_path,
+        hpm_core::SyncOptions {
+            frozen: frozen_lockfile,
+            refresh: false,
+        },
+        console,
+    )
+    .await
+}
+
+/// [`install_dependencies`] with every [`hpm_core::SyncOptions`]:
+/// `hpm update` installs with `refresh`, so the packages the project does
+/// not list move to the newest version that fits.
+pub async fn install_dependencies_with(
+    config: &Config,
+    manifest_path: Option<PathBuf>,
+    options: hpm_core::SyncOptions,
+    console: &mut Console,
+) -> Result<()> {
+    let frozen_lockfile = options.frozen;
     info!("Starting dependency installation");
     if frozen_lockfile {
         info!("Using frozen lockfile mode - lock file must exist and not change");
@@ -108,7 +130,7 @@ pub async fn install_dependencies(
     let project_manager =
         ProjectManager::new(project_dir, storage_manager, Arc::new(config.clone()))?;
     let outcomes = project_manager
-        .sync_dependencies_with_lock(existing_lock.as_ref(), frozen_lockfile)
+        .sync_dependencies_with(existing_lock.as_ref(), options)
         .await
         .context("Failed to sync project dependencies")?;
 

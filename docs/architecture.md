@@ -261,11 +261,23 @@ file that omits a section leaves the lower layers untouched.
 
 ## Dependency resolution
 
-`hpm install` installs the versions a project's manifest names: an exact
-version is looked up as written, and `hpm add` / `hpm update` resolve a
-range to the highest non-yanked match and write that version back. There is
-no transitive installation — every dependency is a direct dependency of the
-project.
+`hpm install` installs the project's dependencies and every package their
+versions require (`ProjectManager::sync_dependencies_with`): an exact
+version is a pin, a range takes the newest version in it that fits, and
+`hpm add` / `hpm update` write the version they choose back as an exact
+one. The set is chosen by `registry::closure::select_closed`, the same loop
+an application that embeds hpm runs, so the two install the same packages
+for the same project. A path dependency takes part as
+`registry::closure::working_copy`: the version its `hpm.toml` declares,
+held like a pin, requiring that file's registry dependencies. A package the
+project does not list keeps the version `hpm.lock` recorded while the set
+still fits it (the lock's versions are offered as pinned *supplied*
+packages); when it does not fit, or under `SyncOptions::refresh`
+(`hpm update`), it is chosen anew, and `--frozen-lockfile` fails instead
+(`registry::closure::select_keeping`).
+A pinned package already in the store contributes its requirements from its
+installed `hpm.toml`, so a project that is installed and locked syncs
+without asking a registry.
 
 Choosing *which* versions a set of packages should use is
 `hpm_core::registry::solve`. A registry entry carries `deps`, the version
@@ -289,9 +301,10 @@ of the answer exactly when a chosen version requires it, directly or through
 another available package, and it constrains nothing while it is not. A
 version whose requirements cannot be met, because the required package has
 no version that fits or rules that version out itself, is passed over for an
-older one. An application that wants required packages installed offers
-them, and offers again whatever the answer's versions require that it had
-not fetched yet, until nothing is missing. The choice has to be made inside
+older one. `registry::closure::select_closed` offers the required packages,
+and offers again whatever the answer's versions require that it had not
+fetched yet, until nothing is missing; where versions come from is a
+`VersionSource` (the registries for `hpm install`). The choice has to be made inside
 the search: adding a required package to the set and removing it when the
 next answer no longer requires it can alternate between two answers and
 never finish.
@@ -343,10 +356,15 @@ client runs the same flow.
  │       each locked checksum is the expected tree digest: checked      │
  │       on the extracted archive before it reaches the store, and on   │
  │       a store copy before it is reused (--frozen-lockfile requires   │
- │       one per registry/URL dep)                                      │
+ │       one per registry/URL package installed, required ones too)     │
  │       warn if metadata.generated_at > 90 days                        │
- │  3. Fetch + install in parallel (one task per dep, JoinSet):         │
- │       Registry        → query registry, exact-version lookup         │
+ │  3. Install URL deps; read path deps' hpm.toml                       │
+ │  4. Choose the set: registry::closure::select_closed over the        │
+ │     registry deps, path/URL deps as working copies, the lock's       │
+ │     required versions supplied (unless refresh); a set that no       │
+ │     longer fits the lock is chosen again unless --frozen-lockfile    │
+ │  5. Fetch + install in parallel (one task per package, JoinSet):     │
+ │       Registry        → query registry, chosen-version lookup        │
  │                       → ArchiveFetcher → ~/.hpm/fetch/               │
  │                       → install_into_cas → ~/.hpm/packages/<slug>@<v>/ │
  │                         (refused unless its manifest declares the    │
@@ -362,28 +380,26 @@ client runs the same flow.
  │     remove-and-recopy that breaks on Windows when Houdini is open),  │
  │     but still get one exec_mode::ensure_repaired sweep — nothing     │
  │     else ever revisits a tree installed by an older hpm.             │
- │  4. Merge [python_dependencies] from every installed dep manifest    │
+ │  6. Merge [python_dependencies] from every installed dep manifest    │
  │     (the root manifest's own are used by package-env scripts only)   │
  │     Python ABI = root manifest's [compat].houdini lower bound        │
- │  5. Ensure managed CPython installed under ~/.hpm/uv-python/         │
+ │  7. Ensure managed CPython installed under ~/.hpm/uv-python/         │
  │     (uv python install <ver>) — auto-downloads on clean machines     │
- │  6. Resolve with bundled uv, hash the resolved set, pick or          │
+ │  8. Resolve with bundled uv, hash the resolved set, pick or          │
  │     rebuild ~/.hpm/venvs/<hash>/                                     │
- │  7. uv pip install --python <venv>/bin/python                        │
- │  8. Write <project>/.hpm/packages/{creator}.{slug}.json per dep      │
- │  9. Sweep stale <project>/.hpm/packages/ entries                     │
- │ 10. CLI step: build new lockfile from sync's InstallOutcomes         │
+ │  9. uv pip install --python <venv>/bin/python                        │
+ │ 10. Write <project>/.hpm/packages/{creator}.{slug}.json per package  │
+ │ 11. Sweep stale <project>/.hpm/packages/ entries                     │
+ │ 12. CLI step: build new lockfile from sync's InstallOutcomes         │
  │     (backfilled from the prior lockfile for short-circuited entries) │
  │     and write hpm.lock                                               │
  └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Note: registry resolution currently uses each dep spec's `version` string
-as an *exact* lookup against the registry. Range specs like `^1.0.0` in
-`[dependencies]` won't resolve through `hpm install` today — `hpm update`
-is the path that re-resolves ranges (querying all versions, filtering by
-`VersionReq`, picking the highest non-yanked) and rewrites the spec to
-the resolved exact version.
+A registry dependency written as a full version is a pin; a range takes
+the newest version in it that fits the rest of the set (see
+[Dependency resolution](#dependency-resolution)). `hpm update` rewrites each
+spec to the version it chose and installs with `SyncOptions::refresh`.
 
 `--frozen-lockfile` aborts if loading the existing lockfile fails, if any
 cached checksum mismatches, or if the freshly-resolved set differs from
@@ -397,7 +413,8 @@ identity of "active projects" comes from the `[projects]` config section.
 ```text
   I = installed packages in ~/.hpm/packages/
   P = active projects discovered via ProjectDiscovery
-  D(p) = direct deps declared by project p
+  D(p) = deps declared by project p, plus every registry/URL package
+         p's hpm.lock records, at the locked version
   T(I) = transitive closure over the dependency graph
 
   orphans = I \ T( ⋃ D(p) )

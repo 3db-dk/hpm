@@ -69,17 +69,18 @@ A dependency does not have to come from a registry. It can also be a
 **URL** to an archive, or a **path** to a package directory on disk, which
 is how you use a package while developing it.
 
-## Versions, and what install does not do
+## Versions, and what install adds
 
 A project's `[dependencies]` hold exact versions. `hpm add` picks the newest
 version and writes it; `hpm update` moves it forward; `hpm install` installs
 what is written.
 
-`hpm install` installs the packages the project lists. It does not read
-those packages' own dependencies and install them too. If a package needs
-another package, the project lists both. An application
-that embeds hpm can work those requirements out and write the complete list;
-the `hpm` command line does not.
+It also installs what those packages need. Each published version records
+the ranges it requires of other packages, and `hpm install` adds every
+package the project's versions require, at the newest version that fits all
+of them, and records it in the lock. When the requirements cannot all be
+met, for example the project pins a version another package rules out, the
+install stops and says which packages disagree.
 
 ## Lock file
 

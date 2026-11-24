@@ -78,10 +78,17 @@ pub enum ProjectError {
     /// `--frozen-lockfile` was given but the lock does not pin this
     /// dependency's version and checksum.
     #[error(
-        "--frozen-lockfile requires hpm.lock to pin {name} at its manifest version with a \
-         checksum. Re-run without --frozen-lockfile to update the lock."
+        "--frozen-lockfile requires hpm.lock to pin {name} at the version being installed with \
+         a checksum. Re-run without --frozen-lockfile to update the lock."
     )]
     FrozenLockIncomplete { name: String },
+
+    /// The project's packages, and the packages their versions require,
+    /// cannot be installed together: a requirement between them cannot be
+    /// met, a package has no usable version, or a required package could
+    /// not be looked up.
+    #[error("The project's packages cannot be installed together: {0}")]
+    Resolution(crate::registry::closure::ClosureError),
 
     /// A package source URL could not be parsed.
     #[error(transparent)]

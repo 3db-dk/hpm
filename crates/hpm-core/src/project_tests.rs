@@ -2432,3 +2432,369 @@ mod project_tree_links {
         }
     }
 }
+
+/// A project gets the packages its packages require, not only the ones it
+/// lists (hpm#17: TumbleRig 1.25 installed with the CLI loaded without the
+/// kit it requires).
+mod required_packages {
+    use super::*;
+    use crate::lock::LockFile;
+    use std::process::Command;
+
+    const RIG: &str = "tumblehead/rig";
+    const KIT: &str = "tumbletrove/kit";
+    const KITS: [&str; 3] = ["0.2.0", "0.3.0", "0.4.0"];
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    fn package_toml(path: &str, version: &str, deps: &str) -> String {
+        format!(
+            "[package]\npath = \"{path}\"\nname = \"x\"\nversion = \"{version}\"\n\n[dependencies]\n{deps}"
+        )
+    }
+
+    /// A zip of `path@version` carrying `hpm.toml` with `deps`.
+    fn zip_of(path: &str, version: &str, deps: &str) -> Vec<u8> {
+        use std::io::Write;
+        let slug = path.split('/').nth(1).unwrap();
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file(format!("{slug}/hpm.toml"), options).unwrap();
+            zip.write_all(package_toml(path, version, deps).as_bytes())
+                .unwrap();
+            zip.start_file(format!("{slug}/data.txt"), options).unwrap();
+            zip.write_all(format!("{path} {version}").as_bytes())
+                .unwrap();
+            zip.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    /// A git index offering rig 1.25.4 (requiring kit >=0.3.0) and kit
+    /// 0.2.0, 0.3.0 and 0.4.0, with every archive in the download cache, so
+    /// nothing touches the network. Returns the index path.
+    fn world(temp: &TempDir) -> std::path::PathBuf {
+        let work = temp.path().join("index-work");
+        for creator in ["tumblehead", "tumbletrove"] {
+            std::fs::create_dir_all(work.join(creator)).unwrap();
+        }
+        std::fs::write(work.join("config.json"), "{}").unwrap();
+        let line = |name: &str, v: &str, deps: &str| {
+            format!(
+                r#"{{"name":"{name}","vers":"{v}","deps":[{deps}],"dl":"https://example.invalid/{}-{v}.zip","yanked":false}}"#,
+                name.replace('/', "-")
+            )
+        };
+        std::fs::write(
+            work.join("tumblehead/rig.json"),
+            line(
+                RIG,
+                "1.25.4",
+                r#"{"name":"tumbletrove/kit","req":">=0.3.0"}"#,
+            ) + "\n",
+        )
+        .unwrap();
+        let kits: Vec<String> = KITS.iter().map(|v| line(KIT, v, "")).collect();
+        std::fs::write(work.join("tumbletrove/kit.json"), kits.join("\n") + "\n").unwrap();
+        git(&work, &["init", "-q", "-b", "main"]);
+        git(&work, &["add", "."]);
+        git(&work, &["commit", "-q", "-m", "index"]);
+        let bare = temp.path().join("index.git");
+        git(
+            temp.path(),
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                work.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+
+        let cache = temp.path().join(".hpm").join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(
+            cache.join("tumblehead-rig-1.25.4"),
+            zip_of(RIG, "1.25.4", "\"tumbletrove/kit\" = \">=0.3.0\"\n"),
+        )
+        .unwrap();
+        for v in KITS {
+            std::fs::write(
+                cache.join(format!("tumbletrove-kit-{v}")),
+                zip_of(KIT, v, ""),
+            )
+            .unwrap();
+        }
+        bare
+    }
+
+    fn project(temp: &TempDir, index: &Path, deps: &str) -> ProjectManager {
+        let (config, storage) = test_setup(temp.path());
+        let root = temp.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let url = index.to_string_lossy().replace('\\', "/");
+        std::fs::write(
+            root.join("hpm.toml"),
+            format!(
+                "{}\n[[registries]]\nname = \"studio\"\nurl = \"{url}\"\ntype = \"git\"\n",
+                package_toml("studio/shot", "0.1.0", deps)
+            ),
+        )
+        .unwrap();
+        ProjectManager::new(root, storage, config).unwrap()
+    }
+
+    fn versions(outcomes: &[(String, InstallOutcome)]) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = outcomes
+            .iter()
+            .map(|(n, o)| (n.clone(), o.package.version.clone()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn pair(name: &str, version: &str) -> (String, String) {
+        (name.to_string(), version.to_string())
+    }
+
+    async fn lock_after(
+        manager: &ProjectManager,
+        outcomes: &[(String, InstallOutcome)],
+    ) -> LockFile {
+        let manifest = manager.load_project_manifest().unwrap().unwrap();
+        manager.lock_file(&manifest, outcomes, None).await.unwrap()
+    }
+
+    /// The issue's case: listing rig alone installs kit too, at the newest
+    /// version rig accepts, with its own Houdini package file and lock
+    /// entry.
+    #[tokio::test]
+    async fn a_required_package_is_installed_loaded_and_locked() {
+        let temp = TempDir::new().unwrap();
+        let index = world(&temp);
+        let manager = project(&temp, &index, "\"tumblehead/rig\" = \"1.25.4\"\n");
+
+        let outcomes = manager.sync_dependencies().await.unwrap();
+
+        assert_eq!(
+            versions(&outcomes),
+            vec![pair(RIG, "1.25.4"), pair(KIT, "0.4.0")]
+        );
+        let packages = &manager.project_paths.packages_dir;
+        assert!(
+            packages.join("tumbletrove.kit.json").is_file(),
+            "kit is loaded by Houdini"
+        );
+        let lock = lock_after(&manager, &outcomes).await;
+        let kit = lock.get_dependency(KIT).expect("kit is locked");
+        assert_eq!(kit.version, "0.4.0");
+        assert!(kit.checksum.is_some());
+    }
+
+    /// A required package keeps the version the lock recorded while it
+    /// still fits; a refresh (`hpm update`) moves it to the newest.
+    #[tokio::test]
+    async fn the_lock_keeps_a_required_version_until_a_refresh() {
+        let temp = TempDir::new().unwrap();
+        let index = world(&temp);
+        let manager = project(
+            &temp,
+            &index,
+            "\"tumblehead/rig\" = \"1.25.4\"\n\"tumbletrove/kit\" = \"0.3.0\"\n",
+        );
+        // Lock kit at 0.3.0 by listing it, then stop listing it.
+        let first = manager.sync_dependencies().await.unwrap();
+        let lock = lock_after(&manager, &first).await;
+        let manager = project(&temp, &index, "\"tumblehead/rig\" = \"1.25.4\"\n");
+
+        let kept = manager
+            .sync_dependencies_with_lock(Some(&lock), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            versions(&kept),
+            vec![pair(RIG, "1.25.4"), pair(KIT, "0.3.0")]
+        );
+
+        let frozen = manager
+            .sync_dependencies_with_lock(Some(&lock), true)
+            .await
+            .unwrap();
+        assert_eq!(
+            versions(&frozen),
+            versions(&kept),
+            "a frozen sync keeps it too"
+        );
+
+        let refreshed = manager
+            .sync_dependencies_with(
+                Some(&lock),
+                SyncOptions {
+                    frozen: false,
+                    refresh: true,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            versions(&refreshed),
+            vec![pair(RIG, "1.25.4"), pair(KIT, "0.4.0")]
+        );
+    }
+
+    /// A required version the lock recorded that the set no longer fits
+    /// (rig now needs a newer kit) is chosen anew, but a frozen sync,
+    /// which must install what the lock says, fails instead.
+    #[tokio::test]
+    async fn a_locked_version_that_no_longer_fits_is_replaced_unless_frozen() {
+        let temp = TempDir::new().unwrap();
+        let index = world(&temp);
+        // Lock kit at 0.2.0, which rig does not accept.
+        let manager = project(&temp, &index, "\"tumbletrove/kit\" = \"0.2.0\"\n");
+        let first = manager.sync_dependencies().await.unwrap();
+        let lock = lock_after(&manager, &first).await;
+        let manager = project(&temp, &index, "\"tumblehead/rig\" = \"1.25.4\"\n");
+
+        let err = manager
+            .sync_dependencies_with_lock(Some(&lock), true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProjectError::Resolution(_)), "{err}");
+
+        let replaced = manager
+            .sync_dependencies_with_lock(Some(&lock), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            versions(&replaced),
+            vec![pair(RIG, "1.25.4"), pair(KIT, "0.4.0")]
+        );
+    }
+
+    /// A frozen sync refuses a required package the lock does not pin.
+    #[tokio::test]
+    async fn a_frozen_sync_refuses_an_unlocked_required_package() {
+        let temp = TempDir::new().unwrap();
+        let index = world(&temp);
+        let manager = project(&temp, &index, "\"tumblehead/rig\" = \"1.25.4\"\n");
+        let mut lock = LockFile::new("x".into(), "0.1.0".into());
+        let rig_only = {
+            let other = TempDir::new().unwrap();
+            let idx = world(&other);
+            let m = project(&other, &idx, "\"tumblehead/rig\" = \"1.25.4\"\n");
+            let o = m.sync_dependencies().await.unwrap();
+            lock_after(&m, &o).await
+        };
+        lock.add_dependency(RIG.into(), rig_only.get_dependency(RIG).unwrap().clone());
+
+        let err = manager
+            .sync_dependencies_with_lock(Some(&lock), true)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, ProjectError::FrozenLockIncomplete { name } if name == KIT),
+            "{err}"
+        );
+    }
+
+    /// A requirement the project's own pin does not meet fails the sync,
+    /// naming both, before anything is installed.
+    #[tokio::test]
+    async fn a_pin_that_breaks_a_requirement_fails_before_installing() {
+        let temp = TempDir::new().unwrap();
+        let index = world(&temp);
+        let manager = project(
+            &temp,
+            &index,
+            "\"tumblehead/rig\" = \"1.25.4\"\n\"tumbletrove/kit\" = \"0.2.0\"\n",
+        );
+
+        let err = manager.sync_dependencies().await.unwrap_err();
+
+        let text = err.to_string();
+        assert!(matches!(err, ProjectError::Resolution(_)), "{text}");
+        assert!(text.contains(KIT) && text.contains(RIG), "{text}");
+        assert!(manager.storage_manager.list_installed().unwrap().is_empty());
+    }
+
+    /// A path dependency brings what its `hpm.toml` requires: a dev rig
+    /// still gets its kit.
+    #[tokio::test]
+    async fn a_path_dependency_brings_its_requirements() {
+        let temp = TempDir::new().unwrap();
+        let index = world(&temp);
+        let dev = temp.path().join("rig-dev");
+        std::fs::create_dir_all(dev.join("otls")).unwrap();
+        std::fs::write(dev.join("otls/rig.hda"), "dev").unwrap();
+        std::fs::write(
+            dev.join("hpm.toml"),
+            package_toml(RIG, "1.26.0", "\"tumbletrove/kit\" = \"^0.3\"\n"),
+        )
+        .unwrap();
+        let path = dev.to_string_lossy().replace('\\', "/");
+        let manager = project(
+            &temp,
+            &index,
+            &format!("\"tumblehead/rig\" = {{ path = \"{path}\" }}\n"),
+        );
+
+        let outcomes = manager.sync_dependencies().await.unwrap();
+
+        assert_eq!(
+            versions(&outcomes),
+            vec![pair(RIG, "1.26.0"), pair(KIT, "0.3.0")]
+        );
+    }
+
+    /// Once nothing requires a package, the next sync stops loading it.
+    #[tokio::test]
+    async fn a_package_no_longer_required_stops_loading() {
+        let temp = TempDir::new().unwrap();
+        let index = world(&temp);
+        let manager = project(&temp, &index, "\"tumblehead/rig\" = \"1.25.4\"\n");
+        manager.sync_dependencies().await.unwrap();
+        let kit_json = manager
+            .project_paths
+            .packages_dir
+            .join("tumbletrove.kit.json");
+        assert!(kit_json.is_file());
+
+        let manager = project(&temp, &index, "");
+        manager.sync_dependencies().await.unwrap();
+
+        assert!(!kit_json.exists());
+    }
+
+    /// An installed, locked project syncs again without its registry: the
+    /// pins and the locked required versions come from the store.
+    #[tokio::test]
+    async fn an_installed_locked_project_syncs_without_the_registry() {
+        let temp = TempDir::new().unwrap();
+        let index = world(&temp);
+        let manager = project(&temp, &index, "\"tumblehead/rig\" = \"1.25.4\"\n");
+        let first = manager.sync_dependencies().await.unwrap();
+        let lock = lock_after(&manager, &first).await;
+        let gone = temp.path().join("no-such-index.git");
+        let manager = project(&temp, &gone, "\"tumblehead/rig\" = \"1.25.4\"\n");
+
+        let again = manager
+            .sync_dependencies_with_lock(Some(&lock), true)
+            .await
+            .unwrap();
+
+        assert_eq!(versions(&again), versions(&first));
+    }
+}

@@ -139,14 +139,15 @@ means `">=1.0, ^1.2.3"`.
 Which of the two to write depends on who reads the manifest:
 
 - **In a project you install with `hpm install`, write exact versions.**
-  Install looks each dependency up at the version written and does not
-  resolve ranges. `hpm add` and `hpm update` choose a version for you and
+  An exact version installs that version; a range installs the newest
+  version in it that fits, and `hpm.lock` keeps the choice until
+  `hpm update`. `hpm add` and `hpm update` choose a version for you and
   write it back as an exact one.
 - **In a package you publish, write the range you have tested against.**
   When a version is published, its registry dependencies (not `path` or
   `url` ones) are registered with it, and the registry serves them as that
-  version's `deps`. A client that chooses versions for a whole project
-  (an application that embeds hpm can) gives each unpinned package
+  version's `deps`. `hpm install` (and an application that embeds hpm)
+  chooses versions for the whole project: it gives each unpinned package
   the newest version whose `[compat].houdini` supports the project's Houdini
   and whose ranges agree with the versions chosen for the other packages,
   and adds a required package the project does not list. It never
@@ -163,8 +164,9 @@ Which of the two to write depends on who reads the manifest:
   "acme/core" = ">=0.47, <0.48"
   ```
 
-`hpm install` itself installs only the packages a project lists; it does not
-follow a package's own `[dependencies]`.
+So a project lists the packages it uses, and `hpm install` adds what they
+need. A path dependency counts as the version its `hpm.toml` declares, and
+its registry dependencies are followed the same way.
 
 ## `[python_dependencies]`
 

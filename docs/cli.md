@@ -113,16 +113,15 @@ hpm install [OPTIONS]
 Install does the following:
 
 1. Loads `hpm.toml` and, if present, `hpm.lock`. An `hpm.lock` that cannot be read stops the install. A lock older than 90 days prints a warning.
-2. Installs every entry of `[dependencies]` into the store (`~/.hpm/packages/`), several at once. A registry dependency is looked up at exactly the version written in the manifest; a URL dependency is downloaded; a path dependency is copied or linked. A package already in the store is reused.
-3. Checks each package the lock pins against its locked checksum, whether it was just downloaded or reused.
+2. Works out the packages to install: every entry of `[dependencies]`, and every package their versions require that the project does not list, directly or through each other. A registry dependency written as a full version is installed at exactly that version; a range takes the newest version in it that fits. A path or URL dependency takes part at the version its own `hpm.toml` declares, and brings what that file's registry dependencies require. Versions are held to the project's `[compat].houdini` and to each other's requirements: when they cannot all hold, install stops before downloading anything from a registry and names the packages involved. A package the project does not list keeps the version `hpm.lock` recorded while it still fits.
+3. Installs them into the store (`~/.hpm/packages/`), several at once: a registry package is downloaded, a URL dependency is downloaded, a path dependency is copied or linked. A package already in the store is reused. Each package the lock pins is checked against its locked checksum, whether it was just downloaded or reused.
 4. Collects `[python_dependencies]` from the installed packages, resolves them with the bundled `uv` for the Python that matches the project's `[compat].houdini`, and installs them into a shared venv under `~/.hpm/venvs/<hash>/`.
-5. Writes one Houdini package file per dependency to `<project>/.hpm/packages/{creator}.{slug}.json`, and removes files there for dependencies that are gone.
-6. Writes `hpm.lock`.
+5. Writes one Houdini package file per installed package to `<project>/.hpm/packages/{creator}.{slug}.json`, required packages included, and removes files there for packages no longer installed.
+6. Writes `hpm.lock`, with an entry for every installed package.
 
-Two things install does not do:
-
-- **It does not resolve ranges.** `"acme/tools" = "^1.2"` fails with "version not found". Write an exact version, or let `hpm add` and `hpm update` choose one and write it for you.
-- **It does not install dependencies of dependencies.** Only the packages listed in the project's own `[dependencies]` are installed. If a package you use needs another package, add that one too. An application that embeds hpm can work the required packages out and write the complete list; the command line does not.
+A required package is looked up in the project's registries, the first one
+that has it. It is chosen the way an application that embeds hpm chooses it,
+so the two install the same set for the same project.
 
 The venv is built from the Python dependencies of the *installed packages*.
 `[python_dependencies]` in the project's own manifest are used by
@@ -155,8 +154,11 @@ picks the highest non-yanked one in the dependency's *update range*:
 - A range such as `>=1.2, <1.5` is searched as written.
 
 Applying an update rewrites the entry in `hpm.toml` to the exact version
-found, then installs. Path and URL dependencies are left alone, and so are
-Python dependencies: `uv` resolves those again on every install.
+found, then installs. That install sets aside the versions `hpm.lock`
+recorded for packages the project does not list, so they move to the newest
+version that fits too. With no packages named, it does this even when every
+listed dependency is current. Path and URL dependencies are left alone, and
+so are Python dependencies: `uv` resolves those again on every install.
 
 With a non-human `--output`, pass `--dry-run` or `--yes`; there is nobody to
 answer the prompt.
@@ -634,7 +636,10 @@ every package would look orphaned. Three classes of artifact
 are considered:
 
 - **Registry/URL packages** in `~/.hpm/packages/<slug>@<version>/`:
-  preserved if reachable from any active project's dependency graph.
+  preserved if reachable from any active project's dependency graph. A
+  project's roots are its `[dependencies]` and every package its `hpm.lock`
+  records, at the locked version, so a required package the lock kept at
+  an older version is preserved even when a newer one is installed too.
 - **Dev installs** in `~/.hpm/packages/_dev/<slug>@<version>/` (created by
   `{ path = "..." }` deps, copy or link mode): preserved if any active
   project's path-dep source manifest reports that `(slug, version)`.

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `hpm install` now installs the packages a project's packages require, not
+  only the ones it lists. A package whose version requires another (a rig
+  that needs a shared toolkit) used to load without it unless the project
+  listed both. Install now chooses every required package at the newest
+  version that fits all requirements and the project's `[compat].houdini`,
+  writes its Houdini package file, and records it in `hpm.lock`. A path or
+  URL dependency brings what its own `hpm.toml` requires. When the
+  requirements cannot all be met, install stops before downloading anything
+  from a registry and names the packages that disagree.
+- A required package keeps the version `hpm.lock` recorded while it still
+  fits. `hpm update` chooses them all again, the newest that fits, and does
+  so even when every listed dependency is current. `--frozen-lockfile`
+  requires every required package locked with a checksum, and fails rather
+  than choose a version the lock does not record.
+- A registry dependency written as a range is installed at the newest
+  version in it that fits, instead of failing with "version not found".
+- `hpm clean` also keeps every package a project's `hpm.lock` records, at
+  the locked version. A required package the lock kept at an older version
+  would otherwise be deleted whenever a newer version that also fits was
+  installed for another project.
+
+### Added
+
+- `hpm_core::registry::closure`: the loop that finds a project's whole
+  package set (`select_closed`, with a `VersionSource` for where versions
+  come from, and `select_keeping` for keeping a lock's versions while they
+  fit), shared by `hpm install` and applications that embed hpm.
+- `ProjectManager::sync_dependencies_with(lock, SyncOptions)`, with
+  `SyncOptions { frozen, refresh }`, and `ProjectError::Resolution`.
+- `hpm_package::retry_transient`, the brief retry `atomic_write` already
+  used for the Windows errors a scanner or indexer causes for a moment
+  (access denied, sharing and lock violations), is now public.
+
 ### Fixed
 
 - A dev copy a project still used could be deleted on Windows. A reclaim
@@ -25,12 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On Windows, a git registry given the path `//` (or `//<name>`) was pinned
   to `C://...`, which git reads as a URL with the transport `C`. Such a
   path is now refused as naming no directory.
-
-### Added
-
-- `hpm_package::retry_transient`, the brief retry `atomic_write` already
-  used for the Windows errors a scanner or indexer causes for a moment
-  (access denied, sharing and lock violations), is now public.
 
 ## [0.44.1] - 2026-11-23
 

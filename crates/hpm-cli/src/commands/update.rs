@@ -13,13 +13,11 @@
 //!
 //! ## Apply
 //!
-//! Because today's install path resolves each dep against an *exact*
-//! version (it calls `Registry::get_version(name, version_string)` with
-//! the manifest's version verbatim), applying an update rewrites the
-//! manifest spec to the resolved exact version. Users who want continued
-//! range tracking after an update need to re-add `^`/`~` manually. This
-//! trade is documented; the alternative — lockfile-driven install — is
-//! a larger architectural change.
+//! Applying an update rewrites each manifest spec to the resolved exact
+//! version, then installs with the lock's versions of required packages
+//! (ones the project does not list) set aside, so they move to the newest
+//! version that fits too. A whole-project update does that install even
+//! when every listed package is current.
 //!
 //! ## Python dependencies
 //!
@@ -136,6 +134,22 @@ pub async fn update_packages(
     .await?;
 
     if candidates.is_empty() {
+        // The listed packages are current, but a package they require may
+        // have a newer version that fits: install again choosing those anew.
+        // Only for a whole-project update; `hpm update <pkg>` moves `<pkg>`.
+        if !options.dry_run && filter.is_empty() {
+            super::install::install_dependencies_with(
+                config,
+                Some(manifest_path.clone()),
+                hpm_core::SyncOptions {
+                    frozen: false,
+                    refresh: true,
+                },
+                console,
+            )
+            .await
+            .context("Failed to install the updated dependency set")?;
+        }
         if options.output.is_json() {
             // Same shape as a non-empty run, so consumers parse one contract.
             print_candidates(&candidates, options.output, console);
@@ -161,9 +175,19 @@ pub async fn update_packages(
     apply_updates(&manifest_path, &candidates)
         .with_context(|| format!("Failed to write {}", manifest_path.display()))?;
 
-    super::install::install_dependencies(config, Some(manifest_path), false, console)
-        .await
-        .context("Failed to install the updated dependency set")?;
+    // Installed choosing every package the project does not pin anew, so
+    // the packages the updated ones require move with them.
+    super::install::install_dependencies_with(
+        config,
+        Some(manifest_path),
+        hpm_core::SyncOptions {
+            frozen: false,
+            refresh: true,
+        },
+        console,
+    )
+    .await
+    .context("Failed to install the updated dependency set")?;
 
     // Human-only: a trailing status line would corrupt the JSON stream.
     if !options.output.is_json() {

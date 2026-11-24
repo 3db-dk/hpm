@@ -35,6 +35,7 @@ pub mod types;
 
 pub use error::ProjectError;
 pub use houdini_emit::PROJECT_OVERRIDES_FILE;
+pub use install::SyncOptions;
 pub use run_env::PackageRunEnv;
 pub use types::{InstallOutcome, ProjectDependency};
 
