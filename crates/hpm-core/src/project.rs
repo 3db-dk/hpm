@@ -19,7 +19,7 @@ use crate::archive_fetcher::ArchiveFetcher;
 use crate::storage::{InstalledPackage, StorageManager};
 use hpm_config::{Config, ProjectPaths};
 use hpm_package::{IoOp, ManifestLoadError, PackageManifest};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::info;
 
@@ -121,6 +121,16 @@ impl ProjectManager {
         })?;
         info!("Ensured project directories exist");
         Ok(())
+    }
+
+    /// The project directory this manager was built for, as it was passed
+    /// to [`Self::new`]: the directory holding `hpm.toml`, `hpm.lock` and
+    /// `.hpm/`.
+    pub fn project_root(&self) -> &Path {
+        self.project_paths
+            .manifest_file
+            .parent()
+            .expect("the manifest path is <project root>/hpm.toml")
     }
 
     pub fn load_project_manifest(&self) -> Result<Option<PackageManifest>, ProjectError> {

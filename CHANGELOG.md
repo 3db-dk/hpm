@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ProjectManager::project_root()` returns the project directory a manager
+  was built for, so an embedder no longer has to carry it alongside.
+
 ## [0.45.2] - 2026-11-24
 
 ### Fixed

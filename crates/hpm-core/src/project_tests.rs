@@ -1745,6 +1745,44 @@ mod dev_copy_props {
     }
 }
 
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(32))]
+
+    /// `project_root()` is the directory the manager was built for, spelled
+    /// as it was passed (spaces, dots, `..`, non-ASCII, nesting), so an
+    /// embedder need not carry it alongside; the project's files sit in it.
+    #[test]
+    fn prop_project_root_is_the_directory_the_manager_was_built_for(
+        segments in proptest::collection::vec(
+            proptest::prop_oneof![
+                proptest::strategy::Just("some project".to_string()),
+                proptest::strategy::Just("v1.2".to_string()),
+                proptest::strategy::Just(".".to_string()),
+                proptest::strategy::Just("..".to_string()),
+                proptest::strategy::Just("prøjekt".to_string()),
+                "[a-z]{1,6}",
+            ],
+            1..4,
+        ),
+    ) {
+        let temp_dir = TempDir::new().unwrap();
+        let (config, storage_manager) = test_setup(temp_dir.path());
+        let base = temp_dir.path().join("base").join("deeper");
+        std::fs::create_dir_all(&base).unwrap();
+        // One step at a time: `create_dir_all` of a path ending in `.`
+        // does not create the directory before it.
+        let root = segments.iter().fold(base, |p, s| {
+            let next = p.join(s);
+            std::fs::create_dir_all(&next).unwrap();
+            next
+        });
+        let manager = ProjectManager::new(root.clone(), storage_manager, config).unwrap();
+        proptest::prop_assert_eq!(manager.project_root(), root.as_path());
+        proptest::prop_assert_eq!(&manager.project_paths.manifest_file, &root.join("hpm.toml"));
+        proptest::prop_assert!(root.join(".hpm").join("packages").is_dir());
+    }
+}
+
 /// When a project moves to a new version of a dev package, the old version's
 /// container is reclaimed by the same-package sweep, but only once no project
 /// points at it: unlike an age or version-order rule, another project still
