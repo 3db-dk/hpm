@@ -522,18 +522,21 @@ pub(crate) fn reclaim_dev_copies(
     unrecorded: Unrecorded,
     state_of: impl Fn(u32) -> ProcessState,
 ) -> usize {
-    reclaim_with(container, keep, unrecorded, state_of, &|_| {})
+    reclaim_with(container, keep, unrecorded, state_of, &|_| {}, &|_| {})
 }
 
 /// [`reclaim_dev_copies`], with `after_decision` called for each copy judged
-/// unused, before it is moved aside: the window in which an install may
-/// claim it. Tests put a claim there; production passes nothing.
+/// unused, before it is moved aside, and `after_move` called with its path
+/// once it is aside, before the reclaim asks again: the two windows in which
+/// an install may claim it. Tests put claims there; production passes
+/// nothing.
 fn reclaim_with(
     container: &Path,
     keep: Option<&str>,
     unrecorded: Unrecorded,
     state_of: impl Fn(u32) -> ProcessState,
     after_decision: &dyn Fn(&Path),
+    after_move: &dyn Fn(&Path),
 ) -> usize {
     // One reclaim at a time in this process. Two at once in one container
     // (back-to-back syncs, a sync's sweep of a sibling) both tried to delete
@@ -624,6 +627,7 @@ fn reclaim_with(
             }
             continue;
         }
+        after_move(&path);
         // Another process shares no lock with this one, and its install may
         // claim the copy between the decision and the move: it records its
         // hold, then checks the copy is complete, and reuses it. Its record
@@ -1140,11 +1144,18 @@ mod tests {
         let c = tmp.path().join("_dev/rig@1.0.0");
         let copy = make_copy(&c, &hash('e'));
         let claimed = std::cell::RefCell::new(Vec::new());
-        let removed = reclaim_with(&c, None, Unrecorded::Remove, process_state, &|p| {
-            // The install, between the reclaim's decision and its rename.
-            claimed.borrow_mut().push(DevCopyHold::acquire(p).unwrap());
-            assert!(dev_copy_is_complete(p));
-        });
+        let removed = reclaim_with(
+            &c,
+            None,
+            Unrecorded::Remove,
+            process_state,
+            &|p| {
+                // The install, between the reclaim's decision and its rename.
+                claimed.borrow_mut().push(DevCopyHold::acquire(p).unwrap());
+                assert!(dev_copy_is_complete(p));
+            },
+            &|_| {},
+        );
         assert_eq!(removed, 0);
         assert!(
             copy.join("otls/a.hda").is_file(),
@@ -1165,16 +1176,23 @@ mod tests {
             OTHER => ProcessState::Alive { started_at: None },
             _ => ProcessState::Gone,
         };
-        reclaim_with(&c, None, Unrecorded::Remove, state_of, &|p| {
-            record_process_user(
-                p,
-                ProcessRecord {
-                    pid: OTHER,
-                    started_at: None,
-                },
-            )
-            .unwrap();
-        });
+        reclaim_with(
+            &c,
+            None,
+            Unrecorded::Remove,
+            state_of,
+            &|p| {
+                record_process_user(
+                    p,
+                    ProcessRecord {
+                        pid: OTHER,
+                        started_at: None,
+                    },
+                )
+                .unwrap();
+            },
+            &|_| {},
+        );
         assert!(copy.join("otls/a.hda").is_file());
     }
 
@@ -1188,10 +1206,17 @@ mod tests {
         let copy = make_copy(&c, &hash('d'));
         let manifest = tmp.path().join("proj/acme.rig.json");
         let spelled = c.join("..").join("rig@1.0.0").join(hash('d'));
-        let removed = reclaim_with(&c, None, Unrecorded::Remove, process_state, &|p| {
-            write_manifest(&manifest, &spelled);
-            record_project_user(p, &manifest).unwrap();
-        });
+        let removed = reclaim_with(
+            &c,
+            None,
+            Unrecorded::Remove,
+            process_state,
+            &|p| {
+                write_manifest(&manifest, &spelled);
+                record_project_user(p, &manifest).unwrap();
+            },
+            &|_| {},
+        );
         assert_eq!(removed, 0);
         assert!(
             copy.join("otls/a.hda").is_file(),
@@ -1209,21 +1234,31 @@ mod tests {
     /// Another process's claim can only show after the copy has moved
     /// aside, when the reclaim asks again: it must count then without
     /// resolving the copy itself, which is gone, however the manifest spells
-    /// the path.
+    /// the path, and the copy goes back whole.
     #[test]
     fn a_project_claim_spelled_differently_counts_after_the_copy_moves() {
         let tmp = TempDir::new().unwrap();
         let c = tmp.path().join("_dev/rig@1.0.0");
         let copy = make_copy(&c, &hash('d'));
         let manifest = tmp.path().join("proj/acme.rig.json");
-        write_manifest(&manifest, &c.join("..").join("rig@1.0.0").join(hash('d')));
-        record_project_user(&copy, &manifest).unwrap();
-        std::fs::rename(
-            &copy,
-            c.join(format!("{TOMBSTONE_PREFIX}{}-1-0", hash('d'))),
-        )
-        .unwrap();
-        assert!(hash_in_use(&c, &hash('d'), &process_state));
+        let spelled = c.join("..").join("rig@1.0.0").join(hash('d'));
+        let removed = reclaim_with(&c, None, Unrecorded::Remove, process_state, &|_| {}, &|p| {
+            assert!(!p.exists(), "called once the copy is aside");
+            write_manifest(&manifest, &spelled);
+            record_project_user(p, &manifest).unwrap();
+        });
+        assert_eq!(removed, 0);
+        assert!(
+            copy.join("otls/a.hda").is_file(),
+            "the claimed copy is back"
+        );
+        assert!(
+            !std::fs::read_dir(&c).unwrap().flatten().any(|e| e
+                .file_name()
+                .to_string_lossy()
+                .starts_with(TOMBSTONE_PREFIX)),
+            "no tombstone is left"
+        );
     }
 
     /// A tombstone is a copy moved aside for deletion. One whose copy is in
@@ -2051,5 +2086,161 @@ mod tests {
         let dir = records_dir(&c, &hash('a'));
         std::fs::write(dir.join("project-ffffffffffffffff.json"), b"{\"other\": 1}").unwrap();
         assert!(live(), "a record naming no manifest is kept");
+    }
+
+    mod window_props {
+        use super::*;
+        use proptest::prelude::*;
+        use std::cell::RefCell;
+        use std::collections::BTreeSet;
+
+        /// A claim on a copy made while a reclaim runs: by an install in this
+        /// process (a hold), by another process (its record), or by a
+        /// project whose manifest now points at the copy, spelled as the
+        /// store spells it or otherwise.
+        #[derive(Debug, Clone, Copy)]
+        enum Claim {
+            Hold,
+            OtherProcess,
+            Project { spelled_otherwise: bool },
+        }
+
+        /// When it is made: after the reclaim decided the copy is unused
+        /// but before it moves it, or once it is aside.
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        enum When {
+            BeforeTheMove,
+            AfterTheMove,
+        }
+
+        #[derive(Debug, Clone)]
+        struct CopyCase {
+            used_already: bool,
+            claim: Option<(Claim, When)>,
+        }
+
+        fn copy_case() -> impl Strategy<Value = CopyCase> {
+            let claim = prop_oneof![
+                Just(Claim::Hold),
+                Just(Claim::OtherProcess),
+                any::<bool>().prop_map(|spelled_otherwise| Claim::Project { spelled_otherwise }),
+            ];
+            let when = prop_oneof![Just(When::BeforeTheMove), Just(When::AfterTheMove)];
+            (any::<bool>(), prop::option::of((claim, when))).prop_map(|(used_already, claim)| {
+                CopyCase {
+                    used_already,
+                    claim,
+                }
+            })
+        }
+
+        const OTHER: u32 = 77;
+
+        fn h(i: usize) -> String {
+            format!("{:064x}", 0xc0de_0000u64 + i as u64)
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(128))]
+
+            /// Claims made while a reclaim runs. A copy is kept exactly when
+            /// it was in use already or was claimed during the reclaim, in
+            /// either window, with its content and no tombstone left. A copy
+            /// claimed before the move is never moved at all: this process's
+            /// installs take holds under the lock the move is made under,
+            /// and the records are listed again there, so a project is never
+            /// left pointing at a copy that is aside, even for a moment
+            /// (which on Windows the move back can stretch). Only an unused
+            /// copy is ever moved.
+            #[test]
+            fn prop_a_copy_claimed_while_reclaiming_is_kept(
+                copies in prop::collection::vec(copy_case(), 1..5),
+            ) {
+                let tmp = TempDir::new().unwrap();
+                let c = tmp.path().join("_dev/rig@1.0.0");
+                for (i, cp) in copies.iter().enumerate() {
+                    let path = make_copy(&c, &h(i));
+                    std::fs::write(path.join("id"), i.to_string()).unwrap();
+                    if cp.used_already {
+                        let m = tmp.path().join(format!("old{i}/acme.rig.json"));
+                        write_manifest(&m, &path);
+                        record_project_user(&path, &m).unwrap();
+                    }
+                }
+                let index_of = |p: &Path| -> usize {
+                    let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                    (0..copies.len()).find(|&i| h(i) == name).unwrap()
+                };
+                let holds = RefCell::new(Vec::new());
+                let claim = |p: &Path, now: When| {
+                    let i = index_of(p);
+                    let Some((kind, when)) = copies[i].claim else { return };
+                    if when != now {
+                        return;
+                    }
+                    match kind {
+                        Claim::Hold => holds.borrow_mut().push(DevCopyHold::acquire(p).unwrap()),
+                        Claim::OtherProcess => {
+                            record_process_user(p, ProcessRecord { pid: OTHER, started_at: None })
+                                .unwrap();
+                        }
+                        Claim::Project { spelled_otherwise } => {
+                            let m = tmp.path().join(format!("new{i}/acme.rig.json"));
+                            let hpath = if spelled_otherwise {
+                                c.join("..").join("rig@1.0.0").join(h(i))
+                            } else {
+                                p.to_path_buf()
+                            };
+                            write_manifest(&m, &hpath);
+                            record_project_user(p, &m).unwrap();
+                        }
+                    }
+                };
+                let moved = RefCell::new(BTreeSet::new());
+                let state_of = |pid: u32| match pid {
+                    OTHER => ProcessState::Alive { started_at: None },
+                    _ => ProcessState::Gone,
+                };
+
+                reclaim_with(
+                    &c,
+                    None,
+                    Unrecorded::Remove,
+                    state_of,
+                    &|p| claim(p, When::BeforeTheMove),
+                    &|p| {
+                        moved.borrow_mut().insert(index_of(p));
+                        claim(p, When::AfterTheMove);
+                    },
+                );
+
+                let kept: BTreeSet<usize> =
+                    (0..copies.len()).filter(|&i| c.join(h(i)).exists()).collect();
+                let want: BTreeSet<usize> = (0..copies.len())
+                    .filter(|&i| copies[i].used_already || copies[i].claim.is_some())
+                    .collect();
+                prop_assert_eq!(&kept, &want);
+                for &i in &kept {
+                    prop_assert_eq!(
+                        std::fs::read_to_string(c.join(h(i)).join("id")).unwrap(),
+                        i.to_string()
+                    );
+                }
+                for &i in moved.borrow().iter() {
+                    prop_assert!(!copies[i].used_already, "copy {} was in use but moved", i);
+                    prop_assert!(
+                        !matches!(copies[i].claim, Some((_, When::BeforeTheMove))),
+                        "copy {} was claimed before the move but moved", i
+                    );
+                }
+                let tombstones = std::fs::read_dir(&c)
+                    .unwrap()
+                    .flatten()
+                    .filter(|e| e.file_name().to_string_lossy().starts_with(TOMBSTONE_PREFIX))
+                    .count();
+                prop_assert_eq!(tombstones, 0);
+                drop(holds);
+            }
+        }
     }
 }
