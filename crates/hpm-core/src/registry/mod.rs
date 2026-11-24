@@ -8,6 +8,7 @@
 //! and dependency information without requiring users to specify Git URLs manually.
 
 pub mod api;
+pub mod closure;
 pub mod git;
 pub mod requirement;
 pub mod solve;
