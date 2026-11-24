@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 7ac5eb4f79030d16768d81052831f87c4a55cb57ef8a5c1dfb9a357060ae045d # shrinks to url = "https://-oProxyCommand=x/org/repo.git"
+cc 018ec02f90be887072d3be5951957abe03a7aa0e0894d4d7a78f257d01f53135 # shrinks to url = "//"

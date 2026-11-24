@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the way) did not count. The match now resolves the container, which stays
   where it is, and compares hashes. A container path that cannot be resolved
   for any reason other than not existing keeps the copy.
+- On Windows, a git registry given the path `//` (or `//<name>`) was pinned
+  to `C://...`, which git reads as a URL with the transport `C`. Such a
+  path is now refused as naming no directory.
 
 ### Added
 

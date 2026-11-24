@@ -44,7 +44,16 @@ impl GitRemote {
             let cwd = std::env::current_dir().map_err(|e| {
                 RegistryError::GitError(format!("cannot resolve relative registry path: {e}"))
             })?;
-            return Ok(Self(cwd.join(url).to_string_lossy().into_owned()));
+            let pinned = cwd.join(url).to_string_lossy().into_owned();
+            // On Windows a path with a root but no drive (`//`, `//x`) is
+            // relative to the current drive, and joining it gives `C://...`,
+            // which git would read as a URL with the transport `C`.
+            if pinned.contains("://") {
+                return Err(RegistryError::ParseError(format!(
+                    "registry path {url:?} names no directory"
+                )));
+            }
+            return Ok(Self(pinned));
         }
         Ok(Self(url.to_string()))
     }
@@ -1033,6 +1042,30 @@ mod remote_tests {
                     prop_assert!(
                         parts.iter().all(|c| matches!(c, std::path::Component::Normal(_))),
                         "{:?}", path
+                    );
+                }
+            }
+
+            /// A local path is pinned to an absolute one and never turns
+            /// into a URL on the way. On Windows a root without a drive
+            /// (`//`, `\\x`) is relative to the current drive, and joining
+            /// one onto the working directory gave `C://...`, a URL with
+            /// the transport `C`. Shaped like paths so that every run, not
+            /// one in a dozen, reaches those forms.
+            #[test]
+            fn a_local_path_never_pins_to_a_url(
+                path in prop::collection::vec(
+                    prop_oneof![
+                        Just("/"), Just("\\"), Just("."), Just(".."), Just("x"), Just("C:"),
+                    ],
+                    1..7,
+                ).prop_map(|parts| parts.concat()),
+            ) {
+                if let Ok(remote) = super::super::GitRemote::parse(&path) {
+                    prop_assert_eq!(
+                        remote.as_str().contains("://"),
+                        path.contains("://"),
+                        "{:?} -> {:?}", path, remote.as_str()
                     );
                 }
             }
