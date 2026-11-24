@@ -195,8 +195,10 @@ pub const MAX_ROUNDS: usize = 16;
 /// (a working copy of a package the project does not list, a version a lock
 /// recorded): one is chosen exactly when a chosen version requires it, at
 /// its pin if it has one, and `source` is never asked for it. `excluded`
-/// names packages never to fetch: one a chosen version requires is left
-/// out, and logged.
+/// names packages the set must not contain unless `listed` names them (one
+/// the user switched off, one the account may not use): a requirement on
+/// one is left unmet and logged, it is never fetched, and it is never
+/// chosen, even when `supplied` offers it.
 ///
 /// Whether a required package is part of the set is the solver's decision;
 /// this only fetches. Each round offers every package fetched so far, and
@@ -218,7 +220,7 @@ pub async fn select_closed(
     let listed_names: HashSet<&str> = listed.iter().map(|c| c.name.as_str()).collect();
     let mut offered: Vec<Candidates> = supplied
         .iter()
-        .filter(|c| !listed_names.contains(c.name.as_str()))
+        .filter(|c| !listed_names.contains(c.name.as_str()) && !excluded(&c.name))
         .cloned()
         .collect();
     let mut refused: HashSet<String> = HashSet::new();
@@ -305,20 +307,22 @@ pub struct Kept<'a> {
 /// first with `kept`, and when no set fits those, with `fresh` (the
 /// project's packages as written, nothing supplied), so every package the
 /// project does not pin is chosen anew. With `frozen`, the set must fit the
-/// lock: no second choice is made.
+/// lock: no second choice is made. `excluded` is [`select_closed`]'s, for
+/// both choices.
 pub async fn select_keeping(
     kept: Kept<'_>,
     fresh: &[Candidates],
     houdini: Option<HoudiniTarget>,
     source: &mut impl VersionSource,
     frozen: bool,
+    excluded: impl Fn(&str) -> bool,
 ) -> Result<Vec<Selection>, ClosureError> {
-    match select_closed(kept.listed, kept.supplied, houdini, source, |_| false).await {
+    match select_closed(kept.listed, kept.supplied, houdini, source, &excluded).await {
         Ok(selections) => Ok(selections),
         Err(e) if frozen => Err(e),
         Err(e) => {
             info!("The versions the lock records no longer fit together ({e}); choosing again");
-            select_closed(fresh, &[], houdini, source, |_| false).await
+            select_closed(fresh, &[], houdini, source, &excluded).await
         }
     }
 }

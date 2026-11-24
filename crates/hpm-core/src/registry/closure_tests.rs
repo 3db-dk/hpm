@@ -418,7 +418,9 @@ proptest! {
         (entries, roots) in arb_world(),
         lock in prop::collection::btree_map(0usize..5, 0usize..3, 0..5),
         frozen in any::<bool>(),
+        excluded in prop::collection::btree_set(0usize..5, 0..3),
     ) {
+        let is_excluded = |name: &str| excluded.iter().any(|p| NAMES[*p] == name);
         let of = |name: &str| -> Vec<RegistryEntry> {
             entries.iter().filter(|e| e.name == name).cloned().collect()
         };
@@ -459,20 +461,21 @@ proptest! {
             None,
             &mut MapSource::new(entries.clone()),
             frozen,
+            is_excluded,
         ));
         let with_lock = runtime.block_on(select_closed(
             &kept_listed,
             &supplied,
             None,
             &mut MapSource::new(entries.clone()),
-            |_| false,
+            is_excluded,
         ));
         let anew = runtime.block_on(select_closed(
             &fresh,
             &[],
             None,
             &mut MapSource::new(entries.clone()),
-            |_| false,
+            is_excluded,
         ));
 
         if let Ok(sel) = &got {
@@ -500,6 +503,9 @@ proptest! {
                     "{} was chosen but nothing requires it", s.name
                 );
             }
+            for s in sel.iter().filter(|s| !fresh.iter().any(|c| c.name == s.name)) {
+                prop_assert!(!is_excluded(&s.name), "{} is excluded but was chosen", s.name);
+            }
         }
         match &with_lock {
             Ok(want) => {
@@ -518,6 +524,69 @@ proptest! {
                 got.as_ref().map(|s| chosen(s)).map_err(|_| ()),
                 anew.as_ref().map(|s| chosen(s)).map_err(|_| ())
             ),
+        }
+    }
+
+    /// Excluding a package is offering the solver everything but it: the
+    /// loop's answer is the one offering every package the project neither
+    /// lists nor excludes gives, a requirement on an excluded package
+    /// constrains nothing, the source is never asked for one, and one
+    /// offered as supplied is not chosen either.
+    #[test]
+    fn prop_an_excluded_package_is_never_chosen_or_fetched(
+        (entries, roots) in arb_world(),
+        excluded in prop::collection::btree_set(0usize..5, 1..3),
+        supply_excluded in any::<bool>(),
+    ) {
+        let is_excluded = |name: &str| excluded.iter().any(|p| NAMES[*p] == name);
+        let of = |name: &str| -> Vec<RegistryEntry> {
+            entries.iter().filter(|e| e.name == name).cloned().collect()
+        };
+        let listed: Vec<Candidates> = roots
+            .iter()
+            .map(|(p, pin)| {
+                let versions = of(NAMES[*p]);
+                let pin = pin.and_then(|v| versions.get(v)).map(|e| e.version.clone());
+                Candidates { name: NAMES[*p].to_string(), pin, versions, on_disk: false }
+            })
+            .collect();
+        let unlisted = |n: &str| !listed.iter().any(|c| c.name == n);
+        let allowed: Vec<Candidates> = NAMES
+            .iter()
+            .filter(|n| unlisted(n) && !is_excluded(n))
+            .map(|n| Candidates { name: n.to_string(), pin: None, versions: of(n), on_disk: false })
+            .collect();
+        let supplied: Vec<Candidates> = if supply_excluded {
+            NAMES
+                .iter()
+                .filter(|n| unlisted(n) && is_excluded(n))
+                .map(|n| Candidates { name: n.to_string(), pin: None, versions: of(n), on_disk: false })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let oracle = select(&listed, &allowed, None);
+
+        let mut source = MapSource::new(entries.clone());
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let got = runtime.block_on(select_closed(&listed, &supplied, None, &mut source, is_excluded));
+
+        prop_assert!(
+            source.asked.iter().all(|n| !is_excluded(n) || listed.iter().any(|c| &c.name == n)),
+            "an excluded package was fetched: {:?}", source.asked
+        );
+        match (&got, &oracle) {
+            (Ok(got), Ok(want)) => {
+                let (mut g, mut w) = (chosen(got), chosen(want));
+                g.sort();
+                w.sort();
+                prop_assert_eq!(g, w);
+                for s in got.iter().filter(|s| !listed.iter().any(|c| c.name == s.name)) {
+                    prop_assert!(!is_excluded(&s.name), "{} is excluded but was chosen", s.name);
+                }
+            }
+            (Err(_), Err(_)) => {}
+            _ => prop_assert!(false, "loop {:?} but the world without the excluded {:?}", got, oracle),
         }
     }
 }

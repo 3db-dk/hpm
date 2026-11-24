@@ -2486,29 +2486,44 @@ mod required_packages {
     /// A git index offering rig 1.25.4 (requiring kit >=0.3.0) and kit
     /// 0.2.0, 0.3.0 and 0.4.0, with every archive in the download cache, so
     /// nothing touches the network. Returns the index path.
-    fn world(temp: &TempDir) -> std::path::PathBuf {
+    /// A published version: name, version, and its `(name, requirement)`s.
+    type Published<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+    /// A git index on disk offering each `(name, version, deps)`, with every
+    /// archive in the download cache, so nothing touches the network.
+    /// Returns the index path.
+    fn index_of(temp: &TempDir, packages: &[Published<'_>]) -> std::path::PathBuf {
         let work = temp.path().join("index-work");
-        for creator in ["tumblehead", "tumbletrove"] {
-            std::fs::create_dir_all(work.join(creator)).unwrap();
-        }
+        std::fs::create_dir_all(&work).unwrap();
         std::fs::write(work.join("config.json"), "{}").unwrap();
-        let line = |name: &str, v: &str, deps: &str| {
-            format!(
-                r#"{{"name":"{name}","vers":"{v}","deps":[{deps}],"dl":"https://example.invalid/{}-{v}.zip","yanked":false}}"#,
+        let cache = temp.path().join(".hpm").join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        let mut lines: std::collections::BTreeMap<&str, Vec<String>> = Default::default();
+        for (name, version, deps) in packages {
+            let reqs: Vec<String> = deps
+                .iter()
+                .map(|(n, r)| format!(r#"{{"name":"{n}","req":"{r}"}}"#))
+                .collect();
+            lines.entry(name).or_default().push(format!(
+                r#"{{"name":"{name}","vers":"{version}","deps":[{}],"dl":"https://example.invalid/{}-{version}.zip","yanked":false}}"#,
+                reqs.join(","),
                 name.replace('/', "-")
+            ));
+            let toml: String = deps
+                .iter()
+                .map(|(n, r)| format!("\"{n}\" = \"{r}\"\n"))
+                .collect();
+            std::fs::write(
+                cache.join(format!("{}-{version}", name.replace('/', "-"))),
+                zip_of(name, version, &toml),
             )
-        };
-        std::fs::write(
-            work.join("tumblehead/rig.json"),
-            line(
-                RIG,
-                "1.25.4",
-                r#"{"name":"tumbletrove/kit","req":">=0.3.0"}"#,
-            ) + "\n",
-        )
-        .unwrap();
-        let kits: Vec<String> = KITS.iter().map(|v| line(KIT, v, "")).collect();
-        std::fs::write(work.join("tumbletrove/kit.json"), kits.join("\n") + "\n").unwrap();
+            .unwrap();
+        }
+        for (name, entries) in lines {
+            let file = work.join(format!("{name}.json"));
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, entries.join("\n") + "\n").unwrap();
+        }
         git(&work, &["init", "-q", "-b", "main"]);
         git(&work, &["add", "."]);
         git(&work, &["commit", "-q", "-m", "index"]);
@@ -2523,22 +2538,16 @@ mod required_packages {
                 bare.to_str().unwrap(),
             ],
         );
-
-        let cache = temp.path().join(".hpm").join("cache");
-        std::fs::create_dir_all(&cache).unwrap();
-        std::fs::write(
-            cache.join("tumblehead-rig-1.25.4"),
-            zip_of(RIG, "1.25.4", "\"tumbletrove/kit\" = \">=0.3.0\"\n"),
-        )
-        .unwrap();
-        for v in KITS {
-            std::fs::write(
-                cache.join(format!("tumbletrove-kit-{v}")),
-                zip_of(KIT, v, ""),
-            )
-            .unwrap();
-        }
         bare
+    }
+
+    /// rig 1.25.4 (requiring kit >=0.3.0) and kit 0.2.0, 0.3.0 and 0.4.0.
+    fn world(temp: &TempDir) -> std::path::PathBuf {
+        let mut packages: Vec<Published<'_>> = vec![(RIG, "1.25.4", &[(KIT, ">=0.3.0")])];
+        for v in KITS {
+            packages.push((KIT, v, &[]));
+        }
+        index_of(temp, &packages)
     }
 
     fn project(temp: &TempDir, index: &Path, deps: &str) -> ProjectManager {
@@ -2643,8 +2652,8 @@ mod required_packages {
             .sync_dependencies_with(
                 Some(&lock),
                 SyncOptions {
-                    frozen: false,
                     refresh: true,
+                    ..SyncOptions::default()
                 },
             )
             .await
@@ -2682,6 +2691,220 @@ mod required_packages {
             versions(&replaced),
             vec![pair(RIG, "1.25.4"), pair(KIT, "0.4.0")]
         );
+    }
+
+    fn excluding(names: &[&str]) -> SyncOptions {
+        SyncOptions {
+            excluded: names.iter().map(|n| n.to_string()).collect(),
+            ..SyncOptions::default()
+        }
+    }
+
+    /// A required package the embedder excludes (switched off, or one the
+    /// account may not use) is neither installed nor loaded nor locked,
+    /// and a locked version of it is not brought back.
+    #[tokio::test]
+    async fn an_excluded_required_package_is_not_installed() {
+        let temp = TempDir::new().unwrap();
+        let index = world(&temp);
+        let manager = project(&temp, &index, "\"tumblehead/rig\" = \"1.25.4\"\n");
+        // Installed and locked with kit, then kit is switched off.
+        let first = manager.sync_dependencies().await.unwrap();
+        let lock = lock_after(&manager, &first).await;
+        let kit_json = manager
+            .project_paths
+            .packages_dir
+            .join("tumbletrove.kit.json");
+        assert!(kit_json.is_file());
+
+        let outcomes = manager
+            .sync_dependencies_with(Some(&lock), excluding(&[KIT]))
+            .await
+            .unwrap();
+
+        assert_eq!(versions(&outcomes), vec![pair(RIG, "1.25.4")]);
+        assert!(!kit_json.exists(), "an excluded package is not loaded");
+        assert!(
+            lock_after(&manager, &outcomes)
+                .await
+                .get_dependency(KIT)
+                .is_none()
+        );
+    }
+
+    /// An excluded required package needs no registry: a project whose
+    /// listed packages are in the store syncs offline.
+    #[tokio::test]
+    async fn an_excluded_required_package_needs_no_registry() {
+        let temp = TempDir::new().unwrap();
+        let index = world(&temp);
+        let manager = project(&temp, &index, "\"tumblehead/rig\" = \"1.25.4\"\n");
+        manager
+            .sync_dependencies_with(None, excluding(&[KIT]))
+            .await
+            .unwrap();
+        let gone = temp.path().join("no-such-index.git");
+        let manager = project(&temp, &gone, "\"tumblehead/rig\" = \"1.25.4\"\n");
+
+        let offline = manager
+            .sync_dependencies_with(None, excluding(&[KIT]))
+            .await
+            .unwrap();
+
+        assert_eq!(versions(&offline), vec![pair(RIG, "1.25.4")]);
+        assert!(
+            manager.sync_dependencies().await.is_err(),
+            "without the exclusion the sync must look kit up, and cannot"
+        );
+    }
+
+    /// The manifest wins: a listed package is installed even if excluded.
+    #[tokio::test]
+    async fn a_listed_package_is_installed_even_if_excluded() {
+        let temp = TempDir::new().unwrap();
+        let index = world(&temp);
+        let manager = project(
+            &temp,
+            &index,
+            "\"tumblehead/rig\" = \"1.25.4\"\n\"tumbletrove/kit\" = \"0.3.0\"\n",
+        );
+
+        let outcomes = manager
+            .sync_dependencies_with(None, excluding(&[KIT]))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            versions(&outcomes),
+            vec![pair(RIG, "1.25.4"), pair(KIT, "0.3.0")]
+        );
+    }
+
+    mod properties {
+        use super::*;
+
+        const CORE: &str = "tumbletrove/core";
+
+        /// rig needs kit and core; kit 0.4.0 needs a newer core than 0.3.0.
+        fn deep_world(temp: &TempDir) -> std::path::PathBuf {
+            index_of(
+                temp,
+                &[
+                    (RIG, "1.25.4", &[(KIT, ">=0.3.0"), (CORE, ">=1.0.0")]),
+                    (KIT, "0.3.0", &[(CORE, ">=1.0.0")]),
+                    (KIT, "0.4.0", &[(CORE, ">=1.1.0")]),
+                    (CORE, "1.0.0", &[]),
+                    (CORE, "1.1.0", &[]),
+                ],
+            )
+        }
+
+        fn json_of(name: &str) -> String {
+            format!("{}.json", name.replace('/', "."))
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(24))]
+
+            /// Whatever the project lists, excludes and has locked, a sync
+            /// that succeeds installs a complete, minimal set that leaves
+            /// the excluded out: no excluded package it does not list is
+            /// installed; every installed package is listed or required by
+            /// another; every requirement on a package not excluded is met
+            /// by what is installed; and exactly the installed packages get
+            /// a Houdini package file and a lock entry. A sync that fails
+            /// fails on the requirements, before installing.
+            #[test]
+            fn prop_a_sync_installs_what_is_required_and_nothing_excluded(
+                kit in prop::option::of(prop::sample::select(vec!["0.3.0", "0.4.0"])),
+                core in prop::option::of(prop::sample::select(vec!["1.0.0", "1.1.0"])),
+                exclude_kit in any::<bool>(),
+                exclude_core in any::<bool>(),
+                locked_first in any::<bool>(),
+            ) {
+                let temp = TempDir::new().unwrap();
+                let index = deep_world(&temp);
+                let mut deps = format!("\"{RIG}\" = \"1.25.4\"\n");
+                if let Some(v) = kit {
+                    deps.push_str(&format!("\"{KIT}\" = \"{v}\"\n"));
+                }
+                if let Some(v) = core {
+                    deps.push_str(&format!("\"{CORE}\" = \"{v}\"\n"));
+                }
+                let listed: Vec<&str> = [Some(RIG), kit.map(|_| KIT), core.map(|_| CORE)]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                let excluded: Vec<&str> = [exclude_kit.then_some(KIT), exclude_core.then_some(CORE)]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+
+                // Optionally install everything first, so the lock and the
+                // package files hold packages the exclusion must drop.
+                let manager = project(&temp, &index, &format!("\"{RIG}\" = \"1.25.4\"\n"));
+                let lock = if locked_first {
+                    let first = runtime.block_on(manager.sync_dependencies()).unwrap();
+                    Some(runtime.block_on(lock_after(&manager, &first)))
+                } else {
+                    None
+                };
+                let manager = project(&temp, &index, &deps);
+                let result = runtime.block_on(manager.sync_dependencies_with(lock.as_ref(), excluding(&excluded)));
+
+                let outcomes = match result {
+                    Ok(outcomes) => outcomes,
+                    Err(e) => {
+                        prop_assert!(matches!(e, ProjectError::Resolution(_)), "{e}");
+                        return Ok(());
+                    }
+                };
+                let installed: Vec<(String, String)> = versions(&outcomes);
+                let version_of = |name: &str| installed.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
+                let manifests: Vec<&hpm_package::PackageManifest> =
+                    outcomes.iter().map(|(_, o)| &o.package.manifest).collect();
+
+                for (name, _) in &installed {
+                    prop_assert!(
+                        listed.contains(&name.as_str()) || !excluded.contains(&name.as_str()),
+                        "{name} is excluded but was installed"
+                    );
+                    prop_assert!(
+                        listed.contains(&name.as_str())
+                            || manifests.iter().any(|m| m.dependencies.contains_key(name)),
+                        "{name} was installed but nothing requires it"
+                    );
+                }
+                for m in &manifests {
+                    for dep in crate::registry::closure::registry_requirements(m) {
+                        if excluded.contains(&dep.name.as_str()) && !listed.contains(&dep.name.as_str()) {
+                            continue;
+                        }
+                        let v = version_of(&dep.name);
+                        prop_assert!(v.is_some(), "{} requires {}, which is not installed", m.package.path, dep.name);
+                        let req = crate::registry::solve::requirement(&dep.req).unwrap();
+                        prop_assert!(
+                            req.matches(&semver::Version::parse(&v.unwrap()).unwrap()),
+                            "{} requires {} {}", m.package.path, dep.name, dep.req
+                        );
+                    }
+                }
+                let packages_dir = &manager.project_paths.packages_dir;
+                for name in [RIG, KIT, CORE] {
+                    prop_assert_eq!(
+                        packages_dir.join(json_of(name)).is_file(),
+                        version_of(name).is_some(),
+                        "{}: a Houdini package file exactly when installed", name
+                    );
+                }
+                let lock = runtime.block_on(lock_after(&manager, &outcomes));
+                let mut locked: Vec<String> = lock.dependencies.keys().cloned().collect();
+                locked.sort();
+                let names: Vec<String> = installed.iter().map(|(n, _)| n.clone()).collect();
+                prop_assert_eq!(locked, names, "a lock entry exactly when installed");
+            }
+        }
     }
 
     /// A frozen sync refuses a required package the lock does not pin.

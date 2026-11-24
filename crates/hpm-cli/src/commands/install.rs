@@ -47,7 +47,7 @@ pub async fn install_dependencies(
         manifest_path,
         hpm_core::SyncOptions {
             frozen: frozen_lockfile,
-            refresh: false,
+            ..Default::default()
         },
         console,
     )

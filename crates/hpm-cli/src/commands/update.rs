@@ -144,6 +144,7 @@ pub async fn update_packages(
                 hpm_core::SyncOptions {
                     frozen: false,
                     refresh: true,
+                    ..Default::default()
                 },
                 console,
             )
@@ -183,6 +184,7 @@ pub async fn update_packages(
         hpm_core::SyncOptions {
             frozen: false,
             refresh: true,
+            ..Default::default()
         },
         console,
     )

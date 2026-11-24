@@ -13,7 +13,7 @@ use tracing::info;
 use super::{InstallOutcome, ProjectError, ProjectManager};
 
 /// How a sync treats `hpm.lock` ([`ProjectManager::sync_dependencies_with`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncOptions {
     /// Every registry and URL package the sync installs, listed or
     /// required, must be pinned by the lock at the version installed, with
@@ -24,6 +24,13 @@ pub struct SyncOptions {
     /// version that fits, instead of keeping the version the lock recorded
     /// while it still fits. What `hpm update` installs with.
     pub refresh: bool,
+    /// Packages, by scoped name, the sync must neither install nor require
+    /// unless the manifest lists them: one the user switched off, one the
+    /// account may not use. A requirement on one is left unmet and logged;
+    /// it is not looked up, so it needs no registry, and it gets no Houdini
+    /// package file. An application that embeds hpm passes the same names
+    /// it excludes when it chooses the set, so the two cannot disagree.
+    pub excluded: std::collections::BTreeSet<String>,
 }
 
 impl ProjectManager {
@@ -61,7 +68,7 @@ impl ProjectManager {
             lock,
             SyncOptions {
                 frozen,
-                refresh: false,
+                ..SyncOptions::default()
             },
         )
         .await
@@ -83,6 +90,9 @@ impl ProjectManager {
     /// Unless `options.refresh`, a package the project does not pin keeps
     /// the version `lock` recorded for it while the set still fits that
     /// version; when it does not, every such package is chosen anew.
+    ///
+    /// A package `options.excluded` names, and the manifest does not list,
+    /// is neither installed nor required: a requirement on it is left unmet.
     pub async fn sync_dependencies_with(
         &self,
         lock: Option<&crate::lock::LockFile>,
@@ -290,7 +300,12 @@ impl ProjectManager {
         let mut supplied: Vec<Candidates> = Vec::new();
         if !options.refresh {
             for (name, entry) in lock.map(|l| l.dependencies.iter()).into_iter().flatten() {
-                if dependencies.contains_key(name) || !entry.source.is_url() {
+                // An excluded one is never chosen (select_closed drops it
+                // too); skipping it here also saves looking it up.
+                if dependencies.contains_key(name)
+                    || !entry.source.is_url()
+                    || options.excluded.contains(name)
+                {
                     continue;
                 }
                 let known = match stored(name, &entry.version) {
@@ -316,8 +331,9 @@ impl ProjectManager {
         let mut source = RegistrySource {
             set: registry_set.clone(),
         };
+        let excluded = |name: &str| options.excluded.contains(name);
         let selections = if options.refresh {
-            closure::select_closed(&listed_fresh, &[], houdini, &mut source, |_| false).await
+            closure::select_closed(&listed_fresh, &[], houdini, &mut source, excluded).await
         } else {
             closure::select_keeping(
                 closure::Kept {
@@ -328,6 +344,7 @@ impl ProjectManager {
                 houdini,
                 &mut source,
                 options.frozen,
+                excluded,
             )
             .await
         }

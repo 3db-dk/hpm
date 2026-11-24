@@ -277,7 +277,11 @@ packages); when it does not fit, or under `SyncOptions::refresh`
 (`registry::closure::select_keeping`).
 A pinned package already in the store contributes its requirements from its
 installed `hpm.toml`, so a project that is installed and locked syncs
-without asking a registry.
+without asking a registry. `SyncOptions::excluded` names packages the sync
+must leave out unless the manifest lists them (an embedding application
+passes the ones it excluded when choosing the set: switched off, or not
+available to the account); a requirement on one is left unmet, so it is
+never looked up, installed, locked or loaded.
 
 Choosing *which* versions a set of packages should use is
 `hpm_core::registry::solve`. A registry entry carries `deps`, the version

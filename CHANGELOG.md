@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A sync installed required packages that an application embedding hpm
+  had deliberately left out of the project (switched off by the user, or
+  not available to the account), loaded them into Houdini, and looked them
+  up in a registry, which failed an offline launch that worked before
+  0.45.0. `SyncOptions` gains `excluded`: the sync neither installs nor
+  requires those packages unless the manifest lists them.
+  `registry::closure::select_closed` no longer chooses an excluded package
+  offered as supplied, and `select_keeping` takes the same `excluded`.
+  `SyncOptions` is no longer `Copy`; build it with
+  `..SyncOptions::default()`.
+
 ## [0.45.0] - 2026-11-24
 
 ### Changed
