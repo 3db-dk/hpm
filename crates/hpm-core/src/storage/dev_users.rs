@@ -53,6 +53,27 @@ const TOMBSTONE_PREFIX: &str = ".reclaim-";
 const PROCESS_PREFIX: &str = "process-";
 const PROJECT_PREFIX: &str = "project-";
 
+/// Run `op`, and on Windows retry it briefly while it fails with "not found".
+///
+/// Windows can report a file that exists as missing for a moment: on the
+/// build worker, a record the reclaim had just listed and read failed its
+/// next read with "the system cannot find the path specified" (os error 3)
+/// and was there again afterwards. Taken at its word, that drops a live
+/// claim and removes a copy a project still points at. A file that is
+/// really gone stays gone, and is reported as such after the retries.
+fn retry_missing<T>(mut op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    #[cfg(windows)]
+    for delay_ms in [1, 5, 20, 50] {
+        match op() {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            }
+            result => return result,
+        }
+    }
+    op()
+}
+
 /// Split a dev copy's install path into its container and hash, or `None`
 /// when `install_path` is not a content copy (a link install, a registry
 /// install), which has no copies to protect.
@@ -140,7 +161,7 @@ struct ProjectRecord {
 /// uses nothing; one that cannot be read or parsed is kept, since a copy kept
 /// too long costs disk and one removed too early costs a project.
 fn project_record_is_live(record: &ProjectRecord, copy: &Path) -> bool {
-    match crate::project::houdini_emit::hpaths(&record.manifest) {
+    match retry_missing(|| crate::project::houdini_emit::hpaths(&record.manifest)) {
         Ok(paths) => paths.iter().any(|p| names_copy(p, copy)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => false,
         Err(_) => true,
@@ -241,7 +262,7 @@ fn judge_records(
             }
             continue;
         }
-        let live = match std::fs::read(&path) {
+        let live = match retry_missing(|| std::fs::read(&path)) {
             Ok(bytes) => {
                 if name.starts_with(PROCESS_PREFIX) {
                     serde_json::from_slice::<ProcessRecord>(&bytes)
@@ -575,7 +596,25 @@ fn reclaim_with(
         after_decision(&path);
         let seq = TOMBSTONE_SEQ.fetch_add(1, Ordering::Relaxed);
         let tombstone = container.join(format!("{TOMBSTONE_PREFIX}{name}-{pid}-{seq}"));
-        if let Err(e) = std::fs::rename(&path, &tombstone) {
+        // Decide again, and move, under the lock holds are taken under. An
+        // install in this process takes its hold before it checks the copy
+        // is complete, so it either shows here and the copy stays, or takes
+        // its hold after the move, finds no copy and makes a new one. The
+        // first decision can be stale: it listed the records, then read them
+        // (on the build worker 190 ms later), and a project that recorded
+        // its claim and let go of its hold in between was not seen, so its
+        // copy went aside while it pointed there. Records are listed afresh
+        // here. Holds only wait on this for copies about to be removed.
+        let moved = {
+            let holds = HOLDS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if holds.contains_key(&path) || hash_in_use(container, &name, &state_of) {
+                continue;
+            }
+            std::fs::rename(&path, &tombstone)
+        };
+        if let Err(e) = moved {
             if e.kind() != io::ErrorKind::NotFound {
                 warn!(
                     "Kept dev copy {}: it could not be moved aside, so something still has it open: {}",
@@ -585,11 +624,12 @@ fn reclaim_with(
             }
             continue;
         }
-        // Deciding and moving aside are two steps, and an install may claim
-        // the copy between them: it takes its hold, then checks the copy is
-        // complete, and reuses it. Its hold is in place before that check,
-        // so asking again now sees every claim made before the copy moved;
-        // a claimed copy goes back where the install found it.
+        // Another process shares no lock with this one, and its install may
+        // claim the copy between the decision and the move: it records its
+        // hold, then checks the copy is complete, and reuses it. Its record
+        // is in place before that check, so asking again now sees every
+        // claim made before the copy moved; a claimed copy goes back where
+        // the install found it.
         if DevCopyHold::is_held(&path) || hash_in_use(container, &name, &state_of) {
             // On Windows a scanner may open the tombstone the moment it
             // appears, refusing the rename for a moment: retry. Should it
@@ -1139,11 +1179,10 @@ mod tests {
     }
 
     /// A claim made in that window by a project whose manifest spells the
-    /// copy's path differently (an 8.3 short name on Windows, `..`, a link).
-    /// The reclaim asks again after moving the copy aside, so the claim must
-    /// count without resolving the copy itself, which is gone by then.
+    /// copy's path differently (an 8.3 short name on Windows, `..`, a link)
+    /// counts, and leaves no tombstone behind.
     #[test]
-    fn a_project_claim_spelled_differently_counts_after_the_copy_moves() {
+    fn a_project_claim_spelled_differently_counts_in_the_window() {
         let tmp = TempDir::new().unwrap();
         let c = tmp.path().join("_dev/rig@1.0.0");
         let copy = make_copy(&c, &hash('d'));
@@ -1165,6 +1204,26 @@ mod tests {
                 .starts_with(TOMBSTONE_PREFIX)),
             "no tombstone is left"
         );
+    }
+
+    /// Another process's claim can only show after the copy has moved
+    /// aside, when the reclaim asks again: it must count then without
+    /// resolving the copy itself, which is gone, however the manifest spells
+    /// the path.
+    #[test]
+    fn a_project_claim_spelled_differently_counts_after_the_copy_moves() {
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('d'));
+        let manifest = tmp.path().join("proj/acme.rig.json");
+        write_manifest(&manifest, &c.join("..").join("rig@1.0.0").join(hash('d')));
+        record_project_user(&copy, &manifest).unwrap();
+        std::fs::rename(
+            &copy,
+            c.join(format!("{TOMBSTONE_PREFIX}{}-1-0", hash('d'))),
+        )
+        .unwrap();
+        assert!(hash_in_use(&c, &hash('d'), &process_state));
     }
 
     /// A tombstone is a copy moved aside for deletion. One whose copy is in

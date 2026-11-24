@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, the cleanup that runs after a sync could move a dev copy aside
+  while a project still pointed at it, so Houdini found the package's files
+  missing until the next sync put the copy back. The cleanup now decides
+  again, with a fresh look at who uses the copy, right before moving it,
+  and on Windows it reads a usage record or Houdini package file that
+  appears missing again before treating the claim as gone.
+
 ## [0.45.1] - 2026-11-24
 
 ### Fixed

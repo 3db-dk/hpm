@@ -640,14 +640,20 @@ wait for, one reclaim at a time per process. A copy
 is renamed to a hidden tombstone before it is deleted: on Windows a directory
 with a file open inside cannot be renamed, so a copy read by a process nobody
 recorded stays whole. On macOS and Linux nothing blocks the rename, which is
-why the records, not the OS, are the rule. The pass asks again once the copy
-is aside, since an install may claim it in between, and a claimed copy goes
-back. A project record matches its copy by the canonical container and the
+why the records, not the OS, are the rule. Just before the move the pass
+decides again, with the records listed afresh, under the lock holds are taken
+under: an install in the same process either shows there, or takes its hold
+after the move, finds no copy and makes a new one. An install in another
+process shares no lock, so the pass asks once more when the copy is aside,
+and a claimed copy goes back. A project record matches its copy by the canonical container and the
 hash, never by resolving the copy, which is not there at that moment. A
 tombstone left behind (a deletion or a move back that failed) is put back
 by the next pass when its copy is in use again and its place is free, and
 deleted otherwise. Anything that cannot be judged (an
-unreadable record, a process the OS cannot be asked about) keeps the copy. The
+unreadable record, a process the OS cannot be asked about) keeps the copy.
+On Windows a record or Houdini package file that reads as missing is read
+again for a moment before it counts as gone, since Windows can report a file
+that exists as missing. The
 same pass removes the `.stage-<pid>-<seq>` directory a crashed or killed copy
 left behind, once the process its name records is gone.
 
