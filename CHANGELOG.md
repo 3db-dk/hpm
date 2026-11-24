@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-24
+
 ### Changed
 
 - `hpm install` now installs the packages a project's packages require, not
