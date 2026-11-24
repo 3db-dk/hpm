@@ -45,7 +45,7 @@ pub struct PackageSource {
 
 impl PackageSource {
     /// Create a new package source. Validates that `url` is https (or plain
-    /// http to this machine; see [`crate::http::check_transport`]) and that
+    /// http to this machine, the rule `http::check_transport` applies) and that
     /// `version` is a semantic version.
     pub fn url(
         url: impl Into<String>,

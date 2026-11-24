@@ -1,7 +1,7 @@
 //! A project's whole package set: the packages it lists, and every package
 //! the versions chosen for them require, directly or through each other.
 //!
-//! [`solve`](super::solve) chooses versions for packages it is handed, and
+//! [`solve`] chooses versions for packages it is handed, and
 //! lets a package join the set when a chosen version requires it, but only
 //! among the packages it was offered. Someone has to find those: ask a
 //! registry for each package the answer requires and nobody has fetched,
