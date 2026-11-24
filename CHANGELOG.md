@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A dev copy a project still used could be deleted on Windows. A reclaim
+  moves a copy it judges unused aside to a hidden tombstone, asks again, and
+  moves it back if it has been claimed since. A scanner opening the tombstone
+  could refuse that move back for a moment, and the next reclaim deleted
+  every tombstone it found. The move back now retries, and a tombstone whose
+  copy is in use again, with its place still free, is put back instead of
+  deleted.
+- The second check matched a project's `hpath` to the copy by resolving the
+  copy's path, which fails while the copy is moved aside. So a claim spelled
+  differently from the copy's own path (an 8.3 short name, `..`, a link along
+  the way) did not count. The match now resolves the container, which stays
+  where it is, and compares hashes. A container path that cannot be resolved
+  for any reason other than not existing keeps the copy.
+
+### Added
+
+- `hpm_package::retry_transient`, the brief retry `atomic_write` already
+  used for the Windows errors a scanner or indexer causes for a moment
+  (access denied, sharing and lock violations), is now public.
+
 ## [0.44.1] - 2026-11-23
 
 ### Fixed

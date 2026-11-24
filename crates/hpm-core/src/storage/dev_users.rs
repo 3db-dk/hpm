@@ -46,7 +46,8 @@ use super::dev_install::{is_hash_dir_name, is_link};
 pub const USERS_DIR: &str = ".users";
 
 /// Prefix of a hash directory renamed aside for deletion. A tombstone left by
-/// a deletion that failed is removed by the next reclaim.
+/// a deletion that failed is removed by the next reclaim, or put back when
+/// its copy is in use again.
 const TOMBSTONE_PREFIX: &str = ".reclaim-";
 
 const PROCESS_PREFIX: &str = "process-";
@@ -140,18 +141,45 @@ struct ProjectRecord {
 /// too long costs disk and one removed too early costs a project.
 fn project_record_is_live(record: &ProjectRecord, copy: &Path) -> bool {
     match crate::project::houdini_emit::hpaths(&record.manifest) {
-        Ok(paths) => paths.iter().any(|p| same_path(p, copy)),
+        Ok(paths) => paths.iter().any(|p| names_copy(p, copy)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => false,
         Err(_) => true,
     }
 }
 
-fn same_path(a: &Path, b: &Path) -> bool {
-    a == b
-        || matches!(
-            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
-            (Ok(x), Ok(y)) if x == y
-        )
+/// Whether the `hpath` entry `hpath` names `copy`, spelled the same or not
+/// (a short 8.3 name, `..`, a link along the way).
+///
+/// Judged by the canonical parent directory and the file name, never by
+/// resolving `copy` itself: the reclaim asks again after moving the copy
+/// aside, when `copy` does not exist, and a claim must still count then.
+/// An answer that cannot be had (a parent that cannot be resolved for any
+/// reason but not existing) keeps the copy: kept too long costs disk,
+/// removed too early costs a project. A parent that does not exist is not
+/// the container, which does.
+fn names_copy(hpath: &Path, copy: &Path) -> bool {
+    if hpath == copy {
+        return true;
+    }
+    let (Some(hpath_dir), Some(hpath_name), Some(copy_dir), Some(copy_name)) = (
+        hpath.parent(),
+        hpath.file_name(),
+        copy.parent(),
+        copy.file_name(),
+    ) else {
+        return false;
+    };
+    if hpath_name != copy_name {
+        return false;
+    }
+    match (
+        std::fs::canonicalize(hpath_dir),
+        std::fs::canonicalize(copy_dir),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        (Err(e), Ok(_)) if e.kind() == io::ErrorKind::NotFound => false,
+        _ => true,
+    }
 }
 
 /// Whether anything still uses `<container>/<hash>`. Dead records are
@@ -461,11 +489,12 @@ pub fn record_project_process(packages_dir: &Path, user: ProcessRecord) {
 ///
 /// Each removal renames the copy to a hidden tombstone and deletes that; a
 /// copy that cannot be renamed (on Windows: something has a file open in it)
-/// is kept whole. Tombstones a failed deletion left behind are retried here,
-/// and record directories whose copy is gone are dropped. A staging
-/// directory (`.stage-<pid>-<seq>`) is an install in flight while the process
-/// its name records runs, and is left alone; once that process is gone it is
-/// what a crashed or killed copy left behind, and is removed.
+/// is kept whole. Tombstones a failed deletion left behind are retried here
+/// (or put back, when their copy is in use again), and record directories
+/// whose copy is gone are dropped. A staging directory (`.stage-<pid>-<seq>`)
+/// is an install in flight while the process its name records runs, and is
+/// left alone; once that process is gone it is what a crashed or killed copy
+/// left behind, and is removed.
 pub(crate) fn reclaim_dev_copies(
     container: &Path,
     keep: Option<&str>,
@@ -507,7 +536,7 @@ fn reclaim_with(
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with(TOMBSTONE_PREFIX) {
-            let _ = remove_tree(&path);
+            settle_tombstone(container, &path, &name, &state_of);
             continue;
         }
         if let Some(pid) = stage_owner(&name) {
@@ -562,9 +591,13 @@ fn reclaim_with(
         // so asking again now sees every claim made before the copy moved;
         // a claimed copy goes back where the install found it.
         if DevCopyHold::is_held(&path) || hash_in_use(container, &name, &state_of) {
-            if let Err(e) = std::fs::rename(&tombstone, &path) {
+            // On Windows a scanner may open the tombstone the moment it
+            // appears, refusing the rename for a moment: retry. Should it
+            // still fail, the tombstone stays, and the next reclaim puts it
+            // back (see `settle_tombstone`) rather than deleting it.
+            if let Err(e) = hpm_package::retry_transient(|| std::fs::rename(&tombstone, &path)) {
                 warn!(
-                    "Dev copy {} was claimed while being reclaimed and could not be put back: {}",
+                    "Dev copy {} was claimed while being reclaimed and could not be put back yet (retried on the next reclaim): {}",
                     path.display(),
                     e
                 );
@@ -591,6 +624,53 @@ fn reclaim_with(
         );
     }
     removed
+}
+
+/// Deal with the tombstone `path` (named `name`) found in `container`.
+///
+/// A tombstone is a copy moved aside to be deleted, left by a deletion that
+/// failed, by a reclaim that found a claim after moving the copy and could
+/// not move it back, or by a reclaim running right now in another process.
+/// One whose copy is in use again, and whose place is free, goes back;
+/// anything else is deleted, as before. Deleting every tombstone outright
+/// lost a copy a project still used, on Windows, when the move back failed.
+fn settle_tombstone(
+    container: &Path,
+    path: &Path,
+    name: &str,
+    state_of: &impl Fn(u32) -> ProcessState,
+) {
+    if let Some(hash) = tombstone_hash(name) {
+        let copy = container.join(hash);
+        if std::fs::symlink_metadata(&copy).is_err()
+            && (DevCopyHold::is_held(&copy) || hash_in_use(container, hash, state_of))
+        {
+            match hpm_package::retry_transient(|| std::fs::rename(path, &copy)) {
+                Ok(()) => info!(
+                    "Put back dev copy {}: it was moved aside for deletion while still in use",
+                    copy.display()
+                ),
+                Err(e) => warn!(
+                    "Dev copy {} is in use but could not be put back yet (retried on the next reclaim): {}",
+                    copy.display(),
+                    e
+                ),
+            }
+            return;
+        }
+    }
+    let _ = remove_tree(path);
+}
+
+/// The hash a tombstone (`.reclaim-<hash>-<pid>-<seq>`) was moved aside
+/// from, when `name` is one.
+fn tombstone_hash(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix(TOMBSTONE_PREFIX)?;
+    let mut parts = rest.rsplitn(3, '-');
+    parts.next()?.parse::<u64>().ok()?;
+    parts.next()?.parse::<u32>().ok()?;
+    let hash = parts.next()?;
+    is_hash_dir_name(hash).then_some(hash)
 }
 
 /// The PID that made the staging directory `name`, when `name` is one
@@ -1058,6 +1138,96 @@ mod tests {
         assert!(copy.join("otls/a.hda").is_file());
     }
 
+    /// A claim made in that window by a project whose manifest spells the
+    /// copy's path differently (an 8.3 short name on Windows, `..`, a link).
+    /// The reclaim asks again after moving the copy aside, so the claim must
+    /// count without resolving the copy itself, which is gone by then.
+    #[test]
+    fn a_project_claim_spelled_differently_counts_after_the_copy_moves() {
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('d'));
+        let manifest = tmp.path().join("proj/acme.rig.json");
+        let spelled = c.join("..").join("rig@1.0.0").join(hash('d'));
+        let removed = reclaim_with(&c, None, Unrecorded::Remove, process_state, &|p| {
+            write_manifest(&manifest, &spelled);
+            record_project_user(p, &manifest).unwrap();
+        });
+        assert_eq!(removed, 0);
+        assert!(
+            copy.join("otls/a.hda").is_file(),
+            "the claimed copy is back"
+        );
+        assert!(
+            !std::fs::read_dir(&c).unwrap().flatten().any(|e| e
+                .file_name()
+                .to_string_lossy()
+                .starts_with(TOMBSTONE_PREFIX)),
+            "no tombstone is left"
+        );
+    }
+
+    /// A tombstone is a copy moved aside for deletion. One whose copy is in
+    /// use again goes back (on Windows the reclaim that found the claim may
+    /// have failed to move it back); one nobody uses, or whose place a newer
+    /// copy took, is deleted.
+    #[test]
+    fn a_tombstone_whose_copy_is_in_use_is_put_back() {
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let manifest = tmp.path().join("proj/acme.rig.json");
+        let tomb = |h: &str, seq: u32| c.join(format!("{TOMBSTONE_PREFIX}{h}-4242-{seq}"));
+
+        let used = make_copy(&c, &hash('c'));
+        write_manifest(&manifest, &used);
+        record_project_user(&used, &manifest).unwrap();
+        std::fs::rename(&used, tomb(&hash('c'), 0)).unwrap();
+
+        let unused = make_copy(&c, &hash('b'));
+        std::fs::rename(&unused, tomb(&hash('b'), 1)).unwrap();
+
+        let replaced = make_copy(&c, &hash('a'));
+        let other_manifest = tmp.path().join("other/acme.rig.json");
+        write_manifest(&other_manifest, &replaced);
+        record_project_user(&replaced, &other_manifest).unwrap();
+        std::fs::rename(&replaced, tomb(&hash('a'), 2)).unwrap();
+        make_copy(&c, &hash('a'));
+
+        let removed = reclaim_dev_copies(&c, None, Unrecorded::Remove, process_state);
+        assert_eq!(removed, 0);
+        assert!(used.join("otls/a.hda").is_file(), "the used copy is back");
+        assert!(!tomb(&hash('c'), 0).exists());
+        assert!(!unused.exists() && !tomb(&hash('b'), 1).exists());
+        assert!(replaced.join("otls/a.hda").is_file());
+        assert!(!tomb(&hash('a'), 2).exists(), "a copy in its place wins");
+    }
+
+    /// An `hpath` whose directory cannot be resolved (here: one behind a
+    /// directory nobody may enter) cannot be judged, and keeps the copy;
+    /// one whose directory does not exist is not the container, which does.
+    #[cfg(unix)]
+    #[test]
+    fn an_hpath_that_cannot_be_resolved_keeps_the_copy() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        let c = tmp.path().join("_dev/rig@1.0.0");
+        let copy = make_copy(&c, &hash('a'));
+        let locked = tmp.path().join("locked");
+        std::fs::create_dir_all(locked.join("inner")).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let enterable = std::fs::read_dir(&locked).is_ok();
+        let judged = names_copy(&locked.join("inner").join(hash('a')), &copy);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !enterable {
+            // Root enters anything, so only an ordinary user can test this.
+            assert!(judged, "an hpath that cannot be resolved keeps the copy");
+        }
+        assert!(!names_copy(
+            &tmp.path().join("missing").join(hash('a')),
+            &copy
+        ));
+    }
+
     #[test]
     fn non_copy_paths_are_not_recorded() {
         let tmp = TempDir::new().unwrap();
@@ -1229,19 +1399,36 @@ mod tests {
             /// A recorded process, judged through the shared PID table.
             Process(u32),
             /// A project record; its manifest may point here or elsewhere,
-            /// or be gone.
+            /// or be gone. One pointing here may spell the path differently
+            /// (through `..`), as an 8.3 short name or a link does.
             Project {
                 points_here: bool,
                 manifest_exists: bool,
+                spelled_otherwise: bool,
             },
             /// A record nobody can parse: judged live.
             Garbage,
+        }
+
+        /// Where an earlier reclaim left a copy.
+        #[derive(Debug, Clone, Copy)]
+        enum Place {
+            /// In place, as an install left it.
+            Here,
+            /// Moved aside to a tombstone that was never deleted or put
+            /// back (a failed deletion, a failed move back).
+            Aside,
+            /// Moved aside, and a fresh copy of the same hash has since
+            /// taken its place.
+            AsideAndReplaced,
         }
 
         #[derive(Debug, Clone)]
         struct Case {
             /// Per copy, its users (empty: never recorded).
             copies: Vec<Vec<User>>,
+            /// Per copy, where it is.
+            places: Vec<Place>,
             pids: BTreeMap<u32, Os>,
             keep: Option<usize>,
             unrecorded: bool,
@@ -1256,19 +1443,30 @@ mod tests {
         fn user() -> impl Strategy<Value = User> {
             prop_oneof![
                 (1u32..5).prop_map(User::Process),
-                (any::<bool>(), any::<bool>()).prop_map(|(points_here, manifest_exists)| {
-                    User::Project {
+                (any::<bool>(), any::<bool>(), any::<bool>()).prop_map(
+                    |(points_here, manifest_exists, spelled_otherwise)| User::Project {
                         points_here,
                         manifest_exists,
+                        spelled_otherwise,
                     }
-                }),
+                ),
                 Just(User::Garbage),
             ]
         }
 
         fn case() -> impl Strategy<Value = Case> {
             (
-                prop::collection::vec(prop::collection::vec(user(), 0..4), 1..7),
+                prop::collection::vec(
+                    (
+                        prop::collection::vec(user(), 0..4),
+                        prop_oneof![
+                            3 => Just(Place::Here),
+                            1 => Just(Place::Aside),
+                            1 => Just(Place::AsideAndReplaced),
+                        ],
+                    ),
+                    1..7,
+                ),
                 prop::collection::btree_map(
                     1u32..5,
                     prop_oneof![
@@ -1287,8 +1485,10 @@ mod tests {
                 .prop_map(
                     |(copies, pids, keep, unrecorded, hash_named_file, stage_pid)| {
                         let keep = keep.map(|i| i.index(copies.len()));
+                        let (copies, places) = copies.into_iter().unzip();
                         Case {
                             copies,
+                            places,
                             pids,
                             keep,
                             unrecorded,
@@ -1303,24 +1503,35 @@ mod tests {
             format!("{:064x}", i + 1)
         }
 
-        /// The rule, stated independently of the code: a copy is kept when it
-        /// is `keep`, or never recorded under `Unrecorded::Keep`, or has a
-        /// live user.
-        fn kept_by_model(c: &Case) -> BTreeSet<usize> {
+        /// Whether any of a copy's users is live.
+        fn has_live_user(c: &Case, i: usize) -> bool {
             let os = |pid: u32| c.pids.get(&pid).copied().unwrap_or(Os::Gone);
+            c.copies[i].iter().any(|u| match u {
+                User::Process(pid) => matches!(os(*pid), Os::Unknown | Os::Same),
+                User::Project {
+                    points_here,
+                    manifest_exists,
+                    ..
+                } => *points_here && *manifest_exists,
+                User::Garbage => true,
+            })
+        }
+
+        /// The rule, stated independently of the code. A copy in its place
+        /// is kept when it is `keep`, or never recorded under
+        /// `Unrecorded::Keep`, or has a live user. A copy only an earlier
+        /// reclaim's tombstone holds was already judged unused once: it
+        /// comes back exactly when it has a live user. A replaced one is
+        /// judged as the copy now in its place.
+        fn kept_by_model(c: &Case) -> BTreeSet<usize> {
             (0..c.copies.len())
-                .filter(|&i| {
-                    let users = &c.copies[i];
-                    Some(i) == c.keep
-                        || (c.unrecorded && users.is_empty())
-                        || users.iter().any(|u| match u {
-                            User::Process(pid) => matches!(os(*pid), Os::Unknown | Os::Same),
-                            User::Project {
-                                points_here,
-                                manifest_exists,
-                            } => *points_here && *manifest_exists,
-                            User::Garbage => true,
-                        })
+                .filter(|&i| match c.places[i] {
+                    Place::Here | Place::AsideAndReplaced => {
+                        Some(i) == c.keep
+                            || (c.unrecorded && c.copies[i].is_empty())
+                            || has_live_user(c, i)
+                    }
+                    Place::Aside => has_live_user(c, i),
                 })
                 .collect()
         }
@@ -1329,11 +1540,12 @@ mod tests {
             #![proptest_config(ProptestConfig::with_cases(128))]
 
             /// Reclaim removes exactly the copies the rule says nobody uses,
-            /// and changes nothing else: kept copies keep their content, an
-            /// install in flight is kept exactly while its process runs, a
-            /// hash-named file is untouched, nothing
-            /// outside the container is touched, no tombstone is left, and
-            /// no removed copy leaves records behind.
+            /// and changes nothing else: kept copies keep their content
+            /// (a tombstone put back is the copy it held), an install in
+            /// flight is kept exactly while its process runs, a hash-named
+            /// file is untouched, nothing outside the container is touched,
+            /// no tombstone is left, and no removed copy leaves records
+            /// behind.
             #[test]
             fn prop_reclaim_removes_exactly_the_unused_copies(c in case()) {
                 let tmp = TempDir::new().unwrap();
@@ -1350,9 +1562,15 @@ mod tests {
                                 record_process_user(&copy, ProcessRecord { pid: *pid, started_at: Some(T) })
                                     .unwrap();
                             }
-                            User::Project { points_here, manifest_exists } => {
+                            User::Project { points_here, manifest_exists, spelled_otherwise } => {
                                 let m = tmp.path().join(format!("p{i}-{n}/.hpm/packages/s.rig.json"));
-                                write_manifest(&m, if *points_here { &copy } else { &elsewhere });
+                                let spelled = c_dir.join("..").join("rig@1.0.0").join(copy_hash(i));
+                                let hpath = match (points_here, spelled_otherwise) {
+                                    (false, _) => &elsewhere,
+                                    (true, false) => &copy,
+                                    (true, true) => &spelled,
+                                };
+                                write_manifest(&m, hpath);
                                 record_project_user(&copy, &m).unwrap();
                                 if !manifest_exists {
                                     std::fs::remove_file(&m).unwrap();
@@ -1364,6 +1582,14 @@ mod tests {
                                 std::fs::write(dir.join(format!("process-garbage{n}.json")), "{").unwrap();
                             }
                         }
+                    }
+                    if matches!(c.places[i], Place::Aside | Place::AsideAndReplaced) {
+                        let tomb = c_dir.join(format!("{TOMBSTONE_PREFIX}{}-9-{i}", copy_hash(i)));
+                        std::fs::rename(&copy, tomb).unwrap();
+                    }
+                    if matches!(c.places[i], Place::AsideAndReplaced) {
+                        let fresh = make_copy(&c_dir, &copy_hash(i));
+                        std::fs::write(fresh.join("id"), i.to_string()).unwrap();
                     }
                 }
                 let stage = c_dir.join(format!(".stage-{}-0/otls", c.stage_pid));
@@ -1388,7 +1614,12 @@ mod tests {
                 let got: BTreeSet<usize> =
                     (0..c.copies.len()).filter(|&i| c_dir.join(copy_hash(i)).exists()).collect();
                 prop_assert_eq!(&got, &want);
-                prop_assert_eq!(removed, c.copies.len() - want.len());
+                // Only copies found in place count as removed; a tombstone
+                // deleted was a removal counted when it was moved aside.
+                let removed_in_place = (0..c.copies.len())
+                    .filter(|i| !matches!(c.places[*i], Place::Aside) && !want.contains(i))
+                    .count();
+                prop_assert_eq!(removed, removed_in_place);
                 for i in &got {
                     let copy = c_dir.join(copy_hash(*i));
                     prop_assert_eq!(std::fs::read_to_string(copy.join("id")).unwrap(), i.to_string());
@@ -1414,6 +1645,103 @@ mod tests {
                     .filter(|e| e.file_name().to_string_lossy().starts_with(TOMBSTONE_PREFIX))
                     .count();
                 prop_assert_eq!(tombstones, 0);
+            }
+        }
+
+        /// One step of a spelling of a path below a temp root.
+        #[derive(Debug, Clone, Copy)]
+        enum Step {
+            /// `.`
+            Dot,
+            /// Into the sibling directory `side`, then `..` out of it.
+            Detour,
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(256))]
+
+            /// A project's `hpath` names a copy however the path to it is
+            /// spelled, whether the copy is in place or moved aside (the
+            /// reclaim asks again while it is aside). A path to another
+            /// hash, or to the same hash in another container, never names
+            /// it.
+            #[test]
+            fn prop_any_spelling_names_the_copy_and_nothing_else(
+                steps in prop::collection::vec(
+                    (0usize..4, prop_oneof![Just(Step::Dot), Just(Step::Detour)]),
+                    0..6,
+                ),
+                aside in any::<bool>(),
+            ) {
+                let tmp = TempDir::new().unwrap();
+                let parts = ["_dev", "rig@1.0.0"];
+                let c = tmp.path().join(parts[0]).join(parts[1]);
+                let copy = make_copy(&c, &hash('a'));
+                let other_container = tmp.path().join(parts[0]).join("rig@2.0.0");
+                make_copy(&other_container, &hash('a'));
+                for dir in [tmp.path().to_path_buf(), tmp.path().join(parts[0]), c.clone()] {
+                    std::fs::create_dir_all(dir.join("side")).unwrap();
+                }
+                // Spell root/_dev/rig@1.0.0, inserting each step after the
+                // component it is placed at (0: the root, 1: _dev, 2: the
+                // container; 3 and up: also the container).
+                let spell = |container_name: &str| {
+                    let mut p = tmp.path().to_path_buf();
+                    let names = [Some(parts[0]), Some(container_name), None];
+                    for (level, name) in names.into_iter().enumerate() {
+                        for (at, step) in &steps {
+                            if (*at).min(2) == level {
+                                p = match step {
+                                    Step::Dot => p.join("."),
+                                    Step::Detour => p.join("side").join(".."),
+                                };
+                            }
+                        }
+                        if let Some(name) = name {
+                            p = p.join(name);
+                        }
+                    }
+                    p
+                };
+                if aside {
+                    std::fs::rename(&copy, c.join(".reclaim-x")).unwrap();
+                }
+                let container = spell(parts[1]);
+                prop_assert!(names_copy(&container.join(hash('a')), &copy), "{:?}", container);
+                prop_assert!(!names_copy(&container.join(hash('b')), &copy));
+                let other = spell("rig@2.0.0");
+                prop_assert!(!names_copy(&other.join(hash('a')), &copy), "{:?}", other);
+            }
+
+            /// The reclaim puts a tombstone back by the hash its name
+            /// records, so the reader must read back exactly what the
+            /// writer in `reclaim_with` produces. No other name a container
+            /// holds is a tombstone of a hash: a misread would move a
+            /// stranger into a copy's place.
+            #[test]
+            fn prop_tombstone_names_round_trip(
+                h in "[0-9a-f]{64}",
+                pid in any::<u32>(),
+                seq in any::<u64>(),
+                other in prop_oneof![
+                    "[0-9a-f]{64}",
+                    "\\.reclaim-[0-9a-f]{1,63}-[0-9]{1,5}-[0-9]{1,3}",
+                    "\\.reclaim-[0-9a-f]{64}-[0-9]{1,5}",
+                    "\\.reclaim-[0-9a-f]{64}-[a-z]{1,3}-[0-9]{1,3}",
+                    "\\.stage-[0-9]{1,5}-[0-9]{1,3}",
+                    Just(USERS_DIR.to_string()),
+                    "[ -~]{0,80}",
+                ],
+            ) {
+                let name = format!("{TOMBSTONE_PREFIX}{h}-{pid}-{seq}");
+                prop_assert_eq!(tombstone_hash(&name), Some(h.as_str()));
+                prop_assert_eq!(stage_owner(&name), None);
+                prop_assert!(!is_hash_dir_name(&name));
+                if let Some(read) = tombstone_hash(&other) {
+                    // Only a well-formed tombstone name reads as one.
+                    prop_assert_eq!(&format!("{TOMBSTONE_PREFIX}{read}-"), &other[..TOMBSTONE_PREFIX.len() + 65]);
+                    prop_assert!(is_hash_dir_name(read));
+                }
             }
         }
 
@@ -1637,6 +1965,14 @@ mod tests {
             ),
             (
                 serde_json::json!({ "hpath": other.to_string_lossy() }),
+                false,
+            ),
+            (
+                serde_json::json!({ "hpath": c.join("..").join("rig@1.0.0").join(hash('a')).to_string_lossy() }),
+                true,
+            ),
+            (
+                serde_json::json!({ "hpath": tmp.path().join("missing").join(hash('a')).to_string_lossy() }),
                 false,
             ),
             (serde_json::json!({ "env": [] }), false),

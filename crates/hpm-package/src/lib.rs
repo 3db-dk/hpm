@@ -120,7 +120,7 @@ pub mod template;
 pub mod toml_file_error;
 
 // Re-exports for convenient access
-pub use atomic_write::atomic_write;
+pub use atomic_write::{atomic_write, retry_transient};
 pub use dependency::DependencySpec;
 pub use env_value::{
     Condition, EnvValue, EnvValueBranch, HoudiniRange, InstallSource, OsKey, PythonTag,

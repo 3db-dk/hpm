@@ -90,7 +90,7 @@ fn create_staging_file(path: &Path, content: &[u8]) -> std::io::Result<PathBuf> 
 /// delete sharing makes a rename onto it, or of it, fail with "access
 /// denied" or a sharing violation until it lets go. Elsewhere, and for any
 /// other error, the first result stands.
-fn retry_transient<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+pub fn retry_transient<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
     #[cfg(windows)]
     {
         // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
